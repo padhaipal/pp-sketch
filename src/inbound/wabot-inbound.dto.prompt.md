@@ -1,1 +1,0 @@
-Look at wabot/src/inbound/process/message/message.dto.prompt.md for inspiration.

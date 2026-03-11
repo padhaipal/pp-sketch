@@ -13,16 +13,28 @@
 	  * Create the new user.
 		* Find the user account associated with the referrer's phone number (if one exists).
 		* Connect the two accounts in a referrer-referee relationship. 
-  * If a new user was created then wabot/src/outbound/outbound.service.ts/sendWAMessage() with .env/WELCOME_MESSAGE_EXTERNAL_ID.
+  * If a new user was created then src/wabot/outbound/outbound.service.ts/sendWAMessage() with .env/WELCOME_MESSAGE_EXTERNAL_ID.
 	  * See sendWAMessage() notes for how to handle the http response. 
   * End span.
 * Else: I now have the existing user's information. 
 3.) Check the timestamp on the message.
 * If it is more than 20 seconds old then log a WARN, return 2XX and end the span. Note that wabot will handle sending the "please try again" message to the user.
 4.) If the message is not type audio, reaction or text then. 
-* wabot/src/outbound/outbound.service.ts/sendWAMessage() with .env/AUDIO_ONLY_REQUEST_EXTERNAL_ID.
+* src/wabot/outbound/outbound.service.ts/sendWAMessage() with .env/AUDIO_ONLY_REQUEST_EXTERNAL_ID.
   * See sendWAMessage() notes for how to handle the http response.
-5.) (Note that now we should have the user entity data from the database and have screened out/handled all first time users and non-audio messages and so only have normal user interaction audio messages left.) Hit the pp/src/mediaMetaData/mediaMetaData.service.ts/create() function. Look at pp/src/mediaMetaData/mediaMetaData.dto.ts for how to structure the message. You will need the mediaUrl which can be obtained from payload.message.audio.mediaUrl as can be confirmed in pp/src/inbound/wabot-inbound.dto.ts. 
+5.) (Note that now we should have the user entity data from the database and have screened out/handled all first time users and non-audio messages and so only have normal user interaction audio messages left.) Hit the src/mediaMetaData/mediaMetaData.service.ts/create() function. Look at src/mediaMetaData/mediaMetaData.dto.ts for how to structure the message. You will need the mediaUrl which can be obtained from payload.message.audio.mediaUrl as can be confirmed in src/wabot/inbound/wabot-inbound.dto.ts. 
 6.) !!! I think I need to run the state machine. 
 
 
+
+
+Note
+* How to handle sendWAMessage() responses.  
+  * If 2XX. Then log INFO and return 2XX. 
+  * If 4XX. Then log ERROR and return 4XX. 
+	* If 5XX. Then log WARN and return 5XX. 
+
+Note
+* database fallback
+  * If redis is down then log a WARN and connect to the PG database directly.
+    * If the PG database is down then log a WARN, return a 500 status to wabot.
