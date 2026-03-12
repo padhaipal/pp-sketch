@@ -9,10 +9,12 @@ createWhatsappAudioMedia(options: CreateWhatsappAudioMediaOptions): Promise<Medi
 2.) Resolve the user (exactly one identifier was provided):
   * If options.user is provided, use its .id as user_id directly (trusted, no DB hit).
   * If options.user_external_id is provided, call user.service.ts/find() to resolve user_id. If not found, log ERROR and throw.
-3.) Create the mediaMetaData database row with status = 'created'
+3.) Check if a mediaMetaData row with this external_id already exists in the database.
+  * If it exists and its status is 'failed', reuse that row: update its status to 'created' and continue to step 4.
+  * If it exists and its status is anything other than 'failed', log WARN and return the existing entity (no-op).
+  * If it does not exist, create a new mediaMetaData database row with status = 'created'.
 4.)
-* hit pp-sketch/src/wabot/outbound/outbound.service.ts/downloadMedia() and get it to start streaming the audio file to this worker.
-* When the first bytes start flowing through hit the database to update the mediaMetaData mediaStatus to 'downloading'.
+* Hit pp-sketch/src/wabot/outbound/outbound.service.ts/downloadMedia() and get it to start streaming the audio file to this worker.
 * Direct this byte flow to the following sinks. STT_TIME_CAP is a .env variable. 
   * src/mediaBucket/outbound/outbound.service.ts/stream()
   * mediaMetaData/sttSarvam.service.ts/run(), mediaMetaData/sttAzure.service.ts/run(), mediaMetaData/sttReverie.service.ts/run(), etc (as turned on and off by feature flags, see docs).

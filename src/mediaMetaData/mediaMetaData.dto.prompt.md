@@ -5,7 +5,7 @@ import { User } from '../users/user.dto';
 
 // --- Enums (enforced at service layer; stored as text in pg — no custom pg enum types) ---
 
-export type MediaStatus = 'created' | 'queued' | 'downloading' | 'ready' | 'failed';
+export type MediaStatus = 'created' | 'queued' | 'ready' | 'failed';
 export type MediaType = 'audio' | 'text' | 'video' | 'image';
 export type MediaSource = 'whatsapp' | 'heygen' | 'azure' | 'sarvam' | 'reverie';
 
@@ -56,7 +56,7 @@ export interface CreateHeygenMediaOptions {
 
 // --- Runtime validation ---
 
-const VALID_MEDIA_STATUSES: MediaStatus[] = ['created', 'queued', 'downloading', 'ready', 'failed'];
+const VALID_MEDIA_STATUSES: MediaStatus[] = ['created', 'queued', 'ready', 'failed'];
 const VALID_MEDIA_TYPES: MediaType[] = ['audio', 'text', 'video', 'image'];
 const VALID_MEDIA_SOURCES: MediaSource[] = ['whatsapp', 'heygen'];
 

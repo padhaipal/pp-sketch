@@ -3,7 +3,11 @@ sendMessage()
 * Send the http request to wabot sendMessage() api endpoint. 
 * return whatever return status is received.
 
-downloadMedia()
-* Format data into the correct shape. Todo: describe the dto which will be controlled by wabot. 
-* Send the http request to wabot sendMessage() api endpoint. 
-* return whatever return status is received.
+downloadMedia(media_url: string, otel_carrier: Record<string, string>): Promise<{ stream: NodeJS.ReadableStream, content_type: string }>
+WABOT_INTERNAL_BASE_URL is available in .env.
+Request shape: see src/wabot/outbound/outbound.dto.prompt.md DownloadMediaRequest.
+* POST to ${WABOT_INTERNAL_BASE_URL}/downloadMedia with body: { media_url, otel: { carrier: otel_carrier } }.
+* Expect a streaming response. Do not buffer the full response body.
+* On 2XX: return { stream: response body as a readable stream, content_type: response content-type header value }.
+* On 4XX: log ERROR and throw.
+* On 5XX: log WARN and throw.
