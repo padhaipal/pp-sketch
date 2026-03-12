@@ -31,7 +31,7 @@ export interface MediaMetaData {
   source: MediaSource;
   media_details?: Record<string, unknown>; // JSONB, e.g. { mime_type, byte_size }
   user_id?: string | null;                 // FK -> users.id, required for 'whatsapp', null for 'heygen'
-  input_media_id?: string | null;          // FK -> media_metadata.id, e.g. source image for a generated video
+  input_media_id?: string | null;          // FK -> media_metadata.id, "derived from" link. Many entities can point to one parent (one-to-many from parent's perspective). E.g. STT text transcripts → source audio, generated video → source image.
   generation_request_json?: Record<string, unknown> | null; // JSONB, request payload (no secrets)
   created_at: Date;                        // TIMESTAMPTZ, default now()
 }

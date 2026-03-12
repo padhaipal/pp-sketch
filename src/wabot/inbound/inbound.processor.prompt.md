@@ -26,6 +26,11 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/wabot/inb
   * external_id: payload.message.audio.mediaUrl
   * source_url: payload.message.audio.mediaUrl
   * user: the User entity from step 2 (trusted path, no extra DB hit)
+* This will return a mediaMetaData entity for the user's audio message which will contain a link to where that audio is stored in the S3 bucket. There will also be several mediaMetaData text entities associated with that mediaMetaData entity which will contain the transcripts of the audio message. 
+6.) Hit the database for any mediaMetaData entities that 
+
+
+
 6.) !!! todo: I think I need to run the state machine. 
 
 Note
