@@ -19,12 +19,11 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/wabot/inb
 * Else: I now have the existing user's information and continue to the next step. 
 3.) Check payload.message.timestamp.
 * If it is more than 20 seconds old then log a WARN, complete the job and end the span. Note that wabot will handle sending the "please try again" message to the user.
-4.) If payload.message.type is not "audio" or "text" then: 
+4.) If payload.message.type is not "audio" then: 
 * src/wabot/outbound/outbound.service.ts/sendMessage() with .env/AUDIO_ONLY_REQUEST_EXTERNAL_ID.
   * See sendMessage() notes below for how to handle the http response.
-5.) (Note that now we should have the user entity data from the database and have screened out/handled all first time users and non-audio messages and so only have normal user interaction audio messages left.) Call src/mediaMetaData/mediaMetaData.service.ts/create() with:
+5.) (Note that now we should have the user entity data from the database and have screened out/handled all first time users and non-audio messages and so only have normal user interaction audio messages left.) Call src/mediaMetaData/mediaMetaData.service.ts/createWhatsappAudioMedia() with:
   * external_id: payload.message.audio.mediaUrl
-  * media_type: 'audio'
   * source_url: payload.message.audio.mediaUrl
   * user: the User entity from step 2 (trusted path, no extra DB hit)
 6.) !!! todo: I think I need to run the state machine. 
