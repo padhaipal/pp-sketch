@@ -1,8 +1,8 @@
-// pp-sketch/src/mediaMetaData/mediaMetaData.service.prompt.md
+// pp-sketch/src/media-meta-data/media-meta-data.service.prompt.md
 See src/docs/database.md for redis/database details and fallback patterns.
 
 Enum enforcement: MediaStatus, MediaType, and MediaSource are stored as plain text in pg (no custom pg enum types).
-All writes and updates MUST call the assertion helpers (assertValidMediaStatus, assertValidMediaType, assertValidMediaSource) from mediaMetaData.dto before touching the database, so that adding or removing enum values is a code-only change.
+All writes and updates MUST call the assertion helpers (assertValidMediaStatus, assertValidMediaType, assertValidMediaSource) from media-meta-data.dto before touching the database, so that adding or removing enum values is a code-only change.
 
 createWhatsappAudioMedia(options: CreateWhatsappAudioMediaOptions): Promise<MediaMetaData>
 1.) Validate options at runtime with validateCreateWhatsappAudioMediaOptions(). If it fails, log WARN and let the BadRequestException propagate.
@@ -16,14 +16,14 @@ createWhatsappAudioMedia(options: CreateWhatsappAudioMediaOptions): Promise<Medi
 4.)
 * Hit pp-sketch/src/wabot/outbound/outbound.service.ts/downloadMedia() and get it to start streaming the audio file to this worker.
 * Direct this byte flow to the following sinks. STT_TIME_CAP is a .env variable. 
-  * src/mediaBucket/outbound/outbound.service.ts/stream()
-  * mediaMetaData/sttSarvam.service.ts/run(), mediaMetaData/sttAzure.service.ts/run(), mediaMetaData/sttReverie.service.ts/run(), etc (as turned on and off by feature flags, see docs). Each run() receives the audio mediaMetaData entity and sets input_media_id on the text entity it creates.
+  * src/media-bucket/outbound/outbound.service.ts/stream()
+  * media-meta-data/stt-sarvam.service.ts/run(), media-meta-data/stt-azure.service.ts/run(), media-meta-data/stt-reverie.service.ts/run(), etc (as turned on and off by feature flags, see docs). Each run() receives the audio mediaMetaData entity and sets input_media_id on the text entity it creates.
 * All of these streams will be processed in parallel asynchronously.
   * If the byte flow to the S3 bucket fails then stop all streaming immediately, make a db hit to mark this mediaMetaData entity as 'failed', log a WARN and stop this worker and mark it such that BullMQ retries it. 
   * If the byte flow to the S3 bucket succeeds but all of the speech to text ais either time out or fail then make a db hit to mark this mediaMetaData entity as 'failed', log a WARN and stop this worker and mark it such that BullMQ retries it.
   * Else: Wait until all streams are finished, error or timeout. 
-    * src/mediaBucket/outbound/outbound.service.ts/stream() should return the S3 bucket location for this media resource.
-    * Each mediaMetaData/sttXXX.service.ts/run() will return either a mediaMetaData entity or its id.
+    * src/media-bucket/outbound/outbound.service.ts/stream() should return the S3 bucket location for this media resource.
+    * Each media-meta-data/stt-xxx.service.ts/run() will return either a mediaMetaData entity or its id.
 5.) Update the audio mediaMetaData row (single row update):
 * update s3_key
 * update the mediaDetails field

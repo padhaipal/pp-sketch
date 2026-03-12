@@ -1,4 +1,4 @@
-// pp-sketch/src/mediaMetaData/mediaMetaData.dto.prompt.md
+// pp-sketch/src/media-meta-data/media-meta-data.dto.prompt.md
 
 import { BadRequestException } from '@nestjs/common';
 import { User } from '../users/user.dto';

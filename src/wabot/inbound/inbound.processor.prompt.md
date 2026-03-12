@@ -22,16 +22,13 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/wabot/inb
 4.) If payload.message.type is not "audio" then: 
 * src/wabot/outbound/outbound.service.ts/sendMessage() with .env/AUDIO_ONLY_REQUEST_EXTERNAL_ID.
   * See sendMessage() notes below for how to handle the http response.
-5.) (Note that now we should have the user entity data from the database and have screened out/handled all first time users and non-audio messages and so only have normal user interaction audio messages left.) Call src/mediaMetaData/mediaMetaData.service.ts/createWhatsappAudioMedia() with:
+5.) (Note that now we should have the user entity data from the database and have screened out/handled all first time users and non-audio messages and so only have normal user interaction audio messages left.) Call src/media-meta-data/media-meta-data.service.ts/createWhatsappAudioMedia() with:
   * external_id: payload.message.audio.mediaUrl
   * source_url: payload.message.audio.mediaUrl
   * user: the User entity from step 2 (trusted path, no extra DB hit)
 * This will return a mediaMetaData entity for the user's audio message which will contain a link to where that audio is stored in the S3 bucket. There will also be several mediaMetaData text entities associated with that mediaMetaData entity which will contain the transcripts of the audio message. 
-6.) Hit the database for any mediaMetaData entities that 
-
-
-
-6.) !!! todo: I think I need to run the state machine. 
+6.) Hit the database for the transcript text mediaMetaData entities that are associated with that audio mediaMetaData entity. 
+7.) 
 
 Note
 * How to handle sendMessage() responses.  

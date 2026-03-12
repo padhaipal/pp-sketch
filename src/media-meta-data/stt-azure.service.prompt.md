@@ -1,4 +1,4 @@
-// pp-sketch/src/mediaMetaData/sttAzure.service.prompt.md
+// pp-sketch/src/media-meta-data/stt-azure.service.prompt.md
 // Azure speech-to-text service.
 // run() receives an audio byte stream and the parent audio MediaMetaData entity.
 // Creates a text MediaMetaData entity (source='azure', input_media_id=parent.id).
