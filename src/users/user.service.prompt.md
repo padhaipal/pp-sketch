@@ -2,7 +2,7 @@ See src/docs/database.md for redis/database details and fallback patterns.
 
 Batch calls are chunked into groups of MAX_USER_BATCH_SIZE (env var, default 100). Each chunk issues one DB query. Results are concatenated in input order. For write operations (update, create), all chunks run inside a single transaction — if any chunk fails, the entire batch is rolled back.
 
-Referrer-referee: each user has at most one referrer; a referrer can have many referees. Before any DB work, topologically sort create/update items so referrers are processed before referees. Reject if the batch contains a cycle (e.g. A refs B, B refs A). If a cycle would form with existing DB data, it can only be detected during/after the write — roll back the transaction and reject the call.
+Referrer-referee: each user has at most one referrer; a referrer can have many referees. Before any DB work, topologically sort create/update items so referrers are processed before referees. Reject if the batch contains a cycle (e.g. A refs B, B refs A) or if a user tries to refer itself. If a cycle would form with existing DB data, it can only be detected during/after the write — roll back the transaction and reject the call.
 
 find(options: FindUserOptions): Promise<User | null>
 find(options: FindUserOptions[]): Promise<(User | null)[]>
