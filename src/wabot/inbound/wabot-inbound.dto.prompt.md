@@ -3,7 +3,6 @@
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
-  IsObject,
   IsOptional,
   IsString,
   Validate,
@@ -14,22 +13,28 @@ import {
 } from 'class-validator';
 import { OtelCarrierDto } from '../../otel/otel.dto';
 
-@ValidatorConstraint({ name: 'exactlyOneOfAudioTextVideoSystem', async: false })
-class ExactlyOneOfAudioTextVideoSystemConstraint
-  implements ValidatorConstraintInterface
-{
+@ValidatorConstraint({ name: 'typeMatchesPayload', async: false })
+class TypeMatchesPayloadConstraint implements ValidatorConstraintInterface {
   validate(_: unknown, args: ValidationArguments): boolean {
     const dto = args.object as MessageDto;
 
-    const presentCount = [dto.audio, dto.text, dto.video, dto.system].filter(
-      (value) => value !== undefined,
-    ).length;
+    const typeToField: Record<string, unknown> = {
+      audio: dto.audio,
+      text: dto.text,
+      video: dto.video,
+      system: dto.system,
+    };
 
-    return presentCount === 1;
+    const presentFields = Object.entries(typeToField).filter(
+      ([, value]) => value !== undefined,
+    );
+
+    return presentFields.length === 1 && presentFields[0][0] === dto.type;
   }
 
-  defaultMessage(): string {
-    return 'Exactly one of audio, text, video or system must be present.';
+  defaultMessage(args: ValidationArguments): string {
+    const dto = args.object as MessageDto;
+    return `type "${dto.type}" must match the populated field. Exactly one of audio, text, video or system must be present and it must match type.`;
   }
 }
 
@@ -41,6 +46,16 @@ export class AudioDto {
 export class VideoDto {
   @IsString()
   mediaUrl!: string;
+}
+
+export class TextDto {
+  @IsString()
+  body!: string;
+}
+
+export class SystemDto {
+  @IsString()
+  body!: string;
 }
 
 export class MessageDto {
@@ -62,8 +77,9 @@ export class MessageDto {
   audio?: AudioDto;
 
   @IsOptional()
-  @IsObject()
-  text?: Record<string, unknown>;
+  @ValidateNested()
+  @Type(() => TextDto)
+  text?: TextDto;
 
   @IsOptional()
   @ValidateNested()
@@ -71,11 +87,12 @@ export class MessageDto {
   video?: VideoDto;
 
   @IsOptional()
-  @IsObject()
-  system?: Record<string, unknown>;
+  @ValidateNested()
+  @Type(() => SystemDto)
+  system?: SystemDto;
 
-  @Validate(ExactlyOneOfAudioTextVideoSystemConstraint)
-  private readonly exactlyOneOfAudioTextVideoSystem!: true;
+  @Validate(TypeMatchesPayloadConstraint)
+  private readonly typeMatchesPayload!: true;
 }
 
 export class MessageJobDto {
