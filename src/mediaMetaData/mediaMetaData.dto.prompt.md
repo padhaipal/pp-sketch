@@ -2,7 +2,7 @@
 
 import { BadRequestException } from '@nestjs/common';
 import { User } from '../users/user.dto';
-import { AiProvider } from '../aiProviders/aiProvider.dto';
+import { AiProvider } from '../ai-providers/ai-provider.dto';
 
 // --- Enums (match pg custom types) ---
 
