@@ -1,9 +1,10 @@
-1.) If the message is type system ((Note that system messages are only used to communicate changes to the user’s phone number and nothing else. It is important not to miss these because if we do the user with the new phone number will look like a new user).
-* Use the user phone number as an externalID to find and update the user in the database. Throw away the old user phone number. !!! I need to update the prompt for src/user/user.service.ts to support this, also see src/docs/database.md for notes !!!
-  * See notes for information about the database fallback.
-* If the user can’t be found in the database then log a WARN, return 404. 
-* Else, then I have successfully updated the user entity in the database. End span. Return 2XX.
-2.) Attempt to get the user’s data by hitting the database using the user’s phone number as the external_id.
+Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/wabot/inbound/wabot-inbound.dto.ts (MessageJobDto).
+
+1.) If the message is type system ((Note that system messages are only used to communicate changes to the user's phone number and nothing else. It is important not to miss these because if we do the user with the new phone number will look like a new user).
+* Use the user phone number as an externalID to update the user in the database, this is the method to use users/user.service.ts/update().
+* If the user can't be found in the database then log a WARN, fail the job.
+* Else, then I have successfully updated the user entity in the database. End span. Complete the job.
+2.) Attempt to get the user's data by hitting the database using the user's phone number as the external_id.
 * See notes for information about the database fallback and apply it to all the db calls in the steps below.
 * If user doesn't exist in the database and the message is type text.
 	* Search the text for valid phone numbers.
@@ -18,7 +19,7 @@
   * End span.
 * Else: I now have the existing user's information. 
 3.) Check the timestamp on the message.
-* If it is more than 20 seconds old then log a WARN, return 2XX and end the span. Note that wabot will handle sending the "please try again" message to the user.
+* If it is more than 20 seconds old then log a WARN, complete the job and end the span. Note that wabot will handle sending the "please try again" message to the user.
 4.) If the message is not type audio, reaction or text then. 
 * src/wabot/outbound/outbound.service.ts/sendWAMessage() with .env/AUDIO_ONLY_REQUEST_EXTERNAL_ID.
   * See sendWAMessage() notes for how to handle the http response.
@@ -30,11 +31,11 @@
 
 Note
 * How to handle sendWAMessage() responses.  
-  * If 2XX. Then log INFO and return 2XX. 
-  * If 4XX. Then log ERROR and return 4XX. 
-	* If 5XX. Then log WARN and return 5XX. 
+  * If 2XX. Then log INFO and complete the job. 
+  * If 4XX. Then log ERROR and fail the job. 
+	* If 5XX. Then log WARN and fail the job. 
 
 Note
 * database fallback
   * If redis is down then log a WARN and connect to the PG database directly.
-    * If the PG database is down then log a WARN, return a 500 status to wabot.
+    * If the PG database is down then log a WARN, fail the job.
