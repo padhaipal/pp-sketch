@@ -25,6 +25,13 @@ type LetterRef =
 
 export type CreateScoreOptions = { score: number } & UserRef & LetterRef;
 
+type LetterOutcomes = string | string[];
+
+export type RecordOutcomesOptions = UserRef & {
+  correct?: LetterOutcomes;
+  incorrect?: LetterOutcomes;
+};
+
 type OptionalUserRef =
   | { user: User;    user_id?: never; user_external_id?: never }
   | { user?: never;  user_id: string; user_external_id?: never }
@@ -128,5 +135,64 @@ export function validateFindScoreOptions(options: unknown): FindScoreOptions {
   validateLetterRefFields(o, 'find()');
 
   return o as unknown as FindScoreOptions;
+}
+
+function validateLetterOutcomes(value: unknown, fieldName: string): string[] {
+  if (typeof value === 'string') {
+    if (value.length === 0) {
+      throw new BadRequestException(
+        `recordOutcomes() options.${fieldName} must be a non-empty string`,
+      );
+    }
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      throw new BadRequestException(
+        `recordOutcomes() options.${fieldName} array must not be empty`,
+      );
+    }
+    for (const item of value) {
+      if (typeof item !== 'string' || item.length === 0) {
+        throw new BadRequestException(
+          `recordOutcomes() options.${fieldName} array items must be non-empty strings`,
+        );
+      }
+    }
+    return value;
+  }
+  throw new BadRequestException(
+    `recordOutcomes() options.${fieldName} must be a string or array of strings`,
+  );
+}
+
+export function validateRecordOutcomesOptions(
+  options: unknown,
+): RecordOutcomesOptions & { _correct: string[]; _incorrect: string[] } {
+  if (!options || typeof options !== 'object') {
+    throw new BadRequestException('recordOutcomes() options must be an object');
+  }
+  const o = options as Record<string, unknown>;
+
+  exactlyOne(
+    { user: o.user, user_id: o.user_id, user_external_id: o.user_external_id },
+    'user ref',
+  );
+  validateUserRefFields(o, 'recordOutcomes()');
+
+  if (o.correct === undefined && o.incorrect === undefined) {
+    throw new BadRequestException(
+      'recordOutcomes() requires at least one of correct or incorrect',
+    );
+  }
+
+  const _correct = o.correct !== undefined
+    ? validateLetterOutcomes(o.correct, 'correct')
+    : [];
+  const _incorrect = o.incorrect !== undefined
+    ? validateLetterOutcomes(o.incorrect, 'incorrect')
+    : [];
+
+  return { ...(o as unknown as RecordOutcomesOptions), _correct, _incorrect };
 }
 ```
