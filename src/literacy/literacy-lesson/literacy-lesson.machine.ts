@@ -1,5 +1,6 @@
-import { setup, assign, createActor } from "xstate";
+import { setup, assign, createActor, and } from "xstate";
 import { markWord } from "./evaluate-answer.utils";
+import { scoreService } from "../score/score.service";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -67,14 +68,18 @@ export const machine = setup({
       on: {
         ANSWER: [
           {
-            guard: addEventListener([
+            guard: and([
               { type: 'checkAnswer', params: { fn: markWord } },
               ({ context }) => context.wordErrors === 0
             ]),
             target: 'complete',
-          },
-          {
-            guard: ({ context }) => context.wordErrors >= 2,
+            actions: [
+              ({ context }) => {
+                scoreService.gradeAndRecord({
+                  correct: Array.from(context.word),
+                });
+              },
+            ]
           }
         ],
       },

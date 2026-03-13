@@ -12,17 +12,17 @@ Single database round-trip. Returns scores ordered by `created_at DESC`.
 - `limit` defaults to `DEFAULT_FIND_SCORE_LIMIT` (100,000) when omitted. Must be a positive integer not exceeding `DEFAULT_FIND_SCORE_LIMIT`.
 - Builds a single `SELECT ... FROM scores` query, conditionally adding `WHERE` clauses for user_id and/or letter_id, plus `ORDER BY created_at DESC` and `LIMIT`.
 
-## recordOutcomes(options: RecordOutcomesOptions): Promise\<Score[]>
+## gradeAndRecord(options: GradeAndRecordOptions): Promise\<Score[]>
 
 Two database round-trips. Accepts correct/incorrect letter graphemes for a single user, recalculates scores, and persists them.
 
-1.) Validate options at runtime with `validateRecordOutcomesOptions()`. This normalises `correct` and `incorrect` into `string[]` (wrapping a bare string in an array) and ensures at least one is provided. If validation fails, let the `BadRequestException` propagate.
+1.) Validate options at runtime with `validateGradeAndRecordOptions()`. This normalises `correct` and `incorrect` into `string[]` (wrapping a bare string in an array) and ensures at least one is provided. If validation fails, let the `BadRequestException` propagate.
 
 2.) **DB hit 1** — call `find()` for this user (no letter filter, no limit override — uses the default). From the returned rows (already ordered by `created_at DESC`), extract the most recent score per `letter_id` by keeping only the first occurrence of each `letter_id`.
 
 3.) From that map of latest-per-letter scores, remove every entry whose `score` value is an integer (`score % 1 === 0`). What remains is the set of "active" non-integer scores.
 
-4.) Compute `average`: the arithmetic mean of all remaining non-integer score values. If no non-integer scores exist, use `0.5` as the default average.
+4.) Compute `average`: the arithmetic mean of all remaining non-integer score values. If no non-integer scores exist, use `0.001` as the default average.
 
 5.) For each grapheme in `_correct` and `_incorrect`:
    - Look up the letter's previous score from the non-integer map built in step 3 (may be `undefined` if the letter had no prior non-integer score or no score at all).

@@ -27,7 +27,7 @@ export type CreateScoreOptions = { score: number } & UserRef & LetterRef;
 
 type LetterOutcomes = string | string[];
 
-export type RecordOutcomesOptions = UserRef & {
+export type GradeAndRecordOptions = UserRef & {
   correct?: LetterOutcomes;
   incorrect?: LetterOutcomes;
 };
@@ -141,7 +141,7 @@ function validateLetterOutcomes(value: unknown, fieldName: string): string[] {
   if (typeof value === 'string') {
     if (value.length === 0) {
       throw new BadRequestException(
-        `recordOutcomes() options.${fieldName} must be a non-empty string`,
+        `gradeAndRecord() options.${fieldName} must be a non-empty string`,
       );
     }
     return [value];
@@ -149,28 +149,28 @@ function validateLetterOutcomes(value: unknown, fieldName: string): string[] {
   if (Array.isArray(value)) {
     if (value.length === 0) {
       throw new BadRequestException(
-        `recordOutcomes() options.${fieldName} array must not be empty`,
+        `gradeAndRecord() options.${fieldName} array must not be empty`,
       );
     }
     for (const item of value) {
       if (typeof item !== 'string' || item.length === 0) {
         throw new BadRequestException(
-          `recordOutcomes() options.${fieldName} array items must be non-empty strings`,
+          `gradeAndRecord() options.${fieldName} array items must be non-empty strings`,
         );
       }
     }
     return value;
   }
   throw new BadRequestException(
-    `recordOutcomes() options.${fieldName} must be a string or array of strings`,
+    `gradeAndRecord() options.${fieldName} must be a string or array of strings`,
   );
 }
 
-export function validateRecordOutcomesOptions(
+export function validateGradeAndRecordOptions(
   options: unknown,
-): RecordOutcomesOptions & { _correct: string[]; _incorrect: string[] } {
+): GradeAndRecordOptions & { _correct: string[]; _incorrect: string[] } {
   if (!options || typeof options !== 'object') {
-    throw new BadRequestException('recordOutcomes() options must be an object');
+    throw new BadRequestException('gradeAndRecord() options must be an object');
   }
   const o = options as Record<string, unknown>;
 
@@ -178,11 +178,11 @@ export function validateRecordOutcomesOptions(
     { user: o.user, user_id: o.user_id, user_external_id: o.user_external_id },
     'user ref',
   );
-  validateUserRefFields(o, 'recordOutcomes()');
+  validateUserRefFields(o, 'gradeAndRecord()');
 
   if (o.correct === undefined && o.incorrect === undefined) {
     throw new BadRequestException(
-      'recordOutcomes() requires at least one of correct or incorrect',
+      'gradeAndRecord() requires at least one of correct or incorrect',
     );
   }
 
@@ -193,6 +193,6 @@ export function validateRecordOutcomesOptions(
     ? validateLetterOutcomes(o.incorrect, 'incorrect')
     : [];
 
-  return { ...(o as unknown as RecordOutcomesOptions), _correct, _incorrect };
+  return { ...(o as unknown as GradeAndRecordOptions), _correct, _incorrect };
 }
 ```
