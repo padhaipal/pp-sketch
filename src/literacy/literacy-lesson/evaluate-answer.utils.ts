@@ -189,12 +189,8 @@ class EvaluateAnswer {
       if (cleanedExampleChars.length === 0 || cleanedStudentChars.length === 0) {
         continue;
       }
-      if (cleanedExampleChars[0] !== cleanedStudentChars[0]) continue;
-      if (cleanedExampleChars.length > 1 && this.isMatra(cleanedExampleChars[1])) {
-        if (!(cleanedStudentChars.length > 1 && cleanedStudentChars[1] === cleanedExampleChars[1])) {
-          continue;
-        }
-      }
+      if (cleanedExampleChars[0] !== cleanedStudentChars[0] && !sameFamily(cleanedExampleChars[0], cleanedStudentChars[0])) continue;
+      // Todo: I need to hard code checks for matra images here since those words don't start with the matra character.
       return true;
     }
     return false;
