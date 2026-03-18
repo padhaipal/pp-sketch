@@ -1,5 +1,5 @@
 import { setup, assign, createActor, and, not } from "xstate";
-import { markWord, markLetter, detectIncorrectEndMatra, detectIncorrectMiddleMatra, detectInsertion } from "./evaluate-answer.utils";
+import { markWord, markLetter, markImage, detectIncorrectEndMatra, detectIncorrectMiddleMatra, detectInsertion } from "./evaluate-answer.utils";
 import { identifyCharacterStatus } from "./identify-character-status.utils";
 import { scoreService } from "../score/score.service";
 
@@ -289,7 +289,35 @@ export const machine = setup({
         ]
     },
 
-    image: {},
+    image: {
+      entry: assign({
+        answer: ({ context }) => context.wrongCharacters[0],
+      }),
+      on: {
+        ANSWER: [
+          // Student got the image correct, go to the letterImage state.
+          {
+            guard: { type: 'checkAnswer', params: { fn: markImage } },
+            target: 'letterImage',
+          },
+          // This is the student's second attempt, go to the letterImage state.
+          {
+            guard: ({ context }) => context.imageErrors >= 1,
+            target: 'letterImage',
+            actions: [
+              { type: 'resetToZero', params: { keys: 'imageErrors' } },
+            ],
+          },
+          // The student got the image wrong on the first attempt.
+          {
+            target: 'image',
+            actions: [
+              { type: 'increment', params: { keys: 'imageErrors' } },
+            ],
+          },
+        ],
+      },
+    },
 
     letterNoImage: {},
 
