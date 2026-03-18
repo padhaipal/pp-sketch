@@ -1,6 +1,3 @@
-// src/apps/alfa-app/state/evaluate-answer.utils.ts
-import { LogMethod } from 'src/common/decorators/log-method.decorator';
-
 /* ───────── constants ───────── */
 const CONSONANT_SET = new Set(
   'अआइईउऊऋॠऌॡएऐओऔकखगघङचछजझञटठडढणतथदधनपफबभमयरलवशषसहabcdefghijklmnopqrstuvwxyz'.split(
@@ -75,7 +72,6 @@ class EvaluateAnswer {
 
   /* public APIs --------------------------------------------------- */
 
-  @LogMethod()
   static markWord({ correctAnswer, studentAnswer }: MarkArgs): boolean {
     const cleanedCorrectAnswer = this.clean(correctAnswer);
     const studentWords = studentAnswer.split(/\s+/);
@@ -181,7 +177,6 @@ class EvaluateAnswer {
     return MATRAS.has(char);
   }
 
-  @LogMethod()
   static markImage({ correctAnswer, studentAnswer }: MarkArgs): boolean {
     const cleanedExampleWord = this.clean(correctAnswer);
     const cleanedExampleChars = this.splitWord(cleanedExampleWord);
@@ -205,7 +200,6 @@ class EvaluateAnswer {
     return false;
   }
 
-  @LogMethod()
   static markLetter({ correctAnswer, studentAnswer }: MarkArgs): boolean {
     const cleanedCorrectAnswer = this.clean(correctAnswer);
     const words = studentAnswer.trim().split(/\s+/);
@@ -263,7 +257,6 @@ class EvaluateAnswer {
     });
   }
 
-  @LogMethod()
   private static markPhoneme(correctAnswer: string, word: string): boolean {
     if (!word || !correctAnswer) return false;
     if (word === correctAnswer) return true;
@@ -278,12 +271,10 @@ class EvaluateAnswer {
     return false;
   }
 
-  @LogMethod()
   private static markConjunct(correctAnswer: string, word: string): boolean {
     return word === correctAnswer;
   }
 
-  @LogMethod()
   static detectIncorrectEndMatra({ correctAnswer, studentAnswer }: MarkArgs): boolean {
     return studentAnswer
       .trim()
@@ -291,7 +282,29 @@ class EvaluateAnswer {
       .some((w) => w === correctAnswer + LONG_A);
   }
 
-  @LogMethod()
+  static detectInsertion({ correctAnswer, studentAnswer }: MarkArgs): boolean {
+    const cleanedCorrect = this.clean(correctAnswer);
+    if (cleanedCorrect.length === 0) {
+      console.error(
+        'detectInsertion: cleanedCorrect is empty. Raw value was:',
+        correctAnswer,
+      );
+      return false;
+    }
+    return studentAnswer.split(/\s+/).some((studentWord) => {
+      const cleanedStudent = this.clean(studentWord);
+      if (cleanedStudent.length <= cleanedCorrect.length) return false;
+      const correctChars = Array.from(cleanedCorrect);
+      const studentChars = Array.from(cleanedStudent);
+      let ci = 0;
+      for (const ch of studentChars) {
+        if (ch === correctChars[ci]) ci++;
+        if (ci === correctChars.length) return true;
+      }
+      return false;
+    });
+  }
+
   static detectIncorrectMiddleMatra({ correctAnswer, studentAnswer }: MarkArgs): boolean {
     const cleanT = correctAnswer.normalize('NFC');
     const cleanS = studentAnswer.normalize('NFC');
@@ -319,6 +332,8 @@ export type { MarkArgs };
 export const markWord = (args: MarkArgs) => EvaluateAnswer.markWord(args);
 export const markImage = (args: MarkArgs) => EvaluateAnswer.markImage(args);
 export const markLetter = (args: MarkArgs) => EvaluateAnswer.markLetter(args);
+export const detectInsertion = (args: MarkArgs) =>
+  EvaluateAnswer.detectInsertion(args);
 export const detectIncorrectEndMatra = (args: MarkArgs) =>
   EvaluateAnswer.detectIncorrectEndMatra(args);
 export const detectIncorrectMiddleMatra = (args: MarkArgs) =>
