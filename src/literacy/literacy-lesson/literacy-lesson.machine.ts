@@ -10,6 +10,7 @@ interface Context {
   wrongCharacters: string[];
   wordErrors: number;
   imageErrors: number;
+  letterErrors: number;
   letterImageErrors: number;
   letterNoImageErrors: number;
   answer: string | undefined;
@@ -277,6 +278,13 @@ export const machine = setup({
           {
             guard: not({ type: 'checkAnswer', params: { fn: markLetter } }),
             target: 'image',
+            actions: [
+              ({ context }) => {
+                scoreService.gradeAndRecord({
+                  incorrect: [context.wrongCharacters[0]],
+                });
+              }
+            ]
           },
           // This transition should never be reached — all cases are handled above.
           {
@@ -318,6 +326,83 @@ export const machine = setup({
         ],
       },
     },
+
+    letterImage: {
+      entry: assign({
+        answer: ({ context }) => context.wrongCharacters[0],
+      }),
+      on: {
+        ANSWER: [
+          // Student got the letter correct and it is the last letter in wrongCharacters, go back to the word state.
+          {
+            guard: and([
+              { type: 'checkAnswer', params: { fn: markLetter } },
+              ({ context }) => context.wrongCharacters.length === 1
+            ]),
+            target: 'word',
+            actions: [
+              { type: 'dropFirstWrongCharacter' },
+            ]
+          },
+          // Student got the letter correct but it isn't the last letter in wrongCharacters, go to the next letter state.
+          {
+            guard: { type: 'checkAnswer', params: { fn: markLetter } },
+            target: 'routeWrongLetter',
+            actions: [
+              { type: 'dropFirstWrongCharacter' },
+            ]
+          },
+          // Student got the letter wrong, it is their first attempt.
+          {
+            guard: ({ context }) => context.letterErrors === 0,
+            target: 'letterImage',
+            actions: [
+              { type: 'increment', params: { keys: 'letterErrors' } },
+            ]
+          },
+          // Student got the letter wrong, it is their second attempt.
+          {
+            guard: ({ context }) => context.letterErrors === 1,
+            target: 'letterImage',
+            actions: [
+              { type: 'increment', params: { keys: 'letterErrors' } },
+            ]
+          },
+          // Student got the letter wrong three times, it is the last letter in wrongCharacters.
+          {
+            guard: and([
+              ({ context }) => context.letterErrors >= 2,
+              ({ context }) => context.wrongCharacters.length === 1
+            ]),
+            target: 'word',
+            actions: [
+              { type: 'resetToZero', params: { keys: 'letterErrors' } },
+              { type: 'dropFirstWrongCharacter' },
+            ]
+          },
+          // Student got the letter wrong three times, more letters remain.
+          {
+            guard: and([
+              ({ context }) => context.letterErrors >= 2,
+              ({ context }) => context.wrongCharacters.length > 1
+            ]),
+            target: 'routeWrongLetter',
+            actions: [
+              { type: 'resetToZero', params: { keys: 'letterErrors' } },
+              { type: 'dropFirstWrongCharacter' },
+            ]
+          },
+          // This transition should never be reached — all cases are handled above.
+          {
+            actions: () => {
+              throw new Error(
+                'Unhandled ANSWER transition in letterImage state — this should be unreachable',
+              );
+            },
+          }
+        ]
+      },
+    }
 
     letterNoImage: {},
 
