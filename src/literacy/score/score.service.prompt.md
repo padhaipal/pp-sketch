@@ -42,8 +42,7 @@ function calculateNewScore(
   previousScore: number | undefined,
   correct: boolean,
 ): number {
-  const base = previousScore ?? average;
-  const direction = correct ? 1 : -1;
-  return base + direction * 0.1 + average * 0.01;
+  const base = previousScore ?? 0;
+  return correct ? base + 1 : base - 5;
 }
 ```
