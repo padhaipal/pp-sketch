@@ -404,7 +404,122 @@ export const machine = setup({
       },
     }
 
-    letterNoImage: {},
+    letterNoImage: {
+      entry: assign({
+        answer: ({ context }) => context.wrongCharacters[0],
+      }),
+      on: {
+        ANSWER: [
+          // Student got the letter correct first go and it is the last letter in wrongCharacters, mark the letter as correct and go back to the word state.
+          {
+            guard: and([
+              { type: 'checkAnswer', params: { fn: markLetter } },
+              ({ context }) => context.letterNoImageErrors === 0,
+              ({ context }) => context.wrongCharacters.length === 1
+            ]),
+            target: 'word',
+            actions: [
+              ({ context }) => {
+                scoreService.gradeAndRecord({
+                  correct: [context.wrongCharacters[0]],
+                });
+              },
+              { type: 'dropFirstWrongCharacter' },
+            ]
+          },
+          // Student got the letter correct first go but it isn't the last letter in wrongCharacters, mark the letter as correct and go to the routeWrongLetter state.
+          {
+            guard: and([
+              { type: 'checkAnswer', params: { fn: markLetter } },
+              ({ context }) => context.letterNoImageErrors === 0,
+              ({ context }) => context.wrongCharacters.length >= 1,
+            ]),
+            target: 'routeWrongLetter',
+            actions: [
+              ({ context }) => {
+                scoreService.gradeAndRecord({
+                  correct: [context.wrongCharacters[0]],
+                });
+              },
+              { type: 'dropFirstWrongCharacter' },
+            ]
+          },
+          // Student got the letter correct second go and it is the last letter in wrongCharacters, go back to the word state.
+          {
+            guard: and([
+              { type: 'checkAnswer', params: { fn: markLetter } },
+              ({ context }) => context.letterNoImageErrors >= 1,
+              ({ context }) => context.wrongCharacters.length === 1
+            ]),
+            target: 'word',
+            actions: [
+              { type: 'dropFirstWrongCharacter' },
+              { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
+            ]
+          },
+          // Student got the letter correct second go but it isn't the last letter in wrongCharacters, go to the routeWrongLetter state.
+          {
+            guard: and([
+              { type: 'checkAnswer', params: { fn: markLetter } },
+              ({ context }) => context.letterNoImageErrors >= 1,
+              ({ context }) => context.wrongCharacters.length >= 1,
+            ]),
+            target: 'routeWrongLetter',
+            actions: [
+              { type: 'dropFirstWrongCharacter' },
+              { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
+            ]
+          },
+          // Student got the letter wrong first go, mark the letter as incorrect and go to the letterNoImage state.
+          {
+            guard: and([
+              ({ context }) => context.letterNoImageErrors === 0,
+            ]),
+            target: 'letterNoImage',
+            actions: [
+              ({ context }) => {
+                scoreService.gradeAndRecord({
+                  incorrect: [context.wrongCharacters[0]],
+                });
+              },
+              { type: 'increment', params: { keys: 'letterNoImageErrors' } },
+            ]
+          },
+          // Student got the letter wrong second go and it is the last letter in wrongCharacters, go to the word state.
+          {
+            guard: and([
+              ({ context }) => context.letterNoImageErrors >= 1,
+              ({ context }) => context.wrongCharacters.length === 1,
+            ]),
+            target: 'word',
+            actions: [
+              { type: 'dropFirstWrongCharacter' },
+              { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
+            ]
+          },
+          // Student got the letter wrong second go and it is not the last letter in wrongCharacters, go to the routeWrongLetter state.
+          {
+            guard: and([
+              ({ context }) => context.letterNoImageErrors >= 1,
+              ({ context }) => context.wrongCharacters.length >= 1,
+            ]),
+            target: 'routeWrongLetter',
+            actions: [
+              { type: 'dropFirstWrongCharacter' },
+              { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
+            ]
+          },
+          // This transition should never be reached — all cases are handled above.
+          {
+            actions: () => {
+              throw new Error(
+                'Unhandled ANSWER transition in letterNoImage state — this should be unreachable',
+              );
+            },
+          }
+        ]
+      },
+    },
 
     complete: {
       type: 'final',
