@@ -7,13 +7,14 @@ import { scoreService } from "../score/score.service";
 
 interface Context {
   word: string;
-  wrongCharacters: string[];
+  wrongLetters: string[];
   wordErrors: number;
   imageErrors: number;
   letterErrors: number;
   letterImageErrors: number;
   letterNoImageErrors: number;
   answer: string | undefined;
+  mediaExternalId: string;
 }
 
 type CounterKey = keyof {
@@ -61,8 +62,8 @@ export const machine = setup({
       }
       return updates;
     }),
-    dropFirstWrongCharacter: assign({
-      wrongCharacters: ({ context }) => context.wrongCharacters.slice(1),
+    dropFirstWrongLetter: assign({
+      wrongLetters: ({ context }) => context.wrongLetters.slice(1),
     }),
     resetToZero: assign(({ context }, params: { keys: CounterKey | CounterKey[] }) => {
       const updates: Partial<Context> = {};
@@ -78,19 +79,20 @@ export const machine = setup({
 
   context: ({ input }) => ({
     word: input.word,
-    wrongCharacters: [],
+    wrongLetters: [],
     wordErrors: 0,
     imageErrors: 0,
     letterImageErrors: 0,
     letterNoImageErrors: 0,
     answer: input.word,
+    mediaExternalId: `${input.word}-word-initial`,
   }),
 
   states: {
     word: {
       entry: assign({
         answer: ({ context }) => context.word,
-        wrongCharacters: () => [],
+        wrongLetters: () => [],
       }),
       on: {
         ANSWER: [
@@ -102,6 +104,7 @@ export const machine = setup({
             ]),
             target: 'complete',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.word}-word-correct-first` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
                   correct: Array.from(context.word),
@@ -112,12 +115,18 @@ export const machine = setup({
           // Student got the word correct on a subsequent try, no score change.
           {
             guard: { type: 'checkAnswer', params: { fn: markWord } },
-            target: 'complete'
+            target: 'complete',
+            actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.word}-word-correct-retry` }),
+            ]
           },
           // Student got the word wrong three times, move on to the next word.
           {
             guard: ({ context }) => context.wordErrors >= 2,
-            target: 'complete'
+            target: 'complete',
+            actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.word}-word-maxErrors` }),
+            ]
           },
           // The student only made an end matra error on the first attempt, mark all letters in the word as correct.
           {
@@ -127,6 +136,7 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.word}-word-endMatra-first` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
               ({ context }) => {
                 scoreService.gradeAndRecord({
@@ -140,7 +150,8 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: detectIncorrectEndMatra } },
             target: 'word',
             actions: [
-              { type: 'increment', params: { keys: 'wordErrors' } }
+              assign({ mediaExternalId: ({ context }) => `${context.word}-word-endMatra-retry` }),
+              { type: 'increment', params: { keys: 'wordErrors' } },
             ]
           },
           // The student only made a middle matra error on the first attempt, mark all letters in the word as correct.
@@ -151,6 +162,7 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.word}-word-middleMatra-first` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
               ({ context }) => {
                 scoreService.gradeAndRecord({
@@ -164,7 +176,8 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: detectIncorrectMiddleMatra } },
             target: 'word',
             actions: [
-              { type: 'increment', params: { keys: 'wordErrors' } }
+              assign({ mediaExternalId: ({ context }) => `${context.word}-word-middleMatra-retry` }),
+              { type: 'increment', params: { keys: 'wordErrors' } },
             ]
           },
           // The student only made an insertion error on the first attempt, mark all letters in the word as correct.
@@ -175,6 +188,7 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.word}-word-insertion-first` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
               ({ context }) => {
                 scoreService.gradeAndRecord({
@@ -188,15 +202,18 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: detectInsertion } },
             target: 'word',
             actions: [
-              { type: 'increment', params: { keys: 'wordErrors' } }
+              assign({ mediaExternalId: ({ context }) => `${context.word}-word-insertion-retry` }),
+              { type: 'increment', params: { keys: 'wordErrors' } },
             ]
           },
           // Only make the student go through the letter loop once. 
           {
             guard: ({ context }) => context.wordErrors >= 1,
             target: 'word',
-            actions: 
-            { type: 'increment', params: { keys: 'wordErrors' } },
+            actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.word}-word-loopBack` }),
+              { type: 'increment', params: { keys: 'wordErrors' } },
+            ],
           },
           // The student got one or more letters wrong on the first attempt.
           {
@@ -205,7 +222,7 @@ export const machine = setup({
             actions: [
               { type: 'increment', params: { keys: 'wordErrors' } },
               assign({
-                wrongCharacters: ({ context, event }) => {
+                wrongLetters: ({ context, event }) => {
                   const { incorrectChars } = identifyCharacterStatus({
                     correctAnswer: context.word,
                     studentAnswer: event.studentAnswer,
@@ -213,6 +230,7 @@ export const machine = setup({
                   return incorrectChars;
                 },
               }),
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-word-wrong-drillLetters` }),
             ],
           },
           // This transition should never be reached — all cases are handled above.
@@ -230,7 +248,7 @@ export const machine = setup({
     routeWrongLetter: {
       always: [
         {
-          guard: ({ context }) => NO_IMAGE_LETTERS.has(context.wrongCharacters[0]),
+          guard: ({ context }) => NO_IMAGE_LETTERS.has(context.wrongLetters[0]),
           target: 'letterNoImage',
         },
         {
@@ -241,37 +259,39 @@ export const machine = setup({
 
     letter: {
       entry: assign({
-        answer: ({ context }) => context.wrongCharacters[0],
+        answer: ({ context }) => context.wrongLetters[0],
       }),
       on: {
         ANSWER: [
-          // Student got the letter correct and it is the last letter in wrongCharacters, mark the letter as correct and go back to the word state.
+          // Student got the letter correct and it is the last letter in wrongLetters, mark the letter as correct and go back to the word state.
           {
             guard: and([
               { type: 'checkAnswer', params: { fn: markLetter } },
-              ({ context }) => context.wrongCharacters.length === 1
+              ({ context }) => context.wrongLetters.length === 1
             ]),
             target: 'word',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.word}-letter-correct-last` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
-                  correct: [context.wrongCharacters[0]],
+                  correct: [context.wrongLetters[0]],
                 });
               },
-              { type: 'dropFirstWrongCharacter' },
+              { type: 'dropFirstWrongLetter' },
             ]
           },
-          // Student got the letter correct but it isn't the last letter in wrongCharacters, mark the letter as correct and to the next letter state.
+          // Student got the letter correct but it isn't the last letter in wrongLetters, mark the letter as correct and to the next letter state.
           {
             guard: { type: 'checkAnswer', params: { fn: markLetter } },
             target: 'routeWrongLetter',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letter-correct-more` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
-                  correct: [context.wrongCharacters[0]],
+                  correct: [context.wrongLetters[0]],
                 });
               },
-              { type: 'dropFirstWrongCharacter' },
+              { type: 'dropFirstWrongLetter' },
             ]
           },
           // Student got the letter wrong, mark the letter as incorrect and go to the image state.
@@ -279,9 +299,10 @@ export const machine = setup({
             guard: not({ type: 'checkAnswer', params: { fn: markLetter } }),
             target: 'image',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letter-wrong` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
-                  incorrect: [context.wrongCharacters[0]],
+                  incorrect: [context.wrongLetters[0]],
                 });
               }
             ]
@@ -299,7 +320,7 @@ export const machine = setup({
 
     image: {
       entry: assign({
-        answer: ({ context }) => context.wrongCharacters[0],
+        answer: ({ context }) => context.wrongLetters[0],
       }),
       on: {
         ANSWER: [
@@ -307,12 +328,16 @@ export const machine = setup({
           {
             guard: { type: 'checkAnswer', params: { fn: markImage } },
             target: 'letterImage',
+            actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-image-correct` }),
+            ],
           },
           // This is the student's second attempt, go to the letterImage state.
           {
             guard: ({ context }) => context.imageErrors >= 1,
             target: 'letterImage',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-image-maxErrors` }),
               { type: 'resetToZero', params: { keys: 'imageErrors' } },
             ],
           },
@@ -320,6 +345,7 @@ export const machine = setup({
           {
             target: 'image',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-image-wrong-first` }),
               { type: 'increment', params: { keys: 'imageErrors' } },
             ],
           },
@@ -329,27 +355,29 @@ export const machine = setup({
 
     letterImage: {
       entry: assign({
-        answer: ({ context }) => context.wrongCharacters[0],
+        answer: ({ context }) => context.wrongLetters[0],
       }),
       on: {
         ANSWER: [
-          // Student got the letter correct and it is the last letter in wrongCharacters, go back to the word state.
+          // Student got the letter correct and it is the last letter in wrongLetters, go back to the word state.
           {
             guard: and([
               { type: 'checkAnswer', params: { fn: markLetter } },
-              ({ context }) => context.wrongCharacters.length === 1
+              ({ context }) => context.wrongLetters.length === 1
             ]),
             target: 'word',
             actions: [
-              { type: 'dropFirstWrongCharacter' },
+              assign({ mediaExternalId: ({ context }) => `${context.word}-letterImage-correct-last` }),
+              { type: 'dropFirstWrongLetter' },
             ]
           },
-          // Student got the letter correct but it isn't the last letter in wrongCharacters, go to the next letter state.
+          // Student got the letter correct but it isn't the last letter in wrongLetters, go to the next letter state.
           {
             guard: { type: 'checkAnswer', params: { fn: markLetter } },
             target: 'routeWrongLetter',
             actions: [
-              { type: 'dropFirstWrongCharacter' },
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterImage-correct-more` }),
+              { type: 'dropFirstWrongLetter' },
             ]
           },
           // Student got the letter wrong, it is their first attempt.
@@ -357,6 +385,7 @@ export const machine = setup({
             guard: ({ context }) => context.letterErrors === 0,
             target: 'letterImage',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterImage-wrong-first` }),
               { type: 'increment', params: { keys: 'letterErrors' } },
             ]
           },
@@ -365,31 +394,34 @@ export const machine = setup({
             guard: ({ context }) => context.letterErrors === 1,
             target: 'letterImage',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterImage-wrong-second` }),
               { type: 'increment', params: { keys: 'letterErrors' } },
             ]
           },
-          // Student got the letter wrong three times, it is the last letter in wrongCharacters.
+          // Student got the letter wrong three times, it is the last letter in wrongLetters.
           {
             guard: and([
               ({ context }) => context.letterErrors >= 2,
-              ({ context }) => context.wrongCharacters.length === 1
+              ({ context }) => context.wrongLetters.length === 1
             ]),
             target: 'word',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.word}-letterImage-maxErrors-last` }),
               { type: 'resetToZero', params: { keys: 'letterErrors' } },
-              { type: 'dropFirstWrongCharacter' },
+              { type: 'dropFirstWrongLetter' },
             ]
           },
           // Student got the letter wrong three times, more letters remain.
           {
             guard: and([
               ({ context }) => context.letterErrors >= 2,
-              ({ context }) => context.wrongCharacters.length > 1
+              ({ context }) => context.wrongLetters.length > 1
             ]),
             target: 'routeWrongLetter',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterImage-maxErrors-more` }),
               { type: 'resetToZero', params: { keys: 'letterErrors' } },
-              { type: 'dropFirstWrongCharacter' },
+              { type: 'dropFirstWrongLetter' },
             ]
           },
           // This transition should never be reached — all cases are handled above.
@@ -406,67 +438,71 @@ export const machine = setup({
 
     letterNoImage: {
       entry: assign({
-        answer: ({ context }) => context.wrongCharacters[0],
+        answer: ({ context }) => context.wrongLetters[0],
       }),
       on: {
         ANSWER: [
-          // Student got the letter correct first go and it is the last letter in wrongCharacters, mark the letter as correct and go back to the word state.
+          // Student got the letter correct first go and it is the last letter in wrongLetters, mark the letter as correct and go back to the word state.
           {
             guard: and([
               { type: 'checkAnswer', params: { fn: markLetter } },
               ({ context }) => context.letterNoImageErrors === 0,
-              ({ context }) => context.wrongCharacters.length === 1
+              ({ context }) => context.wrongLetters.length === 1
             ]),
             target: 'word',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.word}-letterNoImage-correct-first-last` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
-                  correct: [context.wrongCharacters[0]],
+                  correct: [context.wrongLetters[0]],
                 });
               },
-              { type: 'dropFirstWrongCharacter' },
+              { type: 'dropFirstWrongLetter' },
             ]
           },
-          // Student got the letter correct first go but it isn't the last letter in wrongCharacters, mark the letter as correct and go to the routeWrongLetter state.
+          // Student got the letter correct first go but it isn't the last letter in wrongLetters, mark the letter as correct and go to the routeWrongLetter state.
           {
             guard: and([
               { type: 'checkAnswer', params: { fn: markLetter } },
               ({ context }) => context.letterNoImageErrors === 0,
-              ({ context }) => context.wrongCharacters.length >= 1,
+              ({ context }) => context.wrongLetters.length >= 1,
             ]),
             target: 'routeWrongLetter',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-correct-first-more` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
-                  correct: [context.wrongCharacters[0]],
+                  correct: [context.wrongLetters[0]],
                 });
               },
-              { type: 'dropFirstWrongCharacter' },
+              { type: 'dropFirstWrongLetter' },
             ]
           },
-          // Student got the letter correct second go and it is the last letter in wrongCharacters, go back to the word state.
+          // Student got the letter correct second go and it is the last letter in wrongLetters, go back to the word state.
           {
             guard: and([
               { type: 'checkAnswer', params: { fn: markLetter } },
               ({ context }) => context.letterNoImageErrors >= 1,
-              ({ context }) => context.wrongCharacters.length === 1
+              ({ context }) => context.wrongLetters.length === 1
             ]),
             target: 'word',
             actions: [
-              { type: 'dropFirstWrongCharacter' },
+              assign({ mediaExternalId: ({ context }) => `${context.word}-letterNoImage-correct-retry-last` }),
+              { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
             ]
           },
-          // Student got the letter correct second go but it isn't the last letter in wrongCharacters, go to the routeWrongLetter state.
+          // Student got the letter correct second go but it isn't the last letter in wrongLetters, go to the routeWrongLetter state.
           {
             guard: and([
               { type: 'checkAnswer', params: { fn: markLetter } },
               ({ context }) => context.letterNoImageErrors >= 1,
-              ({ context }) => context.wrongCharacters.length >= 1,
+              ({ context }) => context.wrongLetters.length >= 1,
             ]),
             target: 'routeWrongLetter',
             actions: [
-              { type: 'dropFirstWrongCharacter' },
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-correct-retry-more` }),
+              { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
             ]
           },
@@ -477,35 +513,38 @@ export const machine = setup({
             ]),
             target: 'letterNoImage',
             actions: [
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-wrong-first` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
-                  incorrect: [context.wrongCharacters[0]],
+                  incorrect: [context.wrongLetters[0]],
                 });
               },
               { type: 'increment', params: { keys: 'letterNoImageErrors' } },
             ]
           },
-          // Student got the letter wrong second go and it is the last letter in wrongCharacters, go to the word state.
+          // Student got the letter wrong second go and it is the last letter in wrongLetters, go to the word state.
           {
             guard: and([
               ({ context }) => context.letterNoImageErrors >= 1,
-              ({ context }) => context.wrongCharacters.length === 1,
+              ({ context }) => context.wrongLetters.length === 1,
             ]),
             target: 'word',
             actions: [
-              { type: 'dropFirstWrongCharacter' },
+              assign({ mediaExternalId: ({ context }) => `${context.word}-letterNoImage-wrong-last` }),
+              { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
             ]
           },
-          // Student got the letter wrong second go and it is not the last letter in wrongCharacters, go to the routeWrongLetter state.
+          // Student got the letter wrong second go and it is not the last letter in wrongLetters, go to the routeWrongLetter state.
           {
             guard: and([
               ({ context }) => context.letterNoImageErrors >= 1,
-              ({ context }) => context.wrongCharacters.length >= 1,
+              ({ context }) => context.wrongLetters.length >= 1,
             ]),
             target: 'routeWrongLetter',
             actions: [
-              { type: 'dropFirstWrongCharacter' },
+              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-wrong-more` }),
+              { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
             ]
           },

@@ -27,8 +27,12 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/wabot/inb
   * source_url: payload.message.audio.mediaUrl
   * user: the User entity from step 2 (trusted path, no extra DB hit)
 * This will return a mediaMetaData entity for the user's audio message which will contain a link to where that audio is stored in the S3 bucket. There will also be several mediaMetaData text entities associated with that mediaMetaData entity which will contain the transcripts of the audio message. 
-6.) Hit the database for the transcript text mediaMetaData entities that are associated with that audio mediaMetaData entity. 
+6.) Hit the database for the transcript text mediaMetaData entities that are associated with that audio mediaMetaData entity. In the same hit also get the previous dehydrated literacy-lesson state for that user. 
 7.) 
+* If there is no literacy-lesson state then start a new lesson.
+* If the literacy-lesson state is older than 60s then start a new lesson.
+* Else rehydrate and run the literacy-lesson and pass in the transcript texts.
+  * 
 
 Note
 * How to handle sendMessage() responses.  
