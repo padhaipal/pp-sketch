@@ -1,7 +1,9 @@
-sendMessage()
-* Format data into the correct shape. Todo: describe the dto which will be controlled by wabot. 
-* Send the http request to wabot sendMessage() api endpoint. 
-* return whatever return status is received.
+sendMessage(options: { user_external_id: string; wamid: string; consecutive?: boolean; media: OutboundMediaItem[]; otel_carrier: Record<string, string> }): Promise<{ status: number; body: { delivered: boolean; reason?: string } }>
+WABOT_INTERNAL_BASE_URL is available in .env.
+Request shape: see src/wabot/outbound/outbound.dto.prompt.md SendMessageRequest.
+* Build the SendMessageRequest body from the options.
+* POST to ${WABOT_INTERNAL_BASE_URL}/sendMessage.
+* Return { status: response HTTP status, body: parsed response JSON }.
 
 downloadMedia(media_url: string, otel_carrier: Record<string, string>): Promise<{ stream: NodeJS.ReadableStream, content_type: string }>
 WABOT_INTERNAL_BASE_URL is available in .env.

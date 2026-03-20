@@ -7,6 +7,7 @@ export interface Score {
   id: string;                  // UUID PK
   user_id: string;             // FK -> users.id
   letter_id: string;           // FK -> letters.id
+  user_message_id: string;    // FK -> media_metadata.id — the user's audio message that triggered this score
   score: number;               // DOUBLE PRECISION
   created_at: Date;            // TIMESTAMPTZ, default now()
 }
@@ -23,13 +24,14 @@ type LetterRef =
   | { letter?: never;  letter_id: string; letter_grapheme?: never }
   | { letter?: never;  letter_id?: never; letter_grapheme: string };
 
-export type CreateScoreOptions = { score: number } & UserRef & LetterRef;
+export type CreateScoreOptions = { score: number; user_message_id: string } & UserRef & LetterRef;
 
 type LetterOutcomes = string | string[];
 
 export type GradeAndRecordOptions = UserRef & {
   correct?: LetterOutcomes;
   incorrect?: LetterOutcomes;
+  userMessageId: string;
 };
 
 type OptionalUserRef =
@@ -106,6 +108,10 @@ export function validateCreateScoreOptions(options: unknown): CreateScoreOptions
     throw new BadRequestException('create() options.score is required and must be a finite number');
   }
 
+  if (typeof o.user_message_id !== 'string' || o.user_message_id.length === 0) {
+    throw new BadRequestException('create() options.user_message_id is required and must be a non-empty string');
+  }
+
   exactlyOne({ user: o.user, user_id: o.user_id, user_external_id: o.user_external_id }, 'user ref');
   exactlyOne({ letter: o.letter, letter_id: o.letter_id, letter_grapheme: o.letter_grapheme }, 'letter ref');
   validateUserRefFields(o, 'create()');
@@ -179,6 +185,10 @@ export function validateGradeAndRecordOptions(
     'user ref',
   );
   validateUserRefFields(o, 'gradeAndRecord()');
+
+  if (typeof o.userMessageId !== 'string' || (o.userMessageId as string).length === 0) {
+    throw new BadRequestException('gradeAndRecord() options.userMessageId is required and must be a non-empty string');
+  }
 
   if (o.correct === undefined && o.incorrect === undefined) {
     throw new BadRequestException(

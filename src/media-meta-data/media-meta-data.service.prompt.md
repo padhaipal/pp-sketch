@@ -12,7 +12,7 @@ createWhatsappAudioMedia(options: CreateWhatsappAudioMediaOptions): Promise<Medi
 3.) Check if a mediaMetaData row with this external_id already exists in the database.
   * If it exists and its status is 'failed', reuse that row: update its status to 'created' and continue to step 4.
   * If it exists and its status is anything other than 'failed', log WARN and return the existing entity (no-op).
-  * If it does not exist, create a new mediaMetaData database row with status = 'created'.
+  * If it does not exist, create a new mediaMetaData database row with status = 'created', rolled_back = false.
 4.)
 * Hit pp-sketch/src/wabot/outbound/outbound.service.ts/downloadMedia() and get it to start streaming the audio file to this worker.
 * Direct this byte flow to the following sinks. STT_TIME_CAP is a .env variable. 
@@ -29,6 +29,56 @@ createWhatsappAudioMedia(options: CreateWhatsappAudioMediaOptions): Promise<Medi
 * update the mediaDetails field
 * Update status to 'ready'
 6.) Return the newly created mediaMetadata entity.
+
+## findTranscripts(options: FindTranscriptsOptions): Promise<MediaMetaData[]>
+
+Single DB round-trip. Returns all text transcript entities that are children of the given media entity.
+
+1.) Validate options at runtime with `validateFindTranscriptsOptions()`. If it fails, let the BadRequestException propagate.
+2.) Resolve the parent media entity's id:
+  * If `options.media_metadata` is provided, use its `.id` directly (trusted, no DB hit).
+  * If `options.media_metadata_id` is provided, use it directly (no DB hit — the FK relationship in the query will fail gracefully if the id doesn't exist).
+  * If `options.media_metadata_external_id` is provided, resolve via subquery: `(SELECT id FROM media_metadata WHERE external_id = $1)`.
+3.) Query: `SELECT * FROM media_metadata WHERE input_media_id = $resolvedId AND media_type = 'text' AND status = 'ready' ORDER BY created_at ASC`.
+4.) Returns an empty array if no transcripts exist (caller decides whether that is an error).
+
+## findMediaByStateTransitionId(stateTransitionId: string): Promise<FindMediaByStateTransitionIdResult>
+
+Single DB round-trip. Looks up all ready media entities whose `external_id` matches the given `stateTransitionId`, then randomly selects one entity per media type.
+
+1.) If `stateTransitionId` is not a valid non-empty string, throw BadRequestException.
+2.) Query: `SELECT * FROM media_metadata WHERE external_id = $1 AND status = 'ready'`.
+3.) Group the returned rows by `media_type`.
+4.) For each media type (audio, video, text, image): if one or more rows exist in that group, randomly select one. If none exist for a type, that key is omitted from the result.
+5.) Return the `FindMediaByStateTransitionIdResult` object.
+
+## markRolledBack(mediaId: string): Promise<void>
+
+Atomically tags the media_metadata row as rolled back AND deletes every row in every table that references it via a foreign key. Both operations happen inside a single transaction so the tag and the deletions are all-or-nothing.
+
+1.) If `mediaId` is not a valid non-empty string, throw BadRequestException.
+2.) Execute the following as a single database call using a plpgsql anonymous block (or a stored function):
+  * `UPDATE media_metadata SET rolled_back = true WHERE id = $1`. If no row was updated (rowCount = 0), raise an exception (NotFoundException).
+  * Dynamically discover all foreign key constraints that reference `media_metadata.id` by querying `pg_constraint` + `pg_attribute`:
+    ```sql
+    SELECT con.conrelid::regclass AS referencing_table,
+           att.attname            AS referencing_column
+    FROM pg_constraint con
+    JOIN pg_attribute att
+      ON att.attrelid = con.conrelid AND att.attnum = ANY(con.conkey)
+    WHERE con.confrelid = 'media_metadata'::regclass
+      AND con.contype = 'f'
+      AND EXISTS (
+        SELECT 1 FROM pg_attribute pa
+        WHERE pa.attrelid = con.confrelid
+          AND pa.attnum = ANY(con.confkey)
+          AND pa.attname = 'id'
+      )
+    ```
+  * For each discovered FK column/table pair, execute `DELETE FROM {table} WHERE {column} = $mediaId`.
+  * All of the above runs inside a single transaction — if any step fails, the entire operation rolls back (neither the tag nor the deletes persist).
+3.) This approach is schema-aware: when a new table adds a FK to `media_metadata.id`, it is automatically covered without code changes.
+
 
 createHeygenMedia(options: CreateHeygenMediaOptions[]): Promise<MediaMetaData[]>
 // TODO: define when heygen integration is built

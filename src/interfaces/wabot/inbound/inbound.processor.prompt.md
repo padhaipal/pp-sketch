@@ -26,13 +26,39 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/wabot/inb
   * external_id: payload.message.audio.mediaUrl
   * source_url: payload.message.audio.mediaUrl
   * user: the User entity from step 2 (trusted path, no extra DB hit)
-* This will return a mediaMetaData entity for the user's audio message which will contain a link to where that audio is stored in the S3 bucket. There will also be several mediaMetaData text entities associated with that mediaMetaData entity which will contain the transcripts of the audio message. 
-6.) Hit the database for the transcript text mediaMetaData entities that are associated with that audio mediaMetaData entity. In the same hit also get the previous dehydrated literacy-lesson state for that user. 
-7.) 
-* If there is no literacy-lesson state then start a new lesson.
-* If the literacy-lesson state is older than 60s then start a new lesson.
-* Else rehydrate and run the literacy-lesson and pass in the transcript texts.
-  * 
+* This will return a mediaMetaData entity for the user's audio message which will contain a link to where that audio is stored in the S3 bucket. There will also be several mediaMetaData text entities associated with that mediaMetaData entity which will contain the transcripts of the audio message.
+* Store the audio mediaMetaData entity's `id` as `userMessageId` — this will be passed to downstream services as the FK linking all writes back to this interaction.
+6.) Call src/media-meta-data/media-meta-data.service.ts/findTranscripts() with:
+  * media_metadata: the audio mediaMetaData entity from step 5 (trusted path — uses .id directly)
+* If no transcripts are returned then log ERROR, end the span, fail the job.
+* Else: continue
+7.) Call src/literacy/literacy-lesson/literacy-lesson.service.ts/processAnswer() with:
+  * user: the User entity from step 2 (trusted path, no extra DB hit)
+  * transcripts: the transcript mediaMetaData entities obtained in step 6
+  * user_message_id: the `userMessageId` from step 5
+* processAnswer() internally handles: finding or creating the lesson state, rehydrating or starting a fresh machine, running the ANSWER event, and persisting the new snapshot. It returns `{ stateTransitionId, isComplete }`. Save the stateTransitionId in a variable.
+* If processAnswer() throws then log ERROR, end the span and fail the job.
+* If processAnswer() returns isComplete === true then call processAnswer() again with just user and user_message_id (omit transcripts — this starts a fresh lesson without sending an ANSWER event). This will return a second stateTransitionId, save it in a variable as well. 
+8.) For each stateTransitionId (there may be one or two), call src/media-meta-data/media-meta-data.service.ts/findMediaByStateTransitionId().
+  * Each call returns a `FindMediaByStateTransitionIdResult` with one randomly selected entity per media type (audio, video, text, image), or undefined for types with no matching media.
+  * Build an ordered `OutboundMediaItem[]` array from the results. For each stateTransitionId's result, append items in this order: video, audio, image, text (skipping any type that is undefined). If there are two stateTransitionIds, the first stateTransitionId's items come before the second's.
+  * For each media entity, construct the OutboundMediaItem:
+    * `type: 'audio' | 'video' | 'image'` → `{ type, url: entity.s3_key or preloaded WhatsApp URL }`
+    * `type: 'text'` → `{ type: 'text', body: entity.text }`
+9.) Send the outbound message(s) to the student via src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with:
+  * user_external_id: the User entity's external_id from step 2
+  * wamid: payload.message.id
+  * consecutive: payload.consecutive
+  * media: the OutboundMediaItem[] array built in step 8
+  * otel_carrier: the current span's carrier
+Note that sendMessage() returns { status, body } where body has a `delivered` flag.
+  * If 2XX and `delivered: true` then log INFO, end the span and mark the job as successful.
+  * If 2XX and `delivered: false` then the inflight window expired and wabot already sent the fallback message. Roll back all writes associated with this interaction:
+    3. Call `mediaMetaDataService.markRolledBack(userMessageId)` — sets `rolled_back = true` on the audio mediaMetaData entity, deleting any fk rows in the database that are associated with that userMessageId and preventing any late/out-of-order writes from referencing it.
+    * Log INFO, end the span and mark the job as successful.
+  * If 4XX then log ERROR, end the span and fail the job.
+  * If 5XX then log ERROR, end the span and fail the job.
+
 
 Note
 * How to handle sendMessage() responses.  

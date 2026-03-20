@@ -14,7 +14,8 @@ interface Context {
   letterImageErrors: number;
   letterNoImageErrors: number;
   answer: string | undefined;
-  mediaExternalId: string;
+  stateTransitionId: string;
+  userMessageId: string;
 }
 
 type CounterKey = keyof {
@@ -82,10 +83,12 @@ export const machine = setup({
     wrongLetters: [],
     wordErrors: 0,
     imageErrors: 0,
+    letterErrors: 0,
     letterImageErrors: 0,
     letterNoImageErrors: 0,
     answer: input.word,
-    mediaExternalId: `${input.word}-word-initial`,
+    stateTransitionId: `${input.word}-word-initial`,
+    userMessageId: input.userMessageId,
   }),
 
   states: {
@@ -104,10 +107,11 @@ export const machine = setup({
             ]),
             target: 'complete',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-word-correct-first` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-word-complete-correct-first` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
                   correct: Array.from(context.word),
+                  userMessageId: context.userMessageId,
                 });
               },
             ]
@@ -117,7 +121,7 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: markWord } },
             target: 'complete',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-word-correct-retry` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-word-complete-correct-retry` }),
             ]
           },
           // Student got the word wrong three times, move on to the next word.
@@ -125,7 +129,7 @@ export const machine = setup({
             guard: ({ context }) => context.wordErrors >= 2,
             target: 'complete',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-word-maxErrors` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-word-complete-maxErrors` }),
             ]
           },
           // The student only made an end matra error on the first attempt, mark all letters in the word as correct.
@@ -136,11 +140,12 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-word-endMatra-first` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-endMatra-first` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
               ({ context }) => {
                 scoreService.gradeAndRecord({
                   correct: Array.from(context.word),
+                  userMessageId: context.userMessageId,
                 });
               },
             ]
@@ -150,7 +155,7 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: detectIncorrectEndMatra } },
             target: 'word',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-word-endMatra-retry` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-endMatra-retry` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
             ]
           },
@@ -162,11 +167,12 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-word-middleMatra-first` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-middleMatra-first` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
               ({ context }) => {
                 scoreService.gradeAndRecord({
                   correct: Array.from(context.word),
+                  userMessageId: context.userMessageId,
                 });
               },
             ]
@@ -176,7 +182,7 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: detectIncorrectMiddleMatra } },
             target: 'word',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-word-middleMatra-retry` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-middleMatra-retry` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
             ]
           },
@@ -188,11 +194,12 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-word-insertion-first` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-insertion-first` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
               ({ context }) => {
                 scoreService.gradeAndRecord({
                   correct: Array.from(context.word),
+                  userMessageId: context.userMessageId,
                 });
               },
             ]
@@ -202,7 +209,7 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: detectInsertion } },
             target: 'word',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-word-insertion-retry` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-insertion-retry` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
             ]
           },
@@ -211,7 +218,7 @@ export const machine = setup({
             guard: ({ context }) => context.wordErrors >= 1,
             target: 'word',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-word-loopBack` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-loopBack` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
             ],
           },
@@ -230,7 +237,7 @@ export const machine = setup({
                   return incorrectChars;
                 },
               }),
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-word-wrong-drillLetters` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-word-routeWrongLetter-drillLetters` }),
             ],
           },
           // This transition should never be reached — all cases are handled above.
@@ -271,10 +278,11 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-letter-correct-last` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-letter-word-correct-last` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
                   correct: [context.wrongLetters[0]],
+                  userMessageId: context.userMessageId,
                 });
               },
               { type: 'dropFirstWrongLetter' },
@@ -285,10 +293,11 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: markLetter } },
             target: 'routeWrongLetter',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letter-correct-more` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letter-routeWrongLetter-correct-more` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
                   correct: [context.wrongLetters[0]],
+                  userMessageId: context.userMessageId,
                 });
               },
               { type: 'dropFirstWrongLetter' },
@@ -299,10 +308,11 @@ export const machine = setup({
             guard: not({ type: 'checkAnswer', params: { fn: markLetter } }),
             target: 'image',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letter-wrong` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letter-image-wrong` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
                   incorrect: [context.wrongLetters[0]],
+                  userMessageId: context.userMessageId,
                 });
               }
             ]
@@ -329,7 +339,7 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: markImage } },
             target: 'letterImage',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-image-correct` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-image-letterImage-correct` }),
             ],
           },
           // This is the student's second attempt, go to the letterImage state.
@@ -337,7 +347,7 @@ export const machine = setup({
             guard: ({ context }) => context.imageErrors >= 1,
             target: 'letterImage',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-image-maxErrors` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-image-letterImage-maxErrors` }),
               { type: 'resetToZero', params: { keys: 'imageErrors' } },
             ],
           },
@@ -345,7 +355,7 @@ export const machine = setup({
           {
             target: 'image',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-image-wrong-first` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-image-image-wrong-first` }),
               { type: 'increment', params: { keys: 'imageErrors' } },
             ],
           },
@@ -367,7 +377,7 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-letterImage-correct-last` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-letterImage-word-correct-last` }),
               { type: 'dropFirstWrongLetter' },
             ]
           },
@@ -376,7 +386,7 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: markLetter } },
             target: 'routeWrongLetter',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterImage-correct-more` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-routeWrongLetter-correct-more` }),
               { type: 'dropFirstWrongLetter' },
             ]
           },
@@ -385,7 +395,7 @@ export const machine = setup({
             guard: ({ context }) => context.letterErrors === 0,
             target: 'letterImage',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterImage-wrong-first` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-letterImage-wrong-first` }),
               { type: 'increment', params: { keys: 'letterErrors' } },
             ]
           },
@@ -394,7 +404,7 @@ export const machine = setup({
             guard: ({ context }) => context.letterErrors === 1,
             target: 'letterImage',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterImage-wrong-second` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-letterImage-wrong-second` }),
               { type: 'increment', params: { keys: 'letterErrors' } },
             ]
           },
@@ -406,7 +416,7 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-letterImage-maxErrors-last` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-letterImage-word-maxErrors-last` }),
               { type: 'resetToZero', params: { keys: 'letterErrors' } },
               { type: 'dropFirstWrongLetter' },
             ]
@@ -419,7 +429,7 @@ export const machine = setup({
             ]),
             target: 'routeWrongLetter',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterImage-maxErrors-more` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-routeWrongLetter-maxErrors-more` }),
               { type: 'resetToZero', params: { keys: 'letterErrors' } },
               { type: 'dropFirstWrongLetter' },
             ]
@@ -451,10 +461,11 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-letterNoImage-correct-first-last` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-letterNoImage-word-correct-first-last` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
                   correct: [context.wrongLetters[0]],
+                  userMessageId: context.userMessageId,
                 });
               },
               { type: 'dropFirstWrongLetter' },
@@ -469,10 +480,11 @@ export const machine = setup({
             ]),
             target: 'routeWrongLetter',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-correct-first-more` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-routeWrongLetter-correct-first-more` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
                   correct: [context.wrongLetters[0]],
+                  userMessageId: context.userMessageId,
                 });
               },
               { type: 'dropFirstWrongLetter' },
@@ -487,7 +499,7 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-letterNoImage-correct-retry-last` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-letterNoImage-word-correct-retry-last` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
             ]
@@ -501,7 +513,7 @@ export const machine = setup({
             ]),
             target: 'routeWrongLetter',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-correct-retry-more` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-routeWrongLetter-correct-retry-more` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
             ]
@@ -513,10 +525,11 @@ export const machine = setup({
             ]),
             target: 'letterNoImage',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-wrong-first` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-letterNoImage-wrong-first` }),
               ({ context }) => {
                 scoreService.gradeAndRecord({
                   incorrect: [context.wrongLetters[0]],
+                  userMessageId: context.userMessageId,
                 });
               },
               { type: 'increment', params: { keys: 'letterNoImageErrors' } },
@@ -530,7 +543,7 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.word}-letterNoImage-wrong-last` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-letterNoImage-word-wrong-last` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
             ]
@@ -543,7 +556,7 @@ export const machine = setup({
             ]),
             target: 'routeWrongLetter',
             actions: [
-              assign({ mediaExternalId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-wrong-more` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-routeWrongLetter-wrong-more` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
             ]

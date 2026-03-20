@@ -33,6 +33,7 @@ export interface MediaMetaData {
   user_id?: string | null;                 // FK -> users.id, required for 'whatsapp', null for 'heygen'
   input_media_id?: string | null;          // FK -> media_metadata.id, "derived from" link. Many entities can point to one parent (one-to-many from parent's perspective). E.g. STT text transcripts → source audio, generated video → source image.
   generation_request_json?: Record<string, unknown> | null; // JSONB, request payload (no secrets)
+  rolled_back: boolean;                    // default false. Set to true when outbound delivery fails (inflight-expired). Prevents future writes (scores, lesson state) from referencing this entity as user_message_id.
   created_at: Date;                        // TIMESTAMPTZ, default now()
 }
 
@@ -52,6 +53,25 @@ export interface CreateWhatsappAudioMediaOptions {
 
 export interface CreateHeygenMediaOptions {
   // TODO
+}
+
+// --- FindTranscripts options ---
+// Exactly one identifier must be provided to locate the parent media entity.
+
+export interface FindTranscriptsOptions {
+  media_metadata?: MediaMetaData;          // trusted — service uses .id directly
+  media_metadata_id?: string;              // direct ID lookup
+  media_metadata_external_id?: string;     // resolve via subquery on external_id
+}
+
+// --- FindMediaByStateTransitionId result ---
+// One randomly selected entity per media type (or undefined if none exist for that type).
+
+export interface FindMediaByStateTransitionIdResult {
+  audio?: MediaMetaData;
+  video?: MediaMetaData;
+  text?: MediaMetaData;
+  image?: MediaMetaData;
 }
 
 // --- Runtime validation ---
@@ -101,6 +121,36 @@ export function validateCreateWhatsappAudioMediaOptions(options: unknown): Creat
     user_external_id: o.user_external_id,
     media_details: o.media_details,
   } as CreateWhatsappAudioMediaOptions;
+}
+
+export function validateFindTranscriptsOptions(options: unknown): FindTranscriptsOptions {
+  if (!options || typeof options !== 'object') {
+    throw new BadRequestException('findTranscripts() options must be an object');
+  }
+  const o = options as Record<string, unknown>;
+
+  const hasEntity = o.media_metadata !== undefined;
+  const hasId = o.media_metadata_id !== undefined;
+  const hasExternalId = o.media_metadata_external_id !== undefined;
+  const provided = [hasEntity, hasId, hasExternalId].filter(Boolean).length;
+
+  if (provided !== 1) {
+    throw new BadRequestException(
+      'findTranscripts() requires exactly one of media_metadata, media_metadata_id, or media_metadata_external_id',
+    );
+  }
+
+  if (hasEntity && (typeof o.media_metadata !== 'object' || o.media_metadata === null || typeof (o.media_metadata as MediaMetaData).id !== 'string')) {
+    throw new BadRequestException('findTranscripts() options.media_metadata must be a MediaMetaData object with a valid id');
+  }
+  if (hasId && (typeof o.media_metadata_id !== 'string' || (o.media_metadata_id as string).length === 0)) {
+    throw new BadRequestException('findTranscripts() options.media_metadata_id must be a non-empty string');
+  }
+  if (hasExternalId && (typeof o.media_metadata_external_id !== 'string' || (o.media_metadata_external_id as string).length === 0)) {
+    throw new BadRequestException('findTranscripts() options.media_metadata_external_id must be a non-empty string');
+  }
+
+  return o as unknown as FindTranscriptsOptions;
 }
 
 export function validateCreateHeygenMediaOptions(options: unknown): CreateHeygenMediaOptions[] {

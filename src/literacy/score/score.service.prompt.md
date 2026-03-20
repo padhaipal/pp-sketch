@@ -4,6 +4,8 @@ Single database round-trip. Inserts a row into `scores` using `INSERT ... SELECT
 
 Resolves user and letter via subquery regardless of how they were identified (entity, id, or external id). The subquery doubles as an existence check — if the referenced row doesn't exist, the insert returns nothing and the method throws `NotFoundException`.
 
+The INSERT query atomically checks `rolled_back = false` on the referenced `media_metadata` row by joining it in the SELECT source: `INSERT INTO scores ... SELECT u.id, l.id, $user_message_id, $score FROM users u, letters l, media_metadata m WHERE ... AND m.id = $user_message_id AND m.rolled_back = false`. If the media has been rolled back, the SELECT returns nothing, the insert is a no-op, and the method throws `BadRequestException`.
+
 ## find(options: FindScoreOptions): Promise<Score[]>
 
 Single database round-trip. Returns scores ordered by `created_at DESC`.
@@ -28,9 +30,11 @@ Two database round-trips. Accepts correct/incorrect letter graphemes for a singl
    - Look up the letter's previous score from the non-integer map built in step 3 (may be `undefined` if the letter had no prior non-integer score or no score at all).
    - Call `calculateNewScore(average, previousScore, isCorrect)` to obtain the new score value.
 
-6.) **DB hit 2** — build and execute a single multi-row `INSERT INTO scores ... SELECT ... RETURNING *` that inserts one row per input grapheme. Resolves each user/letter via subquery (same pattern as `create()`). This keeps the write to a single round-trip regardless of how many letters were provided.
+6.) **DB hit 2** — build and execute a single multi-row `INSERT INTO scores ... SELECT ... RETURNING *` that inserts one row per input grapheme. Resolves each user/letter via subquery (same pattern as `create()`). Each row includes `user_message_id` set to `options.userMessageId`. The SELECT source also joins `media_metadata m WHERE m.id = $userMessageId AND m.rolled_back = false` — if the media has been rolled back, the SELECT returns nothing and no rows are inserted. This keeps the write to a single round-trip regardless of how many letters were provided.
 
-7.) Return the array of newly created `Score` rows.
+7.) If the INSERT returned zero rows and input graphemes were provided, it means the media was rolled back. Log WARN and return an empty array.
+
+8.) Return the array of newly created `Score` rows.
 
 ### calculateNewScore(average: number, previousScore: number | undefined, correct: boolean): number
 
