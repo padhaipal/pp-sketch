@@ -163,6 +163,6 @@ Returns a single row with:
 
 7.) **Select the lowest-scored word.** Find the minimum `wordScore` among remaining words. If multiple words tie, pick one at random.
 
-8.) **Safety fallback.** If the filtered list is empty (should not happen given the word list size), fall back to a random word from the full word list.
+8.) **Safety fallback.** If the filtered list is empty (should not happen given the word list size), fall back to a random word from the full word list and log a WARN.
 
 9.) Return the selected word.
