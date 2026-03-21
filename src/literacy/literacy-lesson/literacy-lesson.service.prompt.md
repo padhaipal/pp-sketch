@@ -71,6 +71,98 @@ Returns null if no rows exist.
 
 ## selectNextWord(userId: string): Promise\<string>
 
-Private helper. Selects the next word for a new lesson based on the student's score history.
-// TODO: integrate with ScoreService to pick the word that most needs practice.
-// For now: pick a random word from a hardcoded list of curriculum words.
+Private helper. Selects the next word for a new lesson based on the student's score history and recent performance. The word list is loaded from `./word-list.json`.
+
+### Constants (top of file)
+
+```typescript
+const RECENT_WORDS_TO_EXCLUDE = 5;
+const SNAPSHOT_WORDS_TO_COUNT = 3;
+const SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH = 10;
+const SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME = 15;
+const MIN_WORD_LENGTH_FLOOR = 2;
+const NEW_USER_THRESHOLD = 3;
+```
+
+### Word length
+
+Use `Array.from(word).length` throughout — consistent with how the machine decomposes words via `Array.from(context.word)` (each code point, including matras, counts as one character).
+
+### Algorithm
+
+1.) **Single DB round-trip.** Fetch letter scores, recent words, snapshot count, and distinct-word count in one query:
+
+```sql
+WITH recent_distinct_words AS (
+  SELECT word, MAX(created_at) AS latest_at
+  FROM literacy_lesson_states
+  WHERE user_id = $1
+  GROUP BY word
+  ORDER BY latest_at DESC
+  LIMIT $RECENT_WORDS_TO_EXCLUDE
+),
+top_n_words AS (
+  SELECT word FROM recent_distinct_words
+  ORDER BY latest_at DESC
+  LIMIT $SNAPSHOT_WORDS_TO_COUNT
+),
+top_n_snapshot_count AS (
+  SELECT COUNT(*)::int AS count
+  FROM literacy_lesson_states
+  WHERE user_id = $1 AND word IN (SELECT word FROM top_n_words)
+),
+latest_scores AS (
+  SELECT DISTINCT ON (s.letter_id) l.grapheme, s.score
+  FROM scores s
+  JOIN letters l ON l.id = s.letter_id
+  WHERE s.user_id = $1
+  ORDER BY s.letter_id, s.created_at DESC
+),
+distinct_word_count AS (
+  SELECT COUNT(DISTINCT word)::int AS count
+  FROM literacy_lesson_states
+  WHERE user_id = $1
+)
+SELECT
+  COALESCE(
+    (SELECT json_agg(json_build_object('grapheme', grapheme, 'score', score))
+     FROM latest_scores),
+    '[]'::json
+  ) AS letter_scores,
+  COALESCE(
+    (SELECT json_agg(word ORDER BY latest_at DESC)
+     FROM recent_distinct_words),
+    '[]'::json
+  ) AS recent_words,
+  COALESCE((SELECT count FROM top_n_snapshot_count), 0) AS top_n_snapshot_count,
+  COALESCE((SELECT count FROM distinct_word_count), 0) AS distinct_word_count
+```
+
+Returns a single row with:
+* `letter_scores` — array of `{ grapheme, score }`, the latest score per letter for this user.
+* `recent_words` — array of up to `RECENT_WORDS_TO_EXCLUDE` most recently covered distinct words (most recent first).
+* `top_n_snapshot_count` — total number of `literacy_lesson_states` rows whose word matches one of the `SNAPSHOT_WORDS_TO_COUNT` most recent distinct words.
+* `distinct_word_count` — total number of distinct words this user has ever been taught.
+
+2.) Build a `Map<string, number>` from `letter_scores`, mapping each grapheme to its latest score.
+
+3.) **Exclude recent words.** Remove every word that appears in `recent_words` from the word list.
+
+4.) **Determine max word length:**
+
+* If `distinct_word_count < NEW_USER_THRESHOLD` → `maxLength = MIN_WORD_LENGTH_FLOOR`.
+* Otherwise, let `mostRecentWordLen = Array.from(recent_words[0]).length`:
+  * If `top_n_snapshot_count < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH` → `maxLength = mostRecentWordLen + 1`.
+  * Else if `top_n_snapshot_count < SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME` → `maxLength = mostRecentWordLen`.
+  * Else → `maxLength = mostRecentWordLen - 1`.
+* Apply floor: `maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR)` (one- and two-character words are never removed).
+
+5.) **Filter by length.** Remove words where `Array.from(word).length > maxLength`.
+
+6.) **Score each remaining word.** For each word, compute `wordScore = Array.from(word).reduce((sum, char) => sum + (scoreMap.get(char) ?? 0), 0)`.
+
+7.) **Select the lowest-scored word.** Find the minimum `wordScore` among remaining words. If multiple words tie, pick one at random.
+
+8.) **Safety fallback.** If the filtered list is empty (should not happen given the word list size), fall back to a random word from the full word list.
+
+9.) Return the selected word.
