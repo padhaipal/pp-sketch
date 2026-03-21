@@ -1,7 +1,6 @@
-import { setup, assign, createActor, and, not } from "xstate";
+import { setup, assign, and, not } from "xstate";
 import { markWord, markLetter, markImage, detectIncorrectEndMatra, detectIncorrectMiddleMatra, detectInsertion } from "./evaluate-answer.utils";
 import { identifyCharacterStatus } from "./identify-character-status.utils";
-import { scoreService } from "../score/score.service";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -16,6 +15,8 @@ interface Context {
   answer: string | undefined;
   stateTransitionId: string;
   userMessageId: string;
+  pendingCorrect: string[];
+  pendingIncorrect: string[];
 }
 
 type CounterKey = keyof {
@@ -56,6 +57,10 @@ export const machine = setup({
   },
 
   actions: {
+    clearPendingScores: assign({
+      pendingCorrect: () => [],
+      pendingIncorrect: () => [],
+    }),
     increment: assign(({ context }, params: { keys: CounterKey | CounterKey[] }) => {
       const updates: Partial<Context> = {};
       for (const key of normalizeKeys(params.keys)) {
@@ -89,6 +94,8 @@ export const machine = setup({
     answer: input.word,
     stateTransitionId: `${input.word}-word-initial`,
     userMessageId: input.userMessageId,
+    pendingCorrect: [],
+    pendingIncorrect: [],
   }),
 
   states: {
@@ -107,13 +114,9 @@ export const machine = setup({
             ]),
             target: 'complete',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-complete-correct-first` }),
-              ({ context }) => {
-                scoreService.gradeAndRecord({
-                  correct: Array.from(context.word),
-                  userMessageId: context.userMessageId,
-                });
-              },
+              assign({ pendingCorrect: ({ context }) => Array.from(context.word) }),
             ]
           },
           // Student got the word correct on a subsequent try, no score change.
@@ -121,6 +124,7 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: markWord } },
             target: 'complete',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-complete-correct-retry` }),
             ]
           },
@@ -129,6 +133,7 @@ export const machine = setup({
             guard: ({ context }) => context.wordErrors >= 2,
             target: 'complete',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-complete-maxErrors` }),
             ]
           },
@@ -140,14 +145,10 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-endMatra-first` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
-              ({ context }) => {
-                scoreService.gradeAndRecord({
-                  correct: Array.from(context.word),
-                  userMessageId: context.userMessageId,
-                });
-              },
+              assign({ pendingCorrect: ({ context }) => Array.from(context.word) }),
             ]
           },
           // The student only made an end matra error on a subsequent try, no score change.
@@ -155,6 +156,7 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: detectIncorrectEndMatra } },
             target: 'word',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-endMatra-retry` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
             ]
@@ -167,14 +169,10 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-middleMatra-first` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
-              ({ context }) => {
-                scoreService.gradeAndRecord({
-                  correct: Array.from(context.word),
-                  userMessageId: context.userMessageId,
-                });
-              },
+              assign({ pendingCorrect: ({ context }) => Array.from(context.word) }),
             ]
           },
           // The student only made a middle matra error on a subsequent try, no score change.
@@ -182,6 +180,7 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: detectIncorrectMiddleMatra } },
             target: 'word',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-middleMatra-retry` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
             ]
@@ -194,14 +193,10 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-insertion-first` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
-              ({ context }) => {
-                scoreService.gradeAndRecord({
-                  correct: Array.from(context.word),
-                  userMessageId: context.userMessageId,
-                });
-              },
+              assign({ pendingCorrect: ({ context }) => Array.from(context.word) }),
             ]
           },
           // The student only made an insertion error on a subsequent try, no score change.
@@ -209,6 +204,7 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: detectInsertion } },
             target: 'word',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-insertion-retry` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
             ]
@@ -218,6 +214,7 @@ export const machine = setup({
             guard: ({ context }) => context.wordErrors >= 1,
             target: 'word',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-loopBack` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
             ],
@@ -227,6 +224,7 @@ export const machine = setup({
             guard: not({ type: 'checkAnswer', params: { fn: markWord } }),
             target: 'routeWrongLetter',
             actions: [
+              { type: 'clearPendingScores' },
               { type: 'increment', params: { keys: 'wordErrors' } },
               assign({
                 wrongLetters: ({ context, event }) => {
@@ -278,13 +276,9 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-letter-word-correct-last` }),
-              ({ context }) => {
-                scoreService.gradeAndRecord({
-                  correct: [context.wrongLetters[0]],
-                  userMessageId: context.userMessageId,
-                });
-              },
+              assign({ pendingCorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'dropFirstWrongLetter' },
             ]
           },
@@ -293,13 +287,9 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: markLetter } },
             target: 'routeWrongLetter',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letter-routeWrongLetter-correct-more` }),
-              ({ context }) => {
-                scoreService.gradeAndRecord({
-                  correct: [context.wrongLetters[0]],
-                  userMessageId: context.userMessageId,
-                });
-              },
+              assign({ pendingCorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'dropFirstWrongLetter' },
             ]
           },
@@ -308,13 +298,9 @@ export const machine = setup({
             guard: not({ type: 'checkAnswer', params: { fn: markLetter } }),
             target: 'image',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letter-image-wrong` }),
-              ({ context }) => {
-                scoreService.gradeAndRecord({
-                  incorrect: [context.wrongLetters[0]],
-                  userMessageId: context.userMessageId,
-                });
-              }
+              assign({ pendingIncorrect: ({ context }) => [context.wrongLetters[0]] }),
             ]
           },
           // This transition should never be reached — all cases are handled above.
@@ -326,6 +312,7 @@ export const machine = setup({
             },
           }
         ]
+      },
     },
 
     image: {
@@ -339,6 +326,7 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: markImage } },
             target: 'letterImage',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-image-letterImage-correct` }),
             ],
           },
@@ -347,6 +335,7 @@ export const machine = setup({
             guard: ({ context }) => context.imageErrors >= 1,
             target: 'letterImage',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-image-letterImage-maxErrors` }),
               { type: 'resetToZero', params: { keys: 'imageErrors' } },
             ],
@@ -355,6 +344,7 @@ export const machine = setup({
           {
             target: 'image',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-image-image-wrong-first` }),
               { type: 'increment', params: { keys: 'imageErrors' } },
             ],
@@ -377,6 +367,7 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-letterImage-word-correct-last` }),
               { type: 'dropFirstWrongLetter' },
             ]
@@ -386,6 +377,7 @@ export const machine = setup({
             guard: { type: 'checkAnswer', params: { fn: markLetter } },
             target: 'routeWrongLetter',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-routeWrongLetter-correct-more` }),
               { type: 'dropFirstWrongLetter' },
             ]
@@ -395,6 +387,7 @@ export const machine = setup({
             guard: ({ context }) => context.letterErrors === 0,
             target: 'letterImage',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-letterImage-wrong-first` }),
               { type: 'increment', params: { keys: 'letterErrors' } },
             ]
@@ -404,6 +397,7 @@ export const machine = setup({
             guard: ({ context }) => context.letterErrors === 1,
             target: 'letterImage',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-letterImage-wrong-second` }),
               { type: 'increment', params: { keys: 'letterErrors' } },
             ]
@@ -416,6 +410,7 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-letterImage-word-maxErrors-last` }),
               { type: 'resetToZero', params: { keys: 'letterErrors' } },
               { type: 'dropFirstWrongLetter' },
@@ -429,6 +424,7 @@ export const machine = setup({
             ]),
             target: 'routeWrongLetter',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-routeWrongLetter-maxErrors-more` }),
               { type: 'resetToZero', params: { keys: 'letterErrors' } },
               { type: 'dropFirstWrongLetter' },
@@ -444,7 +440,7 @@ export const machine = setup({
           }
         ]
       },
-    }
+    },
 
     letterNoImage: {
       entry: assign({
@@ -461,13 +457,9 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-letterNoImage-word-correct-first-last` }),
-              ({ context }) => {
-                scoreService.gradeAndRecord({
-                  correct: [context.wrongLetters[0]],
-                  userMessageId: context.userMessageId,
-                });
-              },
+              assign({ pendingCorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'dropFirstWrongLetter' },
             ]
           },
@@ -480,13 +472,9 @@ export const machine = setup({
             ]),
             target: 'routeWrongLetter',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-routeWrongLetter-correct-first-more` }),
-              ({ context }) => {
-                scoreService.gradeAndRecord({
-                  correct: [context.wrongLetters[0]],
-                  userMessageId: context.userMessageId,
-                });
-              },
+              assign({ pendingCorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'dropFirstWrongLetter' },
             ]
           },
@@ -499,6 +487,7 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-letterNoImage-word-correct-retry-last` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
@@ -513,6 +502,7 @@ export const machine = setup({
             ]),
             target: 'routeWrongLetter',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-routeWrongLetter-correct-retry-more` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
@@ -525,13 +515,9 @@ export const machine = setup({
             ]),
             target: 'letterNoImage',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-letterNoImage-wrong-first` }),
-              ({ context }) => {
-                scoreService.gradeAndRecord({
-                  incorrect: [context.wrongLetters[0]],
-                  userMessageId: context.userMessageId,
-                });
-              },
+              assign({ pendingIncorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'increment', params: { keys: 'letterNoImageErrors' } },
             ]
           },
@@ -543,6 +529,7 @@ export const machine = setup({
             ]),
             target: 'word',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.word}-letterNoImage-word-wrong-last` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
@@ -556,6 +543,7 @@ export const machine = setup({
             ]),
             target: 'routeWrongLetter',
             actions: [
+              { type: 'clearPendingScores' },
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-routeWrongLetter-wrong-more` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
@@ -578,13 +566,3 @@ export const machine = setup({
     },
   },
 });
-
-// ─── Usage ────────────────────────────────────────────────────────────────────
-
-const actor = createActor(machine);
-
-actor.subscribe((snapshot) => {
-  console.log("State:", snapshot.value);
-});
-
-actor.start();

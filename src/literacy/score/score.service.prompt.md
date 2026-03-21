@@ -47,6 +47,6 @@ function calculateNewScore(
   correct: boolean,
 ): number {
   const base = previousScore ?? 0;
-  return correct ? base + 1 : base - 5;
+  return correct ? base + 1.01 : base - 5.01;
 }
 ```

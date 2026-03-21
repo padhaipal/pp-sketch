@@ -31,12 +31,15 @@ The main entry point called by the inbound processor at step 7. Handles the full
 * If `combinedTranscript` is undefined, throw BadRequestException — rehydrating an existing lesson requires a student answer.
 * Create a new XState actor from the machine, restoring from the stored `state.snapshot` (using XState's `createActor(machine, { snapshot: state.snapshot })`).
 * Start the actor.
-* Before sending the event, update the actor's context with the new `userMessageId`: assign `context.userMessageId = options.user_message_id` (so that any scoreService calls during this transition use the correct trigger).
+* Before sending the event, update the actor's context with the new `userMessageId`: assign `context.userMessageId = options.user_message_id`.
 * Send the ANSWER event: `{ type: 'ANSWER', studentAnswer: combinedTranscript }`.
 * Extract the new snapshot.
 * Go to step 7.
 
-7.) Persist the new snapshot:
+7.) Read pending scores from the snapshot:
+* Read `snapshot.context.pendingCorrect` and `snapshot.context.pendingIncorrect` from the snapshot and store them in local variables. The machine clears these arrays at the start of every ANSWER transition via the `clearPendingScores` action, so stale values never persist across calls.
+
+8.) Persist the snapshot:
 * Single DB round-trip. The INSERT atomically checks `rolled_back = false` on the referenced media_metadata row:
   ```sql
   INSERT INTO literacy_lesson_states (user_id, user_message_id, word, snapshot, created_at)
@@ -49,7 +52,15 @@ The main entry point called by the inbound processor at step 7. Handles the full
   If the media has been rolled back, the SELECT returns nothing and no row is inserted.
 * If zero rows were returned, it means the media was rolled back or the DB write failed — log WARN and throw (the processor must not send the outbound message).
 
-8.) Return `{ stateTransitionId: snapshot.context.stateTransitionId, isComplete: snapshot.status === 'done' }`.
+9.) Record scores via ScoreService:
+* If `pendingCorrect` or `pendingIncorrect` is non-empty, call `scoreService.gradeAndRecord()` with:
+  * user: `options.user`
+  * correct: `pendingCorrect` (omit if empty)
+  * incorrect: `pendingIncorrect` (omit if empty)
+  * userMessageId: `options.user_message_id`
+* Await the result. If `gradeAndRecord()` throws, log WARN but do NOT re-throw — a scoring failure must not prevent the outbound message from being sent to the student.
+
+10.) Return `{ stateTransitionId: snapshot.context.stateTransitionId, isComplete: snapshot.status === 'done' }`.
 
 ## findCurrentState(userId: string): Promise\<LiteracyLessonState | null>
 

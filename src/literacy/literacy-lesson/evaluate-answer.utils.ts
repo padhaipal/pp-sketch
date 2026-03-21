@@ -272,10 +272,11 @@ class EvaluateAnswer {
   }
 
   static detectIncorrectEndMatra({ correctAnswer, studentAnswer }: MarkArgs): boolean {
+    const cleanedCorrect = this.clean(correctAnswer);
     return studentAnswer
       .trim()
       .split(/\s+/)
-      .some((w) => w === correctAnswer + LONG_A);
+      .some((w) => this.clean(w) === cleanedCorrect + LONG_A);
   }
 
   static detectInsertion({ correctAnswer, studentAnswer }: MarkArgs): boolean {
