@@ -23,8 +23,7 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/wabot/inb
 * src/wabot/outbound/outbound.service.ts/sendMessage() with .env/AUDIO_ONLY_REQUEST_EXTERNAL_ID.
   * See sendMessage() notes below for how to handle the http response.
 5.) (Note that now we should have the user entity data from the database and have screened out/handled all first time users and non-audio messages and so only have normal user interaction audio messages left.) Call src/media-meta-data/media-meta-data.service.ts/createWhatsappAudioMedia() with:
-  * external_id: payload.message.audio.mediaUrl
-  * source_url: payload.message.audio.mediaUrl
+  * wa_media_url: payload.message.audio.mediaUrl
   * user: the User entity from step 2 (trusted path, no extra DB hit)
 * This will return a mediaMetaData entity for the user's audio message which will contain a link to where that audio is stored in the S3 bucket. There will also be several mediaMetaData text entities associated with that mediaMetaData entity which will contain the transcripts of the audio message.
 * Store the audio mediaMetaData entity's `id` as `userMessageId` — this will be passed to downstream services as the FK linking all writes back to this interaction.
@@ -43,7 +42,7 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/wabot/inb
   * Each call returns a `FindMediaByStateTransitionIdResult` with one randomly selected entity per media type (audio, video, text, image), or undefined for types with no matching media.
   * Build an ordered `OutboundMediaItem[]` array from the results. For each stateTransitionId's result, append items in this order: video, audio, image, text (skipping any type that is undefined). If there are two stateTransitionIds, the first stateTransitionId's items come before the second's.
   * For each media entity, construct the OutboundMediaItem:
-    * `type: 'audio' | 'video' | 'image'` → `{ type, url: entity.s3_key or preloaded WhatsApp URL }`
+    * `type: 'audio' | 'video' | 'image'` → `{ type, url: entity.wa_media_url }`
     * `type: 'text'` → `{ type: 'text', body: entity.text }`
 9.) Send the outbound message(s) to the student via src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with:
   * user_external_id: the User entity's external_id from step 2

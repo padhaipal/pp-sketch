@@ -15,7 +15,6 @@ export type MediaSource = 'whatsapp' | 'heygen' | 'azure' | 'sarvam' | 'reverie'
 // Enforced structurally: each source has its own Options type and validator.
 
 // --- Entity (matches pg media_metadata table) ---
-// Note: for WhatsApp-sourced media, external_id is the mediaUrl that produced the media.
 
 // media_type → field rules (enforced at service layer):
 //   'text'                  — s3_key is NULL, text is REQUIRED
@@ -23,7 +22,8 @@ export type MediaSource = 'whatsapp' | 'heygen' | 'azure' | 'sarvam' | 'reverie'
 
 export interface MediaMetaData {
   id: string;                              // UUID PK
-  external_id: string;                     // unique — origin identifier (WhatsApp mediaUrl for WA media)
+  wa_media_url?: string | null;            // UNIQUE WHERE NOT NULL — WhatsApp media URL. For WA-sourced audio: the inbound CDN URL (set at creation, used for dedup). For HeyGen audio/video: the preloaded outbound WhatsApp URL (set by WHATSAPP_PRELOAD worker).
+  state_transition_id?: string | null;     // lookup key for lesson content — maps to stateTransitionId produced by the XState machine. No uniqueness constraint; multiple entities (one per media_type) share the same value. Indexed: (state_transition_id, status).
   s3_key?: string | null;                  // unique, object key in media-bucket; required unless media_type = 'text'
   text?: string | null;                    // the text content; required when media_type = 'text', null otherwise
   status: MediaStatus;
@@ -41,8 +41,7 @@ export interface MediaMetaData {
 // source is always 'whatsapp', media_type is always 'audio'. User is required (exactly one of user or user_external_id).
 
 export interface CreateWhatsappAudioMediaOptions {
-  external_id: string;
-  source_url: string;                      // where to fetch the media from (WhatsApp CDN URL); not stored — service downloads and uploads to S3
+  wa_media_url: string;                    // WhatsApp CDN URL — stored on the entity (dedup via UNIQUE constraint) and used to download the media
   user?: User;                             // trusted — service uses .id directly
   user_external_id?: string;               // untrusted — service calls user.service.ts/find()
   media_details?: Record<string, unknown>;
@@ -51,9 +50,11 @@ export interface CreateWhatsappAudioMediaOptions {
 // --- Heygen options ---
 // source is always 'heygen'. User is FORBIDDEN (HeyGen media is not user-scoped).
 // Accepts an array of items — each item becomes one media_metadata row + one BullMQ job.
-// external_id is auto-generated as `tmp_${uuid}` — replaced later by WhatsApp mediaUrl after preload.
+// wa_media_url starts as NULL — set later by the WHATSAPP_PRELOAD worker after the media is uploaded to WhatsApp.
+// The entity only transitions to status = 'ready' once wa_media_url is populated.
 
 export interface CreateHeygenMediaItem {
+  state_transition_id: string;             // required — the lesson state transition this media is for (e.g. 'कमल-word-initial')
   media_type: 'video' | 'audio';
   script_text: string;                     // the text the avatar speaks (video) or synthesizes (audio)
 
@@ -87,7 +88,7 @@ export interface CreateHeygenMediaOptions {
 export interface FindTranscriptsOptions {
   media_metadata?: MediaMetaData;          // trusted — service uses .id directly
   media_metadata_id?: string;              // direct ID lookup
-  media_metadata_external_id?: string;     // resolve via subquery on external_id
+  media_metadata_wa_media_url?: string;    // resolve via subquery on wa_media_url
 }
 
 // --- FindMediaByStateTransitionId result ---
@@ -112,11 +113,8 @@ export function validateCreateWhatsappAudioMediaOptions(options: unknown): Creat
   }
   const o = options as Record<string, unknown>;
 
-  if (typeof o.external_id !== 'string' || o.external_id.length === 0) {
-    throw new BadRequestException('createWhatsappAudioMedia() options.external_id is required and must be a non-empty string');
-  }
-  if (typeof o.source_url !== 'string' || o.source_url.length === 0) {
-    throw new BadRequestException('createWhatsappAudioMedia() options.source_url is required and must be a non-empty string');
+  if (typeof o.wa_media_url !== 'string' || o.wa_media_url.length === 0) {
+    throw new BadRequestException('createWhatsappAudioMedia() options.wa_media_url is required and must be a non-empty string');
   }
 
   const hasUser = o.user !== undefined;
@@ -141,8 +139,7 @@ export function validateCreateWhatsappAudioMediaOptions(options: unknown): Creat
   }
 
   return {
-    external_id: o.external_id,
-    source_url: o.source_url,
+    wa_media_url: o.wa_media_url,
     user: o.user,
     user_external_id: o.user_external_id,
     media_details: o.media_details,
@@ -157,12 +154,12 @@ export function validateFindTranscriptsOptions(options: unknown): FindTranscript
 
   const hasEntity = o.media_metadata !== undefined;
   const hasId = o.media_metadata_id !== undefined;
-  const hasExternalId = o.media_metadata_external_id !== undefined;
-  const provided = [hasEntity, hasId, hasExternalId].filter(Boolean).length;
+  const hasWaMediaUrl = o.media_metadata_wa_media_url !== undefined;
+  const provided = [hasEntity, hasId, hasWaMediaUrl].filter(Boolean).length;
 
   if (provided !== 1) {
     throw new BadRequestException(
-      'findTranscripts() requires exactly one of media_metadata, media_metadata_id, or media_metadata_external_id',
+      'findTranscripts() requires exactly one of media_metadata, media_metadata_id, or media_metadata_wa_media_url',
     );
   }
 
@@ -172,8 +169,8 @@ export function validateFindTranscriptsOptions(options: unknown): FindTranscript
   if (hasId && (typeof o.media_metadata_id !== 'string' || (o.media_metadata_id as string).length === 0)) {
     throw new BadRequestException('findTranscripts() options.media_metadata_id must be a non-empty string');
   }
-  if (hasExternalId && (typeof o.media_metadata_external_id !== 'string' || (o.media_metadata_external_id as string).length === 0)) {
-    throw new BadRequestException('findTranscripts() options.media_metadata_external_id must be a non-empty string');
+  if (hasWaMediaUrl && (typeof o.media_metadata_wa_media_url !== 'string' || (o.media_metadata_wa_media_url as string).length === 0)) {
+    throw new BadRequestException('findTranscripts() options.media_metadata_wa_media_url must be a non-empty string');
   }
 
   return o as unknown as FindTranscriptsOptions;
@@ -201,6 +198,9 @@ export function validateCreateHeygenMediaOptions(options: unknown): CreateHeygen
     }
     const item = raw as Record<string, unknown>;
 
+    if (typeof item.state_transition_id !== 'string' || item.state_transition_id.length === 0) {
+      throw new BadRequestException(`createHeygenMedia() items[${idx}].state_transition_id is required and must be a non-empty string`);
+    }
     if (typeof item.media_type !== 'string' || !VALID_HEYGEN_MEDIA_TYPES.includes(item.media_type as CreateHeygenMediaItem['media_type'])) {
       throw new BadRequestException(`createHeygenMedia() items[${idx}].media_type must be one of: ${VALID_HEYGEN_MEDIA_TYPES.join(', ')}`);
     }
@@ -271,6 +271,7 @@ export function validateCreateHeygenMediaOptions(options: unknown): CreateHeygen
     }
 
     return {
+      state_transition_id: item.state_transition_id,
       media_type: item.media_type,
       script_text: item.script_text,
       avatar_id: item.avatar_id,

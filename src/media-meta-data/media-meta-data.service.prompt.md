@@ -9,12 +9,12 @@ createWhatsappAudioMedia(options: CreateWhatsappAudioMediaOptions): Promise<Medi
 2.) Resolve the user (exactly one identifier was provided):
   * If options.user is provided, use its .id as user_id directly (trusted, no DB hit).
   * If options.user_external_id is provided, call user.service.ts/find() to resolve user_id. If not found, log ERROR and throw.
-3.) Check if a mediaMetaData row with this external_id already exists in the database.
+3.) Check if a mediaMetaData row with this wa_media_url already exists in the database.
   * If it exists and its status is 'failed', reuse that row: update its status to 'created' and continue to step 4.
   * If it exists and its status is anything other than 'failed', log WARN and return the existing entity (no-op).
-  * If it does not exist, create a new mediaMetaData database row with status = 'created', rolled_back = false.
+  * If it does not exist, create a new mediaMetaData database row with wa_media_url = options.wa_media_url, status = 'created', rolled_back = false.
 4.)
-* Hit pp-sketch/src/wabot/outbound/outbound.service.ts/downloadMedia() and get it to start streaming the audio file to this worker.
+* Hit pp-sketch/src/wabot/outbound/outbound.service.ts/downloadMedia() with options.wa_media_url and get it to start streaming the audio file to this worker.
 * Direct this byte flow to the following sinks. STT_TIME_CAP is a .env variable. 
   * src/media-bucket/outbound/outbound.service.ts/stream()
   * media-meta-data/stt-sarvam.service.ts/run(), media-meta-data/stt-azure.service.ts/run(), media-meta-data/stt-reverie.service.ts/run(), etc (as turned on and off by feature flags, see docs). Each run() receives the audio mediaMetaData entity and sets input_media_id on the text entity it creates.
@@ -38,16 +38,22 @@ Single DB round-trip. Returns all text transcript entities that are children of 
 2.) Resolve the parent media entity's id:
   * If `options.media_metadata` is provided, use its `.id` directly (trusted, no DB hit).
   * If `options.media_metadata_id` is provided, use it directly (no DB hit — the FK relationship in the query will fail gracefully if the id doesn't exist).
-  * If `options.media_metadata_external_id` is provided, resolve via subquery: `(SELECT id FROM media_metadata WHERE external_id = $1)`.
+  * If `options.media_metadata_wa_media_url` is provided, resolve via subquery: `(SELECT id FROM media_metadata WHERE wa_media_url = $1)`.
 3.) Query: `SELECT * FROM media_metadata WHERE input_media_id = $resolvedId AND media_type = 'text' AND status = 'ready' ORDER BY created_at ASC`.
 4.) Returns an empty array if no transcripts exist (caller decides whether that is an error).
 
 ## findMediaByStateTransitionId(stateTransitionId: string): Promise<FindMediaByStateTransitionIdResult>
 
-Single DB round-trip. Looks up all ready media entities whose `external_id` matches the given `stateTransitionId`, then randomly selects one entity per media type.
+Single DB round-trip. Looks up all ready, deliverable media entities whose `state_transition_id` matches the given `stateTransitionId`, then randomly selects one entity per media type. Uses the `(state_transition_id, status)` index.
 
 1.) If `stateTransitionId` is not a valid non-empty string, throw BadRequestException.
-2.) Query: `SELECT * FROM media_metadata WHERE external_id = $1 AND status = 'ready'`.
+2.) Query:
+  ```sql
+  SELECT * FROM media_metadata
+  WHERE state_transition_id = $1
+    AND status = 'ready'
+    AND (wa_media_url IS NOT NULL OR media_type = 'text')
+  ```
 3.) Group the returned rows by `media_type`.
 4.) For each media type (audio, video, text, image): if one or more rows exist in that group, randomly select one. If none exist for a type, that key is omitted from the result.
 5.) Return the `FindMediaByStateTransitionIdResult` object.
@@ -85,18 +91,18 @@ createHeygenMedia(options: CreateHeygenMediaOptions): Promise<MediaMetaData[]>
 1.) Validate options at runtime with validateCreateHeygenMediaOptions(). If it fails, log WARN and let the BadRequestException propagate.
 
 2.) For each item in options.items:
-  a.) Generate a temporary external_id: `tmp_${uuid()}`.
-  b.) Assert enum values: assertValidMediaType(item.media_type), assertValidMediaSource('heygen').
-  c.) Create a media_metadata database row:
+  a.) Assert enum values: assertValidMediaType(item.media_type), assertValidMediaSource('heygen').
+  b.) Create a media_metadata database row:
     * id = uuid()
-    * external_id = the generated tmp_ id
+    * state_transition_id = item.state_transition_id
+    * wa_media_url = NULL (set later by WHATSAPP_PRELOAD worker)
     * status = 'created'
     * media_type = item.media_type
     * source = 'heygen'
     * user_id = NULL (HeyGen media is not user-scoped)
     * rolled_back = false
     * generation_request_json = the sanitized item payload (no secrets — strip any avatar_id / voice_id that match env defaults, keep the rest)
-  d.) Build a BullMQ job payload:
+  c.) Build a BullMQ job payload:
     {
       media_metadata_id: the row's id,
       media_type: item.media_type,
@@ -114,7 +120,7 @@ createHeygenMedia(options: CreateHeygenMediaOptions): Promise<MediaMetaData[]>
         background: item.background,
       }
     }
-  e.) Collect the row and job payload.
+  d.) Collect the row and job payload.
 
 3.) Enqueue all job payloads atomically using queue.addBulk() on the HEYGEN_GENERATE queue.
   * If addBulk() fails: retry with exponential backoff (10s cap).

@@ -23,17 +23,16 @@ c.) Download the video from event_data.url as a readable stream.
 d.) Stream it to src/interfaces/media-bucket/outbound/outbound.service.ts/stream() to upload to S3.
     * If upload fails: log ERROR, update media_metadata status = 'failed', fail the job.
 
-e.) Check if the media_metadata row's external_id starts with 'tmp_'.
-    If so, enqueue a job on the WHATSAPP_PRELOAD queue with { media_metadata_id: callback_id, s3_key }.
-    (Do not implement the WHATSAPP_PRELOAD worker — just queue the job.)
-
-f.) Update the media_metadata row (single update):
+e.) Update the media_metadata row (single update):
     * s3_key = returned S3 key
     * media_details = merge existing media_details with:
       - video_url (original HeyGen URL, for reference)
       - mime_type: 'video/mp4'
       - byte_size (from download if available)
-    * status = 'ready'
+    * status stays 'queued' (NOT 'ready' — the WHATSAPP_PRELOAD worker sets 'ready' after populating wa_media_url)
+
+f.) Enqueue a job on the WHATSAPP_PRELOAD queue with { media_metadata_id: callback_id, s3_key }.
+    (The WHATSAPP_PRELOAD worker will upload the media to WhatsApp, set wa_media_url, and transition status to 'ready'. TODO: implement the worker.)
 
 g.) Mark the BullMQ job as complete.
 
