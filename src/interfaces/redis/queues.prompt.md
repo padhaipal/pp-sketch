@@ -1,4 +1,4 @@
-// pp-sketch/src/redis/queues.prompt.md
+// pp-sketch/src/interfaces/redis/queues.prompt.md
 
 Export queue names, Redis connection, and Queue/Worker factories.
 
