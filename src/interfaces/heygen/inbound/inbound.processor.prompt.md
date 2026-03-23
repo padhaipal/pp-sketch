@@ -32,7 +32,7 @@ e.) Update the media_metadata row (single update):
     * status stays 'queued' (NOT 'ready' — the WHATSAPP_PRELOAD worker sets 'ready' after populating wa_media_url)
 
 f.) Enqueue a job on the WHATSAPP_PRELOAD queue with { media_metadata_id: callback_id, s3_key }.
-    (The WHATSAPP_PRELOAD worker will upload the media to WhatsApp, set wa_media_url, and transition status to 'ready'. TODO: implement the worker.)
+    (The WHATSAPP_PRELOAD worker will upload the media to WhatsApp, set wa_media_url, and transition status to 'ready'. See src/media-meta-data/whatsapp-preload.processor.prompt.md.)
 
 g.) Mark the BullMQ job as complete.
 

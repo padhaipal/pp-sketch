@@ -22,7 +22,7 @@ export type MediaSource = 'whatsapp' | 'heygen' | 'azure' | 'sarvam' | 'reverie'
 
 export interface MediaMetaData {
   id: string;                              // UUID PK
-  wa_media_url?: string | null;            // UNIQUE WHERE NOT NULL — WhatsApp media URL. For WA-sourced audio: the inbound CDN URL (set at creation, used for dedup). For HeyGen audio/video: the preloaded outbound WhatsApp URL (set by WHATSAPP_PRELOAD worker).
+  wa_media_url?: string | null;            // UNIQUE WHERE NOT NULL — WhatsApp media reference. For WA-sourced audio: the inbound CDN URL (set at creation, used for dedup). For HeyGen audio/video: the WhatsApp media ID returned by the Cloud API upload (set by WHATSAPP_PRELOAD worker, refreshed every 20 days before the 30-day expiry).
   state_transition_id?: string | null;     // lookup key for lesson content — maps to stateTransitionId produced by the XState machine. No uniqueness constraint; multiple entities (one per media_type) share the same value. Indexed: (state_transition_id, status).
   s3_key?: string | null;                  // unique, object key in media-bucket; required unless media_type = 'text'
   text?: string | null;                    // the text content; required when media_type = 'text', null otherwise
@@ -99,6 +99,17 @@ export interface FindMediaByStateTransitionIdResult {
   video?: MediaMetaData;
   text?: MediaMetaData;
   image?: MediaMetaData;
+}
+
+// --- WHATSAPP_PRELOAD job payload ---
+// Used by the WHATSAPP_PRELOAD BullMQ worker (see whatsapp-preload.processor.prompt.md).
+// Enqueued by: HeyGen outbound service (audio), HeyGen inbound processor (video).
+// For reload jobs (20-day refresh cycle), the same shape is reused with reload = true.
+
+export interface WhatsappPreloadJobDto {
+  media_metadata_id: string;               // FK -> media_metadata.id — the entity whose wa_media_url will be set
+  s3_key: string;                          // S3 object key — used to fetch the raw media bytes via media-bucket/outbound/getBuffer()
+  reload?: boolean;                        // true when this is a periodic reload (skip status transition); falsy/absent for initial preload
 }
 
 // --- Runtime validation ---

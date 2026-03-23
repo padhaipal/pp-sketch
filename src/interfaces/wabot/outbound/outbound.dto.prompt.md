@@ -16,7 +16,7 @@ SendMessageRequest — the JSON body pp sends to wabot's sendMessage endpoint.
 OutboundMediaItem — one media message to send.
 {
   type: 'audio' | 'video' | 'image' | 'text';
-  url?: string;                            // preloaded WhatsApp media URL — required for audio, video, image; absent for text
+  url?: string;                            // WhatsApp media reference — either an external URL (starts with "http") or a WhatsApp media ID (from preloaded upload). Required for audio, video, image; absent for text.
   body?: string;                           // text content — required for text type; absent for audio, video, image
 }
 
@@ -41,3 +41,18 @@ DownloadMediaRequest — the JSON body pp sends to wabot's downloadMedia endpoin
 DownloadMediaResponse — wabot streams the response back.
 * HTTP response body: raw binary audio bytes (streamed, not buffered).
 * HTTP response header content-type: the mime type of the media (e.g. "audio/ogg; codecs=opus").
+
+// --- UploadMedia request ---
+// Sent from pp to wabot's uploadMedia endpoint.
+// Carries raw media bytes to be uploaded to WhatsApp's servers.
+
+UploadMediaRequest — raw binary body with metadata in headers.
+* HTTP request body: raw binary bytes (the media file contents).
+* HTTP request header Content-Type: the mime type of the media (e.g. "audio/mpeg", "video/mp4").
+* HTTP request header X-Media-Type: the WhatsApp media type ("audio", "video", "image").
+* HTTP request query param ?otel=<JSON>: serialized OTel carrier for distributed tracing.
+
+UploadMediaResponse — wabot's JSON response.
+* 200 `{ wa_media_url: string }` — the WhatsApp media ID returned by the Cloud API. Use this value in sendMessage's OutboundMediaItem.url to reference the preloaded media.
+* 4XX — WhatsApp client error (passed through).
+* 5XX — WhatsApp server error (passed through).

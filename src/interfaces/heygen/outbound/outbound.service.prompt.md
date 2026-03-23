@@ -75,7 +75,7 @@
 //       - media_details = { mime_type: 'audio/mpeg', duration, byte_size, request_id, word_timestamps }
 //       - status stays 'queued' (NOT 'ready' — the WHATSAPP_PRELOAD worker sets 'ready' after populating wa_media_url)
 //     * Enqueue a job on the WHATSAPP_PRELOAD queue with { media_metadata_id, s3_key }.
-//       (The WHATSAPP_PRELOAD worker will upload the media to WhatsApp, set wa_media_url, and transition status to 'ready'. TODO: implement the worker.)
+//       (The WHATSAPP_PRELOAD worker will upload the media to WhatsApp, set wa_media_url, and transition status to 'ready'. See src/media-meta-data/whatsapp-preload.processor.prompt.md.)
 //     * Mark the BullMQ job as complete.
 
 // d.) On 4XX:
