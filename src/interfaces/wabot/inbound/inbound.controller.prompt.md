@@ -1,5 +1,5 @@
 receive()
-1.) Check the http message data structure against src/wabot/inbound/wabot-inbound.dto.ts. 
+1.) Check the http message data structure against src/interfaces/wabot/inbound/wabot-inbound.dto.ts. 
 * If the check fails then return a 400 response. 
 2.) Use the message payload to start a span. 
 3.) Enqueue a job on the BullMQ `wabot-inbound` queue. 

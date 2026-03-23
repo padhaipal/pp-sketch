@@ -17,4 +17,4 @@ Export queue names, Redis connection, and Queue/Worker factories.
 
 4.) createWorker(name, processor, defaultJobOptions?).
 * Returns BullMQ Worker instance.
-* Workers must be started on app bootstrap (see main.prompt.md).
+* Workers must be started on app bootstrap (see src/main.ts).

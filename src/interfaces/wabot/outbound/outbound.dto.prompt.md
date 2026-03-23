@@ -1,4 +1,4 @@
-// pp-sketch/src/wabot/outbound/outbound.dto.prompt.md
+// pp-sketch/src/interfaces/wabot/outbound/outbound.dto.prompt.md
 
 // --- SendMessage request ---
 // Sent from pp to wabot's sendMessage endpoint.

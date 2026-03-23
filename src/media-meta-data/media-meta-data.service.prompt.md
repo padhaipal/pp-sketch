@@ -14,7 +14,7 @@ createWhatsappAudioMedia(options: CreateWhatsappAudioMediaOptions): Promise<Medi
   * If it exists and its status is anything other than 'failed', log WARN and return the existing entity (no-op).
   * If it does not exist, create a new mediaMetaData database row with wa_media_url = options.wa_media_url, status = 'created', rolled_back = false.
 4.)
-* Hit pp-sketch/src/wabot/outbound/outbound.service.ts/downloadMedia() with options.wa_media_url and get it to start streaming the audio file to this worker.
+* Hit pp-sketch/src/interfaces/wabot/outbound/outbound.service.ts/downloadMedia() with options.wa_media_url and get it to start streaming the audio file to this worker.
 * Direct this byte flow to the following sinks. STT_TIME_CAP is a .env variable. 
   * src/media-bucket/outbound/outbound.service.ts/stream()
   * media-meta-data/stt-sarvam.service.ts/run(), media-meta-data/stt-azure.service.ts/run(), media-meta-data/stt-reverie.service.ts/run(), etc (as turned on and off by feature flags, see docs). Each run() receives the audio mediaMetaData entity and sets input_media_id on the text entity it creates.
