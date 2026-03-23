@@ -4,6 +4,9 @@ Export queue names, Redis connection, and Queue/Worker factories.
 
 1.) QUEUE_NAMES constant.
 * WABOT_INBOUND: 'wabot-inbound'.
+* HEYGEN_GENERATE: 'heygen-generate'.
+* HEYGEN_INBOUND: 'heygen-inbound'.
+* WHATSAPP_PRELOAD: 'whatsapp-preload'.
 
 2.) Redis connection.
 * Create ioredis Connection from REDIS_URL (.env).

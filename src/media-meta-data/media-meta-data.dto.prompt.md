@@ -49,10 +49,36 @@ export interface CreateWhatsappAudioMediaOptions {
 }
 
 // --- Heygen options ---
-// TODO: define when heygen integration is built
+// source is always 'heygen'. User is FORBIDDEN (HeyGen media is not user-scoped).
+// Accepts an array of items — each item becomes one media_metadata row + one BullMQ job.
+// external_id is auto-generated as `tmp_${uuid}` — replaced later by WhatsApp mediaUrl after preload.
+
+export interface CreateHeygenMediaItem {
+  media_type: 'video' | 'audio';
+  script_text: string;                     // the text the avatar speaks (video) or synthesizes (audio)
+
+  // --- Optional overrides (fall back to env defaults HEYGEN_AVATAR_ID / HEYGEN_VOICE_ID) ---
+  avatar_id?: string;                      // video only — override HEYGEN_AVATAR_ID
+  avatar_style?: 'normal' | 'circle' | 'closeUp'; // video only — default 'normal'
+  voice_id?: string;                       // override HEYGEN_VOICE_ID
+  speed?: number;                          // voice speed multiplier
+  emotion?: 'Excited' | 'Friendly' | 'Serious' | 'Soothing' | 'Broadcaster'; // video only
+  locale?: string;                         // BCP-47 locale tag, e.g. 'en-IN', 'hi-IN'
+  language?: string;                       // audio only — base language code, e.g. 'en', 'hi'
+
+  // --- Video-specific options ---
+  title?: string;                          // video title in HeyGen
+  dimension?: { width: number; height: number }; // video resolution, default 1920×1080
+  background?: {                           // video background
+    type: 'color' | 'image' | 'video';
+    value?: string;                        // hex color for 'color' type
+    url?: string;                          // asset URL for 'image'/'video' type
+    fit?: 'crop' | 'cover' | 'contain' | 'none';
+  };
+}
 
 export interface CreateHeygenMediaOptions {
-  // TODO
+  items: CreateHeygenMediaItem[];
 }
 
 // --- FindTranscripts options ---
@@ -153,9 +179,114 @@ export function validateFindTranscriptsOptions(options: unknown): FindTranscript
   return o as unknown as FindTranscriptsOptions;
 }
 
-export function validateCreateHeygenMediaOptions(options: unknown): CreateHeygenMediaOptions[] {
-  // TODO: define when heygen integration is built
-  return [] as CreateHeygenMediaOptions[];
+const VALID_HEYGEN_MEDIA_TYPES: Array<CreateHeygenMediaItem['media_type']> = ['video', 'audio'];
+const VALID_AVATAR_STYLES: Array<NonNullable<CreateHeygenMediaItem['avatar_style']>> = ['normal', 'circle', 'closeUp'];
+const VALID_EMOTIONS: Array<NonNullable<CreateHeygenMediaItem['emotion']>> = ['Excited', 'Friendly', 'Serious', 'Soothing', 'Broadcaster'];
+const VALID_BG_TYPES: Array<'color' | 'image' | 'video'> = ['color', 'image', 'video'];
+const VALID_BG_FITS: Array<'crop' | 'cover' | 'contain' | 'none'> = ['crop', 'cover', 'contain', 'none'];
+
+export function validateCreateHeygenMediaOptions(options: unknown): CreateHeygenMediaOptions {
+  if (!options || typeof options !== 'object') {
+    throw new BadRequestException('createHeygenMedia() options must be an object');
+  }
+  const o = options as Record<string, unknown>;
+
+  if (!Array.isArray(o.items) || o.items.length === 0) {
+    throw new BadRequestException('createHeygenMedia() options.items must be a non-empty array');
+  }
+
+  const validated: CreateHeygenMediaItem[] = o.items.map((raw: unknown, idx: number) => {
+    if (!raw || typeof raw !== 'object') {
+      throw new BadRequestException(`createHeygenMedia() items[${idx}] must be an object`);
+    }
+    const item = raw as Record<string, unknown>;
+
+    if (typeof item.media_type !== 'string' || !VALID_HEYGEN_MEDIA_TYPES.includes(item.media_type as CreateHeygenMediaItem['media_type'])) {
+      throw new BadRequestException(`createHeygenMedia() items[${idx}].media_type must be one of: ${VALID_HEYGEN_MEDIA_TYPES.join(', ')}`);
+    }
+    if (typeof item.script_text !== 'string' || item.script_text.length === 0) {
+      throw new BadRequestException(`createHeygenMedia() items[${idx}].script_text is required and must be a non-empty string`);
+    }
+    if (item.script_text.length > 5000) {
+      throw new BadRequestException(`createHeygenMedia() items[${idx}].script_text must be 5000 characters or fewer`);
+    }
+
+    // user must NOT be provided
+    if (item.user !== undefined || item.user_id !== undefined || item.user_external_id !== undefined) {
+      throw new BadRequestException(`createHeygenMedia() items[${idx}]: user/user_id/user_external_id are forbidden for heygen source`);
+    }
+
+    // optional string overrides
+    if (item.avatar_id !== undefined && (typeof item.avatar_id !== 'string' || item.avatar_id.length === 0)) {
+      throw new BadRequestException(`createHeygenMedia() items[${idx}].avatar_id must be a non-empty string`);
+    }
+    if (item.voice_id !== undefined && (typeof item.voice_id !== 'string' || item.voice_id.length === 0)) {
+      throw new BadRequestException(`createHeygenMedia() items[${idx}].voice_id must be a non-empty string`);
+    }
+    if (item.avatar_style !== undefined && !VALID_AVATAR_STYLES.includes(item.avatar_style as NonNullable<CreateHeygenMediaItem['avatar_style']>)) {
+      throw new BadRequestException(`createHeygenMedia() items[${idx}].avatar_style must be one of: ${VALID_AVATAR_STYLES.join(', ')}`);
+    }
+    if (item.emotion !== undefined && !VALID_EMOTIONS.includes(item.emotion as NonNullable<CreateHeygenMediaItem['emotion']>)) {
+      throw new BadRequestException(`createHeygenMedia() items[${idx}].emotion must be one of: ${VALID_EMOTIONS.join(', ')}`);
+    }
+    if (item.speed !== undefined) {
+      const maxSpeed = item.media_type === 'video' ? 1.5 : 2.0;
+      if (typeof item.speed !== 'number' || item.speed < 0.5 || item.speed > maxSpeed) {
+        throw new BadRequestException(`createHeygenMedia() items[${idx}].speed must be a number between 0.5 and ${maxSpeed}`);
+      }
+    }
+    if (item.locale !== undefined && (typeof item.locale !== 'string' || item.locale.length === 0)) {
+      throw new BadRequestException(`createHeygenMedia() items[${idx}].locale must be a non-empty string`);
+    }
+    if (item.language !== undefined && (typeof item.language !== 'string' || item.language.length === 0)) {
+      throw new BadRequestException(`createHeygenMedia() items[${idx}].language must be a non-empty string`);
+    }
+    if (item.title !== undefined && typeof item.title !== 'string') {
+      throw new BadRequestException(`createHeygenMedia() items[${idx}].title must be a string`);
+    }
+
+    // dimension
+    if (item.dimension !== undefined) {
+      if (typeof item.dimension !== 'object' || item.dimension === null) {
+        throw new BadRequestException(`createHeygenMedia() items[${idx}].dimension must be an object`);
+      }
+      const dim = item.dimension as Record<string, unknown>;
+      if (typeof dim.width !== 'number' || typeof dim.height !== 'number' || dim.width <= 0 || dim.height <= 0) {
+        throw new BadRequestException(`createHeygenMedia() items[${idx}].dimension must have positive width and height`);
+      }
+    }
+
+    // background
+    if (item.background !== undefined) {
+      if (typeof item.background !== 'object' || item.background === null) {
+        throw new BadRequestException(`createHeygenMedia() items[${idx}].background must be an object`);
+      }
+      const bg = item.background as Record<string, unknown>;
+      if (!VALID_BG_TYPES.includes(bg.type as 'color' | 'image' | 'video')) {
+        throw new BadRequestException(`createHeygenMedia() items[${idx}].background.type must be one of: ${VALID_BG_TYPES.join(', ')}`);
+      }
+      if (bg.fit !== undefined && !VALID_BG_FITS.includes(bg.fit as 'crop' | 'cover' | 'contain' | 'none')) {
+        throw new BadRequestException(`createHeygenMedia() items[${idx}].background.fit must be one of: ${VALID_BG_FITS.join(', ')}`);
+      }
+    }
+
+    return {
+      media_type: item.media_type,
+      script_text: item.script_text,
+      avatar_id: item.avatar_id,
+      avatar_style: item.avatar_style,
+      voice_id: item.voice_id,
+      speed: item.speed,
+      emotion: item.emotion,
+      locale: item.locale,
+      language: item.language,
+      title: item.title,
+      dimension: item.dimension,
+      background: item.background,
+    } as CreateHeygenMediaItem;
+  });
+
+  return { items: validated };
 }
 
 // --- Service-layer enum guards (used by the service before any DB write/update) ---

@@ -80,5 +80,49 @@ Atomically tags the media_metadata row as rolled back AND deletes every row in e
 3.) This approach is schema-aware: when a new table adds a FK to `media_metadata.id`, it is automatically covered without code changes.
 
 
-createHeygenMedia(options: CreateHeygenMediaOptions[]): Promise<MediaMetaData[]>
-// TODO: define when heygen integration is built
+createHeygenMedia(options: CreateHeygenMediaOptions): Promise<MediaMetaData[]>
+
+1.) Validate options at runtime with validateCreateHeygenMediaOptions(). If it fails, log WARN and let the BadRequestException propagate.
+
+2.) For each item in options.items:
+  a.) Generate a temporary external_id: `tmp_${uuid()}`.
+  b.) Assert enum values: assertValidMediaType(item.media_type), assertValidMediaSource('heygen').
+  c.) Create a media_metadata database row:
+    * id = uuid()
+    * external_id = the generated tmp_ id
+    * status = 'created'
+    * media_type = item.media_type
+    * source = 'heygen'
+    * user_id = NULL (HeyGen media is not user-scoped)
+    * rolled_back = false
+    * generation_request_json = the sanitized item payload (no secrets — strip any avatar_id / voice_id that match env defaults, keep the rest)
+  d.) Build a BullMQ job payload:
+    {
+      media_metadata_id: the row's id,
+      media_type: item.media_type,
+      heygen_params: {
+        script_text: item.script_text,
+        avatar_id: item.avatar_id,        // undefined if not overridden
+        avatar_style: item.avatar_style,
+        voice_id: item.voice_id,           // undefined if not overridden
+        speed: item.speed,
+        emotion: item.emotion,
+        locale: item.locale,
+        language: item.language,
+        title: item.title,
+        dimension: item.dimension,
+        background: item.background,
+      }
+    }
+  e.) Collect the row and job payload.
+
+3.) Enqueue all job payloads atomically using queue.addBulk() on the HEYGEN_GENERATE queue.
+  * If addBulk() fails: retry with exponential backoff (10s cap).
+    * If the cap is reached:
+      - Mark ALL created media_metadata rows as status = 'failed' (batch update).
+      - Log ERROR.
+      - Throw an InternalServerErrorException.
+
+4.) Once addBulk() succeeds: update all created media_metadata rows to status = 'queued' (batch update).
+
+5.) Return the created media_metadata entities (with status = 'queued').
