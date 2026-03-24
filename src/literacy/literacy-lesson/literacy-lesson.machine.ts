@@ -92,7 +92,7 @@ export const machine = setup({
     letterImageErrors: 0,
     letterNoImageErrors: 0,
     answer: input.word,
-    stateTransitionId: `${input.word}-word-initial`,
+    stateTransitionId: `${input.word}-start-word-initial`,
     userMessageId: input.userMessageId,
     pendingCorrect: [],
     pendingIncorrect: [],
