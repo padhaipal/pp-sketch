@@ -12,7 +12,7 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
 * If the user doesn't exist in the database:
   * user.service.ts/create() with payload.message.from as the externalID and the referrer's externalID as the phone number found in payload.message.text.body (if it exists). 
 	  * If the referrer couldn't be identified in the database then log an INFO and move on. Don't let that block you.
-	* If the new user failed to create then log ERROR and call src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with .env/FALL_BACK_MESSAGE_EXTERNAL_ID.
+	* If the new user failed to create then log ERROR and call src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with .env/FALL_BACK_MESSAGE_PUBLIC_URL.
 	  * See sendMessage() notes below for how to handle the http response.
   * If a new user was created then src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with .env/WELCOME_MESSAGE_EXTERNAL_ID.
 	  * See sendMessage() notes below for how to handle the http response.
