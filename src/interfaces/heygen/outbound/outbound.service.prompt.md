@@ -14,6 +14,8 @@
 // processJob(job)
 // =====================================================================
 
+// 0.) Start a child span: startChildSpan('heygen-generate-processor', job.data.otel_carrier). See src/otel/otel.prompt.md for helpers.
+
 // 1.) Extract from job payload: media_metadata_id, media_type, and heygen_params.
 
 // 2.) Dispatch based on media_type:
@@ -43,16 +45,16 @@
 // c.) On 200:
 //     * Extract video_id from response.data.video_id.
 //     * Update the media_metadata row: set media_details = { video_id }, keep status = 'queued'.
-//     * Mark the BullMQ job as complete. (Actual media download happens when webhook fires.)
+//     * End the span. Mark the BullMQ job as complete. (Actual media download happens when webhook fires.)
 
 // d.) On 4XX:
 //     * Log ERROR with response body.
 //     * Update media_metadata row: status = 'failed', media_details = { error: response.error }.
-//     * Fail the job (no retry — client error).
+//     * End the span. Fail the job (no retry — client error).
 
 // e.) On 5XX:
 //     * Log WARN with response body.
-//     * Fail the job so BullMQ retries it with backoff.
+//     * End the span. Fail the job so BullMQ retries it with backoff.
 
 // --- media_type = 'audio' ---
 
@@ -74,15 +76,15 @@
 //       - s3_key = returned S3 key
 //       - media_details = { mime_type: 'audio/mpeg', duration, byte_size, request_id, word_timestamps }
 //       - status stays 'queued' (NOT 'ready' — the WHATSAPP_PRELOAD worker sets 'ready' after populating wa_media_url)
-//     * Enqueue a job on the WHATSAPP_PRELOAD queue with { media_metadata_id, s3_key }.
+//     * Enqueue a job on the WHATSAPP_PRELOAD queue with { media_metadata_id, s3_key, otel_carrier: injectCarrier(span) }.
 //       (The WHATSAPP_PRELOAD worker will upload the media to WhatsApp, set wa_media_url, and transition status to 'ready'. See src/media-meta-data/whatsapp-preload.processor.prompt.md.)
-//     * Mark the BullMQ job as complete.
+//     * End the span. Mark the BullMQ job as complete.
 
 // d.) On 4XX:
 //     * Log ERROR with response body.
 //     * Update media_metadata row: status = 'failed', media_details = { error: response.error }.
-//     * Fail the job (no retry — client error).
+//     * End the span. Fail the job (no retry — client error).
 
 // e.) On 5XX:
 //     * Log WARN with response body.
-//     * Fail the job so BullMQ retries it with backoff.
+//     * End the span. Fail the job so BullMQ retries it with backoff.

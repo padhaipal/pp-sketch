@@ -116,6 +116,7 @@ export interface WhatsappPreloadJobDto {
   media_metadata_id: string;               // FK -> media_metadata.id — the entity whose wa_media_url will be set
   s3_key: string;                          // S3 object key — used to fetch the raw media bytes via media-bucket/outbound/getBuffer()
   reload?: boolean;                        // true when this is a periodic reload (skip status transition); falsy/absent for initial preload
+  otel_carrier: Record<string, string>;    // trace context — see src/otel/otel.prompt.md
 }
 
 // --- Runtime validation ---

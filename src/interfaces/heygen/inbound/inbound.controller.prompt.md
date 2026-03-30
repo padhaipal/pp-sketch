@@ -17,8 +17,8 @@ receive()
   * If they do not match: log WARN and return 401.
 3.) Validate the parsed JSON body against src/interfaces/heygen/inbound/inbound.dto.ts (HeygenWebhookDto).
   * If validation fails: return 400.
-4.) Start a span.
-5.) Enqueue a job on the HEYGEN_INBOUND BullMQ queue with payload: { event_type, event_data }.
+4.) Start a root span: `startRootSpan('heygen-inbound-controller')` (no incoming OTel carrier — external webhook). See src/otel/otel.prompt.md for helpers.
+5.) Enqueue a job on the HEYGEN_INBOUND BullMQ queue with payload: { event_type, event_data, otel_carrier: injectCarrier(span) }.
   * If enqueue fails: log WARN and retry with exponential backoff (10s time cap).
     * If time cap is reached: log ERROR, end span, return 500.
 6.) Return 200 and end the span.

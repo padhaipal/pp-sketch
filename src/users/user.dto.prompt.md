@@ -31,11 +31,6 @@ export interface CreateUserOptions {
   referrer_user_id?: string;
 }
 
-// --- Batch limit ---
-
-const parsedBatchSize = parseInt(process.env.MAX_USER_BATCH_SIZE ?? '100', 10);
-export const MAX_USER_BATCH_SIZE = Number.isNaN(parsedBatchSize) || parsedBatchSize <= 0 ? 100 : parsedBatchSize;
-
 // --- E.164 phone validation (WhatsApp convention) ---
 
 function validateE164PhoneNumber(value: string, fieldName: string): string {

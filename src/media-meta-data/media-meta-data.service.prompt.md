@@ -1,5 +1,6 @@
 // pp-sketch/src/media-meta-data/media-meta-data.service.prompt.md
 See src/docs/database.md for redis/database details and fallback patterns.
+Inject CacheService from src/interfaces/redis/cache.ts. See cache.dto for key builders and TTLs.
 
 Enum enforcement: MediaStatus, MediaType, and MediaSource are stored as plain text in pg (no custom pg enum types).
 All writes and updates MUST call the assertion helpers (assertValidMediaStatus, assertValidMediaType, assertValidMediaSource) from media-meta-data.dto before touching the database, so that adding or removing enum values is a code-only change.
@@ -44,19 +45,22 @@ Single DB round-trip. Returns all text transcript entities that are children of 
 
 ## findMediaByStateTransitionId(stateTransitionId: string): Promise<FindMediaByStateTransitionIdResult>
 
-Single DB round-trip. Looks up all ready, deliverable media entities whose `state_transition_id` matches the given `stateTransitionId`, then randomly selects one entity per media type. Uses the `(state_transition_id, status)` index.
+Looks up all ready, deliverable media entities whose `state_transition_id` matches the given `stateTransitionId`, then randomly selects one entity per media type. Uses the `(state_transition_id, status)` index.
 
 1.) If `stateTransitionId` is not a valid non-empty string, throw BadRequestException.
-2.) Query:
+2.) Check cache: call `cacheService.get<FindMediaByStateTransitionIdResult>(CACHE_KEYS.mediaByStateTransitionId(stateTransitionId))`.
+  * If cache hit: return the cached result immediately (no DB hit).
+3.) Query (single DB round-trip):
   ```sql
   SELECT * FROM media_metadata
   WHERE state_transition_id = $1
     AND status = 'ready'
     AND (wa_media_url IS NOT NULL OR media_type = 'text')
   ```
-3.) Group the returned rows by `media_type`.
-4.) For each media type (audio, video, text, image): if one or more rows exist in that group, randomly select one. If none exist for a type, that key is omitted from the result.
-5.) Return the `FindMediaByStateTransitionIdResult` object.
+4.) Group the returned rows by `media_type`.
+5.) For each media type (audio, video, text, image): if one or more rows exist in that group, randomly select one. If none exist for a type, that key is omitted from the result.
+6.) If any media types were found (result is not empty): populate the cache with `cacheService.set(CACHE_KEYS.mediaByStateTransitionId(stateTransitionId), result, CACHE_TTL.MEDIA_BY_STATE_TRANSITION)`.
+7.) Return the `FindMediaByStateTransitionIdResult` object.
 
 ## markRolledBack(mediaId: string): Promise<void>
 
@@ -86,7 +90,7 @@ Atomically tags the media_metadata row as rolled back AND deletes every row in e
 3.) This approach is schema-aware: when a new table adds a FK to `media_metadata.id`, it is automatically covered without code changes.
 
 
-createHeygenMedia(options: CreateHeygenMediaOptions): Promise<MediaMetaData[]>
+createHeygenMedia(options: CreateHeygenMediaOptions, otel_carrier: Record<string, string>): Promise<MediaMetaData[]>
 
 1.) Validate options at runtime with validateCreateHeygenMediaOptions(). If it fails, log WARN and let the BadRequestException propagate.
 
@@ -106,6 +110,7 @@ createHeygenMedia(options: CreateHeygenMediaOptions): Promise<MediaMetaData[]>
     {
       media_metadata_id: the row's id,
       media_type: item.media_type,
+      otel_carrier: otel_carrier,
       heygen_params: {
         script_text: item.script_text,
         avatar_id: item.avatar_id,        // undefined if not overridden

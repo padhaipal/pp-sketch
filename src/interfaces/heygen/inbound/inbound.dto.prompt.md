@@ -79,4 +79,6 @@ export class HeygenInboundJobDto {
   event_type!: 'avatar_video.success' | 'avatar_video.fail';
 
   event_data!: Record<string, unknown>;   // raw event_data — processor validates per event_type
+
+  otel_carrier!: Record<string, string>;  // injected by controller — see src/otel/otel.prompt.md
 }

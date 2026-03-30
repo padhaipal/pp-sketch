@@ -6,6 +6,8 @@
 
 processJob(job)
 
+0.) Start a child span: `startChildSpan('heygen-inbound-processor', job.data.otel_carrier)`. See src/otel/otel.prompt.md for helpers.
+
 1.) Extract event_type and event_data from the job payload.
 
 2.) Switch on event_type:
@@ -13,15 +15,15 @@ processJob(job)
 // --- avatar_video.success ---
 
 a.) Validate event_data fields: video_id (string), url (string), callback_id (string).
-    * If callback_id is missing or empty: log ERROR, fail the job.
+    * If callback_id is missing or empty: log ERROR, end the span, fail the job.
 
 b.) Look up the media_metadata row by id = callback_id.
-    * If not found: log ERROR, fail the job.
+    * If not found: log ERROR, end the span, fail the job.
 
 c.) Download the video from event_data.url as a readable stream.
 
 d.) Stream it to src/interfaces/media-bucket/outbound/outbound.service.ts/stream() to upload to S3.
-    * If upload fails: log ERROR, update media_metadata status = 'failed', fail the job.
+    * If upload fails: log ERROR, update media_metadata status = 'failed', end the span, fail the job.
 
 e.) Update the media_metadata row (single update):
     * s3_key = returned S3 key
@@ -31,18 +33,18 @@ e.) Update the media_metadata row (single update):
       - byte_size (from download if available)
     * status stays 'queued' (NOT 'ready' — the WHATSAPP_PRELOAD worker sets 'ready' after populating wa_media_url)
 
-f.) Enqueue a job on the WHATSAPP_PRELOAD queue with { media_metadata_id: callback_id, s3_key }.
+f.) Enqueue a job on the WHATSAPP_PRELOAD queue with { media_metadata_id: callback_id, s3_key, otel_carrier: injectCarrier(span) }.
     (The WHATSAPP_PRELOAD worker will upload the media to WhatsApp, set wa_media_url, and transition status to 'ready'. See src/media-meta-data/whatsapp-preload.processor.prompt.md.)
 
-g.) Mark the BullMQ job as complete.
+g.) End the span. Mark the BullMQ job as complete.
 
 // --- avatar_video.fail ---
 
 a.) Validate event_data fields: video_id (string), msg (string), callback_id (string).
-    * If callback_id is missing or empty: log ERROR, fail the job.
+    * If callback_id is missing or empty: log ERROR, end the span, fail the job.
 
 b.) Look up the media_metadata row by id = callback_id.
-    * If not found: log ERROR, fail the job.
+    * If not found: log ERROR, end the span, fail the job.
 
 c.) Update the media_metadata row:
     * status = 'failed'
@@ -50,5 +52,5 @@ c.) Update the media_metadata row:
 
 d.) Log ERROR with video_id and failure message.
 
-e.) Mark the BullMQ job as complete.
+e.) End the span. Mark the BullMQ job as complete.
     (No retry — HeyGen has already given a terminal failure.)
