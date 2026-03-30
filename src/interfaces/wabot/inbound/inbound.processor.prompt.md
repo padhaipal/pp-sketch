@@ -59,7 +59,7 @@ Note that sendMessage() returns { status, body } where body has a `delivered` fl
   * If 5XX then log ERROR, end the span and fail the job.
 
 Note
-* How to handle sendMessage() responses.  
+* How to handle sendMessage() responses unless otherwise specified.  
   * If 2XX. Then log INFO, end the span and complete the job. 
   * If 4XX. Then log ERROR, end the span and fail the job. 
 	* If 5XX. Then log WARN, end the span and fail the job. 

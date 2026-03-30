@@ -12,9 +12,35 @@ Export queue names, Redis connection, and Queue/Worker factories.
 * Create ioredis Connection from REDIS_URL (.env).
 * Use for BullMQ Queue and Worker instances.
 
-3.) createQueue(name, defaultJobOptions?).
-* Returns BullMQ Queue instance.
+3.) DEFAULT_JOB_OPTIONS per queue.
+Each queue has its own defaultJobOptions controlling retry behaviour and Redis cleanup.
+When a worker's processJob() throws (or the job is explicitly failed), BullMQ retries the job according to these settings.
 
-4.) createWorker(name, processor, defaultJobOptions?).
+* WABOT_INBOUND:
+  - attempts: 3, backoff: { type: 'exponential', delay: 2000 }
+  - removeOnComplete: true, removeOnFail: { count: 5000 }
+  - Rationale: real-time interaction; processor discards messages older than 20 s, so retries must stay well under that window (~6 s total).
+
+* HEYGEN_GENERATE:
+  - attempts: 5, backoff: { type: 'exponential', delay: 5000 }
+  - removeOnComplete: true, removeOnFail: { count: 5000 }
+  - Rationale: external HeyGen API, async media generation. Gives the API ~75 s to recover from rate-limits or transient 5XX errors.
+
+* HEYGEN_INBOUND:
+  - attempts: 3, backoff: { type: 'exponential', delay: 5000 }
+  - removeOnComplete: true, removeOnFail: { count: 5000 }
+  - Rationale: webhook processing (download + S3 upload). Most processor failures are terminal (no retry); the retry budget covers unexpected transient failures (~15 s total).
+
+* WHATSAPP_PRELOAD:
+  - attempts: 5, backoff: { type: 'exponential', delay: 10000 }
+  - removeOnComplete: true, removeOnFail: { count: 5000 }
+  - Rationale: S3 reads + WhatsApp Cloud API uploads, async preload. WhatsApp rate-limiting can last a while (~150 s total retry window).
+
+4.) createQueue(name, defaultJobOptions?).
+* Returns BullMQ Queue instance.
+* If defaultJobOptions is omitted, uses the queue's DEFAULT_JOB_OPTIONS from (3).
+
+5.) createWorker(name, processor, defaultJobOptions?).
 * Returns BullMQ Worker instance.
+* If defaultJobOptions is omitted, uses the queue's DEFAULT_JOB_OPTIONS from (3).
 * Workers must be started on app bootstrap (see src/main.ts).

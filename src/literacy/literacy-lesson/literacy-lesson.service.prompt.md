@@ -22,7 +22,7 @@ The main entry point called by the inbound processor at step 7. Handles the full
 5.) Start a new lesson:
 * Call `selectNextWord(options.user.id)` to pick the word.
 * Create a new XState actor from the machine with `input: { word, userMessageId: options.user_message_id }`.
-* Start the actor. The machine enters the `word` state and the initial context is set (including `stateTransitionId: \`${word}-word-initial\``).
+* Start the actor. The machine enters the `word` state and the initial context is set (including its `stateTransitionId`).
 * If `combinedTranscript` is defined, send the ANSWER event: `{ type: 'ANSWER', studentAnswer: combinedTranscript }`.
 * Extract the snapshot.
 * Go to step 7.
