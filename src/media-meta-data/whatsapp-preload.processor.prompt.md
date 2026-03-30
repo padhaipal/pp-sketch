@@ -1,7 +1,7 @@
 // pp-sketch/src/media-meta-data/whatsapp-preload.processor.prompt.md
 
 // WHATSAPP_PRELOAD BullMQ worker.
-// Handles both initial preload (after HeyGen generation) and periodic reload (every 20 days to prevent WhatsApp media expiry).
+// Handles both initial preload (after HeyGen generation or dashboard upload) and periodic reload (every 20 days to prevent WhatsApp media expiry).
 // Job payload shape: WhatsappPreloadJobDto (see media-meta-data.dto.prompt.md).
 
 // WhatsApp media IDs expire after 30 days. The reload cycle runs every 20 days to maintain a 10-day safety buffer.

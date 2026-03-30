@@ -16,3 +16,20 @@ generateHeygenMedia()
   * If the service throws: let it propagate (NestJS will map to the appropriate HTTP status).
 4.) Return 202 Accepted with body: { created: <number of items>, entities: <returned MediaMetaData[]> }.
 5.) End the span.
+
+// POST /media-meta-data/upload-static
+// Multipart upload of static images / MP4 "GIF" videos from the admin dashboard.
+// Files are uploaded to S3, media_metadata rows created, and WHATSAPP_PRELOAD jobs enqueued.
+// Swagger: @ApiTags('media-meta-data'), @ApiConsumes('multipart/form-data'), @ApiResponse(201)
+// @UseInterceptors(FilesInterceptor('files', 50))
+uploadStaticMedia()
+1.) Parse the `items` form field (JSON string) into an array via JSON.parse.
+  * If JSON.parse fails: return 400.
+  * Validate with validateUploadStaticMediaItems(). If validation fails: return 400.
+2.) Validate files:
+  * files must be a non-empty array with files.length === items.length. If not: return 400.
+  * For each file at index i: call assertValidStaticMediaFile(file, i). If any fails: return 400.
+3.) Start a root span: `startRootSpan('upload-static-controller')` (no incoming OTel carrier — dashboard request).
+4.) Call src/media-meta-data/media-meta-data.service.ts/uploadStaticMedia(files, validatedItems, injectCarrier(span)).
+5.) End the span.
+6.) Return 201 with UploadStaticMediaResult body.

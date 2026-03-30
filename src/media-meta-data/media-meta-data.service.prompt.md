@@ -137,3 +137,48 @@ createHeygenMedia(options: CreateHeygenMediaOptions, otel_carrier: Record<string
 4.) Once addBulk() succeeds: update all created media_metadata rows to status = 'queued' (batch update).
 
 5.) Return the created media_metadata entities (with status = 'queued').
+
+
+uploadStaticMedia(files: Express.Multer.File[], items: UploadStaticMediaItem[], otel_carrier: Record<string, string>): Promise<UploadStaticMediaResult>
+
+Uploads admin-provided images/videos to S3, creates media_metadata rows, and enqueues WHATSAPP_PRELOAD jobs.
+Processes each file+item pair sequentially (index 0, then 1, …). Collects per-item results.
+Dedup: SHA-256 content hash + state_transition_id prevents re-uploading identical bytes for the same transition.
+
+For each pair at index i:
+
+  1.) Compute SHA-256 hex digest of files[i].buffer → content_hash.
+
+  2.) Infer media_type from files[i].mimetype using MIME_TO_MEDIA_TYPE.
+      Assert enums: assertValidMediaType(media_type), assertValidMediaSource('dashboard').
+
+  3.) Dedup check (single DB query):
+      ```sql
+      SELECT * FROM media_metadata
+      WHERE content_hash = $content_hash
+        AND state_transition_id = $state_transition_id
+      LIMIT 1
+      ```
+      * If found with status 'created', 'queued', or 'ready': collect { index: i, status: 'duplicate_skipped', entity: existingRow }. Continue to next pair.
+      * If found with status 'failed': reuse this row — continue to step 4 (re-upload to S3 and re-enqueue). The existing row's id is preserved; s3_key, media_details, and status will be overwritten in step 5.
+      * If not found: continue to step 4 (create new row).
+
+  4.) Upload to S3: call media-bucket stream(Readable.from(files[i].buffer), files[i].mimetype). Returns s3_key.
+      * If stream() throws: log WARN (index, error, items[i].state_transition_id). Collect { index: i, status: 'failed', error: message }. Continue to next pair.
+
+  5.) Create or update media_metadata row:
+      * If reusing a failed row from step 3: UPDATE the existing row — set s3_key = returned key, status = 'created', media_details = { mime_type: files[i].mimetype, byte_size: files[i].size }, rolled_back = false.
+      * If creating new: INSERT with id = uuid(), state_transition_id = items[i].state_transition_id, s3_key = returned key, content_hash = computed hash, wa_media_url = NULL (set later by WHATSAPP_PRELOAD worker), media_type = inferred type, source = 'dashboard', status = 'created', user_id = NULL, rolled_back = false, media_details = { mime_type: files[i].mimetype, byte_size: files[i].size }.
+      * If PG write throws: log WARN (index, error). Collect as 'failed'. Continue to next pair.
+
+  6.) Enqueue WHATSAPP_PRELOAD job:
+      { media_metadata_id: row.id, s3_key, reload: false, otel_carrier }.
+      * If enqueue throws: log WARN. Update row status to 'failed'. Collect as 'failed'. Continue to next pair.
+
+  7.) Update media_metadata status to 'queued'.
+
+  8.) Collect { index: i, status: 'created', entity: row (with status 'queued') }.
+
+After all pairs processed:
+  Compute summary: { created: count('created'), duplicate_skipped: count('duplicate_skipped'), failed: count('failed') }.
+  Return { results, summary }.

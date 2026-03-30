@@ -12,12 +12,13 @@ export type MediaStatus = (typeof VALID_MEDIA_STATUSES)[number];
 const VALID_MEDIA_TYPES = ['audio', 'text', 'video', 'image'] as const;
 export type MediaType = (typeof VALID_MEDIA_TYPES)[number];
 
-const VALID_MEDIA_SOURCES = ['whatsapp', 'heygen', 'azure', 'sarvam', 'reverie'] as const;
+const VALID_MEDIA_SOURCES = ['whatsapp', 'heygen', 'azure', 'sarvam', 'reverie', 'dashboard'] as const;
 export type MediaSource = (typeof VALID_MEDIA_SOURCES)[number];
 
 // --- Source → user rules ---
-// 'whatsapp'  — user is REQUIRED  (user or user_external_id must be provided)
-// 'heygen'    — user is FORBIDDEN (user and user_external_id must NOT be provided)
+// 'whatsapp'   — user is REQUIRED  (user or user_external_id must be provided)
+// 'heygen'     — user is FORBIDDEN (user and user_external_id must NOT be provided)
+// 'dashboard'  — user is FORBIDDEN (admin-uploaded static content is not user-scoped)
 // Enforced structurally: each source has its own Options type and validator.
 
 // --- Entity (matches pg media_metadata table) ---
@@ -31,6 +32,7 @@ export interface MediaMetaData {
   wa_media_url?: string | null;            // UNIQUE WHERE NOT NULL — WhatsApp media reference. For WA-sourced audio: the inbound CDN URL (set at creation, used for dedup). For HeyGen audio/video: the WhatsApp media ID returned by the Cloud API upload (set by WHATSAPP_PRELOAD worker, refreshed every 20 days before the 30-day expiry).
   state_transition_id?: string | null;     // lookup key for lesson content — maps to stateTransitionId produced by the XState machine. No uniqueness constraint; multiple entities (one per media_type) share the same value. Indexed: (state_transition_id, status).
   s3_key?: string | null;                  // unique, object key in media-bucket; required unless media_type = 'text'
+  content_hash?: string | null;            // SHA-256 hex digest of raw file bytes; set for dashboard uploads. Partial index (non-unique): (content_hash, state_transition_id) WHERE content_hash IS NOT NULL
   text?: string | null;                    // the text content; required when media_type = 'text', null otherwise
   status: MediaStatus;
   media_type: MediaType;
@@ -88,6 +90,43 @@ export interface CreateHeygenMediaOptions {
   items: CreateHeygenMediaItem[];
 }
 
+// --- Dashboard upload options ---
+// source is always 'dashboard'. User is FORBIDDEN (admin-uploaded static content is not user-scoped).
+// Accepts multipart/form-data: files[] (binary) + items form field (JSON string). Matched by array index.
+// media_type is inferred from file MIME type; wa_media_url starts NULL (set by WHATSAPP_PRELOAD worker).
+
+const VALID_STATIC_MEDIA_MIME_TYPES = ['image/jpeg', 'image/png', 'video/mp4'] as const;
+type StaticMediaMimeType = (typeof VALID_STATIC_MEDIA_MIME_TYPES)[number];
+
+const MIME_TO_MEDIA_TYPE: Record<StaticMediaMimeType, MediaType> = {
+  'image/jpeg': 'image',
+  'image/png': 'image',
+  'video/mp4': 'video',
+};
+
+const STATIC_MEDIA_MAX_BYTES: Record<'image' | 'video', number> = {
+  image: 5 * 1024 * 1024,    // 5 MB — WhatsApp image limit
+  video: 16 * 1024 * 1024,   // 16 MB — WhatsApp video limit
+};
+
+export interface UploadStaticMediaItem {
+  state_transition_id: string;             // required — the lesson state transition this media is for
+}
+
+export type UploadStaticMediaItemStatus = 'created' | 'duplicate_skipped' | 'failed';
+
+export interface UploadStaticMediaItemResult {
+  index: number;
+  status: UploadStaticMediaItemStatus;
+  entity?: MediaMetaData;                  // present for 'created' and 'duplicate_skipped'
+  error?: string;                          // present for 'failed'
+}
+
+export interface UploadStaticMediaResult {
+  results: UploadStaticMediaItemResult[];
+  summary: { created: number; duplicate_skipped: number; failed: number };
+}
+
 // --- FindTranscripts options ---
 // Exactly one identifier must be provided to locate the parent media entity.
 
@@ -109,7 +148,7 @@ export interface FindMediaByStateTransitionIdResult {
 
 // --- WHATSAPP_PRELOAD job payload ---
 // Used by the WHATSAPP_PRELOAD BullMQ worker (see whatsapp-preload.processor.prompt.md).
-// Enqueued by: HeyGen outbound service (audio), HeyGen inbound processor (video).
+// Enqueued by: HeyGen outbound service (audio), HeyGen inbound processor (video), uploadStaticMedia service (dashboard image/video).
 // For reload jobs (20-day refresh cycle), the same shape is reused with reload = true.
 
 export interface WhatsappPreloadJobDto {
@@ -302,6 +341,37 @@ export function validateCreateHeygenMediaOptions(options: unknown): CreateHeygen
   });
 
   return { items: validated };
+}
+
+// --- Dashboard upload validation ---
+
+export function validateUploadStaticMediaItems(rawItems: unknown): UploadStaticMediaItem[] {
+  if (!Array.isArray(rawItems) || rawItems.length === 0) {
+    throw new BadRequestException('uploadStaticMedia() items must be a non-empty array');
+  }
+  return rawItems.map((raw: unknown, idx: number) => {
+    if (!raw || typeof raw !== 'object') {
+      throw new BadRequestException(`uploadStaticMedia() items[${idx}] must be an object`);
+    }
+    const item = raw as Record<string, unknown>;
+    if (typeof item.state_transition_id !== 'string' || item.state_transition_id.length === 0) {
+      throw new BadRequestException(`uploadStaticMedia() items[${idx}].state_transition_id is required and must be a non-empty string`);
+    }
+    return { state_transition_id: item.state_transition_id };
+  });
+}
+
+export function assertValidStaticMediaFile(file: { mimetype: string; size: number }, idx: number): { media_type: MediaType; mime_type: StaticMediaMimeType } {
+  if (!VALID_STATIC_MEDIA_MIME_TYPES.includes(file.mimetype as StaticMediaMimeType)) {
+    throw new BadRequestException(`uploadStaticMedia() files[${idx}]: unsupported MIME type "${file.mimetype}". Must be one of: ${VALID_STATIC_MEDIA_MIME_TYPES.join(', ')}`);
+  }
+  const mime = file.mimetype as StaticMediaMimeType;
+  const media_type = MIME_TO_MEDIA_TYPE[mime];
+  const maxBytes = STATIC_MEDIA_MAX_BYTES[media_type as 'image' | 'video'];
+  if (file.size > maxBytes) {
+    throw new BadRequestException(`uploadStaticMedia() files[${idx}]: file size ${file.size} bytes exceeds ${maxBytes} byte limit for ${media_type}`);
+  }
+  return { media_type, mime_type: mime };
 }
 
 // --- Service-layer enum guards (used by the service before any DB write/update) ---
