@@ -33,8 +33,8 @@ export interface CreateUserOptions {
 
 // --- Batch limit ---
 
-const parsed = parseInt(process.env.MAX_USER_BATCH_SIZE ?? '100', 10);
-export const MAX_USER_BATCH_SIZE = Number.isNaN(parsed) || parsed <= 0 ? 100 : parsed;
+const parsedBatchSize = parseInt(process.env.MAX_USER_BATCH_SIZE ?? '100', 10);
+export const MAX_USER_BATCH_SIZE = Number.isNaN(parsedBatchSize) || parsedBatchSize <= 0 ? 100 : parsedBatchSize;
 
 // --- E.164 phone validation (WhatsApp convention) ---
 

@@ -56,6 +56,9 @@ export class TextDto {
 export class SystemDto {
   @IsString()
   body!: string;
+
+  @IsString()
+  wa_id!: string;                  // the user's NEW phone number after the change
 }
 
 export class MessageDto {

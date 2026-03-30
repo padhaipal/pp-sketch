@@ -4,10 +4,16 @@ import { BadRequestException } from '@nestjs/common';
 import { User } from '../users/user.dto';
 
 // --- Enums (enforced at service layer; stored as text in pg — no custom pg enum types) ---
+// Each array is the single source of truth; the union type is derived from it via [number].
 
-export type MediaStatus = 'created' | 'queued' | 'ready' | 'failed';
-export type MediaType = 'audio' | 'text' | 'video' | 'image';
-export type MediaSource = 'whatsapp' | 'heygen' | 'azure' | 'sarvam' | 'reverie';
+const VALID_MEDIA_STATUSES = ['created', 'queued', 'ready', 'failed'] as const;
+export type MediaStatus = (typeof VALID_MEDIA_STATUSES)[number];
+
+const VALID_MEDIA_TYPES = ['audio', 'text', 'video', 'image'] as const;
+export type MediaType = (typeof VALID_MEDIA_TYPES)[number];
+
+const VALID_MEDIA_SOURCES = ['whatsapp', 'heygen', 'azure', 'sarvam', 'reverie'] as const;
+export type MediaSource = (typeof VALID_MEDIA_SOURCES)[number];
 
 // --- Source → user rules ---
 // 'whatsapp'  — user is REQUIRED  (user or user_external_id must be provided)
@@ -113,10 +119,6 @@ export interface WhatsappPreloadJobDto {
 }
 
 // --- Runtime validation ---
-
-const VALID_MEDIA_STATUSES: MediaStatus[] = ['created', 'queued', 'ready', 'failed'];
-const VALID_MEDIA_TYPES: MediaType[] = ['audio', 'text', 'video', 'image'];
-const VALID_MEDIA_SOURCES: MediaSource[] = ['whatsapp', 'heygen'];
 
 export function validateCreateWhatsappAudioMediaOptions(options: unknown): CreateWhatsappAudioMediaOptions {
   if (!options || typeof options !== 'object') {

@@ -48,7 +48,7 @@ type OptionalLetterRef =
 
 export type FindScoreOptions = { limit?: number } & OptionalUserRef & OptionalLetterRef;
 
-export const DEFAULT_FIND_LIMIT = 100_000;
+export const DEFAULT_FIND_SCORE_LIMIT = 100_000;
 
 // --- Runtime validation ---
 
@@ -130,8 +130,8 @@ export function validateFindScoreOptions(options: unknown): FindScoreOptions {
     if (typeof o.limit !== 'number' || !Number.isInteger(o.limit) || o.limit < 1) {
       throw new BadRequestException('find() options.limit must be a positive integer');
     }
-    if (o.limit > DEFAULT_FIND_LIMIT) {
-      throw new BadRequestException(`find() options.limit must not exceed ${DEFAULT_FIND_LIMIT}`);
+    if (o.limit > DEFAULT_FIND_SCORE_LIMIT) {
+      throw new BadRequestException(`find() options.limit must not exceed ${DEFAULT_FIND_SCORE_LIMIT}`);
     }
   }
 

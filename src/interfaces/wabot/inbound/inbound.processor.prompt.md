@@ -1,8 +1,8 @@
 // pp-sketch/src/interfaces/wabot/inbound/inbound.processor.prompt.md
 Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interfaces/wabot/inbound/wabot-inbound.dto.ts (MessageJobDto).
 
-1.) If payload.message.type is "system" (Note that system messages are only used to communicate changes to the user's phone number and nothing else. It is important not to miss these because if we do the user with the new phone number will look like a new user).
-* Use payload.message.from as the externalID to update the user in the database via users/user.service.ts/update().
+1.) If payload.message.type is "system" (Note that system messages are only used to communicate changes to the user's phone number and nothing else. It is important not to miss these because if we do the user with the new phone number will look like a new user. payload.message.from is the user's OLD phone number. payload.message.system.wa_id is the user's NEW phone number).
+* Call users/user.service.ts/update() with external_id = payload.message.from (identifies the existing user by their old number) and new_external_id = payload.message.system.wa_id (sets their new number).
 * If the user can't be found in the database then log a ERROR, fail the job.
 * Else, then I have successfully updated the user entity in the database. Log INFO. End span. Complete the job.
 2.) Attempt user.service.ts/find() with payload.message.from as the externalID.
@@ -17,7 +17,7 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
   * If a new user was created then src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with .env/WELCOME_MESSAGE_EXTERNAL_ID.
 	  * See sendMessage() notes below for how to handle the http response.
 * Else: I now have the existing user's information and continue to the next step. 
-3.) Check payload.message.timestamp.
+3.) Check payload.message.timestamp (Unix epoch — may be seconds or milliseconds. If the value has 10 or fewer digits, treat it as seconds and convert to milliseconds by multiplying by 1000, i.e. assume the event happened at the first millisecond of that second).
 * If it is more than 20 seconds old then log a WARN, complete the job and end the span. Note that wabot will handle sending the "please try again" message to the user.
 4.) If payload.message.type is not "audio" then: 
 * src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with .env/AUDIO_ONLY_REQUEST_EXTERNAL_ID.
