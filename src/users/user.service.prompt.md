@@ -23,7 +23,6 @@ update(options: UpdateUserOptions): Promise<User | null>
   )
   SELECT 1 FROM chain WHERE id = $current_user_id
   ```
-  Skip the cycle check entirely if no referrer was provided or if the referrer value resolves to null (removal).
 * Updatable fields:
   * new_external_id replaces the user's external_id, discarding the old one.
   * new_referrer_user_id sets the user's referrer_user_id directly by UUID (pass null to remove the referral).
@@ -38,6 +37,6 @@ update(options: UpdateUserOptions): Promise<User | null>
 
 create(options: CreateUserOptions): Promise<User>
 * Validate options at runtime with validateCreateUserOptions(). If it fails, log WARN and let the BadRequestException propagate.
-* One atomic query to create the user and resolve the referrer (if provided). After write, if a referrer was set: run the same recursive CTE cycle check as in update() — if it returns any rows, roll back and throw BadRequestException. Skip the cycle check if no referrer was provided.
+* One atomic query to create the user and resolve the referrer (if provided). After write, if a referrer was set: run the same recursive CTE cycle check as in update() — if it returns any rows, roll back and throw BadRequestException.
 * Populate the cache for both userById and userByExternalId keys with CACHE_TTL.USER.
 * Return the newly created user entity.

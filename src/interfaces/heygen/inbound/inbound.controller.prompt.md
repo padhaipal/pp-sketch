@@ -12,8 +12,8 @@
 receive()
 1.) Extract the raw request body and the `Signature` header.
 2.) Verify the webhook signature:
-  * Compute HMAC-SHA256 of the raw body using HEYGEN_WEBHOOK_SECRET.
-  * Compare the hex digest against the `Signature` header value.
+  * Compute HMAC-SHA256 of the raw body using HEYGEN_WEBHOOK_SECRET. Encode the result as a hex string.
+  * Compare using `crypto.timingSafeEqual(Buffer.from(computedHex), Buffer.from(signatureHeader))` — never use `===` for signature comparison as it is vulnerable to timing attacks. Ensure both buffers are the same length before comparing (unequal lengths indicate a mismatch — return 401 immediately without calling timingSafeEqual).
   * If they do not match: log WARN and return 401.
 3.) Validate the parsed JSON body against src/interfaces/heygen/inbound/inbound.dto.ts (HeygenWebhookDto).
   * If validation fails: return 400.

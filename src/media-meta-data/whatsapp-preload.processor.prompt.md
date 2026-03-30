@@ -35,5 +35,7 @@ processJob(job)
 7.) If the media_metadata row has a non-null state_transition_id: invalidate the cache by calling `cacheService.del(CACHE_KEYS.mediaByStateTransitionId(state_transition_id))`. This ensures the next findMediaByStateTransitionId() call picks up the new wa_media_url (or newly ready status).
 
 8.) Enqueue a new job on the WHATSAPP_PRELOAD queue with { media_metadata_id, s3_key, reload: true, otel_carrier: injectCarrier(span) } and a delay of 20 days (20 * 24 * 60 * 60 * 1000 ms).
+    * If enqueue throws: retry with exponential backoff (10s cap).
+      * If the cap is reached: log ERROR (media will not be refreshed and will expire after WhatsApp's 30-day limit). Continue — do not fail the job.
 
 9.) End the span. Mark the BullMQ job as complete.

@@ -27,10 +27,7 @@ d.) Stream it to src/interfaces/media-bucket/outbound/outbound.service.ts/stream
 
 e.) Update the media_metadata row (single update):
     * s3_key = returned S3 key
-    * media_details = merge existing media_details with:
-      - video_url (original HeyGen URL, for reference)
-      - mime_type: 'video/mp4'
-      - byte_size (from download if available)
+    * media_details = (full replace): { video_url (original HeyGen URL, for reference), mime_type: 'video/mp4', byte_size (from download if available) }
     * status stays 'queued' (NOT 'ready' — the WHATSAPP_PRELOAD worker sets 'ready' after populating wa_media_url)
 
 f.) Enqueue a job on the WHATSAPP_PRELOAD queue with { media_metadata_id: callback_id, s3_key, otel_carrier: injectCarrier(span) }.
@@ -48,7 +45,7 @@ b.) Look up the media_metadata row by id = callback_id.
 
 c.) Update the media_metadata row:
     * status = 'failed'
-    * media_details = merge existing media_details with { error_msg: event_data.msg }
+    * media_details = (full replace): { error_msg: event_data.msg }
 
 d.) Log ERROR with video_id and failure message.
 

@@ -85,7 +85,7 @@ Atomically tags the media_metadata row as rolled back AND deletes every row in e
           AND pa.attname = 'id'
       )
     ```
-  * For each discovered FK column/table pair, execute `DELETE FROM {table} WHERE {column} = $mediaId`.
+  * For each discovered FK column/table pair, execute `EXECUTE format('DELETE FROM %I WHERE %I = $1', referencing_table, referencing_column) USING mediaId` — the `%I` specifier in plpgsql's `format()` quotes identifiers safely.
   * All of the above runs inside a single transaction — if any step fails, the entire operation rolls back (neither the tag nor the deletes persist).
 3.) This approach is schema-aware: when a new table adds a FK to `media_metadata.id`, it is automatically covered without code changes.
 

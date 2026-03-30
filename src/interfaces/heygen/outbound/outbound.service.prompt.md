@@ -37,7 +37,7 @@
 //     * callback_id = media_metadata_id (so webhook can correlate)
 //     * callback_url = HEYGEN_CALLBACK_URL
 //     * title = heygen_params.title (if provided)
-//     * dimension = heygen_params.dimension (if provided)
+//     * dimension = heygen_params.dimension ?? { width: 1920, height: 1080 }
 
 // b.) POST to https://api.heygen.com/v2/video/generate
 //     Headers: { 'X-Api-Key': HEYGEN_API_KEY, 'Content-Type': 'application/json' }

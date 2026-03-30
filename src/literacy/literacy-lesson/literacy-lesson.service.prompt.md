@@ -31,7 +31,7 @@ The main entry point called by the inbound processor at step 7. Handles the full
 * If `combinedTranscript` is undefined, throw BadRequestException — rehydrating an existing lesson requires a student answer.
 * Create a new XState actor from the machine, restoring from the stored `state.snapshot` (using XState's `createActor(machine, { snapshot: state.snapshot })`).
 * Start the actor.
-* Before sending the event, update the actor's context with the new `userMessageId`: assign `context.userMessageId = options.user_message_id`.
+* Override `userMessageId` in the restored snapshot before creating the actor: `createActor(machine, { snapshot: { ...state.snapshot, context: { ...state.snapshot.context, userMessageId: options.user_message_id } } })`. Do not mutate context after creation — XState context is immutable outside the machine.
 * Send the ANSWER event: `{ type: 'ANSWER', studentAnswer: combinedTranscript }`.
 * Extract the new snapshot.
 * Go to step 7.
@@ -71,7 +71,7 @@ Returns null if no rows exist.
 
 ## selectNextWord(userId: string): Promise\<string>
 
-Private helper. Selects the next word for a new lesson based on the student's score history and recent performance. The word list is loaded from `./word-list.json`.
+Private helper. Selects the next word for a new lesson based on the student's score history and recent performance. The word list is co-located with the service at `src/literacy/literacy-lesson/word-list.json`. Load it with `path.join(__dirname, 'word-list.json')`.
 
 ### Constants (top of file)
 
