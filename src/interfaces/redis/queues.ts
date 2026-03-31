@@ -1,0 +1,67 @@
+import { Queue, Worker, Processor, JobsOptions } from 'bullmq';
+import Redis from 'ioredis';
+
+export const QUEUE_NAMES = {
+  WABOT_INBOUND: 'wabot-inbound',
+  HEYGEN_GENERATE: 'heygen-generate',
+  HEYGEN_INBOUND: 'heygen-inbound',
+  WHATSAPP_PRELOAD: 'whatsapp-preload',
+} as const;
+
+const connection = new Redis(process.env.REDIS_URL!, {
+  maxRetriesPerRequest: null,
+});
+
+export { connection as queueRedisConnection };
+
+export const DEFAULT_JOB_OPTIONS: Record<string, JobsOptions> = {
+  [QUEUE_NAMES.WABOT_INBOUND]: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 2000 },
+    removeOnComplete: true,
+    removeOnFail: { count: 5000 },
+  },
+  [QUEUE_NAMES.HEYGEN_GENERATE]: {
+    attempts: 5,
+    backoff: { type: 'exponential', delay: 5000 },
+    removeOnComplete: true,
+    removeOnFail: { count: 5000 },
+  },
+  [QUEUE_NAMES.HEYGEN_INBOUND]: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 5000 },
+    removeOnComplete: true,
+    removeOnFail: { count: 5000 },
+  },
+  [QUEUE_NAMES.WHATSAPP_PRELOAD]: {
+    attempts: 5,
+    backoff: { type: 'exponential', delay: 10000 },
+    removeOnComplete: true,
+    removeOnFail: { count: 5000 },
+  },
+};
+
+export function createQueue(
+  name: string,
+  defaultJobOptions?: JobsOptions,
+): Queue {
+  return new Queue(name, {
+    connection,
+    defaultJobOptions: defaultJobOptions ?? DEFAULT_JOB_OPTIONS[name],
+  });
+}
+
+export function createWorker<T = any>(
+  name: string,
+  processor: Processor<T>,
+  defaultJobOptions?: JobsOptions,
+): Worker<T> {
+  return new Worker<T>(name, processor, {
+    connection,
+    ...(defaultJobOptions
+      ? { defaultJobOptions }
+      : DEFAULT_JOB_OPTIONS[name]
+        ? { defaultJobOptions: DEFAULT_JOB_OPTIONS[name] }
+        : {}),
+  });
+}

@@ -40,6 +40,7 @@ export const machine = setup({
   types: {
     context: {} as Context,
     events: {} as Events,
+    input: {} as { word: string; userMessageId: string },
   },
 
   guards: {

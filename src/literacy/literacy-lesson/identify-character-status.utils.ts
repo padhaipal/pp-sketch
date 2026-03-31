@@ -1,5 +1,3 @@
-import { LogMethod } from 'src/common/decorators/log-method.decorator';
-
 export type Word = string & { readonly __brand: unique symbol };
 const toWord = (s: string): Word => s as Word;
 
@@ -180,7 +178,6 @@ interface IdentifyArgs {
 }
 
 class IdentifyCharacterStatus {
-  @LogMethod()
   static identify({
     correctAnswer,
     studentAnswer,

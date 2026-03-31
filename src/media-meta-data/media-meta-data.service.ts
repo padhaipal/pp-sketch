@@ -1,0 +1,635 @@
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { Readable, PassThrough } from 'stream';
+import { v4 as uuid } from 'uuid';
+import * as crypto from 'crypto';
+import { pool } from '../interfaces/database/database';
+import { CacheService } from '../interfaces/redis/cache';
+import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
+import { UserService } from '../users/user.service';
+import { WabotOutboundService } from '../interfaces/wabot/outbound/outbound.service';
+import { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound.service';
+import { SarvamService } from '../interfaces/stt/sarvam/sarvam.service';
+import { AzureService } from '../interfaces/stt/azure/azure.service';
+import { ReverieService } from '../interfaces/stt/reverie/reverie.service';
+import { createQueue, QUEUE_NAMES } from '../interfaces/redis/queues';
+import {
+  MediaMetaData,
+  MediaType,
+  CreateWhatsappAudioMediaOptions,
+  CreateHeygenMediaOptions,
+  FindTranscriptsOptions,
+  FindMediaByStateTransitionIdResult,
+  UploadStaticMediaItem,
+  UploadStaticMediaResult,
+  UploadStaticMediaItemResult,
+  WhatsappPreloadJobDto,
+  validateCreateWhatsappAudioMediaOptions,
+  validateCreateHeygenMediaOptions,
+  validateFindTranscriptsOptions,
+  assertValidMediaType,
+  assertValidMediaSource,
+  assertValidMediaStatus,
+} from './media-meta-data.dto';
+
+// Feature flag check (OpenFeature)
+async function isSttEnabled(provider: string): Promise<boolean> {
+  try {
+    const { OpenFeature } = await import('@openfeature/server-sdk');
+    const client = OpenFeature.getClient();
+    return await client.getBooleanValue(`stt.${provider}.enabled`, true);
+  } catch {
+    return true;
+  }
+}
+
+@Injectable()
+export class MediaMetaDataService {
+  private readonly logger = new Logger(MediaMetaDataService.name);
+  private readonly heygenGenerateQueue = createQueue(
+    QUEUE_NAMES.HEYGEN_GENERATE,
+  );
+  private readonly whatsappPreloadQueue = createQueue(
+    QUEUE_NAMES.WHATSAPP_PRELOAD,
+  );
+
+  constructor(
+    private readonly cacheService: CacheService,
+    private readonly userService: UserService,
+    private readonly wabotOutbound: WabotOutboundService,
+    private readonly mediaBucket: MediaBucketService,
+    private readonly sarvamService: SarvamService,
+    private readonly azureService: AzureService,
+    private readonly reverieService: ReverieService,
+  ) {}
+
+  async createWhatsappAudioMedia(
+    options: CreateWhatsappAudioMediaOptions,
+  ): Promise<MediaMetaData> {
+    const validated = validateCreateWhatsappAudioMediaOptions(options);
+
+    // 2. Resolve user
+    let userId: string;
+    if (validated.user) {
+      userId = validated.user.id;
+    } else {
+      const user = await this.userService.find({
+        external_id: validated.user_external_id!,
+      });
+      if (!user) {
+        this.logger.error(
+          `createWhatsappAudioMedia: user not found for external_id ${validated.user_external_id}`,
+        );
+        throw new NotFoundException(
+          `User not found for external_id ${validated.user_external_id}`,
+        );
+      }
+      userId = user.id;
+    }
+
+    // 3. Check existing
+    const { rows: existing } = await pool.query<MediaMetaData>(
+      'SELECT * FROM media_metadata WHERE wa_media_url = $1',
+      [validated.wa_media_url],
+    );
+
+    let entity: MediaMetaData;
+
+    if (existing.length > 0) {
+      if (existing[0].status === 'failed') {
+        await pool.query(
+          "UPDATE media_metadata SET status = 'created' WHERE id = $1",
+          [existing[0].id],
+        );
+        entity = { ...existing[0], status: 'created' };
+      } else {
+        this.logger.warn(
+          `createWhatsappAudioMedia: duplicate wa_media_url ${validated.wa_media_url} with status ${existing[0].status}`,
+        );
+        return existing[0];
+      }
+    } else {
+      const id = uuid();
+      const { rows } = await pool.query<MediaMetaData>(
+        `INSERT INTO media_metadata (id, wa_media_url, status, media_type, source, user_id, rolled_back)
+         VALUES ($1, $2, 'created', 'audio', 'whatsapp', $3, false) RETURNING *`,
+        [id, validated.wa_media_url, userId],
+      );
+      entity = rows[0];
+    }
+
+    // 4. Download and stream to S3 + STT providers in parallel
+    const { stream: audioStream, content_type } =
+      await this.wabotOutbound.downloadMedia(validated.wa_media_url, {});
+
+    // Buffer the stream so we can fan it out
+    const chunks: Buffer[] = [];
+    for await (const chunk of audioStream as AsyncIterable<Buffer>) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const audioBuffer = Buffer.concat(chunks);
+
+    // S3 upload
+    let s3Key: string;
+    try {
+      s3Key = await this.mediaBucket.stream(
+        Readable.from(audioBuffer),
+        content_type,
+      );
+    } catch (err) {
+      await pool.query(
+        "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
+        [entity.id],
+      );
+      this.logger.warn(
+        `createWhatsappAudioMedia: S3 upload failed for ${entity.id}`,
+      );
+      throw err;
+    }
+
+    // STT providers in parallel (feature flag gated)
+    const sttPromises: Promise<MediaMetaData | null>[] = [];
+
+    const [sarvamEnabled, azureEnabled, reverieEnabled] = await Promise.all(
+      [
+        isSttEnabled('sarvam'),
+        isSttEnabled('azure'),
+        isSttEnabled('reverie'),
+      ],
+    );
+
+    if (sarvamEnabled) {
+      sttPromises.push(
+        this.sarvamService
+          .run(Readable.from(audioBuffer), entity)
+          .catch((err) => {
+            this.logger.warn(
+              `Sarvam STT failed for ${entity.id}: ${(err as Error).message}`,
+            );
+            return null;
+          }),
+      );
+    }
+    if (azureEnabled) {
+      sttPromises.push(
+        this.azureService
+          .run(Readable.from(audioBuffer), entity)
+          .catch((err) => {
+            this.logger.warn(
+              `Azure STT failed for ${entity.id}: ${(err as Error).message}`,
+            );
+            return null;
+          }),
+      );
+    }
+    if (reverieEnabled) {
+      sttPromises.push(
+        this.reverieService
+          .run(Readable.from(audioBuffer), entity)
+          .catch((err) => {
+            this.logger.warn(
+              `Reverie STT failed for ${entity.id}: ${(err as Error).message}`,
+            );
+            return null;
+          }),
+      );
+    }
+
+    const sttResults = await Promise.all(sttPromises);
+    const successfulStt = sttResults.filter(
+      (r): r is MediaMetaData => r !== null,
+    );
+
+    if (successfulStt.length === 0 && sttPromises.length > 0) {
+      await pool.query(
+        "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
+        [entity.id],
+      );
+      this.logger.warn(
+        `createWhatsappAudioMedia: all STT providers failed for ${entity.id}`,
+      );
+      throw new Error('All STT providers failed');
+    }
+
+    // 5. Update the audio entity
+    const { rows: updated } = await pool.query<MediaMetaData>(
+      `UPDATE media_metadata
+       SET s3_key = $1, media_details = $2, status = 'ready'
+       WHERE id = $3 RETURNING *`,
+      [
+        s3Key,
+        JSON.stringify({
+          mime_type: content_type,
+          byte_size: audioBuffer.length,
+          ...validated.media_details,
+        }),
+        entity.id,
+      ],
+    );
+
+    return updated[0];
+  }
+
+  async findTranscripts(
+    options: FindTranscriptsOptions,
+  ): Promise<MediaMetaData[]> {
+    const validated = validateFindTranscriptsOptions(options);
+
+    let resolvedId: string;
+    if (validated.media_metadata) {
+      resolvedId = validated.media_metadata.id;
+    } else if (validated.media_metadata_id) {
+      resolvedId = validated.media_metadata_id;
+    } else {
+      const { rows } = await pool.query<{ id: string }>(
+        'SELECT id FROM media_metadata WHERE wa_media_url = $1',
+        [validated.media_metadata_wa_media_url],
+      );
+      if (rows.length === 0) return [];
+      resolvedId = rows[0].id;
+    }
+
+    const { rows } = await pool.query<MediaMetaData>(
+      `SELECT * FROM media_metadata
+       WHERE input_media_id = $1 AND media_type = 'text' AND status = 'ready'
+       ORDER BY created_at ASC`,
+      [resolvedId],
+    );
+    return rows;
+  }
+
+  async findMediaByStateTransitionId(
+    stateTransitionId: string,
+  ): Promise<FindMediaByStateTransitionIdResult> {
+    if (
+      typeof stateTransitionId !== 'string' ||
+      stateTransitionId.length === 0
+    ) {
+      throw new BadRequestException(
+        'stateTransitionId must be a non-empty string',
+      );
+    }
+
+    const cached =
+      await this.cacheService.get<FindMediaByStateTransitionIdResult>(
+        CACHE_KEYS.mediaByStateTransitionId(stateTransitionId),
+      );
+    if (cached) return cached;
+
+    const { rows } = await pool.query<MediaMetaData>(
+      `SELECT * FROM media_metadata
+       WHERE state_transition_id = $1
+         AND status = 'ready'
+         AND (wa_media_url IS NOT NULL OR media_type = 'text')`,
+      [stateTransitionId],
+    );
+
+    const grouped = new Map<string, MediaMetaData[]>();
+    for (const row of rows) {
+      const existing = grouped.get(row.media_type) ?? [];
+      existing.push(row);
+      grouped.set(row.media_type, existing);
+    }
+
+    const result: FindMediaByStateTransitionIdResult = {};
+    for (const type of ['audio', 'video', 'text', 'image'] as const) {
+      const items = grouped.get(type);
+      if (items && items.length > 0) {
+        result[type] = items[Math.floor(Math.random() * items.length)];
+      }
+    }
+
+    if (Object.keys(result).length > 0) {
+      await this.cacheService.set(
+        CACHE_KEYS.mediaByStateTransitionId(stateTransitionId),
+        result,
+        CACHE_TTL.MEDIA_BY_STATE_TRANSITION,
+      );
+    }
+
+    return result;
+  }
+
+  async markRolledBack(mediaId: string): Promise<void> {
+    if (typeof mediaId !== 'string' || mediaId.length === 0) {
+      throw new BadRequestException(
+        'mediaId must be a non-empty string',
+      );
+    }
+
+    await pool.query(
+      `DO $$
+      DECLARE
+        rec RECORD;
+      BEGIN
+        UPDATE media_metadata SET rolled_back = true WHERE id = $1;
+        IF NOT FOUND THEN
+          RAISE EXCEPTION 'Media metadata not found';
+        END IF;
+
+        FOR rec IN
+          SELECT con.conrelid::regclass AS referencing_table,
+                 att.attname            AS referencing_column
+          FROM pg_constraint con
+          JOIN pg_attribute att
+            ON att.attrelid = con.conrelid AND att.attnum = ANY(con.conkey)
+          WHERE con.confrelid = 'media_metadata'::regclass
+            AND con.contype = 'f'
+            AND EXISTS (
+              SELECT 1 FROM pg_attribute pa
+              WHERE pa.attrelid = con.confrelid
+                AND pa.attnum = ANY(con.confkey)
+                AND pa.attname = 'id'
+            )
+        LOOP
+          EXECUTE format('DELETE FROM %I WHERE %I = $1', rec.referencing_table, rec.referencing_column) USING $1;
+        END LOOP;
+      END
+      $$ LANGUAGE plpgsql`,
+      [mediaId],
+    );
+  }
+
+  async createHeygenMedia(
+    options: CreateHeygenMediaOptions,
+    otel_carrier: Record<string, string>,
+  ): Promise<MediaMetaData[]> {
+    const validated = validateCreateHeygenMediaOptions(options);
+
+    const entities: MediaMetaData[] = [];
+    const jobPayloads: any[] = [];
+
+    for (const item of validated.items) {
+      assertValidMediaType(item.media_type);
+      assertValidMediaSource('heygen');
+
+      const id = uuid();
+      const { rows } = await pool.query<MediaMetaData>(
+        `INSERT INTO media_metadata (id, state_transition_id, wa_media_url, status, media_type, source, user_id, rolled_back, generation_request_json)
+         VALUES ($1, $2, NULL, 'created', $3, 'heygen', NULL, false, $4) RETURNING *`,
+        [
+          id,
+          item.state_transition_id,
+          item.media_type,
+          JSON.stringify({
+            script_text: item.script_text,
+            state_transition_id: item.state_transition_id,
+            media_type: item.media_type,
+            ...(item.avatar_id && item.avatar_id !== process.env.HEYGEN_AVATAR_ID && { avatar_id: item.avatar_id }),
+            ...(item.avatar_style && { avatar_style: item.avatar_style }),
+            ...(item.voice_id && item.voice_id !== process.env.HEYGEN_VOICE_ID && { voice_id: item.voice_id }),
+            ...(item.speed !== undefined && { speed: item.speed }),
+            ...(item.emotion && { emotion: item.emotion }),
+            ...(item.locale && { locale: item.locale }),
+            ...(item.language && { language: item.language }),
+            ...(item.title && { title: item.title }),
+            ...(item.dimension && { dimension: item.dimension }),
+            ...(item.background && { background: item.background }),
+          }),
+        ],
+      );
+      entities.push(rows[0]);
+
+      jobPayloads.push({
+        name: `heygen-generate-${id}`,
+        data: {
+          media_metadata_id: id,
+          media_type: item.media_type,
+          otel_carrier,
+          heygen_params: {
+            script_text: item.script_text,
+            avatar_id: item.avatar_id,
+            avatar_style: item.avatar_style,
+            voice_id: item.voice_id,
+            speed: item.speed,
+            emotion: item.emotion,
+            locale: item.locale,
+            language: item.language,
+            title: item.title,
+            dimension: item.dimension,
+            background: item.background,
+          },
+        },
+      });
+    }
+
+    // Enqueue with retry
+    let enqueued = false;
+    let delay = 1000;
+    const startTime = Date.now();
+    while (!enqueued) {
+      try {
+        await this.heygenGenerateQueue.addBulk(jobPayloads);
+        enqueued = true;
+      } catch (err) {
+        if (Date.now() - startTime > 10_000) {
+          const ids = entities.map((e) => e.id);
+          const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+          await pool.query(
+            `UPDATE media_metadata SET status = 'failed' WHERE id IN (${placeholders})`,
+            ids,
+          );
+          this.logger.error(
+            `createHeygenMedia: failed to enqueue after 10s`,
+          );
+          throw err;
+        }
+        await new Promise((r) => setTimeout(r, delay));
+        delay = Math.min(delay * 2, 10_000);
+      }
+    }
+
+    // Mark as queued
+    const ids = entities.map((e) => e.id);
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+    await pool.query(
+      `UPDATE media_metadata SET status = 'queued' WHERE id IN (${placeholders})`,
+      ids,
+    );
+
+    return entities.map((e) => ({ ...e, status: 'queued' as const }));
+  }
+
+  async uploadStaticMedia(
+    files: Express.Multer.File[],
+    items: UploadStaticMediaItem[],
+    otel_carrier: Record<string, string>,
+  ): Promise<UploadStaticMediaResult> {
+    const results: UploadStaticMediaItemResult[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const item = items[i];
+
+      try {
+        // 1. Compute hash
+        const content_hash = crypto
+          .createHash('sha256')
+          .update(file.buffer)
+          .digest('hex');
+
+        // 2. Infer media type from file (already validated by assertValidStaticMediaFile)
+        const mimeToType: Record<string, MediaType> = {
+          'image/jpeg': 'image',
+          'image/png': 'image',
+          'video/mp4': 'video',
+        };
+        const media_type = mimeToType[file.mimetype];
+        assertValidMediaType(media_type);
+        assertValidMediaSource('dashboard');
+
+        // 3. Dedup check
+        const { rows: dupRows } = await pool.query<MediaMetaData>(
+          `SELECT * FROM media_metadata
+           WHERE content_hash = $1 AND state_transition_id = $2
+           LIMIT 1`,
+          [content_hash, item.state_transition_id],
+        );
+
+        if (dupRows.length > 0) {
+          const dup = dupRows[0];
+          if (
+            dup.status === 'created' ||
+            dup.status === 'queued' ||
+            dup.status === 'ready'
+          ) {
+            results.push({
+              index: i,
+              status: 'duplicate_skipped',
+              entity: dup,
+            });
+            continue;
+          }
+          // status === 'failed' — reuse row, continue to upload
+        }
+
+        // 4. Upload to S3
+        let s3Key: string;
+        try {
+          s3Key = await this.mediaBucket.stream(
+            Readable.from(file.buffer),
+            file.mimetype,
+          );
+        } catch (err) {
+          this.logger.warn(
+            `uploadStaticMedia[${i}]: S3 upload failed: ${(err as Error).message}`,
+          );
+          results.push({
+            index: i,
+            status: 'failed',
+            error: (err as Error).message,
+          });
+          continue;
+        }
+
+        // 5. Create or update media_metadata row
+        let entity: MediaMetaData;
+        try {
+          if (dupRows.length > 0 && dupRows[0].status === 'failed') {
+            const { rows } = await pool.query<MediaMetaData>(
+              `UPDATE media_metadata
+               SET s3_key = $1, status = 'created', media_details = $2, rolled_back = false
+               WHERE id = $3 RETURNING *`,
+              [
+                s3Key,
+                JSON.stringify({
+                  mime_type: file.mimetype,
+                  byte_size: file.size,
+                }),
+                dupRows[0].id,
+              ],
+            );
+            entity = rows[0];
+          } else {
+            const id = uuid();
+            const { rows } = await pool.query<MediaMetaData>(
+              `INSERT INTO media_metadata (id, state_transition_id, s3_key, content_hash, wa_media_url, media_type, source, status, user_id, rolled_back, media_details)
+               VALUES ($1, $2, $3, $4, NULL, $5, 'dashboard', 'created', NULL, false, $6) RETURNING *`,
+              [
+                id,
+                item.state_transition_id,
+                s3Key,
+                content_hash,
+                media_type,
+                JSON.stringify({
+                  mime_type: file.mimetype,
+                  byte_size: file.size,
+                }),
+              ],
+            );
+            entity = rows[0];
+          }
+        } catch (err) {
+          this.logger.warn(
+            `uploadStaticMedia[${i}]: PG write failed: ${(err as Error).message}`,
+          );
+          results.push({
+            index: i,
+            status: 'failed',
+            error: (err as Error).message,
+          });
+          continue;
+        }
+
+        // 6. Enqueue WHATSAPP_PRELOAD
+        try {
+          await this.whatsappPreloadQueue.add(
+            `preload-${entity.id}`,
+            {
+              media_metadata_id: entity.id,
+              s3_key: s3Key,
+              reload: false,
+              otel_carrier,
+            } as WhatsappPreloadJobDto,
+          );
+        } catch (err) {
+          this.logger.warn(
+            `uploadStaticMedia[${i}]: enqueue failed: ${(err as Error).message}`,
+          );
+          await pool.query(
+            "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
+            [entity.id],
+          );
+          results.push({
+            index: i,
+            status: 'failed',
+            error: (err as Error).message,
+          });
+          continue;
+        }
+
+        // 7. Mark as queued
+        await pool.query(
+          "UPDATE media_metadata SET status = 'queued' WHERE id = $1",
+          [entity.id],
+        );
+
+        results.push({
+          index: i,
+          status: 'created',
+          entity: { ...entity, status: 'queued' },
+        });
+      } catch (err) {
+        results.push({
+          index: i,
+          status: 'failed',
+          error: (err as Error).message,
+        });
+      }
+    }
+
+    const summary = {
+      created: results.filter((r) => r.status === 'created').length,
+      duplicate_skipped: results.filter(
+        (r) => r.status === 'duplicate_skipped',
+      ).length,
+      failed: results.filter((r) => r.status === 'failed').length,
+    };
+
+    return { results, summary };
+  }
+}
