@@ -37,13 +37,19 @@ import {
 } from './media-meta-data.dto';
 
 // Feature flag check (OpenFeature)
+const STT_DEFAULTS: Record<string, boolean> = {
+  sarvam: true,
+  azure: false,
+  reverie: false,
+};
 async function isSttEnabled(provider: string): Promise<boolean> {
+  const fallback = STT_DEFAULTS[provider] ?? false;
   try {
     const { OpenFeature } = await import('@openfeature/server-sdk');
     const client = OpenFeature.getClient();
-    return await client.getBooleanValue(`stt.${provider}.enabled`, true);
+    return await client.getBooleanValue(`stt.${provider}.enabled`, fallback);
   } catch {
-    return true;
+    return fallback;
   }
 }
 
