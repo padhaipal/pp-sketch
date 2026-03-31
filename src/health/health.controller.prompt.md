@@ -8,7 +8,7 @@
 
 check()
 1.) Run the following checks in parallel:
-  * **pg**: Execute `SELECT 1` against the pg database. Pass if it returns within 5 seconds, fail otherwise.
+  * **pg**: Execute `SELECT 1` via TypeORM DataSource (`this.dataSource.query('SELECT 1')`). Pass if it returns within 5 seconds, fail otherwise.
   * **redis_queue**: Execute `PING` against the BullMQ Redis connection (REDIS_URL, from src/interfaces/redis/queues.ts). Pass if it returns `PONG` within 5 seconds, fail otherwise.
   * **redis_cache**: Call `cacheService.isHealthy()` (CACHE_REDIS_URL, from src/interfaces/redis/cache.ts). Pass if it returns true, fail otherwise.
 

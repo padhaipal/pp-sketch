@@ -21,7 +21,7 @@ export type MediaSource = (typeof VALID_MEDIA_SOURCES)[number];
 // 'dashboard'  — user is FORBIDDEN (admin-uploaded static content is not user-scoped)
 // Enforced structurally: each source has its own Options type and validator.
 
-// --- Entity (matches pg media_metadata table) ---
+// --- Entity (matches pg media_metadata table). TypeORM entity: src/media-meta-data/media-meta-data.entity.ts ---
 
 // media_type → field rules (enforced at service layer):
 //   'text'                  — s3_key is NULL, text is REQUIRED

@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import * as path from 'path';
 import * as fs from 'fs';
 import { createActor } from 'xstate';
-import { pool } from '../../interfaces/database/database';
+import { DataSource } from 'typeorm';
 import { ScoreService } from '../score/score.service';
 import { machine } from './literacy-lesson.machine';
 import {
@@ -24,7 +24,10 @@ export class LiteracyLessonService {
   private readonly logger = new Logger(LiteracyLessonService.name);
   private readonly wordList: string[];
 
-  constructor(private readonly scoreService: ScoreService) {
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly scoreService: ScoreService,
+  ) {
     const wordListPath = path.join(__dirname, 'word-list.json');
     this.wordList = JSON.parse(fs.readFileSync(wordListPath, 'utf-8'));
   }
@@ -114,7 +117,7 @@ export class LiteracyLessonService {
       snapshot.context.pendingIncorrect ?? [];
 
     // 8. Persist snapshot
-    const { rows } = await pool.query<LiteracyLessonState>(
+    const rows = await this.dataSource.query(
       `INSERT INTO literacy_lesson_states (user_id, user_message_id, word, snapshot, created_at)
        SELECT $1, $2, $3, $4, now()
        FROM media_metadata m
@@ -165,7 +168,7 @@ export class LiteracyLessonService {
   async findCurrentState(
     userId: string,
   ): Promise<LiteracyLessonState | null> {
-    const { rows } = await pool.query<LiteracyLessonState>(
+    const rows = await this.dataSource.query(
       `SELECT * FROM literacy_lesson_states
        WHERE user_id = $1
        ORDER BY created_at DESC
@@ -177,7 +180,7 @@ export class LiteracyLessonService {
 
   private async selectNextWord(userId: string): Promise<string> {
     // Single DB round-trip
-    const { rows } = await pool.query(
+    const rows = await this.dataSource.query(
       `WITH recent_distinct_words AS (
         SELECT word, MAX(created_at) AS latest_at
         FROM literacy_lesson_states

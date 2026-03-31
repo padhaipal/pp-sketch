@@ -2,7 +2,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { parsePhoneNumberFromString } from 'libphonenumber-js';
 
-// Matches the pg users table
+// Matches the pg users table. TypeORM entity: src/users/user.entity.ts
 export interface User {
   id: string;                      // UUID PK
   external_id: string;             // unique, the user's WhatsApp phone number

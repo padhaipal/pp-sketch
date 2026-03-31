@@ -4,7 +4,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { pool } from '../../interfaces/database/database';
+import { DataSource } from 'typeorm';
 import {
   Score,
   CreateScoreOptions,
@@ -85,6 +85,8 @@ function calculateNewScore(
 export class ScoreService {
   private readonly logger = new Logger(ScoreService.name);
 
+  constructor(private readonly dataSource: DataSource) {}
+
   async create(options: CreateScoreOptions): Promise<Score> {
     const validated = validateCreateScoreOptions(options);
     const o = validated as unknown as Record<string, unknown>;
@@ -102,7 +104,7 @@ export class ScoreService {
     params.push(validated.score);
     const scoreIdx = idx++;
 
-    const { rows } = await pool.query<Score>(
+    const rows = await this.dataSource.query(
       `INSERT INTO scores (user_id, letter_id, user_message_id, score)
        SELECT u.id, l.id, $${umIdx}, $${scoreIdx}
        FROM users u, letters l, media_metadata m
@@ -177,7 +179,7 @@ export class ScoreService {
         ? `WHERE ${whereClauses.join(' AND ')}`
         : '';
 
-    const { rows } = await pool.query<Score>(
+    const rows = await this.dataSource.query(
       `SELECT s.* FROM ${fromClause} ${whereStr}
        ORDER BY s.created_at DESC LIMIT $${limitIdx}`,
       params,
@@ -215,15 +217,12 @@ export class ScoreService {
 
     if (letterIds.length > 0) {
       const placeholders = letterIds.map((_, i) => `$${i + 1}`).join(',');
-      const { rows: letterRows } = await pool.query<{
-        id: string;
-        grapheme: string;
-      }>(
+      const letterRows = await this.dataSource.query(
         `SELECT id, grapheme FROM letters WHERE id IN (${placeholders})`,
         letterIds,
       );
-      const idToGrapheme = new Map(
-        letterRows.map((r) => [r.id, r.grapheme]),
+      const idToGrapheme = new Map<string, string>(
+        letterRows.map((r: { id: string; grapheme: string }) => [r.id, r.grapheme]),
       );
 
       for (const [letterId, score] of latestPerLetter) {
@@ -290,7 +289,7 @@ export class ScoreService {
     }
 
     const unionQuery = selectParts.join('\nUNION ALL\n');
-    const { rows } = await pool.query<Score>(
+    const rows = await this.dataSource.query(
       `INSERT INTO scores (user_id, letter_id, user_message_id, score)
        ${unionQuery}
        RETURNING *`,

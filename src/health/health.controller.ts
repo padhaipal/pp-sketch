@@ -6,14 +6,17 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
-import { pool } from '../interfaces/database/database';
+import { DataSource } from 'typeorm';
 import { queueRedisConnection } from '../interfaces/redis/queues';
 import { CacheService } from '../interfaces/redis/cache';
 
 @ApiTags('health')
 @Controller('health')
 export class HealthController {
-  constructor(private readonly cacheService: CacheService) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly cacheService: CacheService,
+  ) {}
 
   @Get()
   async check(@Res() res: Response) {
@@ -33,7 +36,7 @@ export class HealthController {
     // PG check
     const pgStart = Date.now();
     try {
-      await timeout(pool.query('SELECT 1'), 5000);
+      await timeout(this.dataSource.query('SELECT 1'), 5000);
       checks.pg = {
         status: 'up',
         latency_ms: Date.now() - pgStart,

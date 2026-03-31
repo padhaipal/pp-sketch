@@ -7,7 +7,7 @@ import {
 import { Readable, PassThrough } from 'stream';
 import { v4 as uuid } from 'uuid';
 import * as crypto from 'crypto';
-import { pool } from '../interfaces/database/database';
+import { DataSource } from 'typeorm';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
 import { UserService } from '../users/user.service';
@@ -58,6 +58,7 @@ export class MediaMetaDataService {
   );
 
   constructor(
+    private readonly dataSource: DataSource,
     private readonly cacheService: CacheService,
     private readonly userService: UserService,
     private readonly wabotOutbound: WabotOutboundService,
@@ -92,7 +93,7 @@ export class MediaMetaDataService {
     }
 
     // 3. Check existing
-    const { rows: existing } = await pool.query<MediaMetaData>(
+    const existing = await this.dataSource.query(
       'SELECT * FROM media_metadata WHERE wa_media_url = $1',
       [validated.wa_media_url],
     );
@@ -101,7 +102,7 @@ export class MediaMetaDataService {
 
     if (existing.length > 0) {
       if (existing[0].status === 'failed') {
-        await pool.query(
+        await this.dataSource.query(
           "UPDATE media_metadata SET status = 'created' WHERE id = $1",
           [existing[0].id],
         );
@@ -114,7 +115,7 @@ export class MediaMetaDataService {
       }
     } else {
       const id = uuid();
-      const { rows } = await pool.query<MediaMetaData>(
+      const rows = await this.dataSource.query(
         `INSERT INTO media_metadata (id, wa_media_url, status, media_type, source, user_id, rolled_back)
          VALUES ($1, $2, 'created', 'audio', 'whatsapp', $3, false) RETURNING *`,
         [id, validated.wa_media_url, userId],
@@ -141,7 +142,7 @@ export class MediaMetaDataService {
         content_type,
       );
     } catch (err) {
-      await pool.query(
+      await this.dataSource.query(
         "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
         [entity.id],
       );
@@ -205,7 +206,7 @@ export class MediaMetaDataService {
     );
 
     if (successfulStt.length === 0 && sttPromises.length > 0) {
-      await pool.query(
+      await this.dataSource.query(
         "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
         [entity.id],
       );
@@ -216,7 +217,7 @@ export class MediaMetaDataService {
     }
 
     // 5. Update the audio entity
-    const { rows: updated } = await pool.query<MediaMetaData>(
+    const updated = await this.dataSource.query(
       `UPDATE media_metadata
        SET s3_key = $1, media_details = $2, status = 'ready'
        WHERE id = $3 RETURNING *`,
@@ -245,7 +246,7 @@ export class MediaMetaDataService {
     } else if (validated.media_metadata_id) {
       resolvedId = validated.media_metadata_id;
     } else {
-      const { rows } = await pool.query<{ id: string }>(
+      const rows = await this.dataSource.query(
         'SELECT id FROM media_metadata WHERE wa_media_url = $1',
         [validated.media_metadata_wa_media_url],
       );
@@ -253,7 +254,7 @@ export class MediaMetaDataService {
       resolvedId = rows[0].id;
     }
 
-    const { rows } = await pool.query<MediaMetaData>(
+    const rows = await this.dataSource.query(
       `SELECT * FROM media_metadata
        WHERE input_media_id = $1 AND media_type = 'text' AND status = 'ready'
        ORDER BY created_at ASC`,
@@ -280,7 +281,7 @@ export class MediaMetaDataService {
       );
     if (cached) return cached;
 
-    const { rows } = await pool.query<MediaMetaData>(
+    const rows = await this.dataSource.query(
       `SELECT * FROM media_metadata
        WHERE state_transition_id = $1
          AND status = 'ready'
@@ -321,7 +322,7 @@ export class MediaMetaDataService {
       );
     }
 
-    await pool.query(
+    await this.dataSource.query(
       `DO $$
       DECLARE
         rec RECORD;
@@ -368,7 +369,7 @@ export class MediaMetaDataService {
       assertValidMediaSource('heygen');
 
       const id = uuid();
-      const { rows } = await pool.query<MediaMetaData>(
+      const rows = await this.dataSource.query(
         `INSERT INTO media_metadata (id, state_transition_id, wa_media_url, status, media_type, source, user_id, rolled_back, generation_request_json)
          VALUES ($1, $2, NULL, 'created', $3, 'heygen', NULL, false, $4) RETURNING *`,
         [
@@ -429,7 +430,7 @@ export class MediaMetaDataService {
         if (Date.now() - startTime > 10_000) {
           const ids = entities.map((e) => e.id);
           const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
-          await pool.query(
+          await this.dataSource.query(
             `UPDATE media_metadata SET status = 'failed' WHERE id IN (${placeholders})`,
             ids,
           );
@@ -446,7 +447,7 @@ export class MediaMetaDataService {
     // Mark as queued
     const ids = entities.map((e) => e.id);
     const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
-    await pool.query(
+    await this.dataSource.query(
       `UPDATE media_metadata SET status = 'queued' WHERE id IN (${placeholders})`,
       ids,
     );
@@ -483,7 +484,7 @@ export class MediaMetaDataService {
         assertValidMediaSource('dashboard');
 
         // 3. Dedup check
-        const { rows: dupRows } = await pool.query<MediaMetaData>(
+        const dupRows = await this.dataSource.query(
           `SELECT * FROM media_metadata
            WHERE content_hash = $1 AND state_transition_id = $2
            LIMIT 1`,
@@ -530,7 +531,7 @@ export class MediaMetaDataService {
         let entity: MediaMetaData;
         try {
           if (dupRows.length > 0 && dupRows[0].status === 'failed') {
-            const { rows } = await pool.query<MediaMetaData>(
+            const rows = await this.dataSource.query(
               `UPDATE media_metadata
                SET s3_key = $1, status = 'created', media_details = $2, rolled_back = false
                WHERE id = $3 RETURNING *`,
@@ -546,7 +547,7 @@ export class MediaMetaDataService {
             entity = rows[0];
           } else {
             const id = uuid();
-            const { rows } = await pool.query<MediaMetaData>(
+            const rows = await this.dataSource.query(
               `INSERT INTO media_metadata (id, state_transition_id, s3_key, content_hash, wa_media_url, media_type, source, status, user_id, rolled_back, media_details)
                VALUES ($1, $2, $3, $4, NULL, $5, 'dashboard', 'created', NULL, false, $6) RETURNING *`,
               [
@@ -590,7 +591,7 @@ export class MediaMetaDataService {
           this.logger.warn(
             `uploadStaticMedia[${i}]: enqueue failed: ${(err as Error).message}`,
           );
-          await pool.query(
+          await this.dataSource.query(
             "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
             [entity.id],
           );
@@ -603,7 +604,7 @@ export class MediaMetaDataService {
         }
 
         // 7. Mark as queued
-        await pool.query(
+        await this.dataSource.query(
           "UPDATE media_metadata SET status = 'queued' WHERE id = $1",
           [entity.id],
         );

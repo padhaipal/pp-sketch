@@ -4,6 +4,7 @@ initOtel();
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { DataSource } from 'typeorm';
 import { AppModule } from './app.module';
 import { createWorker, QUEUE_NAMES } from './interfaces/redis/queues';
 import { processWabotInboundJob } from './interfaces/wabot/inbound/inbound.processor';
@@ -43,6 +44,7 @@ async function bootstrap() {
   SwaggerModule.setup('api', app, document);
 
   // Resolve services for BullMQ processors
+  const dataSource = app.get(DataSource);
   const userService = app.get(UserService);
   const mediaMetaDataService = app.get(MediaMetaDataService);
   const literacyLessonService = app.get(LiteracyLessonService);
@@ -62,11 +64,11 @@ async function bootstrap() {
   });
 
   createWorker(QUEUE_NAMES.HEYGEN_GENERATE, async (job) => {
-    await processHeygenGenerateJob(job, mediaBucket);
+    await processHeygenGenerateJob(job, mediaBucket, dataSource);
   });
 
   createWorker(QUEUE_NAMES.HEYGEN_INBOUND, async (job) => {
-    await processHeygenInboundJob(job, mediaBucket);
+    await processHeygenInboundJob(job, mediaBucket, dataSource);
   });
 
   createWorker(QUEUE_NAMES.WHATSAPP_PRELOAD, async (job) => {
@@ -75,6 +77,7 @@ async function bootstrap() {
       mediaBucket,
       wabotOutbound,
       cacheService,
+      dataSource,
     );
   });
 

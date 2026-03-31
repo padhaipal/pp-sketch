@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { Readable } from 'stream';
-import { pool } from '../../database/database';
+import { DataSource } from 'typeorm';
 import { MediaBucketService } from '../../media-bucket/outbound/outbound.service';
 import { createQueue, QUEUE_NAMES } from '../../redis/queues';
 import {
@@ -43,6 +43,7 @@ export interface HeygenGenerateJobData {
 export async function processHeygenGenerateJob(
   job: Job<HeygenGenerateJobData>,
   mediaBucket: MediaBucketService,
+  dataSource: DataSource,
 ): Promise<void> {
   const span = startChildSpan(
     'heygen-generate-processor',
@@ -98,7 +99,7 @@ export async function processHeygenGenerateJob(
       if (response.ok) {
         const body =
           (await response.json()) as VideoGenerateResponse;
-        await pool.query(
+        await dataSource.query(
           `UPDATE media_metadata
            SET media_details = $1, status = 'queued'
            WHERE id = $2`,
@@ -113,7 +114,7 @@ export async function processHeygenGenerateJob(
         logger.error(
           `HeyGen video 4XX: ${JSON.stringify(errorBody)}`,
         );
-        await pool.query(
+        await dataSource.query(
           `UPDATE media_metadata SET status = 'failed', media_details = $1 WHERE id = $2`,
           [JSON.stringify({ error: errorBody }), media_metadata_id],
         );
@@ -171,7 +172,7 @@ export async function processHeygenGenerateJob(
         // Get byte_size from Content-Length if available
         const byteSize = audioResponse.headers.get('content-length');
 
-        await pool.query(
+        await dataSource.query(
           `UPDATE media_metadata
            SET s3_key = $1, media_details = $2, status = 'queued'
            WHERE id = $3`,
@@ -204,7 +205,7 @@ export async function processHeygenGenerateJob(
         logger.error(
           `HeyGen TTS 4XX: ${JSON.stringify(errorBody)}`,
         );
-        await pool.query(
+        await dataSource.query(
           `UPDATE media_metadata SET status = 'failed', media_details = $1 WHERE id = $2`,
           [JSON.stringify({ error: errorBody }), media_metadata_id],
         );

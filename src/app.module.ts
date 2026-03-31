@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { AppDataSource } from './interfaces/database/data-source';
 import { UserModule } from './users/user.module';
 import { MediaMetaDataModule } from './media-meta-data/media-meta-data.module';
 import { LiteracyLessonModule } from './literacy/literacy-lesson/literacy-lesson.module';
@@ -13,6 +15,7 @@ import { CacheService } from './interfaces/redis/cache';
 
 @Module({
   imports: [
+    TypeOrmModule.forRoot(AppDataSource.options),
     UserModule,
     MediaMetaDataModule,
     LiteracyLessonModule,

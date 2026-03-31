@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { v4 as uuid } from 'uuid';
-import { pool } from '../../database/database';
+import { DataSource } from 'typeorm';
 import {
   MediaMetaData,
   assertValidMediaType,
@@ -11,6 +11,8 @@ import {
 @Injectable()
 export class ReverieService {
   private readonly logger = new Logger(ReverieService.name);
+
+  constructor(private readonly dataSource: DataSource) {}
 
   async run(
     audioStream: NodeJS.ReadableStream,
@@ -30,7 +32,7 @@ export class ReverieService {
     }
 
     // 2. POST to Reverie
-    const sttTimeCap = parseInt(process.env.STT_TIME_CAP ?? '30') * 1000;
+    const sttTimeCap = parseInt(process.env.STT_TIME_CAP ?? '5') * 1000;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), sttTimeCap);
 
@@ -101,7 +103,7 @@ export class ReverieService {
 
     // 5. Create media_metadata row
     const id = uuid();
-    const { rows } = await pool.query<MediaMetaData>(
+    const rows = await this.dataSource.query(
       `INSERT INTO media_metadata (id, media_type, source, status, text, input_media_id, user_id, rolled_back, media_details)
        VALUES ($1, 'text', 'reverie', 'ready', $2, $3, $4, false, $5) RETURNING *`,
       [

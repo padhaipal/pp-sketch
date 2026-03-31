@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { Readable } from 'stream';
-import { pool } from '../../database/database';
+import { DataSource } from 'typeorm';
 import { MediaBucketService } from '../../media-bucket/outbound/outbound.service';
 import { createQueue, QUEUE_NAMES } from '../../redis/queues';
 import { WhatsappPreloadJobDto, MediaMetaData } from '../../../media-meta-data/media-meta-data.dto';
@@ -14,6 +14,7 @@ const whatsappPreloadQueue = createQueue(QUEUE_NAMES.WHATSAPP_PRELOAD);
 export async function processHeygenInboundJob(
   job: Job<HeygenInboundJobDto>,
   mediaBucket: MediaBucketService,
+  dataSource: DataSource,
 ): Promise<void> {
   const span = startChildSpan(
     'heygen-inbound-processor',
@@ -36,7 +37,7 @@ export async function processHeygenInboundJob(
       }
 
       // b. Look up entity
-      const { rows } = await pool.query<MediaMetaData>(
+      const rows = await dataSource.query(
         'SELECT * FROM media_metadata WHERE id = $1',
         [callback_id],
       );
@@ -54,7 +55,7 @@ export async function processHeygenInboundJob(
         logger.error(
           `avatar_video.success: failed to download video from ${url}`,
         );
-        await pool.query(
+        await dataSource.query(
           "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
           [callback_id],
         );
@@ -71,7 +72,7 @@ export async function processHeygenInboundJob(
         logger.error(
           `avatar_video.success: S3 upload failed for ${callback_id}`,
         );
-        await pool.query(
+        await dataSource.query(
           "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
           [callback_id],
         );
@@ -80,7 +81,7 @@ export async function processHeygenInboundJob(
       }
 
       // e. Update entity
-      await pool.query(
+      await dataSource.query(
         `UPDATE media_metadata
          SET s3_key = $1, media_details = $2, status = 'queued'
          WHERE id = $3`,
@@ -116,7 +117,7 @@ export async function processHeygenInboundJob(
       }
 
       // b. Look up entity
-      const { rows } = await pool.query<MediaMetaData>(
+      const rows = await dataSource.query(
         'SELECT * FROM media_metadata WHERE id = $1',
         [callback_id],
       );
@@ -129,7 +130,7 @@ export async function processHeygenInboundJob(
       }
 
       // c. Update entity
-      await pool.query(
+      await dataSource.query(
         `UPDATE media_metadata SET status = 'failed', media_details = $1 WHERE id = $2`,
         [JSON.stringify({ error_msg: msg }), callback_id],
       );

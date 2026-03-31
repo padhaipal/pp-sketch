@@ -1,5 +1,5 @@
 ```typescript
-// Matches the pg letters table
+// Matches the pg letters table. TypeORM entity: src/literacy/letters/letter.entity.ts
 export interface Letter {
   id: string;                              // UUID PK
   grapheme: string;                        // unique, functions as an external id

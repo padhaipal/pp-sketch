@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { pool } from '../../interfaces/database/database';
+import { DataSource } from 'typeorm';
 import {
   Letter,
   CreateLetterOptions,
@@ -16,11 +16,13 @@ import {
 export class LetterService {
   private readonly logger = new Logger(LetterService.name);
 
+  constructor(private readonly dataSource: DataSource) {}
+
   async create(options: CreateLetterOptions): Promise<Letter> {
     const validated = validateCreateLetterOptions(options);
 
     try {
-      const { rows } = await pool.query<Letter>(
+      const rows = await this.dataSource.query(
         `INSERT INTO letters (grapheme, media_metadata_id)
          VALUES ($1, $2) RETURNING *`,
         [validated.grapheme, validated.media_metadata_id ?? null],
@@ -48,7 +50,7 @@ export class LetterService {
     }
 
     try {
-      const { rows } = await pool.query<Letter>(
+      const rows = await this.dataSource.query(
         `INSERT INTO letters (grapheme, media_metadata_id)
          VALUES ${values.join(', ')} RETURNING *`,
         params,
@@ -83,7 +85,7 @@ export class LetterService {
     params.push(validated.grapheme);
 
     try {
-      const { rows } = await pool.query<Letter>(
+      const rows = await this.dataSource.query(
         `UPDATE letters SET ${setClauses.join(', ')}
          WHERE grapheme = $${idx} RETURNING *`,
         params,
@@ -103,7 +105,7 @@ export class LetterService {
     const validated = validateDeleteLetterOptions(options);
 
     try {
-      const { rows } = await pool.query(
+      const rows = await this.dataSource.query(
         'DELETE FROM letters WHERE grapheme = $1 RETURNING id',
         [validated.grapheme],
       );

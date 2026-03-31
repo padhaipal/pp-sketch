@@ -2,7 +2,7 @@
 import { User } from '../../users/user.dto';
 import { Letter } from '../letters/letter.dto';
 
-// Matches the pg scores table
+// Matches the pg scores table. TypeORM entity: src/literacy/score/score.entity.ts
 export interface Score {
   id: string;                  // UUID PK
   user_id: string;             // FK -> users.id

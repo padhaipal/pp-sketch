@@ -17,8 +17,8 @@
 // Every public method wraps its Redis call in try/catch.
 //   * On Redis error (connection down, timeout, etc.): log WARN and return the
 //     "miss" value (null for get, void for set/del). The calling service then
-//     falls through to PG. This matches the database.md contract:
-//     "If redis is down then log a WARN and connect to the PG database directly."
+//     falls through to PG via TypeORM DataSource. This matches the database.md contract:
+//     "If redis is down then log a WARN and query via TypeORM DataSource directly."
 //   * On serialization error (corrupt JSON): log WARN, delete the bad key, return null.
 
 // --- API ---

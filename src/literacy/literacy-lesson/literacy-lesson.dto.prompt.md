@@ -4,7 +4,7 @@ import { BadRequestException } from '@nestjs/common';
 import { User } from '../../users/user.dto';
 import { MediaMetaData } from '../../media-meta-data/media-meta-data.dto';
 
-// --- Entity (matches pg literacy_lesson_states table) ---
+// --- Entity (matches pg literacy_lesson_states table). TypeORM entity: src/literacy/literacy-lesson/literacy-lesson-state.entity.ts ---
 // Append-only: every interaction inserts a new row. Many rows per user.
 // Index: CREATE INDEX idx_literacy_lesson_states_user_latest ON literacy_lesson_states (user_id, created_at DESC)
 

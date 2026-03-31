@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { pool } from '../interfaces/database/database';
+import { DataSource } from 'typeorm';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
 import {
@@ -16,7 +16,10 @@ import {
 export class UserService {
   private readonly logger = new Logger(UserService.name);
 
-  constructor(private readonly cacheService: CacheService) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly cacheService: CacheService,
+  ) {}
 
   async find(options: FindUserOptions): Promise<User | null> {
     const validated = validateFindUserOptions(options);
@@ -28,12 +31,12 @@ export class UserService {
     const cached = await this.cacheService.get<User>(cacheKey);
     if (cached) return cached;
 
-    const { rows } = validated.id
-      ? await pool.query<User>(
+    const rows = validated.id
+      ? await this.dataSource.query(
           'SELECT * FROM users WHERE id = $1',
           [validated.id],
         )
-      : await pool.query<User>(
+      : await this.dataSource.query(
           'SELECT * FROM users WHERE external_id = $1',
           [validated.external_id],
         );
@@ -83,7 +86,7 @@ export class UserService {
       : `external_id = $${paramIdx++}`;
     params.push(validated.id ?? validated.external_id);
 
-    const { rows } = await pool.query<User>(
+    const rows = await this.dataSource.query(
       `UPDATE users SET ${setClauses.join(', ')} WHERE ${whereClause} RETURNING *`,
       params,
     );
@@ -96,7 +99,7 @@ export class UserService {
       validated.new_referrer_user_id !== undefined ||
       validated.new_referrer_external_id !== undefined;
     if (referrerWasSet && updatedUser.referrer_user_id) {
-      const { rows: cycleRows } = await pool.query(
+      const cycleRows = await this.dataSource.query(
         `WITH RECURSIVE chain AS (
           SELECT id, referrer_user_id FROM users WHERE id = $1
           UNION ALL
@@ -110,7 +113,7 @@ export class UserService {
 
       if (cycleRows.length > 0) {
         // Roll back by removing the referrer
-        await pool.query(
+        await this.dataSource.query(
           'UPDATE users SET referrer_user_id = NULL WHERE id = $1',
           [updatedUser.id],
         );
@@ -163,12 +166,12 @@ export class UserService {
                VALUES ($1, $2) RETURNING *`;
       params = [validated.external_id, validated.referrer_user_id];
 
-      const { rows } = await pool.query<User>(query, params);
+      const rows = await this.dataSource.query(query, params);
       const user = rows[0];
 
       // Cycle check
       if (user.referrer_user_id) {
-        const { rows: cycleRows } = await pool.query(
+        const cycleRows = await this.dataSource.query(
           `WITH RECURSIVE chain AS (
             SELECT id, referrer_user_id FROM users WHERE id = $1
             UNION ALL
@@ -180,7 +183,7 @@ export class UserService {
           [user.referrer_user_id, user.id],
         );
         if (cycleRows.length > 0) {
-          await pool.query('DELETE FROM users WHERE id = $1', [user.id]);
+          await this.dataSource.query('DELETE FROM users WHERE id = $1', [user.id]);
           const { BadRequestException } = await import('@nestjs/common');
           throw new BadRequestException(
             'create() would create a referral cycle',
@@ -197,13 +200,13 @@ export class UserService {
       params = [validated.external_id, validated.referrer_external_id];
 
       // If referrer not found, insert without referrer
-      const { rows } = await pool.query<User>(query, params);
+      const rows = await this.dataSource.query(query, params);
       if (rows.length === 0) {
-        const fallback = await pool.query<User>(
+        const fallbackRows = await this.dataSource.query(
           'INSERT INTO users (external_id) VALUES ($1) RETURNING *',
           [validated.external_id],
         );
-        const user = fallback.rows[0];
+        const user = fallbackRows[0];
         await this.populateUserCache(user);
         return user;
       }
@@ -211,7 +214,7 @@ export class UserService {
 
       // Cycle check
       if (user.referrer_user_id) {
-        const { rows: cycleRows } = await pool.query(
+        const cycleRows = await this.dataSource.query(
           `WITH RECURSIVE chain AS (
             SELECT id, referrer_user_id FROM users WHERE id = $1
             UNION ALL
@@ -223,7 +226,7 @@ export class UserService {
           [user.referrer_user_id, user.id],
         );
         if (cycleRows.length > 0) {
-          await pool.query('DELETE FROM users WHERE id = $1', [user.id]);
+          await this.dataSource.query('DELETE FROM users WHERE id = $1', [user.id]);
           const { BadRequestException } = await import('@nestjs/common');
           throw new BadRequestException(
             'create() would create a referral cycle',
@@ -238,7 +241,7 @@ export class UserService {
       params = [validated.external_id];
     }
 
-    const { rows } = await pool.query<User>(query, params);
+    const rows = await this.dataSource.query(query, params);
     const user = rows[0];
     await this.populateUserCache(user);
     return user;

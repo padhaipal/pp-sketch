@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
-import { pool } from '../interfaces/database/database';
+import { DataSource } from 'typeorm';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS } from '../interfaces/redis/cache.dto';
 import { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound.service';
@@ -17,6 +17,7 @@ export async function processWhatsappPreloadJob(
   mediaBucket: MediaBucketService,
   wabotOutbound: WabotOutboundService,
   cacheService: CacheService,
+  dataSource: DataSource,
 ): Promise<void> {
   const span = startChildSpan(
     'whatsapp-preload-processor',
@@ -27,7 +28,7 @@ export async function processWhatsappPreloadJob(
     const { media_metadata_id, s3_key, reload } = job.data;
 
     // 2. Look up entity
-    const { rows } = await pool.query<MediaMetaData>(
+    const rows = await dataSource.query(
       'SELECT * FROM media_metadata WHERE id = $1',
       [media_metadata_id],
     );
@@ -86,7 +87,7 @@ export async function processWhatsappPreloadJob(
       const status = statusMatch ? parseInt(statusMatch[1]) : 0;
       if (status >= 400 && status < 500) {
         logger.error(`uploadMedia 4XX for ${media_metadata_id}`);
-        await pool.query(
+        await dataSource.query(
           "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
           [media_metadata_id],
         );
@@ -99,12 +100,12 @@ export async function processWhatsappPreloadJob(
 
     // 6. Update entity
     if (reload) {
-      await pool.query(
+      await dataSource.query(
         'UPDATE media_metadata SET wa_media_url = $1 WHERE id = $2',
         [wa_media_url, media_metadata_id],
       );
     } else {
-      await pool.query(
+      await dataSource.query(
         "UPDATE media_metadata SET wa_media_url = $1, status = 'ready' WHERE id = $2",
         [wa_media_url, media_metadata_id],
       );
