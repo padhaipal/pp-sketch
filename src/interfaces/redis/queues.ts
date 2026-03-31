@@ -8,7 +8,7 @@ export const QUEUE_NAMES = {
   WHATSAPP_PRELOAD: 'whatsapp-preload',
 } as const;
 
-const connection = new Redis(process.env.REDIS_URL!, {
+const connection = new Redis(process.env.BULLMQ_REDIS_URL!, {
   maxRetriesPerRequest: null,
 });
 

@@ -9,7 +9,7 @@ Export queue names, Redis connection, and Queue/Worker factories.
 * WHATSAPP_PRELOAD: 'whatsapp-preload'.
 
 2.) Redis connection.
-* Create ioredis Connection from REDIS_URL (.env).
+* Create ioredis Connection from BULLMQ_REDIS_URL (.env).
 * Use for BullMQ Queue and Worker instances.
 
 3.) DEFAULT_JOB_OPTIONS per queue.

@@ -1,7 +1,7 @@
 // pp-sketch/src/interfaces/redis/cache.prompt.md
 
 // Read-through cache service backed by the pp-redis-cache Redis instance.
-// This is a SEPARATE Redis instance from the BullMQ queue Redis (REDIS_URL).
+// This is a SEPARATE Redis instance from the BullMQ queue Redis (BULLMQ_REDIS_URL).
 // Environment variable: CACHE_REDIS_URL (.env).
 //
 // See src/interfaces/redis/cache.dto.prompt.md for key conventions and TTL defaults.
