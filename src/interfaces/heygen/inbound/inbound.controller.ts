@@ -114,7 +114,7 @@ export class HeygenInboundController {
       throw new UnauthorizedException('Missing signature');
     }
 
-    const computedBuf = Buffer.from(computedHex);
+    const computedBuf = Buffer.from(computedFromRawStr);
     const signatureBuf = Buffer.from(signatureHeader);
     if (
       computedBuf.length !== signatureBuf.length ||
