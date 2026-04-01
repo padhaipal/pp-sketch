@@ -32,11 +32,18 @@ export class MediaBucketService {
   ): Promise<string> {
     const key = uuid();
     try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of readable) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      const body = Buffer.concat(chunks);
+
       await this.s3.send(
         new PutObjectCommand({
           Bucket: this.bucket,
           Key: key,
-          Body: readable as Readable,
+          Body: body,
+          ContentLength: body.length,
           ContentType: content_type,
         }),
       );
