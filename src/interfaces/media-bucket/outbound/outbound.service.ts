@@ -17,6 +17,7 @@ export class MediaBucketService {
     this.bucket = process.env.MEDIA_BUCKET_NAME!;
     this.s3 = new S3Client({
       endpoint: process.env.MEDIA_BUCKET_ENDPOINT,
+      region: process.env.MEDIA_BUCKET_REGION ?? 'auto',
       credentials: {
         accessKeyId: process.env.MEDIA_BUCKET_ACCESS_KEY!,
         secretAccessKey: process.env.MEDIA_BUCKET_SECRET_KEY!,
