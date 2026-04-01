@@ -30,9 +30,8 @@ export class HeygenInboundController {
   async receive(@Req() req: Request) {
     // 1. Extract raw body and signature
     const rawBody =
-      typeof req.body === 'string'
-        ? req.body
-        : JSON.stringify(req.body);
+      (req as any).rawBody?.toString() ??
+      (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
     const signatureHeader = req.headers['signature'] as string | undefined;
 
     // 2. Verify signature
