@@ -3,6 +3,7 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { v4 as uuid } from 'uuid';
 import { Readable } from 'stream';
@@ -78,6 +79,22 @@ export class MediaBucketService {
     } catch (err) {
       this.logger.error(
         `S3 getBuffer failed for key ${s3_key}: ${(err as Error).message}`,
+      );
+      throw err;
+    }
+  }
+
+  async delete(s3_key: string): Promise<void> {
+    try {
+      await this.s3.send(
+        new DeleteObjectCommand({
+          Bucket: this.bucket,
+          Key: s3_key,
+        }),
+      );
+    } catch (err) {
+      this.logger.error(
+        `S3 delete failed for key ${s3_key}: ${(err as Error).message}`,
       );
       throw err;
     }

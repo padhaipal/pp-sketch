@@ -20,3 +20,8 @@ getBuffer(s3_key: string): Promise<{ buffer: Buffer; content_type: string }>
 // content_type is read from the S3 object's ContentType metadata.
 // Used by: WHATSAPP_PRELOAD worker to retrieve media before uploading to WhatsApp.
 // On S3 error (e.g. NoSuchKey): log ERROR and throw.
+
+delete(s3_key: string): Promise<void>
+// Deletes an object from S3 by key.
+// Used by: markRolledBack() for S3 cleanup after DB rollback.
+// On S3 error: log ERROR and throw.

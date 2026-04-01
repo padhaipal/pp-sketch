@@ -328,6 +328,13 @@ export class MediaMetaDataService {
       );
     }
 
+    // Fetch s3_key before DB transaction
+    const rows = await this.dataSource.query(
+      'SELECT s3_key FROM media_metadata WHERE id = $1',
+      [mediaId],
+    );
+    const s3Key: string | null = rows.length > 0 ? rows[0].s3_key : null;
+
     await this.dataSource.query(
       `DO $$
       DECLARE
@@ -359,6 +366,17 @@ export class MediaMetaDataService {
       $$ LANGUAGE plpgsql`,
       [mediaId],
     );
+
+    // Delete S3 object after DB commit (best-effort)
+    if (s3Key) {
+      try {
+        await this.mediaBucket.delete(s3Key);
+      } catch (err) {
+        this.logger.warn(
+          `S3 cleanup failed for rolled-back media ${mediaId} (key: ${s3Key}): ${(err as Error).message}`,
+        );
+      }
+    }
   }
 
   async createHeygenMedia(

@@ -67,7 +67,8 @@ Looks up all ready, deliverable media entities whose `state_transition_id` match
 Atomically tags the media_metadata row as rolled back AND deletes every row in every table that references it via a foreign key. Both operations happen inside a single transaction so the tag and the deletions are all-or-nothing.
 
 1.) If `mediaId` is not a valid non-empty string, throw BadRequestException.
-2.) Execute the following as a single database call using a plpgsql anonymous block (or a stored function):
+2.) Fetch the `s3_key` from the media_metadata row before the DB transaction.
+3.) Execute the following as a single database call using a plpgsql anonymous block (or a stored function):
   * `UPDATE media_metadata SET rolled_back = true WHERE id = $1`. If no row was updated (rowCount = 0), raise an exception (NotFoundException).
   * Dynamically discover all foreign key constraints that reference `media_metadata.id` by querying `pg_constraint` + `pg_attribute`:
     ```sql
@@ -87,7 +88,8 @@ Atomically tags the media_metadata row as rolled back AND deletes every row in e
     ```
   * For each discovered FK column/table pair, execute `EXECUTE format('DELETE FROM %I WHERE %I = $1', referencing_table, referencing_column) USING mediaId` — the `%I` specifier in plpgsql's `format()` quotes identifiers safely.
   * All of the above runs inside a single transaction — if any step fails, the entire operation rolls back (neither the tag nor the deletes persist).
-3.) This approach is schema-aware: when a new table adds a FK to `media_metadata.id`, it is automatically covered without code changes.
+4.) This approach is schema-aware: when a new table adds a FK to `media_metadata.id`, it is automatically covered without code changes.
+5.) After DB commit, if `s3_key` exists, delete the S3 object via `mediaBucket.delete(s3_key)`. Best-effort: on failure, log WARN but do not throw (worst case is an orphaned S3 object).
 
 
 createHeygenMedia(options: CreateHeygenMediaOptions, otel_carrier: Record<string, string>): Promise<MediaMetaData[]>
