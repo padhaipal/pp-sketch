@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import type { OtelCarrier } from '../../../otel/otel.dto';
 import {
   OutboundMediaItem,
   SendMessageRequest,
@@ -16,7 +17,7 @@ export class WabotOutboundService {
     wamid: string;
     consecutive?: boolean;
     media: OutboundMediaItem[];
-    otel_carrier: Record<string, string>;
+    otel_carrier: OtelCarrier;
   }): Promise<{ status: number; body: SendMessageResponse }> {
     const requestBody: SendMessageRequest = {
       user_external_id: options.user_external_id,
@@ -38,7 +39,7 @@ export class WabotOutboundService {
 
   async downloadMedia(
     media_url: string,
-    otel_carrier: Record<string, string>,
+    otel_carrier: OtelCarrier,
   ): Promise<{ stream: NodeJS.ReadableStream; content_type: string }> {
     const response = await fetch(`${this.baseUrl}/downloadMedia`, {
       method: 'POST',
@@ -75,7 +76,7 @@ export class WabotOutboundService {
     data: Buffer,
     content_type: string,
     media_type: string,
-    otel_carrier: Record<string, string>,
+    otel_carrier: OtelCarrier,
   ): Promise<{ wa_media_url: string }> {
     const otelParam = encodeURIComponent(JSON.stringify(otel_carrier));
     const ab = new ArrayBuffer(data.byteLength);

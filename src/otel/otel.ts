@@ -9,6 +9,7 @@ import {
   Context,
   ROOT_CONTEXT,
 } from '@opentelemetry/api';
+import type { OtelCarrier } from './otel.dto';
 
 const tracer = trace.getTracer(process.env.OTEL_SERVICE_NAME ?? 'pp');
 
@@ -23,13 +24,13 @@ export function initOtel(): NodeSDK {
   return sdk;
 }
 
-export function extractSpan(carrier: Record<string, string>): Context {
+export function extractSpan(carrier: OtelCarrier): Context {
   return propagation.extract(ROOT_CONTEXT, carrier);
 }
 
 export function startChildSpan(
   name: string,
-  carrier: Record<string, string>,
+  carrier: OtelCarrier,
 ): Span {
   const parentCtx = extractSpan(carrier);
   return tracer.startSpan(name, {}, parentCtx);
@@ -39,8 +40,8 @@ export function startRootSpan(name: string): Span {
   return tracer.startSpan(name);
 }
 
-export function injectCarrier(span: Span): Record<string, string> {
-  const carrier: Record<string, string> = {};
+export function injectCarrier(span: Span): OtelCarrier {
+  const carrier: OtelCarrier = {};
   propagation.inject(trace.setSpan(ROOT_CONTEXT, span), carrier);
   return carrier;
 }

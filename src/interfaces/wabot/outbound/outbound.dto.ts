@@ -1,3 +1,5 @@
+import type { OtelCarrier } from '../../../otel/otel.dto';
+
 export interface OutboundMediaItem {
   type: 'audio' | 'video' | 'image' | 'text';
   url?: string;
@@ -9,7 +11,7 @@ export interface SendMessageRequest {
   wamid: string;
   consecutive?: boolean;
   media: OutboundMediaItem[];
-  otel: { carrier: Record<string, string> };
+  otel: { carrier: OtelCarrier };
 }
 
 export interface SendMessageResponse {
@@ -19,7 +21,7 @@ export interface SendMessageResponse {
 
 export interface DownloadMediaRequest {
   media_url: string;
-  otel: { carrier: Record<string, string> };
+  otel: { carrier: OtelCarrier };
 }
 
 export interface UploadMediaResponse {

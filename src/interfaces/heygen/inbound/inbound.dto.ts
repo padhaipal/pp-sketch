@@ -4,6 +4,7 @@ import {
   IsOptional,
   IsString,
 } from 'class-validator';
+import type { OtelCarrier } from '../../../otel/otel.dto';
 
 export class VideoSuccessEventDataDto {
   @IsString()
@@ -57,5 +58,5 @@ export class HeygenInboundJobDto {
 
   event_data!: Record<string, unknown>;
 
-  otel_carrier!: Record<string, string>;
+  otel_carrier!: OtelCarrier;
 }

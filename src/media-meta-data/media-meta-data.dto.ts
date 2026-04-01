@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import type { OtelCarrier } from '../otel/otel.dto';
 import { User } from '../users/user.dto';
 
 const VALID_MEDIA_STATUSES = ['created', 'queued', 'ready', 'failed'] as const;
@@ -40,6 +41,7 @@ export interface CreateWhatsappAudioMediaOptions {
   user?: User;
   user_external_id?: string;
   media_details?: Record<string, unknown>;
+  otel_carrier: OtelCarrier;
 }
 
 export interface CreateHeygenMediaItem {
@@ -123,7 +125,7 @@ export interface WhatsappPreloadJobDto {
   media_metadata_id: string;
   s3_key: string;
   reload?: boolean;
-  otel_carrier: Record<string, string>;
+  otel_carrier: OtelCarrier;
 }
 
 // --- Runtime validation ---
@@ -187,11 +189,26 @@ export function validateCreateWhatsappAudioMediaOptions(
     );
   }
 
+  if (
+    o.otel_carrier === null ||
+    typeof o.otel_carrier !== 'object' ||
+    Array.isArray(o.otel_carrier) ||
+    Object.keys(o.otel_carrier as Record<string, unknown>).length === 0 ||
+    !Object.values(o.otel_carrier as Record<string, unknown>).every(
+      (v) => typeof v === 'string',
+    )
+  ) {
+    throw new BadRequestException(
+      'createWhatsappAudioMedia() options.otel_carrier must be a non-empty Record<string, string>',
+    );
+  }
+
   return {
     wa_media_url: o.wa_media_url,
     user: o.user,
     user_external_id: o.user_external_id,
     media_details: o.media_details,
+    otel_carrier: o.otel_carrier,
   } as CreateWhatsappAudioMediaOptions;
 }
 

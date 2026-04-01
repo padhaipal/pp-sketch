@@ -194,6 +194,7 @@ export async function processWabotInboundJob(
       await mediaMetaDataService.createWhatsappAudioMedia({
         wa_media_url: payload.message.audio!.mediaUrl,
         user,
+        otel_carrier: injectCarrier(span),
       });
     const userMessageId = audioEntity.id;
 

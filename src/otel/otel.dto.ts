@@ -5,10 +5,12 @@ import {
   registerDecorator,
 } from 'class-validator';
 
-function IsStringRecord(validationOptions?: ValidationOptions) {
+export type OtelCarrier = Record<string, string>;
+
+function IsNonEmptyStringRecord(validationOptions?: ValidationOptions) {
   return function (object: object, propertyName: string): void {
     registerDecorator({
-      name: 'isStringRecord',
+      name: 'isNonEmptyStringRecord',
       target: object.constructor,
       propertyName,
       options: validationOptions,
@@ -22,12 +24,14 @@ function IsStringRecord(validationOptions?: ValidationOptions) {
             return false;
           }
 
-          return Object.values(value).every(
-            (entry) => typeof entry === 'string',
+          const entries = Object.values(value);
+          return (
+            entries.length > 0 &&
+            entries.every((entry) => typeof entry === 'string')
           );
         },
         defaultMessage(args: ValidationArguments): string {
-          return `${args.property} must be an object with string values`;
+          return `${args.property} must be a non-empty object with string values`;
         },
       },
     });
@@ -36,6 +40,6 @@ function IsStringRecord(validationOptions?: ValidationOptions) {
 
 export class OtelCarrierDto {
   @IsDefined()
-  @IsStringRecord()
-  carrier!: Record<string, string>;
+  @IsNonEmptyStringRecord()
+  carrier!: OtelCarrier;
 }

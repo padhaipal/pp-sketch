@@ -11,6 +11,7 @@ import {
   TtsResponse,
 } from './outbound.dto';
 import { WhatsappPreloadJobDto, MediaMetaData } from '../../../media-meta-data/media-meta-data.dto';
+import type { OtelCarrier } from '../../../otel/otel.dto';
 import { startChildSpan, injectCarrier } from '../../../otel/otel';
 
 const logger = new Logger('HeygenOutboundService');
@@ -24,7 +25,7 @@ const HEYGEN_CALLBACK_URL = process.env.HEYGEN_CALLBACK_URL!;
 export interface HeygenGenerateJobData {
   media_metadata_id: string;
   media_type: 'video' | 'audio';
-  otel_carrier: Record<string, string>;
+  otel_carrier: OtelCarrier;
   heygen_params: {
     script_text: string;
     avatar_id?: string;

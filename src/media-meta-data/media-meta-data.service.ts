@@ -17,6 +17,7 @@ import { SarvamService } from '../interfaces/stt/sarvam/sarvam.service';
 import { AzureService } from '../interfaces/stt/azure/azure.service';
 import { ReverieService } from '../interfaces/stt/reverie/reverie.service';
 import { createQueue, QUEUE_NAMES } from '../interfaces/redis/queues';
+import type { OtelCarrier } from '../otel/otel.dto';
 import {
   MediaMetaData,
   MediaType,
@@ -131,7 +132,7 @@ export class MediaMetaDataService {
 
     // 4. Download and stream to S3 + STT providers in parallel
     const { stream: audioStream, content_type } =
-      await this.wabotOutbound.downloadMedia(validated.wa_media_url, {});
+      await this.wabotOutbound.downloadMedia(validated.wa_media_url, validated.otel_carrier);
 
     // Buffer the stream so we can fan it out
     const chunks: Buffer[] = [];
@@ -381,7 +382,7 @@ export class MediaMetaDataService {
 
   async createHeygenMedia(
     options: CreateHeygenMediaOptions,
-    otel_carrier: Record<string, string>,
+    otel_carrier: OtelCarrier,
   ): Promise<MediaMetaData[]> {
     const validated = validateCreateHeygenMediaOptions(options);
 
@@ -482,7 +483,7 @@ export class MediaMetaDataService {
   async uploadStaticMedia(
     files: Express.Multer.File[],
     items: UploadStaticMediaItem[],
-    otel_carrier: Record<string, string>,
+    otel_carrier: OtelCarrier,
   ): Promise<UploadStaticMediaResult> {
     const results: UploadStaticMediaItemResult[] = [];
 
