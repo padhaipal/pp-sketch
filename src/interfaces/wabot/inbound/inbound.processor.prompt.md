@@ -19,7 +19,7 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
 	  * If the referrer couldn't be identified in the database then log an INFO and move on. Don't let that block you.
 	* If the new user failed to create then log ERROR and call src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with .env/FALL_BACK_MESSAGE_PUBLIC_URL.
 	  * See sendMessage() notes below for how to handle the http response.
-  * If a new user was created then call findMediaByStateTransitionId(process.env.WELCOME_MESSAGE_EXTERNAL_ID) to retrieve the welcome video, then call src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with media: [{ type: 'video', url: videoEntity.wa_media_url }].
+  * If a new user was created then call findMediaByStateTransitionId(WELCOME_MESSAGE_STATE_TRANSITION_ID) to retrieve the welcome video, then call src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with media: [{ type: 'video', url: videoEntity.wa_media_url }].
 	  * See sendMessage() notes below for how to handle the http response.
 * Else: I now have the existing user's information and continue to the next step. 
 
@@ -27,7 +27,7 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
 * If it is more than 20 seconds old then log a WARN, end the span, complete the job. Note that wabot will handle sending the "please try again" message to the user.
 
 5.) If payload.message.type is not "audio" then: 
-* Call findMediaByStateTransitionId(process.env.AUDIO_ONLY_REQUEST_EXTERNAL_ID) to retrieve the video, then call src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with media: [{ type: 'video', url: videoEntity.wa_media_url }].
+* Call findMediaByStateTransitionId(AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID) to retrieve the video, then call src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with media: [{ type: 'video', url: videoEntity.wa_media_url }].
   * See sendMessage() notes below for how to handle the http response.
 
 6.) (Note that now we should have the user entity data from the database and have screened out/handled all first time users and non-audio messages and so only have normal user interaction audio messages left.) Call src/media-meta-data/media-meta-data.service.ts/createWhatsappAudioMedia() with:

@@ -9,6 +9,7 @@ import { WabotOutboundService } from '../outbound/outbound.service';
 import { OutboundMediaItem } from '../outbound/outbound.dto';
 import { startChildSpan, injectCarrier } from '../../../otel/otel';
 import { FindMediaByStateTransitionIdResult } from '../../../media-meta-data/media-meta-data.dto';
+import { WELCOME_MESSAGE_STATE_TRANSITION_ID, AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID } from '../../../literacy/literacy-lesson/literacy-lesson.machine';
 
 const logger = new Logger('WabotInboundProcessor');
 
@@ -123,7 +124,7 @@ export async function processWabotInboundJob(
       try {
         const welcomeMedia =
           await mediaMetaDataService.findMediaByStateTransitionId(
-            process.env.WELCOME_MESSAGE_EXTERNAL_ID!,
+            WELCOME_MESSAGE_STATE_TRANSITION_ID,
           );
         if (welcomeMedia.video) {
           const result = await wabotOutbound.sendMessage({
@@ -163,7 +164,7 @@ export async function processWabotInboundJob(
       try {
         const audioOnlyMedia =
           await mediaMetaDataService.findMediaByStateTransitionId(
-            process.env.AUDIO_ONLY_REQUEST_EXTERNAL_ID!,
+            AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID,
           );
         if (audioOnlyMedia.video) {
           const result = await wabotOutbound.sendMessage({

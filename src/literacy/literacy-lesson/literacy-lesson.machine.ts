@@ -2,6 +2,11 @@ import { setup, assign, and, not } from "xstate";
 import { markWord, markLetter, markImage, detectIncorrectEndMatra, detectIncorrectMiddleMatra, detectInsertion } from "./evaluate-answer.utils";
 import { identifyCharacterStatus } from "./identify-character-status.utils";
 
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+export const WELCOME_MESSAGE_STATE_TRANSITION_ID = 'welcome-message';
+export const AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID = 'audio-only-request';
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Context {
