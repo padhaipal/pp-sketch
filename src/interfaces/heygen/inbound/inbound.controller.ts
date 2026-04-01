@@ -31,8 +31,9 @@ export class HeygenInboundController {
   async receive(@Req() req: RawBodyRequest<Request>) {
     // --- DEBUG: comprehensive webhook diagnostics ---
     const hasRawBody = Buffer.isBuffer(req.rawBody);
+    const rawBodyBuf = req.rawBody;
     const rawBody = hasRawBody
-      ? req.rawBody!.toString('utf-8')
+      ? rawBodyBuf!.toString('utf-8')
       : JSON.stringify(req.body);
     const jsonStringified = JSON.stringify(req.body);
     const bodyType = typeof req.body;
@@ -41,37 +42,69 @@ export class HeygenInboundController {
     const secretPreview = secret
       ? `${secret.slice(0, 4)}...${secret.slice(-4)} (len=${secret.length})`
       : 'UNDEFINED';
-    const computedHex = crypto
+
+    // Compute HMAC multiple ways to isolate the issue
+    const computedFromRawStr = crypto
       .createHmac('sha256', secret)
       .update(rawBody)
       .digest('hex');
-    // also compute from JSON.stringify for comparison
     const computedFromStringify = crypto
       .createHmac('sha256', secret)
       .update(jsonStringified)
       .digest('hex');
+    // Compute directly from Buffer (no toString, avoids encoding issues)
+    const computedFromBuf = hasRawBody
+      ? crypto.createHmac('sha256', secret).update(rawBodyBuf!).digest('hex')
+      : 'N/A';
+    // Try with trailing newline (some webhook systems append \n)
+    const computedWithNewline = crypto
+      .createHmac('sha256', secret)
+      .update(rawBody + '\n')
+      .digest('hex');
 
+    const xForwardedFor = req.headers['x-forwarded-for'];
+    const xRealIp = req.headers['x-real-ip'];
     const allHeaders = Object.keys(req.headers).join(', ');
     const contentType = req.headers['content-type'];
     const userAgent = req.headers['user-agent'];
 
+    // Hex dump last 20 bytes to detect trailing chars
+    const lastBytes = hasRawBody
+      ? rawBodyBuf!.slice(-20).toString('hex')
+      : Buffer.from(rawBody).slice(-20).toString('hex');
+    // Full body hash for comparing across requests
+    const bodyHash = crypto
+      .createHash('sha256')
+      .update(rawBody)
+      .digest('hex')
+      .slice(0, 16);
+
     this.logger.warn(
-      `[DIAG] hasRawBody=${hasRawBody} | bodyType=${bodyType} | ` +
+      `[DIAG1] hasRawBody=${hasRawBody} | bodyType=${bodyType} | ` +
         `rawBodyLen=${rawBody.length} | stringifyLen=${jsonStringified.length} | ` +
-        `rawBody==stringify: ${rawBody === jsonStringified} | ` +
-        `rawBodyPreview=${rawBody.slice(0, 120)}`,
+        `rawBody==stringify=${rawBody === jsonStringified} | ` +
+        `bodyHash=${bodyHash} | lastBytesHex=${lastBytes}`,
     );
     this.logger.warn(
-      `[DIAG] signatureHeader=${signatureHeader ?? 'MISSING'} | ` +
-        `computedFromRaw=${computedHex} | ` +
-        `computedFromStringify=${computedFromStringify} | ` +
-        `match_raw=${computedHex === signatureHeader} | ` +
-        `match_stringify=${computedFromStringify === signatureHeader}`,
+      `[DIAG2] sig=${signatureHeader ?? 'MISSING'} | ` +
+        `fromRawStr=${computedFromRawStr} | ` +
+        `fromBuf=${computedFromBuf} | ` +
+        `fromStringify=${computedFromStringify} | ` +
+        `fromRaw+nl=${computedWithNewline}`,
     );
     this.logger.warn(
-      `[DIAG] secret=${secretPreview} | content-type=${contentType} | ` +
-        `user-agent=${userAgent} | headers=[${allHeaders}] | ` +
-        `ip=${req.ip} | method=${req.method} | url=${req.originalUrl}`,
+      `[DIAG3] match: raw=${computedFromRawStr === signatureHeader} ` +
+        `buf=${computedFromBuf === signatureHeader} ` +
+        `stringify=${computedFromStringify === signatureHeader} ` +
+        `raw+nl=${computedWithNewline === signatureHeader}`,
+    );
+    this.logger.warn(
+      `[DIAG4] secret=${secretPreview} | content-type=${contentType} | ` +
+        `user-agent=${userAgent} | x-forwarded-for=${xForwardedFor} | ` +
+        `x-real-ip=${xRealIp} | ip=${req.ip} | headers=[${allHeaders}]`,
+    );
+    this.logger.warn(
+      `[DIAG5] fullBody=${rawBody}`,
     );
     // --- END DEBUG ---
 
