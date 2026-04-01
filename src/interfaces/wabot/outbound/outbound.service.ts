@@ -79,26 +79,39 @@ export class WabotOutboundService {
     otel_carrier: OtelCarrier,
   ): Promise<{ wa_media_url: string }> {
     const otelParam = encodeURIComponent(JSON.stringify(otel_carrier));
+    const url = `${this.baseUrl}/uploadMedia?otel=${otelParam}`;
+    this.logger.log(
+      `[v2] POST ${this.baseUrl}/uploadMedia content_type=${content_type} media_type=${media_type} body_size=${data.byteLength}`,
+    );
     const ab = new ArrayBuffer(data.byteLength);
     new Uint8Array(ab).set(data);
-    const response = await fetch(
-      `${this.baseUrl}/uploadMedia?otel=${otelParam}`,
-      {
+    let response: Response;
+    try {
+      response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': content_type,
           'X-Media-Type': media_type,
         },
         body: ab,
-      },
-    );
+      });
+    } catch (err) {
+      this.logger.error(
+        `[v2] fetch to ${this.baseUrl}/uploadMedia threw network error: ${(err as Error).message}`,
+      );
+      throw err;
+    }
+
+    this.logger.log(`[v2] uploadMedia response status=${response.status}`);
 
     if (response.status >= 400 && response.status < 500) {
-      this.logger.error(`uploadMedia 4XX: ${response.status}`);
+      const text = await response.text();
+      this.logger.error(`uploadMedia 4XX: ${response.status} body=${text}`);
       throw new Error(`uploadMedia failed with ${response.status}`);
     }
     if (response.status >= 500) {
-      this.logger.warn(`uploadMedia 5XX: ${response.status}`);
+      const text = await response.text();
+      this.logger.warn(`uploadMedia 5XX: ${response.status} body=${text}`);
       throw new Error(`uploadMedia failed with ${response.status}`);
     }
 
