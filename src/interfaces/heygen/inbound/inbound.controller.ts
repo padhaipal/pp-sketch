@@ -12,6 +12,7 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import * as crypto from 'crypto';
 import type { Request } from 'express';
+import type { RawBodyRequest } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { HeygenWebhookDto } from './inbound.dto';
@@ -27,20 +28,54 @@ export class HeygenInboundController {
 
   @Post()
   @HttpCode(HttpStatus.OK)
-  async receive(@Req() req: Request) {
-    // 1. Extract raw body and signature
-    const rawBody =
-      (req as any).rawBody?.toString() ??
-      (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
+  async receive(@Req() req: RawBodyRequest<Request>) {
+    // --- DEBUG: comprehensive webhook diagnostics ---
+    const hasRawBody = Buffer.isBuffer(req.rawBody);
+    const rawBody = hasRawBody
+      ? req.rawBody!.toString('utf-8')
+      : JSON.stringify(req.body);
+    const jsonStringified = JSON.stringify(req.body);
+    const bodyType = typeof req.body;
     const signatureHeader = req.headers['signature'] as string | undefined;
-
-    // 2. Verify signature
     const secret = process.env.HEYGEN_WEBHOOK_SECRET!;
+    const secretPreview = secret
+      ? `${secret.slice(0, 4)}...${secret.slice(-4)} (len=${secret.length})`
+      : 'UNDEFINED';
     const computedHex = crypto
       .createHmac('sha256', secret)
       .update(rawBody)
       .digest('hex');
+    // also compute from JSON.stringify for comparison
+    const computedFromStringify = crypto
+      .createHmac('sha256', secret)
+      .update(jsonStringified)
+      .digest('hex');
 
+    const allHeaders = Object.keys(req.headers).join(', ');
+    const contentType = req.headers['content-type'];
+    const userAgent = req.headers['user-agent'];
+
+    this.logger.warn(
+      `[DIAG] hasRawBody=${hasRawBody} | bodyType=${bodyType} | ` +
+        `rawBodyLen=${rawBody.length} | stringifyLen=${jsonStringified.length} | ` +
+        `rawBody==stringify: ${rawBody === jsonStringified} | ` +
+        `rawBodyPreview=${rawBody.slice(0, 120)}`,
+    );
+    this.logger.warn(
+      `[DIAG] signatureHeader=${signatureHeader ?? 'MISSING'} | ` +
+        `computedFromRaw=${computedHex} | ` +
+        `computedFromStringify=${computedFromStringify} | ` +
+        `match_raw=${computedHex === signatureHeader} | ` +
+        `match_stringify=${computedFromStringify === signatureHeader}`,
+    );
+    this.logger.warn(
+      `[DIAG] secret=${secretPreview} | content-type=${contentType} | ` +
+        `user-agent=${userAgent} | headers=[${allHeaders}] | ` +
+        `ip=${req.ip} | method=${req.method} | url=${req.originalUrl}`,
+    );
+    // --- END DEBUG ---
+
+    // 1. Verify signature
     if (!signatureHeader) {
       this.logger.warn('Missing Signature header');
       throw new UnauthorizedException('Missing signature');
