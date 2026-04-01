@@ -61,9 +61,16 @@ export async function processWhatsappPreloadJob(
       buffer = result.buffer;
       content_type = result.content_type;
     } catch (err) {
-      logger.error(
-        `S3 getBuffer failed for ${s3_key}: ${(err as Error).message}`,
-      );
+      const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+      if (isLastAttempt) {
+        logger.error(
+          `S3 getBuffer failed for ${s3_key} (final attempt): ${(err as Error).message}`,
+        );
+      } else {
+        logger.warn(
+          `S3 getBuffer failed for ${s3_key} (attempt ${job.attemptsMade + 1}): ${(err as Error).message}`,
+        );
+      }
       span.end();
       throw err;
     }

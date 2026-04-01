@@ -52,13 +52,20 @@ export async function processHeygenInboundJob(
       // c. Download video
       const response = await fetch(url);
       if (!response.ok) {
-        logger.error(
-          `avatar_video.success: failed to download video from ${url}`,
-        );
-        await dataSource.query(
-          "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
-          [callback_id],
-        );
+        const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+        if (isLastAttempt) {
+          logger.error(
+            `avatar_video.success: failed to download video from ${url} (final attempt)`,
+          );
+          await dataSource.query(
+            "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
+            [callback_id],
+          );
+        } else {
+          logger.warn(
+            `avatar_video.success: failed to download video from ${url} (attempt ${job.attemptsMade + 1})`,
+          );
+        }
         span.end();
         throw new Error('Video download failed');
       }
@@ -69,13 +76,20 @@ export async function processHeygenInboundJob(
         const stream = Readable.fromWeb(response.body! as any);
         s3Key = await mediaBucket.stream(stream, 'video/mp4');
       } catch (err) {
-        logger.error(
-          `avatar_video.success: S3 upload failed for ${callback_id}`,
-        );
-        await dataSource.query(
-          "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
-          [callback_id],
-        );
+        const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+        if (isLastAttempt) {
+          logger.error(
+            `avatar_video.success: S3 upload failed for ${callback_id} (final attempt)`,
+          );
+          await dataSource.query(
+            "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
+            [callback_id],
+          );
+        } else {
+          logger.warn(
+            `avatar_video.success: S3 upload failed for ${callback_id} (attempt ${job.attemptsMade + 1})`,
+          );
+        }
         span.end();
         throw err;
       }

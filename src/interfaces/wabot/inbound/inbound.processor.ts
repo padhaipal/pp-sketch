@@ -261,9 +261,16 @@ export async function processWabotInboundJob(
       span.end();
       throw new Error(`sendMessage 4XX: ${sendResult.status}`);
     } else {
-      logger.error(
-        `sendMessage 5XX: ${sendResult.status} for ${user.external_id}`,
-      );
+      const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+      if (isLastAttempt) {
+        logger.error(
+          `sendMessage 5XX (final attempt): ${sendResult.status} for ${user.external_id}`,
+        );
+      } else {
+        logger.warn(
+          `sendMessage 5XX (attempt ${job.attemptsMade + 1}): ${sendResult.status} for ${user.external_id}`,
+        );
+      }
       span.end();
       throw new Error(`sendMessage 5XX: ${sendResult.status}`);
     }

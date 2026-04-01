@@ -122,7 +122,16 @@ export async function processHeygenGenerateJob(
         throw new Error(`HeyGen 4XX: ${response.status}`);
       } else {
         const errorBody = await response.text();
-        logger.warn(`HeyGen video 5XX: ${errorBody}`);
+        const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+        if (isLastAttempt) {
+          logger.error(`HeyGen video 5XX (final attempt): ${errorBody}`);
+          await dataSource.query(
+            `UPDATE media_metadata SET status = 'failed', media_details = $1 WHERE id = $2`,
+            [JSON.stringify({ error: errorBody }), media_metadata_id],
+          );
+        } else {
+          logger.warn(`HeyGen video 5XX (attempt ${job.attemptsMade + 1}): ${errorBody}`);
+        }
         span.end();
         throw new Error(`HeyGen 5XX: ${response.status}`);
       }
@@ -213,7 +222,16 @@ export async function processHeygenGenerateJob(
         throw new Error(`HeyGen TTS 4XX: ${response.status}`);
       } else {
         const errorBody = await response.text();
-        logger.warn(`HeyGen TTS 5XX: ${errorBody}`);
+        const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+        if (isLastAttempt) {
+          logger.error(`HeyGen TTS 5XX (final attempt): ${errorBody}`);
+          await dataSource.query(
+            `UPDATE media_metadata SET status = 'failed', media_details = $1 WHERE id = $2`,
+            [JSON.stringify({ error: errorBody }), media_metadata_id],
+          );
+        } else {
+          logger.warn(`HeyGen TTS 5XX (attempt ${job.attemptsMade + 1}): ${errorBody}`);
+        }
         span.end();
         throw new Error(`HeyGen TTS 5XX: ${response.status}`);
       }
