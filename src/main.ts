@@ -1,3 +1,6 @@
+import dns from 'node:dns';
+dns.setDefaultResultOrder('verbatim');
+
 import { initOtel } from './otel/otel';
 initOtel();
 
