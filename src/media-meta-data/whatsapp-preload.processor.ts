@@ -137,7 +137,7 @@ export async function processWhatsappPreloadJob(
     }
 
     // 8. Enqueue reload job (20 days)
-    const TWENTY_DAYS_MS = 10 * 60 * 1000;
+    const TWENTY_DAYS_MS = 20 * 24 * 60 * 60 * 1000;
     let reloadEnqueued = false;
     let delay = 1000;
     const startTime = Date.now();
