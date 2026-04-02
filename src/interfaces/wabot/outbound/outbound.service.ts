@@ -27,7 +27,7 @@ export class WabotOutboundService {
       otel: { carrier: options.otel_carrier },
     };
 
-    const response = await fetch(`${this.baseUrl}/pp/send-message`, {
+    const response = await fetch(`${this.baseUrl}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
@@ -41,7 +41,7 @@ export class WabotOutboundService {
     media_url: string,
     otel_carrier: OtelCarrier,
   ): Promise<{ stream: NodeJS.ReadableStream; content_type: string }> {
-    const response = await fetch(`${this.baseUrl}/pp/download-media`, {
+    const response = await fetch(`${this.baseUrl}/downloadMedia`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -79,9 +79,9 @@ export class WabotOutboundService {
     otel_carrier: OtelCarrier,
   ): Promise<{ wa_media_url: string }> {
     const otelParam = encodeURIComponent(JSON.stringify(otel_carrier));
-    const url = `${this.baseUrl}/pp/upload-media?otel=${otelParam}`;
+    const url = `${this.baseUrl}/uploadMedia?otel=${otelParam}`;
     this.logger.log(
-      `[v2] POST ${this.baseUrl}/pp/upload-media content_type=${content_type} media_type=${media_type} body_size=${data.byteLength}`,
+      `[v2] POST ${this.baseUrl}/uploadMedia content_type=${content_type} media_type=${media_type} body_size=${data.byteLength}`,
     );
     const ab = new ArrayBuffer(data.byteLength);
     new Uint8Array(ab).set(data);
@@ -97,7 +97,7 @@ export class WabotOutboundService {
       });
     } catch (err) {
       this.logger.error(
-        `[v2] fetch to ${this.baseUrl}/pp/upload-media threw network error: ${(err as Error).message}`,
+        `[v2] fetch to ${this.baseUrl}/uploadMedia threw network error: ${(err as Error).message}`,
       );
       throw err;
     }
