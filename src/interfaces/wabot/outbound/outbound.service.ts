@@ -81,7 +81,7 @@ export class WabotOutboundService {
     const otelParam = encodeURIComponent(JSON.stringify(otel_carrier));
     const url = `${this.baseUrl}/uploadMedia?otel=${otelParam}`;
     this.logger.log(
-      `[v2] POST ${this.baseUrl}/uploadMedia content_type=${content_type} media_type=${media_type} body_size=${data.byteLength}`,
+      `POST ${this.baseUrl}/uploadMedia content_type=${content_type} media_type=${media_type} body_size=${data.byteLength}`,
     );
     const ab = new ArrayBuffer(data.byteLength);
     new Uint8Array(ab).set(data);
@@ -97,12 +97,12 @@ export class WabotOutboundService {
       });
     } catch (err) {
       this.logger.error(
-        `[v2] fetch to ${this.baseUrl}/uploadMedia threw network error: ${(err as Error).message}`,
+        `fetch to ${this.baseUrl}/uploadMedia threw network error: ${(err as Error).message}`,
       );
       throw err;
     }
 
-    this.logger.log(`[v2] uploadMedia response status=${response.status}`);
+    this.logger.log(`uploadMedia response status=${response.status}`);
 
     if (response.status >= 400 && response.status < 500) {
       const text = await response.text();
