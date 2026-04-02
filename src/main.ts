@@ -13,6 +13,7 @@ import { createWorker, QUEUE_NAMES } from './interfaces/redis/queues';
 import { processWabotInboundJob } from './interfaces/wabot/inbound/inbound.processor';
 import { processHeygenInboundJob } from './interfaces/heygen/inbound/inbound.processor';
 import { processHeygenGenerateJob } from './interfaces/heygen/outbound/outbound.service';
+import { processElevenlabsGenerateJob } from './interfaces/elevenlabs/outbound/outbound.service';
 import { processWhatsappPreloadJob } from './media-meta-data/whatsapp-preload.processor';
 import { UserService } from './users/user.service';
 import { MediaMetaDataService } from './media-meta-data/media-meta-data.service';
@@ -70,6 +71,10 @@ async function bootstrap() {
     await processHeygenGenerateJob(job, mediaBucket, dataSource);
   });
 
+  createWorker(QUEUE_NAMES.ELEVENLABS_GENERATE, async (job) => {
+    await processElevenlabsGenerateJob(job, mediaBucket, dataSource);
+  });
+
   createWorker(QUEUE_NAMES.HEYGEN_INBOUND, async (job) => {
     await processHeygenInboundJob(job, mediaBucket, dataSource);
   });
@@ -84,7 +89,7 @@ async function bootstrap() {
     );
   });
 
-  logger.log('BullMQ workers started for all 4 queues');
+  logger.log('BullMQ workers started for all 5 queues');
 
   await app.listen(process.env.PORT ?? 3000);
   logger.log(`Application listening on port ${process.env.PORT ?? 3000}`);
