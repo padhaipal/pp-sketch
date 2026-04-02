@@ -13,6 +13,7 @@ import { ApiTags, ApiConsumes, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { MediaMetaDataService } from './media-meta-data.service';
 import {
   validateCreateHeygenMediaOptions,
+  validateCreateElevenlabsMediaOptions,
   validateUploadStaticMediaItems,
   assertValidStaticMediaFile,
 } from './media-meta-data.dto';
@@ -34,6 +35,24 @@ export class MediaMetaDataController {
     const span = startRootSpan('heygen-generate-controller');
     try {
       const entities = await this.mediaMetaDataService.createHeygenMedia(
+        validated,
+        injectCarrier(span),
+      );
+      return { created: entities.length, entities };
+    } finally {
+      span.end();
+    }
+  }
+
+  @Post('elevenlabs-generate')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiBody({ schema: { type: 'object', properties: { items: { type: 'array' } } } })
+  @ApiResponse({ status: 202 })
+  async generateElevenlabsMedia(@Body() body: unknown) {
+    const validated = validateCreateElevenlabsMediaOptions(body);
+    const span = startRootSpan('elevenlabs-generate-controller');
+    try {
+      const entities = await this.mediaMetaDataService.createElevenlabsMedia(
         validated,
         injectCarrier(span),
       );

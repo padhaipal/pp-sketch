@@ -23,6 +23,8 @@ import {
   MediaType,
   CreateWhatsappAudioMediaOptions,
   CreateHeygenMediaOptions,
+  CreateElevenlabsMediaOptions,
+  validateCreateElevenlabsMediaOptions,
   FindTranscriptsOptions,
   FindMediaByStateTransitionIdResult,
   UploadStaticMediaItem,
@@ -59,6 +61,9 @@ export class MediaMetaDataService {
   private readonly logger = new Logger(MediaMetaDataService.name);
   private readonly heygenGenerateQueue = createQueue(
     QUEUE_NAMES.HEYGEN_GENERATE,
+  );
+  private readonly elevenlabsGenerateQueue = createQueue(
+    QUEUE_NAMES.ELEVENLABS_GENERATE,
   );
   private readonly whatsappPreloadQueue = createQueue(
     QUEUE_NAMES.WHATSAPP_PRELOAD,
@@ -461,6 +466,91 @@ export class MediaMetaDataService {
           );
           this.logger.error(
             `createHeygenMedia: failed to enqueue after 10s`,
+          );
+          throw err;
+        }
+        await new Promise((r) => setTimeout(r, delay));
+        delay = Math.min(delay * 2, 10_000);
+      }
+    }
+
+    // Mark as queued
+    const ids = entities.map((e) => e.id);
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+    await this.dataSource.query(
+      `UPDATE media_metadata SET status = 'queued' WHERE id IN (${placeholders})`,
+      ids,
+    );
+
+    return entities.map((e) => ({ ...e, status: 'queued' as const }));
+  }
+
+  async createElevenlabsMedia(
+    options: CreateElevenlabsMediaOptions,
+    otel_carrier: OtelCarrier,
+  ): Promise<MediaMetaData[]> {
+    const validated = validateCreateElevenlabsMediaOptions(options);
+
+    const entities: MediaMetaData[] = [];
+    const jobPayloads: any[] = [];
+
+    for (const item of validated.items) {
+      assertValidMediaType('audio');
+      assertValidMediaSource('elevenlabs');
+
+      const id = uuid();
+      const rows = await this.dataSource.query(
+        `INSERT INTO media_metadata (id, state_transition_id, wa_media_url, status, media_type, source, user_id, rolled_back, generation_request_json)
+         VALUES ($1, $2, NULL, 'created', 'audio', 'elevenlabs', NULL, false, $3) RETURNING *`,
+        [
+          id,
+          item.state_transition_id,
+          JSON.stringify({
+            script_text: item.script_text,
+            state_transition_id: item.state_transition_id,
+            ...(item.voice_id && item.voice_id !== process.env.ELEVENLABS_VOICE_ID && { voice_id: item.voice_id }),
+            ...(item.model_id && { model_id: item.model_id }),
+            ...(item.language_code && { language_code: item.language_code }),
+            ...(item.voice_settings && { voice_settings: item.voice_settings }),
+          }),
+        ],
+      );
+      entities.push(rows[0]);
+
+      jobPayloads.push({
+        name: `elevenlabs-generate-${id}`,
+        data: {
+          media_metadata_id: id,
+          otel_carrier,
+          elevenlabs_params: {
+            script_text: item.script_text,
+            voice_id: item.voice_id,
+            model_id: item.model_id,
+            language_code: item.language_code,
+            voice_settings: item.voice_settings,
+          },
+        },
+      });
+    }
+
+    // Enqueue with retry
+    let enqueued = false;
+    let delay = 1000;
+    const startTime = Date.now();
+    while (!enqueued) {
+      try {
+        await this.elevenlabsGenerateQueue.addBulk(jobPayloads);
+        enqueued = true;
+      } catch (err) {
+        if (Date.now() - startTime > 10_000) {
+          const ids = entities.map((e) => e.id);
+          const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+          await this.dataSource.query(
+            `UPDATE media_metadata SET status = 'failed' WHERE id IN (${placeholders})`,
+            ids,
+          );
+          this.logger.error(
+            `createElevenlabsMedia: failed to enqueue after 10s`,
           );
           throw err;
         }

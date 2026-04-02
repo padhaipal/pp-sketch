@@ -5,6 +5,7 @@ export const QUEUE_NAMES = {
   WABOT_INBOUND: 'wabot-inbound',
   HEYGEN_GENERATE: 'heygen-generate',
   HEYGEN_INBOUND: 'heygen-inbound',
+  ELEVENLABS_GENERATE: 'elevenlabs-generate',
   WHATSAPP_PRELOAD: 'whatsapp-preload',
 } as const;
 
@@ -29,6 +30,12 @@ export const DEFAULT_JOB_OPTIONS: Record<string, JobsOptions> = {
   },
   [QUEUE_NAMES.HEYGEN_INBOUND]: {
     attempts: 3,
+    backoff: { type: 'exponential', delay: 5000 },
+    removeOnComplete: true,
+    removeOnFail: { count: 5000 },
+  },
+  [QUEUE_NAMES.ELEVENLABS_GENERATE]: {
+    attempts: 5,
     backoff: { type: 'exponential', delay: 5000 },
     removeOnComplete: true,
     removeOnFail: { count: 5000 },

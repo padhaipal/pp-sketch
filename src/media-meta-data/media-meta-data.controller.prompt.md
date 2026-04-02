@@ -17,6 +17,16 @@ generateHeygenMedia()
 4.) Return 202 Accepted with body: { created: <number of items>, entities: <returned MediaMetaData[]> }.
 5.) End the span.
 
+// POST /media-meta-data/elevenlabs-generate
+// Same pattern as heygen-generate but uses CreateElevenlabsMediaOptions / validateCreateElevenlabsMediaOptions.
+// Swagger: @ApiTags('media-meta-data'), @ApiBody({ type: CreateElevenlabsMediaOptions }), @ApiResponse(202)
+generateElevenlabsMedia()
+1.) Validate request body with validateCreateElevenlabsMediaOptions(). If fails: return 400.
+2.) Start root span: startRootSpan('elevenlabs-generate-controller').
+3.) Call mediaMetaDataService.createElevenlabsMedia(validated, injectCarrier(span)).
+4.) Return 202 with { created: <count>, entities }.
+5.) End span.
+
 // POST /media-meta-data/upload-static
 // Multipart upload of static images / MP4 "GIF" videos from the admin dashboard.
 // Files are uploaded to S3, media_metadata rows created, and WHATSAPP_PRELOAD jobs enqueued.

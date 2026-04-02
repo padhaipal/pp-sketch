@@ -12,13 +12,14 @@ export type MediaStatus = (typeof VALID_MEDIA_STATUSES)[number];
 const VALID_MEDIA_TYPES = ['audio', 'text', 'video', 'image'] as const;
 export type MediaType = (typeof VALID_MEDIA_TYPES)[number];
 
-const VALID_MEDIA_SOURCES = ['whatsapp', 'heygen', 'azure', 'sarvam', 'reverie', 'dashboard'] as const;
+const VALID_MEDIA_SOURCES = ['whatsapp', 'heygen', 'elevenlabs', 'azure', 'sarvam', 'reverie', 'dashboard'] as const;
 export type MediaSource = (typeof VALID_MEDIA_SOURCES)[number];
 
 // --- Source → user rules ---
-// 'whatsapp'   — user is REQUIRED  (user or user_external_id must be provided)
-// 'heygen'     — user is FORBIDDEN (user and user_external_id must NOT be provided)
-// 'dashboard'  — user is FORBIDDEN (admin-uploaded static content is not user-scoped)
+// 'whatsapp'    — user is REQUIRED  (user or user_external_id must be provided)
+// 'heygen'      — user is FORBIDDEN (user and user_external_id must NOT be provided)
+// 'elevenlabs'  — user is FORBIDDEN (same as heygen — generated content, not user-scoped)
+// 'dashboard'   — user is FORBIDDEN (admin-uploaded static content is not user-scoped)
 // Enforced structurally: each source has its own Options type and validator.
 
 // --- Entity (matches pg media_metadata table). TypeORM entity: src/media-meta-data/media-meta-data.entity.ts ---
@@ -90,6 +91,52 @@ export interface CreateHeygenMediaOptions {
   items: CreateHeygenMediaItem[];
 }
 
+// --- ElevenLabs options ---
+// source is always 'elevenlabs'. User is FORBIDDEN. Audio only (no video).
+// Same bulk pattern as HeyGen: array of items → one media_metadata row + one BullMQ job each.
+// ElevenLabs TTS is synchronous — the worker gets audio binary back in the HTTP response.
+// wa_media_url starts NULL — set later by WHATSAPP_PRELOAD worker.
+
+export interface CreateElevenlabsMediaItem {
+  state_transition_id: string;             // required — lesson state transition
+  script_text: string;                     // the text to synthesize
+
+  // --- Optional overrides (fall back to env default ELEVENLABS_VOICE_ID) ---
+  voice_id?: string;                       // override ELEVENLABS_VOICE_ID
+  model_id?: string;                       // default 'eleven_multilingual_v2'
+  language_code?: string;                  // ISO 639-1, e.g. 'hi', 'en'
+  voice_settings?: {
+    stability?: number;                    // 0.0–1.0
+    similarity_boost?: number;             // 0.0–1.0
+    style?: number;                        // 0.0–1.0
+    speed?: number;                        // 0.7–1.2
+    use_speaker_boost?: boolean;
+  };
+}
+
+export interface CreateElevenlabsMediaOptions {
+  items: CreateElevenlabsMediaItem[];
+}
+
+export function validateCreateElevenlabsMediaOptions(options: unknown): CreateElevenlabsMediaOptions {
+  // Same validation style as validateCreateHeygenMediaOptions.
+  // Validates options is object, items is non-empty array.
+  // Per item:
+  //   - state_transition_id: required non-empty string
+  //   - script_text: required non-empty string, max 5000 chars
+  //   - user/user_id/user_external_id: FORBIDDEN
+  //   - voice_id: optional non-empty string
+  //   - model_id: optional non-empty string
+  //   - language_code: optional non-empty string
+  //   - voice_settings: optional object. If provided:
+  //     - stability: optional number 0.0–1.0
+  //     - similarity_boost: optional number 0.0–1.0
+  //     - style: optional number 0.0–1.0
+  //     - speed: optional number 0.7–1.2
+  //     - use_speaker_boost: optional boolean
+  // Returns { items: validated[] }.
+}
+
 // --- Dashboard upload options ---
 // source is always 'dashboard'. User is FORBIDDEN (admin-uploaded static content is not user-scoped).
 // Accepts multipart/form-data: files[] (binary) + items form field (JSON string). Matched by array index.
@@ -148,7 +195,7 @@ export interface FindMediaByStateTransitionIdResult {
 
 // --- WHATSAPP_PRELOAD job payload ---
 // Used by the WHATSAPP_PRELOAD BullMQ worker (see whatsapp-preload.processor.prompt.md).
-// Enqueued by: HeyGen outbound service (audio), HeyGen inbound processor (video), uploadStaticMedia service (dashboard image/video).
+// Enqueued by: HeyGen outbound service (audio), HeyGen inbound processor (video), ElevenLabs outbound service (audio), uploadStaticMedia service (dashboard image/video).
 // For reload jobs (20-day refresh cycle), the same shape is reused with reload = true.
 
 export interface WhatsappPreloadJobDto {

@@ -11,6 +11,7 @@ export type MediaType = (typeof VALID_MEDIA_TYPES)[number];
 const VALID_MEDIA_SOURCES = [
   'whatsapp',
   'heygen',
+  'elevenlabs',
   'azure',
   'sarvam',
   'reverie',
@@ -67,6 +68,25 @@ export interface CreateHeygenMediaItem {
 
 export interface CreateHeygenMediaOptions {
   items: CreateHeygenMediaItem[];
+}
+
+export interface CreateElevenlabsMediaItem {
+  state_transition_id: string;
+  script_text: string;
+  voice_id?: string;
+  model_id?: string;
+  language_code?: string;
+  voice_settings?: {
+    stability?: number;
+    similarity_boost?: number;
+    style?: number;
+    speed?: number;
+    use_speaker_boost?: boolean;
+  };
+}
+
+export interface CreateElevenlabsMediaOptions {
+  items: CreateElevenlabsMediaItem[];
 }
 
 const VALID_STATIC_MEDIA_MIME_TYPES = [
@@ -541,6 +561,159 @@ export function assertValidStaticMediaFile(
     );
   }
   return { media_type, mime_type: mime };
+}
+
+export function validateCreateElevenlabsMediaOptions(
+  options: unknown,
+): CreateElevenlabsMediaOptions {
+  if (!options || typeof options !== 'object') {
+    throw new BadRequestException(
+      'createElevenlabsMedia() options must be an object',
+    );
+  }
+  const o = options as Record<string, unknown>;
+
+  if (!Array.isArray(o.items) || o.items.length === 0) {
+    throw new BadRequestException(
+      'createElevenlabsMedia() options.items must be a non-empty array',
+    );
+  }
+
+  const validated: CreateElevenlabsMediaItem[] = o.items.map(
+    (raw: unknown, idx: number) => {
+      if (!raw || typeof raw !== 'object') {
+        throw new BadRequestException(
+          `createElevenlabsMedia() items[${idx}] must be an object`,
+        );
+      }
+      const item = raw as Record<string, unknown>;
+
+      if (
+        typeof item.state_transition_id !== 'string' ||
+        item.state_transition_id.length === 0
+      ) {
+        throw new BadRequestException(
+          `createElevenlabsMedia() items[${idx}].state_transition_id is required and must be a non-empty string`,
+        );
+      }
+      if (
+        typeof item.script_text !== 'string' ||
+        item.script_text.length === 0
+      ) {
+        throw new BadRequestException(
+          `createElevenlabsMedia() items[${idx}].script_text is required and must be a non-empty string`,
+        );
+      }
+      if (item.script_text.length > 5000) {
+        throw new BadRequestException(
+          `createElevenlabsMedia() items[${idx}].script_text must be 5000 characters or fewer`,
+        );
+      }
+
+      if (
+        item.user !== undefined ||
+        item.user_id !== undefined ||
+        item.user_external_id !== undefined
+      ) {
+        throw new BadRequestException(
+          `createElevenlabsMedia() items[${idx}]: user/user_id/user_external_id are forbidden for elevenlabs source`,
+        );
+      }
+
+      if (
+        item.voice_id !== undefined &&
+        (typeof item.voice_id !== 'string' || item.voice_id.length === 0)
+      ) {
+        throw new BadRequestException(
+          `createElevenlabsMedia() items[${idx}].voice_id must be a non-empty string`,
+        );
+      }
+      if (
+        item.model_id !== undefined &&
+        (typeof item.model_id !== 'string' || item.model_id.length === 0)
+      ) {
+        throw new BadRequestException(
+          `createElevenlabsMedia() items[${idx}].model_id must be a non-empty string`,
+        );
+      }
+      if (
+        item.language_code !== undefined &&
+        (typeof item.language_code !== 'string' ||
+          item.language_code.length === 0)
+      ) {
+        throw new BadRequestException(
+          `createElevenlabsMedia() items[${idx}].language_code must be a non-empty string`,
+        );
+      }
+
+      if (item.voice_settings !== undefined) {
+        if (
+          typeof item.voice_settings !== 'object' ||
+          item.voice_settings === null
+        ) {
+          throw new BadRequestException(
+            `createElevenlabsMedia() items[${idx}].voice_settings must be an object`,
+          );
+        }
+        const vs = item.voice_settings as Record<string, unknown>;
+        if (
+          vs.stability !== undefined &&
+          (typeof vs.stability !== 'number' ||
+            vs.stability < 0 ||
+            vs.stability > 1)
+        ) {
+          throw new BadRequestException(
+            `createElevenlabsMedia() items[${idx}].voice_settings.stability must be a number between 0.0 and 1.0`,
+          );
+        }
+        if (
+          vs.similarity_boost !== undefined &&
+          (typeof vs.similarity_boost !== 'number' ||
+            vs.similarity_boost < 0 ||
+            vs.similarity_boost > 1)
+        ) {
+          throw new BadRequestException(
+            `createElevenlabsMedia() items[${idx}].voice_settings.similarity_boost must be a number between 0.0 and 1.0`,
+          );
+        }
+        if (
+          vs.style !== undefined &&
+          (typeof vs.style !== 'number' || vs.style < 0 || vs.style > 1)
+        ) {
+          throw new BadRequestException(
+            `createElevenlabsMedia() items[${idx}].voice_settings.style must be a number between 0.0 and 1.0`,
+          );
+        }
+        if (
+          vs.speed !== undefined &&
+          (typeof vs.speed !== 'number' || vs.speed < 0.7 || vs.speed > 1.2)
+        ) {
+          throw new BadRequestException(
+            `createElevenlabsMedia() items[${idx}].voice_settings.speed must be a number between 0.7 and 1.2`,
+          );
+        }
+        if (
+          vs.use_speaker_boost !== undefined &&
+          typeof vs.use_speaker_boost !== 'boolean'
+        ) {
+          throw new BadRequestException(
+            `createElevenlabsMedia() items[${idx}].voice_settings.use_speaker_boost must be a boolean`,
+          );
+        }
+      }
+
+      return {
+        state_transition_id: item.state_transition_id,
+        script_text: item.script_text,
+        voice_id: item.voice_id,
+        model_id: item.model_id,
+        language_code: item.language_code,
+        voice_settings: item.voice_settings,
+      } as CreateElevenlabsMediaItem;
+    },
+  );
+
+  return { items: validated };
 }
 
 export function assertValidMediaStatus(

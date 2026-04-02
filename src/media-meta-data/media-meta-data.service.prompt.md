@@ -141,6 +141,35 @@ createHeygenMedia(options: CreateHeygenMediaOptions, otel_carrier: Record<string
 5.) Return the created media_metadata entities (with status = 'queued').
 
 
+createElevenlabsMedia(options: CreateElevenlabsMediaOptions, otel_carrier: Record<string, string>): Promise<MediaMetaData[]>
+
+Identical pattern to createHeygenMedia, but source = 'elevenlabs', media_type always 'audio', queue = ELEVENLABS_GENERATE.
+
+1.) Validate with validateCreateElevenlabsMediaOptions().
+
+2.) For each item in options.items:
+  a.) Assert enums: assertValidMediaType('audio'), assertValidMediaSource('elevenlabs').
+  b.) Create media_metadata row:
+    * id = uuid(), state_transition_id, wa_media_url = NULL, status = 'created',
+      media_type = 'audio', source = 'elevenlabs', user_id = NULL, rolled_back = false,
+      generation_request_json = sanitized item payload (no secrets — strip voice_id matching env default)
+  c.) Build BullMQ job payload:
+    {
+      media_metadata_id: row id,
+      otel_carrier,
+      elevenlabs_params: {
+        script_text, voice_id, model_id, language_code, voice_settings
+      }
+    }
+
+3.) Enqueue all jobs via queue.addBulk() on ELEVENLABS_GENERATE queue.
+  * Retry with exponential backoff (10s cap). On cap: mark all rows 'failed', log ERROR, throw.
+
+4.) Update all rows to status = 'queued'.
+
+5.) Return entities (status = 'queued').
+
+
 uploadStaticMedia(files: Express.Multer.File[], items: UploadStaticMediaItem[], otel_carrier: Record<string, string>): Promise<UploadStaticMediaResult>
 
 Uploads admin-provided images/videos to S3, creates media_metadata rows, and enqueues WHATSAPP_PRELOAD jobs.

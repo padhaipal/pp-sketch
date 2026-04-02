@@ -6,6 +6,7 @@ Export queue names, Redis connection, and Queue/Worker factories.
 * WABOT_INBOUND: 'wabot-inbound'.
 * HEYGEN_GENERATE: 'heygen-generate'.
 * HEYGEN_INBOUND: 'heygen-inbound'.
+* ELEVENLABS_GENERATE: 'elevenlabs-generate'.
 * WHATSAPP_PRELOAD: 'whatsapp-preload'.
 
 2.) Redis connection.
@@ -30,6 +31,11 @@ When a worker's processJob() throws (or the job is explicitly failed), BullMQ re
   - attempts: 3, backoff: { type: 'exponential', delay: 5000 }
   - removeOnComplete: true, removeOnFail: { count: 5000 }
   - Rationale: webhook processing (download + S3 upload). Most processor failures are terminal (no retry); the retry budget covers unexpected transient failures (~15 s total).
+
+* ELEVENLABS_GENERATE:
+  - attempts: 5, backoff: { type: 'exponential', delay: 5000 }
+  - removeOnComplete: true, removeOnFail: { count: 5000 }
+  - Rationale: external ElevenLabs API, synchronous TTS. Same retry budget as HEYGEN_GENERATE (~75 s).
 
 * WHATSAPP_PRELOAD:
   - attempts: 5, backoff: { type: 'exponential', delay: 10000 }
