@@ -45,22 +45,28 @@ Single DB round-trip. Returns all text transcript entities that are children of 
 
 ## findMediaByStateTransitionId(stateTransitionId: string): Promise<FindMediaByStateTransitionIdResult>
 
-Looks up all ready, deliverable media entities whose `state_transition_id` matches the given `stateTransitionId`, then randomly selects one entity per media type. Uses the `(state_transition_id, status)` index.
+Looks up all ready, deliverable media entities whose `state_transition_id` matches the given `stateTransitionId`, then randomly selects one entity per media type. Falls back per-media-type to a generic key when the specific key has no row of that type. Uses the `(state_transition_id, status)` index.
+
+Generic key derivation: replace the substring before the first `-` with `_`. Example: `शब्द-start-word-initial` → `_-start-word-initial`. If `stateTransitionId` contains no `-`, there is no generic key — skip the fallback entirely.
 
 1.) If `stateTransitionId` is not a valid non-empty string, throw BadRequestException.
-2.) Check cache: call `cacheService.get<FindMediaByStateTransitionIdResult>(CACHE_KEYS.mediaByStateTransitionId(stateTransitionId))`.
-  * If cache hit: return the cached result immediately (no DB hit).
-3.) Query (single DB round-trip):
+2.) Compute `genericKey` (or null if no `-`).
+3.) Check cache: call `cacheService.get<FindMediaByStateTransitionIdResult>(CACHE_KEYS.mediaByStateTransitionId(stateTransitionId))`.
+  * If cache hit: return immediately (no DB hit). The cached value already encodes any generic fallbacks resolved on a previous call.
+4.) Query (single DB round-trip — use `= ANY($1::text[])` so both keys are fetched together; pass `[stateTransitionId]` if `genericKey` is null):
   ```sql
   SELECT * FROM media_metadata
-  WHERE state_transition_id = $1
+  WHERE state_transition_id = ANY($1::text[])
     AND status = 'ready'
     AND (wa_media_url IS NOT NULL OR media_type = 'text')
   ```
-4.) Group the returned rows by `media_type`.
-5.) For each media type (audio, video, text, image): if one or more rows exist in that group, randomly select one. If none exist for a type, that key is omitted from the result.
-6.) If any media types were found (result is not empty): populate the cache with `cacheService.set(CACHE_KEYS.mediaByStateTransitionId(stateTransitionId), result, CACHE_TTL.MEDIA_BY_STATE_TRANSITION)`.
-7.) Return the `FindMediaByStateTransitionIdResult` object.
+5.) Partition rows into two groups by `state_transition_id`: specific-rows and generic-rows. Within each group, sub-group by `media_type`.
+6.) For each media type (audio, video, text, image):
+  * If specific-rows has one or more entries of that type, randomly select one from specific-rows.
+  * Else if generic-rows has one or more entries of that type, randomly select one from generic-rows.
+  * Else omit the key.
+7.) If the result is non-empty, cache it under the **specific** key only with `cacheService.set(CACHE_KEYS.mediaByStateTransitionId(stateTransitionId), result, CACHE_TTL.MEDIA_BY_STATE_TRANSITION)`. Do not write a separate generic-key cache entry.
+8.) Return the `FindMediaByStateTransitionIdResult` object.
 
 ## markRolledBack(mediaId: string): Promise<void>
 

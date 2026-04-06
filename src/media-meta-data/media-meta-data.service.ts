@@ -287,30 +287,40 @@ export class MediaMetaDataService {
       );
     }
 
+    const dashIdx = stateTransitionId.indexOf('-');
+    const genericKey =
+      dashIdx >= 0 ? `_${stateTransitionId.substring(dashIdx)}` : null;
+
     const cached =
       await this.cacheService.get<FindMediaByStateTransitionIdResult>(
         CACHE_KEYS.mediaByStateTransitionId(stateTransitionId),
       );
     if (cached) return cached;
 
+    const keys = genericKey ? [stateTransitionId, genericKey] : [stateTransitionId];
     const rows = await this.dataSource.query(
       `SELECT * FROM media_metadata
-       WHERE state_transition_id = $1
+       WHERE state_transition_id = ANY($1::text[])
          AND status = 'ready'
          AND (wa_media_url IS NOT NULL OR media_type = 'text')`,
-      [stateTransitionId],
+      [keys],
     );
 
-    const grouped = new Map<string, MediaMetaData[]>();
+    const specificByType = new Map<string, MediaMetaData[]>();
+    const genericByType = new Map<string, MediaMetaData[]>();
     for (const row of rows) {
-      const existing = grouped.get(row.media_type) ?? [];
+      const bucket =
+        row.state_transition_id === stateTransitionId
+          ? specificByType
+          : genericByType;
+      const existing = bucket.get(row.media_type) ?? [];
       existing.push(row);
-      grouped.set(row.media_type, existing);
+      bucket.set(row.media_type, existing);
     }
 
     const result: FindMediaByStateTransitionIdResult = {};
     for (const type of ['audio', 'video', 'text', 'image'] as const) {
-      const items = grouped.get(type);
+      const items = specificByType.get(type) ?? genericByType.get(type);
       if (items && items.length > 0) {
         result[type] = items[Math.floor(Math.random() * items.length)];
       }
