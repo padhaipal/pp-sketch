@@ -89,10 +89,12 @@ export interface CreateElevenlabsMediaOptions {
   items: CreateElevenlabsMediaItem[];
 }
 
+// Audio is restricted to OGG/Opus so WhatsApp renders it as a voice-note (PTT) bubble.
 const VALID_STATIC_MEDIA_MIME_TYPES = [
   'image/jpeg',
   'image/png',
   'video/mp4',
+  'audio/ogg',
 ] as const;
 type StaticMediaMimeType = (typeof VALID_STATIC_MEDIA_MIME_TYPES)[number];
 
@@ -100,15 +102,21 @@ const MIME_TO_MEDIA_TYPE: Record<StaticMediaMimeType, MediaType> = {
   'image/jpeg': 'image',
   'image/png': 'image',
   'video/mp4': 'video',
+  'audio/ogg': 'audio',
 };
 
-const STATIC_MEDIA_MAX_BYTES: Record<'image' | 'video', number> = {
+const STATIC_MEDIA_MAX_BYTES: Record<'image' | 'video' | 'audio', number> = {
   image: 5 * 1024 * 1024,
   video: 16 * 1024 * 1024,
+  audio: 16 * 1024 * 1024,
 };
+
+const STATIC_TEXT_MAX_CHARS = 4096;
 
 export interface UploadStaticMediaItem {
   state_transition_id: string;
+  media_type: MediaType;
+  text?: string;
 }
 
 export type UploadStaticMediaItemStatus =
@@ -535,7 +543,38 @@ export function validateUploadStaticMediaItems(
         `uploadStaticMedia() items[${idx}].state_transition_id is required and must be a non-empty string`,
       );
     }
-    return { state_transition_id: item.state_transition_id };
+    if (
+      typeof item.media_type !== 'string' ||
+      !VALID_MEDIA_TYPES.includes(item.media_type as MediaType)
+    ) {
+      throw new BadRequestException(
+        `uploadStaticMedia() items[${idx}].media_type is required and must be one of: ${VALID_MEDIA_TYPES.join(', ')}`,
+      );
+    }
+    const media_type = item.media_type as MediaType;
+    if (media_type === 'text') {
+      if (typeof item.text !== 'string' || item.text.length === 0) {
+        throw new BadRequestException(
+          `uploadStaticMedia() items[${idx}].text is required and must be a non-empty string when media_type === 'text'`,
+        );
+      }
+      if (item.text.length > STATIC_TEXT_MAX_CHARS) {
+        throw new BadRequestException(
+          `uploadStaticMedia() items[${idx}].text length ${item.text.length} exceeds ${STATIC_TEXT_MAX_CHARS} char limit`,
+        );
+      }
+      return {
+        state_transition_id: item.state_transition_id,
+        media_type,
+        text: item.text,
+      };
+    }
+    if (item.text !== undefined) {
+      throw new BadRequestException(
+        `uploadStaticMedia() items[${idx}].text is forbidden when media_type !== 'text'`,
+      );
+    }
+    return { state_transition_id: item.state_transition_id, media_type };
   });
 }
 
@@ -554,7 +593,8 @@ export function assertValidStaticMediaFile(
   }
   const mime = file.mimetype as StaticMediaMimeType;
   const media_type = MIME_TO_MEDIA_TYPE[mime];
-  const maxBytes = STATIC_MEDIA_MAX_BYTES[media_type as 'image' | 'video'];
+  const maxBytes =
+    STATIC_MEDIA_MAX_BYTES[media_type as 'image' | 'video' | 'audio'];
   if (file.size > maxBytes) {
     throw new BadRequestException(
       `uploadStaticMedia() files[${idx}]: file size ${file.size} bytes exceeds ${maxBytes} byte limit for ${media_type}`,

@@ -139,25 +139,34 @@ export function validateCreateElevenlabsMediaOptions(options: unknown): CreateEl
 
 // --- Dashboard upload options ---
 // source is always 'dashboard'. User is FORBIDDEN (admin-uploaded static content is not user-scoped).
-// Accepts multipart/form-data: files[] (binary) + items form field (JSON string). Matched by array index.
-// media_type is inferred from file MIME type; wa_media_url starts NULL (set by WHATSAPP_PRELOAD worker).
+// Accepts multipart/form-data: files[] (binary, for non-text items only) + items form field (JSON string).
+// Files are matched to non-text items in order (skipping text items). Text items carry their content inline in the `text` field — they have no associated file, no S3 upload, and no WHATSAPP_PRELOAD enqueue.
+// For non-text items, media_type is inferred from file MIME type and wa_media_url starts NULL (set by WHATSAPP_PRELOAD worker). For text items, media_type is 'text' (declared on the item itself) and wa_media_url stays NULL forever.
 
-const VALID_STATIC_MEDIA_MIME_TYPES = ['image/jpeg', 'image/png', 'video/mp4'] as const;
+// Audio is restricted to OGG/Opus so WhatsApp renders it as a voice-note (PTT) bubble with waveform.
+// Any other audio MIME would render as a generic music-player message, which is not what we want.
+const VALID_STATIC_MEDIA_MIME_TYPES = ['image/jpeg', 'image/png', 'video/mp4', 'audio/ogg'] as const;
 type StaticMediaMimeType = (typeof VALID_STATIC_MEDIA_MIME_TYPES)[number];
 
 const MIME_TO_MEDIA_TYPE: Record<StaticMediaMimeType, MediaType> = {
   'image/jpeg': 'image',
   'image/png': 'image',
   'video/mp4': 'video',
+  'audio/ogg': 'audio',
 };
 
-const STATIC_MEDIA_MAX_BYTES: Record<'image' | 'video', number> = {
+const STATIC_MEDIA_MAX_BYTES: Record<'image' | 'video' | 'audio', number> = {
   image: 5 * 1024 * 1024,    // 5 MB — WhatsApp image limit
   video: 16 * 1024 * 1024,   // 16 MB — WhatsApp video limit
+  audio: 16 * 1024 * 1024,   // 16 MB — WhatsApp audio limit
 };
+
+const STATIC_TEXT_MAX_CHARS = 4096;          // WhatsApp text body limit
 
 export interface UploadStaticMediaItem {
   state_transition_id: string;             // required — the lesson state transition this media is for
+  media_type: MediaType;                   // required — 'image' | 'video' | 'audio' | 'text'. For non-text, must match MIME-inferred type for the corresponding file.
+  text?: string;                           // required iff media_type === 'text'; forbidden otherwise. Non-empty, ≤ STATIC_TEXT_MAX_CHARS.
 }
 
 export type UploadStaticMediaItemStatus = 'created' | 'duplicate_skipped' | 'failed';
@@ -195,7 +204,7 @@ export interface FindMediaByStateTransitionIdResult {
 
 // --- WHATSAPP_PRELOAD job payload ---
 // Used by the WHATSAPP_PRELOAD BullMQ worker (see whatsapp-preload.processor.prompt.md).
-// Enqueued by: HeyGen outbound service (audio), HeyGen inbound processor (video), ElevenLabs outbound service (audio), uploadStaticMedia service (dashboard image/video).
+// Enqueued by: HeyGen outbound service (audio), HeyGen inbound processor (video), ElevenLabs outbound service (audio), uploadStaticMedia service (non-text dashboard items only — text items skip preload entirely).
 // For reload jobs (20-day refresh cycle), the same shape is reused with reload = true.
 
 export interface WhatsappPreloadJobDto {
@@ -404,7 +413,23 @@ export function validateUploadStaticMediaItems(rawItems: unknown): UploadStaticM
     if (typeof item.state_transition_id !== 'string' || item.state_transition_id.length === 0) {
       throw new BadRequestException(`uploadStaticMedia() items[${idx}].state_transition_id is required and must be a non-empty string`);
     }
-    return { state_transition_id: item.state_transition_id };
+    if (typeof item.media_type !== 'string' || !VALID_MEDIA_TYPES.includes(item.media_type as MediaType)) {
+      throw new BadRequestException(`uploadStaticMedia() items[${idx}].media_type is required and must be one of: ${VALID_MEDIA_TYPES.join(', ')}`);
+    }
+    const media_type = item.media_type as MediaType;
+    if (media_type === 'text') {
+      if (typeof item.text !== 'string' || item.text.length === 0) {
+        throw new BadRequestException(`uploadStaticMedia() items[${idx}].text is required and must be a non-empty string when media_type === 'text'`);
+      }
+      if (item.text.length > STATIC_TEXT_MAX_CHARS) {
+        throw new BadRequestException(`uploadStaticMedia() items[${idx}].text length ${item.text.length} exceeds ${STATIC_TEXT_MAX_CHARS} char limit`);
+      }
+      return { state_transition_id: item.state_transition_id, media_type, text: item.text };
+    }
+    if (item.text !== undefined) {
+      throw new BadRequestException(`uploadStaticMedia() items[${idx}].text is forbidden when media_type !== 'text'`);
+    }
+    return { state_transition_id: item.state_transition_id, media_type };
   });
 }
 
@@ -414,7 +439,7 @@ export function assertValidStaticMediaFile(file: { mimetype: string; size: numbe
   }
   const mime = file.mimetype as StaticMediaMimeType;
   const media_type = MIME_TO_MEDIA_TYPE[mime];
-  const maxBytes = STATIC_MEDIA_MAX_BYTES[media_type as 'image' | 'video'];
+  const maxBytes = STATIC_MEDIA_MAX_BYTES[media_type as 'image' | 'video' | 'audio'];
   if (file.size > maxBytes) {
     throw new BadRequestException(`uploadStaticMedia() files[${idx}]: file size ${file.size} bytes exceeds ${maxBytes} byte limit for ${media_type}`);
   }

@@ -586,10 +586,71 @@ export class MediaMetaDataService {
     otel_carrier: OtelCarrier,
   ): Promise<UploadStaticMediaResult> {
     const results: UploadStaticMediaItemResult[] = [];
+    let fileCursor = 0;
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+    for (let i = 0; i < items.length; i++) {
       const item = items[i];
+
+      // --- Text item branch ---
+      if (item.media_type === 'text') {
+        try {
+          assertValidMediaType('text');
+          assertValidMediaSource('dashboard');
+
+          const dupRows = await this.dataSource.query(
+            `SELECT * FROM media_metadata
+             WHERE state_transition_id = $1
+               AND media_type = 'text'
+               AND text = $2
+             LIMIT 1`,
+            [item.state_transition_id, item.text],
+          );
+
+          if (dupRows.length > 0 && dupRows[0].status === 'ready') {
+            results.push({
+              index: i,
+              status: 'duplicate_skipped',
+              entity: dupRows[0],
+            });
+            continue;
+          }
+
+          let entity: MediaMetaData;
+          if (dupRows.length > 0 && dupRows[0].status === 'failed') {
+            const rows = await this.dataSource.query(
+              `UPDATE media_metadata
+               SET status = 'ready', rolled_back = false
+               WHERE id = $1 RETURNING *`,
+              [dupRows[0].id],
+            );
+            entity = rows[0];
+          } else {
+            const id = uuid();
+            const rows = await this.dataSource.query(
+              `INSERT INTO media_metadata (id, state_transition_id, media_type, source, status, text, s3_key, content_hash, wa_media_url, user_id, rolled_back, media_details)
+               VALUES ($1, $2, 'text', 'dashboard', 'ready', $3, NULL, NULL, NULL, NULL, false, NULL) RETURNING *`,
+              [id, item.state_transition_id, item.text],
+            );
+            entity = rows[0];
+          }
+
+          results.push({ index: i, status: 'created', entity });
+        } catch (err) {
+          this.logger.warn(
+            `uploadStaticMedia[${i}]: text insert failed: ${(err as Error).message}`,
+          );
+          results.push({
+            index: i,
+            status: 'failed',
+            error: (err as Error).message,
+          });
+        }
+        continue;
+      }
+
+      // --- Non-text item branch ---
+      const file = files[fileCursor];
+      fileCursor++;
 
       try {
         // 1. Compute hash
@@ -603,10 +664,17 @@ export class MediaMetaDataService {
           'image/jpeg': 'image',
           'image/png': 'image',
           'video/mp4': 'video',
+          'audio/ogg': 'audio',
         };
         const media_type = mimeToType[file.mimetype];
         assertValidMediaType(media_type);
         assertValidMediaSource('dashboard');
+
+        if (media_type !== item.media_type) {
+          throw new BadRequestException(
+            `uploadStaticMedia() items[${i}].media_type "${item.media_type}" does not match file MIME-inferred type "${media_type}"`,
+          );
+        }
 
         // 3. Dedup check
         const dupRows = await this.dataSource.query(

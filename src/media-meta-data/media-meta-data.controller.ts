@@ -84,14 +84,18 @@ export class MediaMetaDataController {
 
     const validatedItems = validateUploadStaticMediaItems(rawItems);
 
-    // Validate files
-    if (!files || files.length === 0 || files.length !== validatedItems.length) {
+    // Files are matched in order to non-text items only.
+    const nonTextCount = validatedItems.filter(
+      (item) => item.media_type !== 'text',
+    ).length;
+    const fileList = files ?? [];
+    if (fileList.length !== nonTextCount) {
       throw new BadRequestException(
-        'files must be a non-empty array with length matching items',
+        `files length (${fileList.length}) must equal number of non-text items (${nonTextCount})`,
       );
     }
-    for (let i = 0; i < files.length; i++) {
-      assertValidStaticMediaFile(files[i], i);
+    for (let i = 0; i < fileList.length; i++) {
+      assertValidStaticMediaFile(fileList[i], i);
     }
 
     const span = startRootSpan('upload-static-controller');
