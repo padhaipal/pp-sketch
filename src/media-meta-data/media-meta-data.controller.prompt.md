@@ -3,6 +3,7 @@
 // POST endpoint accepting a generation request JSON package from the dashboard.
 // Called by the dev React dashboard via Swagger.
 // No authentication or authorization — any entity with dashboard access is trusted.
+// Body limit: heygen-generate and elevenlabs-generate routes override the default 100kb body limit to 5mb (route-scoped json() middleware in media-meta-data.module.ts) since bulk batches can be many MB.
 
 // Swagger: @ApiTags('media-meta-data'), @ApiBody({ type: CreateHeygenMediaOptions }), @ApiResponse(202)
 
