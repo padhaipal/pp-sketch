@@ -6,6 +6,7 @@ initOtel();
 
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
+import { json, urlencoded } from 'express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { DataSource } from 'typeorm';
 import { AppModule } from './app.module';
@@ -27,7 +28,16 @@ const logger = new Logger('Bootstrap');
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     rawBody: true,
+    bodyParser: false,
   });
+
+  // Route-scoped 5mb body limit for bulk audio-generation endpoints; must be registered BEFORE the
+  // global default parser so the specific route matches first.
+  app.use('/media-meta-data/elevenlabs-generate', json({ limit: '5mb' }));
+  app.use('/media-meta-data/heygen-generate', json({ limit: '5mb' }));
+  // Default body parsers (Nest's built-in parser is disabled above).
+  app.use(json());
+  app.use(urlencoded({ extended: true }));
 
   // Global validation pipe
   app.useGlobalPipes(
