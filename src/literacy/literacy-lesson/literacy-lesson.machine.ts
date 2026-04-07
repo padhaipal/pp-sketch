@@ -283,7 +283,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
-              assign({ stateTransitionId: ({ context }) => `${context.word}-letter-word-correct-last` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letter-word-correct-last` }),
               assign({ pendingCorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'dropFirstWrongLetter' },
             ]
@@ -374,7 +374,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
-              assign({ stateTransitionId: ({ context }) => `${context.word}-letterImage-word-correct-last` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-word-correct-last` }),
               { type: 'dropFirstWrongLetter' },
             ]
           },
@@ -417,7 +417,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
-              assign({ stateTransitionId: ({ context }) => `${context.word}-letterImage-word-maxErrors-last` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-word-maxErrors-last` }),
               { type: 'resetToZero', params: { keys: 'letterErrors' } },
               { type: 'dropFirstWrongLetter' },
             ]
@@ -464,7 +464,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
-              assign({ stateTransitionId: ({ context }) => `${context.word}-letterNoImage-word-correct-first-last` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-word-correct-first-last` }),
               assign({ pendingCorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'dropFirstWrongLetter' },
             ]
@@ -494,7 +494,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
-              assign({ stateTransitionId: ({ context }) => `${context.word}-letterNoImage-word-correct-retry-last` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-word-correct-retry-last` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
             ]
@@ -536,7 +536,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
-              assign({ stateTransitionId: ({ context }) => `${context.word}-letterNoImage-word-wrong-last` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-word-wrong-last` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
             ]
