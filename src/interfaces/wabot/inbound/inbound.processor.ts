@@ -125,7 +125,7 @@ export async function processWabotInboundJob(
         throw err;
       }
 
-      // Send welcome message
+      // Send welcome message 
       try {
         logger.log(`[HPTRACE] looking up welcome media stid=${WELCOME_MESSAGE_STATE_TRANSITION_ID}`);
         const welcomeMedia =
