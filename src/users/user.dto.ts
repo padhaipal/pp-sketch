@@ -28,7 +28,8 @@ export interface CreateUserOptions {
 }
 
 function validateE164PhoneNumber(value: string, fieldName: string): string {
-  const parsed = parsePhoneNumberFromString(value);
+  const normalized = value.startsWith('+') ? value : `+${value}`;
+  const parsed = parsePhoneNumberFromString(normalized);
   if (!parsed || !parsed.isValid()) {
     throw new BadRequestException(
       `${fieldName} must be a valid E.164 phone number (e.g. +923001234567)`,
