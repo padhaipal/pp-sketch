@@ -27,11 +27,19 @@ export class WabotOutboundService {
       otel: { carrier: options.otel_carrier },
     };
 
-    const response = await fetch(`${this.baseUrl}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-    });
+    this.logger.log(`[HPTRACE] WabotOutbound.sendMessage POST ${this.baseUrl}/sendMessage user=${options.user_external_id} mediaCount=${options.media.length}`);
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+    } catch (err) {
+      this.logger.error(`[HPTRACE] WabotOutbound.sendMessage fetch threw: ${(err as Error).message}`);
+      throw err;
+    }
+    this.logger.log(`[HPTRACE] WabotOutbound.sendMessage response status=${response.status}`);
 
     const body = (await response.json()) as SendMessageResponse;
     return { status: response.status, body };

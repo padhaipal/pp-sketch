@@ -67,7 +67,10 @@ async function bootstrap() {
   const cacheService = app.get(CacheService);
 
   // BullMQ workers
-  createWorker(QUEUE_NAMES.WABOT_INBOUND, async (job) => {
+  logger.log(`[HPTRACE] BULLMQ_REDIS_URL set=${!!process.env.BULLMQ_REDIS_URL}`);
+  logger.log(`[HPTRACE] Registering worker for queue=${QUEUE_NAMES.WABOT_INBOUND}`);
+  const wabotInboundWorker = createWorker(QUEUE_NAMES.WABOT_INBOUND, async (job) => {
+    logger.log(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) picked up job id=${job.id} name=${job.name}`);
     await processWabotInboundJob(
       job,
       userService,
@@ -75,7 +78,14 @@ async function bootstrap() {
       literacyLessonService,
       wabotOutbound,
     );
+    logger.log(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) finished job id=${job.id}`);
   });
+  wabotInboundWorker.on('ready', () => logger.log(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) READY`));
+  wabotInboundWorker.on('active', (job) => logger.log(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) ACTIVE job id=${job.id}`));
+  wabotInboundWorker.on('completed', (job) => logger.log(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) COMPLETED job id=${job.id}`));
+  wabotInboundWorker.on('failed', (job, err) => logger.error(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) FAILED job id=${job?.id} err=${err.message}`));
+  wabotInboundWorker.on('error', (err) => logger.error(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) ERROR ${err.message}`));
+  wabotInboundWorker.on('stalled', (jobId) => logger.warn(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) STALLED job id=${jobId}`));
 
   createWorker(QUEUE_NAMES.HEYGEN_GENERATE, async (job) => {
     await processHeygenGenerateJob(job, mediaBucket, dataSource);

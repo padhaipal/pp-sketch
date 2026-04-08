@@ -21,6 +21,7 @@ export async function processWabotInboundJob(
   wabotOutbound: WabotOutboundService,
 ): Promise<void> {
   const payload = job.data;
+  logger.log(`[HPTRACE] processWabotInboundJob START jobId=${job.id} from=${payload.message.from} type=${payload.message.type} consecutive=${payload.consecutive}`);
 
   // 0. Start span
   const span = startChildSpan(
@@ -62,9 +63,11 @@ export async function processWabotInboundJob(
     }
 
     // 3. Find or create user
+    logger.log(`[HPTRACE] looking up user external_id=${payload.message.from}`);
     let user = await userService.find({
       external_id: payload.message.from,
     });
+    logger.log(`[HPTRACE] user lookup result: ${user ? `FOUND id=${user.id}` : 'NOT FOUND'}`);
 
     if (!user) {
       // Try to find referrer from text body
@@ -107,10 +110,12 @@ export async function processWabotInboundJob(
           }
         }
 
+        logger.log(`[HPTRACE] creating user external_id=${payload.message.from} referrer=${referrerExternalId ?? 'none'}`);
         user = await userService.create({
           external_id: payload.message.from,
           referrer_external_id: referrerExternalId,
         });
+        logger.log(`[HPTRACE] user CREATED id=${user.id} external_id=${user.external_id}`);
       } catch (err) {
         logger.error(
           `Failed to create user ${payload.message.from}: ${(err as Error).message}`,
@@ -122,11 +127,14 @@ export async function processWabotInboundJob(
 
       // Send welcome message
       try {
+        logger.log(`[HPTRACE] looking up welcome media stid=${WELCOME_MESSAGE_STATE_TRANSITION_ID}`);
         const welcomeMedia =
           await mediaMetaDataService.findMediaByStateTransitionId(
             WELCOME_MESSAGE_STATE_TRANSITION_ID,
           );
+        logger.log(`[HPTRACE] welcome media keys=${Object.keys(welcomeMedia).join(',') || 'EMPTY'}`);
         if (welcomeMedia.video) {
+          logger.log(`[HPTRACE] sending welcome video to ${user.external_id} url=${welcomeMedia.video.wa_media_url}`);
           const result = await wabotOutbound.sendMessage({
             user_external_id: user.external_id,
             wamid: payload.message.id,
@@ -135,7 +143,10 @@ export async function processWabotInboundJob(
             ],
             otel_carrier: injectCarrier(span),
           });
+          logger.log(`[HPTRACE] welcome send result status=${result.status}`);
           handleSendResult(result, 'welcome');
+        } else {
+          logger.warn(`[HPTRACE] NO welcome video found — user gets nothing`);
         }
       } catch (err) {
         logger.warn(
@@ -143,6 +154,7 @@ export async function processWabotInboundJob(
         );
       }
 
+      logger.log(`[HPTRACE] new-user onboarding complete, returning early`);
       span.end();
       return;
     }
@@ -190,6 +202,7 @@ export async function processWabotInboundJob(
     }
 
     // 6. Process audio message
+    logger.log(`[HPTRACE] creating whatsapp audio media for user ${user.id}`);
     const audioEntity =
       await mediaMetaDataService.createWhatsappAudioMedia({
         wa_media_url: payload.message.audio!.mediaUrl,
@@ -197,11 +210,14 @@ export async function processWabotInboundJob(
         otel_carrier: injectCarrier(span),
       });
     const userMessageId = audioEntity.id;
+    logger.log(`[HPTRACE] audio media created id=${userMessageId}`);
 
     // 7. Find transcripts
+    logger.log(`[HPTRACE] finding transcripts for media ${userMessageId}`);
     const transcripts = await mediaMetaDataService.findTranscripts({
       media_metadata: audioEntity,
     });
+    logger.log(`[HPTRACE] transcripts found count=${transcripts.length}`);
 
     if (transcripts.length === 0) {
       logger.error(`No transcripts found for audio ${audioEntity.id}`);
@@ -210,11 +226,13 @@ export async function processWabotInboundJob(
     }
 
     // 8. Process answer
+    logger.log(`[HPTRACE] calling processAnswer`);
     const result1 = await literacyLessonService.processAnswer({
       user,
       transcripts,
       user_message_id: userMessageId,
     });
+    logger.log(`[HPTRACE] processAnswer result stid=${result1.stateTransitionId} complete=${result1.isComplete}`);
 
     const stateTransitionIds: string[] = [result1.stateTransitionId];
 
@@ -231,12 +249,16 @@ export async function processWabotInboundJob(
     const outboundMedia: OutboundMediaItem[] = [];
 
     for (const stid of stateTransitionIds) {
+      logger.log(`[HPTRACE] looking up media stid=${stid}`);
       const media =
         await mediaMetaDataService.findMediaByStateTransitionId(stid);
+      logger.log(`[HPTRACE] media keys=${Object.keys(media).join(',') || 'EMPTY'} for stid=${stid}`);
       appendMediaItems(outboundMedia, media);
     }
+    logger.log(`[HPTRACE] outboundMedia count=${outboundMedia.length}`);
 
     // 10. Send outbound
+    logger.log(`[HPTRACE] sending outbound to wabot for ${user.external_id}`);
     const sendResult = await wabotOutbound.sendMessage({
       user_external_id: user.external_id,
       wamid: payload.message.id,
@@ -245,6 +267,7 @@ export async function processWabotInboundJob(
       otel_carrier: injectCarrier(span),
     });
 
+    logger.log(`[HPTRACE] outbound result status=${sendResult.status} delivered=${sendResult.body?.delivered}`);
     if (sendResult.status >= 200 && sendResult.status < 300) {
       if (sendResult.body.delivered) {
         logger.log(`Message delivered to ${user.external_id}`);
