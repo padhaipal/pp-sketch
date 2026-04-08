@@ -283,7 +283,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
-              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letter-word-correct-last` }),
+              assign({ stateTransitionId: ({ context }) => `${context.word}-letter-word-correct-last` }),
               assign({ pendingCorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'dropFirstWrongLetter' },
             ]
@@ -294,7 +294,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
-              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letter-routeWrongLetter-correct-more` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[1]}-letter-routeWrongLetter-correct-more` }),
               assign({ pendingCorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'dropFirstWrongLetter' },
             ]
@@ -384,7 +384,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
-              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-routeWrongLetter-correct-more` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[1]}-letterImage-routeWrongLetter-correct-more` }),
               { type: 'dropFirstWrongLetter' },
             ]
           },
@@ -431,7 +431,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
-              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-routeWrongLetter-maxErrors-more` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[1]}-letterImage-routeWrongLetter-maxErrors-more` }),
               { type: 'resetToZero', params: { keys: 'letterErrors' } },
               { type: 'dropFirstWrongLetter' },
             ]
@@ -474,12 +474,12 @@ export const machine = setup({
             guard: and([
               { type: 'checkAnswer', params: { fn: markLetter } },
               ({ context }) => context.letterNoImageErrors === 0,
-              ({ context }) => context.wrongLetters.length >= 1,
+              ({ context }) => context.wrongLetters.length >= 2,
             ]),
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
-              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-routeWrongLetter-correct-first-more` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[1]}-letterNoImage-routeWrongLetter-correct-first-more` }),
               assign({ pendingCorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'dropFirstWrongLetter' },
             ]
@@ -504,12 +504,12 @@ export const machine = setup({
             guard: and([
               { type: 'checkAnswer', params: { fn: markLetter } },
               ({ context }) => context.letterNoImageErrors >= 1,
-              ({ context }) => context.wrongLetters.length >= 1,
+              ({ context }) => context.wrongLetters.length >= 2,
             ]),
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
-              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-routeWrongLetter-correct-retry-more` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[1]}-letterNoImage-routeWrongLetter-correct-retry-more` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
             ]
@@ -545,12 +545,12 @@ export const machine = setup({
           {
             guard: and([
               ({ context }) => context.letterNoImageErrors >= 1,
-              ({ context }) => context.wrongLetters.length >= 1,
+              ({ context }) => context.wrongLetters.length >= 2,
             ]),
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
-              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-routeWrongLetter-wrong-more` }),
+              assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[1]}-letterNoImage-routeWrongLetter-wrong-more` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
             ]

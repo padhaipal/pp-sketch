@@ -663,6 +663,7 @@ export class MediaMetaDataService {
         const mimeToType: Record<string, MediaType> = {
           'image/jpeg': 'image',
           'image/png': 'image',
+          'image/webp': 'image',
           'video/mp4': 'video',
           'audio/ogg': 'audio',
         };

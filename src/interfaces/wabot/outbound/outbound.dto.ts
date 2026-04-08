@@ -1,9 +1,11 @@
 import type { OtelCarrier } from '../../../otel/otel.dto';
 
 export interface OutboundMediaItem {
-  type: 'audio' | 'video' | 'image' | 'text';
+  type: 'audio' | 'video' | 'image' | 'sticker' | 'text';
   url?: string;
   body?: string;
+  // Optional mime hint. wabot promotes type='image' + mime_type='image/webp' to a sticker.
+  mime_type?: string;
 }
 
 export interface SendMessageRequest {

@@ -293,7 +293,9 @@ function appendMediaItems(
     if (type === 'text') {
       items.push({ type: 'text', body: entity.text! });
     } else {
-      items.push({ type, url: entity.wa_media_url! });
+      const mime_type = (entity.media_details as { mime_type?: string } | null)
+        ?.mime_type;
+      items.push({ type, url: entity.wa_media_url!, mime_type });
     }
   }
 }

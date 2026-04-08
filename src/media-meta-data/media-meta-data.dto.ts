@@ -93,6 +93,7 @@ export interface CreateElevenlabsMediaOptions {
 const VALID_STATIC_MEDIA_MIME_TYPES = [
   'image/jpeg',
   'image/png',
+  'image/webp',
   'video/mp4',
   'audio/ogg',
 ] as const;
@@ -101,6 +102,7 @@ type StaticMediaMimeType = (typeof VALID_STATIC_MEDIA_MIME_TYPES)[number];
 const MIME_TO_MEDIA_TYPE: Record<StaticMediaMimeType, MediaType> = {
   'image/jpeg': 'image',
   'image/png': 'image',
+  'image/webp': 'image',
   'video/mp4': 'video',
   'audio/ogg': 'audio',
 };
@@ -110,6 +112,58 @@ const STATIC_MEDIA_MAX_BYTES: Record<'image' | 'video' | 'audio', number> = {
   video: 16 * 1024 * 1024,
   audio: 16 * 1024 * 1024,
 };
+
+// WhatsApp sticker limits (https://developers.facebook.com/docs/whatsapp/cloud-api/reference/media)
+const WEBP_STATIC_MAX_BYTES = 100 * 1024;
+const WEBP_ANIMATED_MAX_BYTES = 500 * 1024;
+const WEBP_REQUIRED_DIMENSION = 512;
+
+interface WebpInfo {
+  width: number;
+  height: number;
+  animated: boolean;
+}
+
+// Parses width/height/animation flag from a WebP buffer header.
+// Supports VP8 (lossy), VP8L (lossless), and VP8X (extended) chunks.
+function parseWebpHeader(buf: Buffer): WebpInfo {
+  if (
+    buf.length < 30 ||
+    buf.toString('ascii', 0, 4) !== 'RIFF' ||
+    buf.toString('ascii', 8, 12) !== 'WEBP'
+  ) {
+    throw new BadRequestException('invalid webp: missing RIFF/WEBP header');
+  }
+  const chunk = buf.toString('ascii', 12, 16);
+  if (chunk === 'VP8X') {
+    const flags = buf[20];
+    const animated = (flags & 0x02) !== 0;
+    const width = 1 + (buf[24] | (buf[25] << 8) | (buf[26] << 16));
+    const height = 1 + (buf[27] | (buf[28] << 8) | (buf[29] << 16));
+    return { width, height, animated };
+  }
+  if (chunk === 'VP8L') {
+    if (buf[20] !== 0x2f) {
+      throw new BadRequestException('invalid webp: bad VP8L signature');
+    }
+    const b0 = buf[21];
+    const b1 = buf[22];
+    const b2 = buf[23];
+    const b3 = buf[24];
+    const width = 1 + (((b1 & 0x3f) << 8) | b0);
+    const height = 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6));
+    return { width, height, animated: false };
+  }
+  if (chunk === 'VP8 ') {
+    if (buf[23] !== 0x9d || buf[24] !== 0x01 || buf[25] !== 0x2a) {
+      throw new BadRequestException('invalid webp: bad VP8 start code');
+    }
+    const width = (buf[26] | (buf[27] << 8)) & 0x3fff;
+    const height = (buf[28] | (buf[29] << 8)) & 0x3fff;
+    return { width, height, animated: false };
+  }
+  throw new BadRequestException(`invalid webp: unknown chunk "${chunk}"`);
+}
 
 const STATIC_TEXT_MAX_CHARS = 4096;
 
@@ -579,7 +633,7 @@ export function validateUploadStaticMediaItems(
 }
 
 export function assertValidStaticMediaFile(
-  file: { mimetype: string; size: number },
+  file: { mimetype: string; size: number; buffer: Buffer },
   idx: number,
 ): { media_type: MediaType; mime_type: StaticMediaMimeType } {
   if (
@@ -593,6 +647,36 @@ export function assertValidStaticMediaFile(
   }
   const mime = file.mimetype as StaticMediaMimeType;
   const media_type = MIME_TO_MEDIA_TYPE[mime];
+
+  // webp gets sticker-specific validation (dimensions + size by static/animated).
+  if (mime === 'image/webp') {
+    let info: WebpInfo;
+    try {
+      info = parseWebpHeader(file.buffer);
+    } catch (err) {
+      throw new BadRequestException(
+        `uploadStaticMedia() files[${idx}]: ${(err as Error).message}`,
+      );
+    }
+    if (
+      info.width !== WEBP_REQUIRED_DIMENSION ||
+      info.height !== WEBP_REQUIRED_DIMENSION
+    ) {
+      throw new BadRequestException(
+        `uploadStaticMedia() files[${idx}]: webp must be ${WEBP_REQUIRED_DIMENSION}x${WEBP_REQUIRED_DIMENSION}, got ${info.width}x${info.height}`,
+      );
+    }
+    const webpMax = info.animated
+      ? WEBP_ANIMATED_MAX_BYTES
+      : WEBP_STATIC_MAX_BYTES;
+    if (file.size > webpMax) {
+      throw new BadRequestException(
+        `uploadStaticMedia() files[${idx}]: ${info.animated ? 'animated' : 'static'} webp size ${file.size} bytes exceeds ${webpMax} byte limit`,
+      );
+    }
+    return { media_type, mime_type: mime };
+  }
+
   const maxBytes =
     STATIC_MEDIA_MAX_BYTES[media_type as 'image' | 'video' | 'audio'];
   if (file.size > maxBytes) {

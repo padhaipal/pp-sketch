@@ -53,7 +53,7 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
   * Each call returns a `FindMediaByStateTransitionIdResult` with one randomly selected entity per media type (audio, video, text, image), or undefined for types with no matching media.
   * Build an ordered `OutboundMediaItem[]` array from the results. For each stateTransitionId's result, append items in this order: video, audio, image, text (skipping any type that is undefined). If there are two stateTransitionIds, the first stateTransitionId's items come before the second's.
   * For each media entity, construct the OutboundMediaItem:
-    * `type: 'audio' | 'video' | 'image'` → `{ type, url: entity.wa_media_url }`
+    * `type: 'audio' | 'video' | 'image'` → `{ type, url: entity.wa_media_url, mime_type: entity.media_details?.mime_type }`. The mime_type hint lets wabot auto-promote image/webp to a sticker.
     * `type: 'text'` → `{ type: 'text', body: entity.text }`
 
 10.) Send the outbound message(s) to the student via src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with:

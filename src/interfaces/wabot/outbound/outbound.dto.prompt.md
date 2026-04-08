@@ -15,14 +15,15 @@ SendMessageRequest — the JSON body pp sends to wabot's sendMessage endpoint.
 
 OutboundMediaItem — one media message to send.
 {
-  type: 'audio' | 'video' | 'image' | 'text';
-  url?: string;                            // WhatsApp media reference — either an external URL (starts with "http") or a WhatsApp media ID (from preloaded upload). Required for audio, video, image; absent for text.
-  body?: string;                           // text content — required for text type; absent for audio, video, image
+  type: 'audio' | 'video' | 'image' | 'sticker' | 'text';
+  url?: string;                            // WhatsApp media reference — either an external URL (starts with "http") or a WhatsApp media ID (from preloaded upload). Required for audio, video, image, sticker; absent for text.
+  body?: string;                           // text content — required for text type; absent for audio, video, image, sticker
+  mime_type?: string;                      // optional mime hint. wabot auto-promotes type='image' + mime_type='image/webp' to a sticker (WA does not accept webp via the image message type).
 }
 
 // type → field rules (enforced at wabot validation layer):
-//   'text'                       — body is REQUIRED, url is absent
-//   'audio' | 'video' | 'image'  — url is REQUIRED, body is absent
+//   'text'                                  — body is REQUIRED, url is absent
+//   'audio' | 'video' | 'image' | 'sticker' — url is REQUIRED, body is absent
 
 SendMessageResponse — wabot's response.
 * 200 `{ delivered: true }` — all messages were sent to WhatsApp.
