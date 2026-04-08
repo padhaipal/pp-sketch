@@ -244,6 +244,15 @@ export class MediaMetaDataService {
       ],
     );
 
+    this.logger.log(
+      `[HPTRACE-SHAPE] updated typeof=${typeof updated} isArray=${Array.isArray(updated)} length=${(updated as unknown as { length?: number })?.length} keys=${updated && typeof updated === 'object' ? Object.keys(updated as object).join(',') : 'N/A'} json=${JSON.stringify(updated)}`,
+    );
+    if (Array.isArray(updated) && updated.length > 0) {
+      this.logger.log(
+        `[HPTRACE-SHAPE] updated[0] typeof=${typeof updated[0]} isArray=${Array.isArray(updated[0])} keys=${updated[0] && typeof updated[0] === 'object' ? Object.keys(updated[0] as object).join(',') : 'N/A'}`,
+      );
+    }
+
     return updated[0];
   }
 
