@@ -32,10 +32,10 @@ function validateE164PhoneNumber(value: string, fieldName: string): string {
   const parsed = parsePhoneNumberFromString(normalized);
   if (!parsed || !parsed.isValid()) {
     throw new BadRequestException(
-      `${fieldName} must be a valid E.164 phone number (e.g. +923001234567)`,
+      `${fieldName} must be a valid phone number in WhatsApp format (e.g. 923001234567)`,
     );
   }
-  return parsed.format('E.164');
+  return parsed.format('E.164').replace(/^\+/, '');
 }
 
 export function validateFindUserOptions(options: unknown): FindUserOptions {
