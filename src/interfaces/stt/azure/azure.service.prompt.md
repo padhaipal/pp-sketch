@@ -24,20 +24,15 @@ run(audioStream: NodeJS.ReadableStream, parentMedia: MediaMetaData): Promise<Med
   * Non-200 — parse error JSON: `{ error: { code: string, message: string } }`. Log WARN (status, error.code, error.message, parentMedia.id). Throw.
   * Timeout / network error — log WARN (details, parentMedia.id). Throw.
 
-4.) Assert enums: assertValidMediaType('text'), assertValidMediaSource('azure'), assertValidMediaStatus('ready').
-
-5.) Create a media_metadata row:
-  * id = uuid()
-  * media_type = 'text'
-  * source = 'azure'
-  * status = 'ready'
+4.) Create the transcript entity via mediaMetaDataService.createTextMedia():
   * text = combinedPhrases[0].text (display form — Azure returns punctuated, capitalised text; may be empty string if no speech detected)
+  * user: pass parentMedia.user_id as user: { id: parentMedia.user_id } (trusted path — no DB hit)
+  * source = 'azure'
   * input_media_id = parentMedia.id
-  * user_id = parentMedia.user_id
-  * rolled_back = false
   * media_details = { duration_ms: response.durationMilliseconds, locale: phrases[0]?.locale ?? null, confidence: average of phrases[].confidence (null if no phrases) }
+  Note: the service must inject MediaMetaDataService (not DataSource directly).
 
-6.) Return the created MediaMetaData entity.
+5.) Return the created MediaMetaData entity.
 
 // Error contract: if run() throws, the caller (createWhatsappAudioMedia) treats this provider
 // as failed for this attempt. This service must NOT swallow errors — always re-throw so the

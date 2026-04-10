@@ -45,6 +45,15 @@ export interface CreateWhatsappAudioMediaOptions {
   otel_carrier: OtelCarrier;
 }
 
+export interface CreateTextMediaOptions {
+  text: string;
+  user?: User;
+  user_external_id?: string;
+  source?: MediaSource;
+  input_media_id?: string;
+  media_details?: Record<string, unknown>;
+}
+
 export interface CreateHeygenMediaItem {
   state_transition_id: string;
   media_type: 'video' | 'audio';
@@ -292,6 +301,89 @@ export function validateCreateWhatsappAudioMediaOptions(
     media_details: o.media_details,
     otel_carrier: o.otel_carrier,
   } as CreateWhatsappAudioMediaOptions;
+}
+
+export function validateCreateTextMediaOptions(
+  options: unknown,
+): CreateTextMediaOptions {
+  if (!options || typeof options !== 'object') {
+    throw new BadRequestException(
+      'createTextMedia() options must be an object',
+    );
+  }
+  const o = options as Record<string, unknown>;
+
+  if (typeof o.text !== 'string' || o.text.length === 0) {
+    throw new BadRequestException(
+      'createTextMedia() options.text is required and must be a non-empty string',
+    );
+  }
+
+  const hasUser = o.user !== undefined;
+  const hasUserExternalId = o.user_external_id !== undefined;
+
+  if (hasUser && hasUserExternalId) {
+    throw new BadRequestException(
+      'createTextMedia() requires exactly one of user or user_external_id, not both',
+    );
+  }
+  if (!hasUser && !hasUserExternalId) {
+    throw new BadRequestException(
+      'createTextMedia() requires exactly one of user or user_external_id',
+    );
+  }
+
+  if (
+    hasUser &&
+    (typeof o.user !== 'object' ||
+      o.user === null ||
+      typeof (o.user as User).id !== 'string')
+  ) {
+    throw new BadRequestException(
+      'createTextMedia() options.user must be a User object with a valid id',
+    );
+  }
+  if (
+    hasUserExternalId &&
+    (typeof o.user_external_id !== 'string' ||
+      (o.user_external_id as string).length === 0)
+  ) {
+    throw new BadRequestException(
+      'createTextMedia() options.user_external_id must be a non-empty string',
+    );
+  }
+
+  if (o.source !== undefined) {
+    assertValidMediaSource(o.source as string);
+  }
+
+  if (
+    o.input_media_id !== undefined &&
+    (typeof o.input_media_id !== 'string' ||
+      (o.input_media_id as string).length === 0)
+  ) {
+    throw new BadRequestException(
+      'createTextMedia() options.input_media_id must be a non-empty string',
+    );
+  }
+
+  if (
+    o.media_details !== undefined &&
+    (typeof o.media_details !== 'object' || o.media_details === null)
+  ) {
+    throw new BadRequestException(
+      'createTextMedia() options.media_details must be an object',
+    );
+  }
+
+  return {
+    text: o.text,
+    user: o.user,
+    user_external_id: o.user_external_id,
+    source: o.source,
+    input_media_id: o.input_media_id,
+    media_details: o.media_details,
+  } as CreateTextMediaOptions;
 }
 
 export function validateFindTranscriptsOptions(

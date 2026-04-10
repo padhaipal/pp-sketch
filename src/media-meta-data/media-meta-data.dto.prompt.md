@@ -16,7 +16,7 @@ const VALID_MEDIA_SOURCES = ['whatsapp', 'heygen', 'elevenlabs', 'azure', 'sarva
 export type MediaSource = (typeof VALID_MEDIA_SOURCES)[number];
 
 // --- Source → user rules ---
-// 'whatsapp'    — user is REQUIRED  (user or user_external_id must be provided)
+// 'whatsapp'    — user is REQUIRED  (user or user_external_id must be provided). Used by both CreateWhatsappAudioMediaOptions and CreateTextMediaOptions.
 // 'heygen'      — user is FORBIDDEN (user and user_external_id must NOT be provided)
 // 'elevenlabs'  — user is FORBIDDEN (same as heygen — generated content, not user-scoped)
 // 'dashboard'   — user is FORBIDDEN (admin-uploaded static content is not user-scoped)
@@ -55,6 +55,23 @@ export interface CreateWhatsappAudioMediaOptions {
   user_external_id?: string;               // untrusted — service calls user.service.ts/find()
   media_details?: Record<string, unknown>;
 }
+
+// --- Text media options ---
+// media_type is always 'text'. User is required (exactly one of user or user_external_id).
+// No S3 upload — row is created with status 'ready' immediately.
+// Used by: inbound processor (source='whatsapp', no parent) and STT services (source='sarvam'/'azure'/'reverie', input_media_id links to parent audio).
+
+export interface CreateTextMediaOptions {
+  text: string;                              // the text content (message body or transcript)
+  user?: User;                               // trusted — service uses .id directly
+  user_external_id?: string;                 // untrusted — service calls user.service.ts/find()
+  source?: MediaSource;                      // defaults to 'whatsapp' if omitted
+  input_media_id?: string;                   // FK → media_metadata.id — parent entity (e.g. source audio for STT transcripts)
+  media_details?: Record<string, unknown>;   // provider-specific metadata (e.g. language_code, confidence)
+}
+
+// validateCreateTextMediaOptions(): validates text is non-empty string, exactly one of user/user_external_id,
+// source is valid MediaSource if provided, input_media_id is non-empty string if provided, media_details is object if provided.
 
 // --- Heygen options ---
 // source is always 'heygen'. User is FORBIDDEN (HeyGen media is not user-scoped).

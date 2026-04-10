@@ -22,6 +22,7 @@ import {
   MediaMetaData,
   MediaType,
   CreateWhatsappAudioMediaOptions,
+  CreateTextMediaOptions,
   CreateHeygenMediaOptions,
   CreateElevenlabsMediaOptions,
   validateCreateElevenlabsMediaOptions,
@@ -32,6 +33,7 @@ import {
   UploadStaticMediaItemResult,
   WhatsappPreloadJobDto,
   validateCreateWhatsappAudioMediaOptions,
+  validateCreateTextMediaOptions,
   validateCreateHeygenMediaOptions,
   validateFindTranscriptsOptions,
   assertValidMediaType,
@@ -254,6 +256,54 @@ export class MediaMetaDataService {
     }
 
     return updated[0];
+  }
+
+  async createTextMedia(
+    options: CreateTextMediaOptions,
+  ): Promise<MediaMetaData> {
+    const validated = validateCreateTextMediaOptions(options);
+
+    // Resolve user
+    let userId: string;
+    if (validated.user) {
+      userId = validated.user.id;
+    } else {
+      const user = await this.userService.find({
+        external_id: validated.user_external_id!,
+      });
+      if (!user) {
+        this.logger.error(
+          `createTextMedia: user not found for external_id ${validated.user_external_id}`,
+        );
+        throw new NotFoundException(
+          `User not found for external_id ${validated.user_external_id}`,
+        );
+      }
+      userId = user.id;
+    }
+
+    const source = validated.source ?? 'whatsapp';
+    assertValidMediaType('text');
+    assertValidMediaSource(source);
+    assertValidMediaStatus('ready');
+
+    const id = uuid();
+    const rows = await this.dataSource.query(
+      `INSERT INTO media_metadata (id, text, status, media_type, source, user_id, input_media_id, media_details, rolled_back)
+       VALUES ($1, $2, 'ready', 'text', $3, $4, $5, $6, false) RETURNING *`,
+      [
+        id,
+        validated.text,
+        source,
+        userId,
+        validated.input_media_id ?? null,
+        validated.media_details
+          ? JSON.stringify(validated.media_details)
+          : null,
+      ],
+    );
+
+    return rows[0];
   }
 
   async findTranscripts(

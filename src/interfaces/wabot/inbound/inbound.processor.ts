@@ -125,36 +125,83 @@ export async function processWabotInboundJob(
         throw err;
       }
 
-      // Send welcome message
+      // Save user's message
+      let userMessageId: string | undefined;
       try {
-        logger.log(`[HPTRACE] looking up welcome media stid=${WELCOME_MESSAGE_STATE_TRANSITION_ID}`);
+        if (payload.message.type === 'text') {
+          const textEntity = await mediaMetaDataService.createTextMedia({
+            text: payload.message.text!.body,
+            user,
+          });
+          userMessageId = textEntity.id;
+        } else if (payload.message.type === 'audio') {
+          const audioEntity =
+            await mediaMetaDataService.createWhatsappAudioMedia({
+              wa_media_url: payload.message.audio!.url,
+              user,
+              otel_carrier: injectCarrier(span),
+            });
+          userMessageId = audioEntity.id;
+        } else {
+          logger.error(
+            `New user ${user.external_id} sent unsupported type "${payload.message.type}" — sending welcome only`,
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          `Failed to save new user message: ${(err as Error).message}`,
+        );
+      }
+
+      // Build outbound media: welcome + first lesson
+      const onboardingMedia: OutboundMediaItem[] = [];
+
+      try {
         const welcomeMedia =
           await mediaMetaDataService.findMediaByStateTransitionId(
             WELCOME_MESSAGE_STATE_TRANSITION_ID,
           );
-        logger.log(`[HPTRACE] welcome media keys=${Object.keys(welcomeMedia).join(',') || 'EMPTY'}`);
-        if (welcomeMedia.video) {
-          logger.log(`[HPTRACE] sending welcome video to ${user.external_id} url=${welcomeMedia.video.wa_media_url}`);
-          const result = await wabotOutbound.sendMessage({
-            user_external_id: user.external_id,
-            wamid: payload.message.id,
-            media: [
-              { type: 'video', url: welcomeMedia.video.wa_media_url! },
-            ],
-            otel_carrier: injectCarrier(span),
-          });
-          logger.log(`[HPTRACE] welcome send result status=${result.status}`);
-          handleSendResult(result, 'welcome');
-        } else {
-          logger.warn(`[HPTRACE] NO welcome video found — user gets nothing`);
-        }
+        appendMediaItems(onboardingMedia, welcomeMedia);
       } catch (err) {
         logger.warn(
-          `Failed to send welcome message: ${(err as Error).message}`,
+          `Failed to fetch welcome media: ${(err as Error).message}`,
         );
       }
 
-      logger.log(`[HPTRACE] new-user onboarding complete, returning early`);
+      if (userMessageId) {
+        try {
+          const lessonResult = await literacyLessonService.processAnswer({
+            user,
+            user_message_id: userMessageId,
+          });
+          const lessonMedia =
+            await mediaMetaDataService.findMediaByStateTransitionId(
+              lessonResult.stateTransitionId,
+            );
+          appendMediaItems(onboardingMedia, lessonMedia);
+        } catch (err) {
+          logger.warn(
+            `Failed to start first lesson for new user: ${(err as Error).message}`,
+          );
+        }
+      }
+
+      if (onboardingMedia.length > 0) {
+        try {
+          const result = await wabotOutbound.sendMessage({
+            user_external_id: user.external_id,
+            wamid: payload.message.id,
+            media: onboardingMedia,
+            otel_carrier: injectCarrier(span),
+          });
+          handleSendResult(result, 'new-user-onboarding');
+        } catch (err) {
+          logger.warn(
+            `Failed to send new-user onboarding: ${(err as Error).message}`,
+          );
+        }
+      }
+
       span.end();
       return;
     }

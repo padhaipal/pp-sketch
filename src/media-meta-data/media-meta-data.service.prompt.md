@@ -31,6 +31,18 @@ createWhatsappAudioMedia(options: CreateWhatsappAudioMediaOptions): Promise<Medi
 * Update status to 'ready'
 6.) Return the newly created mediaMetadata entity.
 
+## createTextMedia(options: CreateTextMediaOptions): Promise<MediaMetaData>
+
+Creates a text media_metadata row. Used by: inbound processor (WhatsApp text messages) and STT services (transcripts). No S3 upload — the row is immediately 'ready'.
+
+1.) Validate options at runtime with validateCreateTextMediaOptions(). If it fails, log WARN and let the BadRequestException propagate.
+2.) Resolve the user (exactly one identifier was provided):
+  * If options.user is provided, use its .id as user_id directly (trusted, no DB hit).
+  * If options.user_external_id is provided, call user.service.ts/find() to resolve user_id. If not found, log ERROR and throw.
+3.) Determine source: options.source ?? 'whatsapp'. Assert enums: assertValidMediaType('text'), assertValidMediaSource(source), assertValidMediaStatus('ready').
+4.) INSERT a new media_metadata row: id = uuid(), text = options.text, status = 'ready', media_type = 'text', source = resolved source, user_id = resolved user_id, input_media_id = options.input_media_id ?? NULL, media_details = options.media_details ?? NULL, rolled_back = false. All other columns NULL.
+5.) Return the created entity.
+
 ## findTranscripts(options: FindTranscriptsOptions): Promise<MediaMetaData[]>
 
 Single DB round-trip. Returns all text transcript entities that are children of the given media entity.

@@ -19,8 +19,17 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
 	  * If the referrer couldn't be identified in the database then log an INFO and move on. Don't let that block you.
 	* If the new user failed to create then log ERROR and call src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with .env/FALL_BACK_MESSAGE_PUBLIC_URL.
 	  * See sendMessage() notes below for how to handle the http response.
-  * If a new user was created then call findMediaByStateTransitionId(WELCOME_MESSAGE_STATE_TRANSITION_ID) to retrieve the welcome video, then call src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with media: [{ type: 'video', url: videoEntity.wa_media_url }].
-	  * See sendMessage() notes below for how to handle the http response.
+  * If a new user was created:
+    * Save the user's inbound message:
+      * If payload.message.type is "text": call mediaMetaDataService.createTextMedia({ text: payload.message.text.body, user }). Store returned entity's id as userMessageId.
+      * If payload.message.type is "audio": call mediaMetaDataService.createWhatsappAudioMedia({ wa_media_url: payload.message.audio.url, user, otel_carrier }). Store returned entity's id as userMessageId. (STT work runs but transcripts are not used here.)
+      * If any other type: log ERROR, skip saving (userMessageId stays undefined).
+      * If saving throws: log WARN, continue without userMessageId.
+    * Build an OutboundMediaItem[] array for onboarding:
+      * Fetch welcome media via findMediaByStateTransitionId(WELCOME_MESSAGE_STATE_TRANSITION_ID), append items. If fetch fails, log WARN, continue.
+      * If userMessageId is defined: call literacyLessonService.processAnswer({ user, user_message_id: userMessageId }) (no transcripts — starts a fresh lesson). Fetch lesson media via findMediaByStateTransitionId(result.stateTransitionId), append items. If processAnswer or media fetch fails, log WARN, continue.
+    * If the outbound array is non-empty: send via sendMessage(). See sendMessage() notes below for how to handle the http response.
+    * End span, return.
 * Else: I now have the existing user's information and continue to the next step. 
 
 4.) Check payload.message.timestamp (Unix epoch — may be seconds or milliseconds. If the value has 10 or fewer digits, treat it as seconds and convert to milliseconds by multiplying by 1000, i.e. assume the event happened at the first millisecond of that second).

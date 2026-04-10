@@ -25,20 +25,15 @@ run(audioStream: NodeJS.ReadableStream, parentMedia: MediaMetaData): Promise<Med
   * 4XX — log WARN (status, error body, parentMedia.id). Throw.
   * 5XX / timeout / network error — log WARN (details, parentMedia.id). Throw.
 
-4.) Assert enums: assertValidMediaType('text'), assertValidMediaSource('sarvam'), assertValidMediaStatus('ready').
-
-5.) Create a media_metadata row:
-  * id = uuid()
-  * media_type = 'text'
-  * source = 'sarvam'
-  * status = 'ready'
+4.) Create the transcript entity via mediaMetaDataService.createTextMedia():
   * text = response.transcript (may be empty string if no speech detected)
+  * user: pass parentMedia.user_id via user_external_id (or resolve to a User object if available from caller context — see note below)
+  * source = 'sarvam'
   * input_media_id = parentMedia.id
-  * user_id = parentMedia.user_id
-  * rolled_back = false
   * media_details = { language_code: response.language_code, language_probability: response.language_probability, sarvam_request_id: response.request_id }
+  Note: the service must inject MediaMetaDataService (not DataSource directly). Since parentMedia only has user_id (not a full User object), the simplest approach is to pass it as user: { id: parentMedia.user_id } (trusted path — no DB hit).
 
-6.) Return the created MediaMetaData entity.
+5.) Return the created MediaMetaData entity.
 
 // Error contract: if run() throws, the caller (createWhatsappAudioMedia) treats this provider
 // as failed for this attempt. This service must NOT swallow errors — always re-throw so the
