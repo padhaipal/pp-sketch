@@ -161,7 +161,7 @@ export async function processWabotInboundJob(
           await mediaMetaDataService.findMediaByStateTransitionId(
             WELCOME_MESSAGE_STATE_TRANSITION_ID,
           );
-        appendMediaItems(onboardingMedia, welcomeMedia, logger);
+        appendMediaItems(onboardingMedia, welcomeMedia);
       } catch (err) {
         logger.warn(
           `Failed to fetch welcome media: ${(err as Error).message}`,
@@ -178,7 +178,7 @@ export async function processWabotInboundJob(
             await mediaMetaDataService.findMediaByStateTransitionId(
               lessonResult.stateTransitionId,
             );
-          appendMediaItems(onboardingMedia, lessonMedia, logger);
+          appendMediaItems(onboardingMedia, lessonMedia);
         } catch (err) {
           logger.warn(
             `Failed to start first lesson for new user: ${(err as Error).message}`,
@@ -226,7 +226,6 @@ export async function processWabotInboundJob(
             AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID,
           );
         if (audioOnlyMedia.video) {
-          logger.log(`[HPTRACE] appending media id=${audioOnlyMedia.video.id} stid=${audioOnlyMedia.video.state_transition_id} type=video`);
           const result = await wabotOutbound.sendMessage({
             user_external_id: user.external_id,
             wamid: payload.message.id,
