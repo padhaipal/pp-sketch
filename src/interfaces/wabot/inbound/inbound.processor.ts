@@ -300,7 +300,7 @@ export async function processWabotInboundJob(
       const media =
         await mediaMetaDataService.findMediaByStateTransitionId(stid);
       logger.log(`[HPTRACE] media keys=${Object.keys(media).join(',') || 'EMPTY'} for stid=${stid}`);
-      appendMediaItems(outboundMedia, media);
+      appendMediaItems(outboundMedia, media, logger);
     }
     logger.log(`[HPTRACE] outboundMedia count=${outboundMedia.length}`);
 
@@ -356,10 +356,12 @@ export async function processWabotInboundJob(
 function appendMediaItems(
   items: OutboundMediaItem[],
   media: FindMediaByStateTransitionIdResult,
+  logger?: { log: (msg: string) => void },
 ): void {
   for (const type of ['video', 'audio', 'image', 'text'] as const) {
     const entity = media[type];
     if (!entity) continue;
+    logger?.log(`[HPTRACE] appending media id=${entity.id} stid=${entity.state_transition_id} type=${type}`);
     if (type === 'text') {
       items.push({ type: 'text', body: entity.text! });
     } else {
