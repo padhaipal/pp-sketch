@@ -350,7 +350,7 @@ export class MediaMetaDataService {
          AND (wa_media_url IS NOT NULL OR media_type = 'text')`,
       [keys],
     );
-    this.logger.log(`[HPTRACE] findMediaBySTID: stid="${stateTransitionId}" dbRows=${rows.length}${rows.length > 0 ? ` types=[${rows.map((r: any) => `${r.media_type}:${r.state_transition_id}`).join(', ')}]` : ''}`);
+    this.logger.log(`[HPTRACE] findMediaBySTID: stid="${stateTransitionId}" dbRows=${rows.length}${rows.length > 0 ? ` types=[${rows.map((r: any) => `${r.media_type}:${r.state_transition_id}:${r.id}`).join(', ')}]` : ''}`);
 
     const specificByType = new Map<string, MediaMetaData[]>();
     const genericByType = new Map<string, MediaMetaData[]>();
@@ -376,7 +376,7 @@ export class MediaMetaDataService {
     if (resultTypes.length === 0) {
       this.logger.warn(`[HPTRACE] findMediaBySTID: NO MEDIA FOUND for stid="${stateTransitionId}" (keys=[${keys.join(', ')}])`);
     } else {
-      this.logger.log(`[HPTRACE] findMediaBySTID: stid="${stateTransitionId}" returning mediaTypes=[${resultTypes.join(', ')}]`);
+      this.logger.log(`[HPTRACE] findMediaBySTID: stid="${stateTransitionId}" sending=[${resultTypes.map(t => `${t}:${result[t]!.state_transition_id}:${result[t]!.id}`).join(', ')}]`);
     }
 
     if (resultTypes.length > 0) {
