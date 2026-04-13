@@ -187,7 +187,7 @@ export class MediaMetaDataService {
     if (sarvamEnabled) {
       sttPromises.push(
         this.sarvamService
-          .run(Readable.from(audioBuffer), entity)
+          .run(audioBuffer, entity)
           .catch((err) => {
             this.logger.warn(
               `Sarvam STT failed for ${entity.id}: ${(err as Error).message}`,
@@ -199,7 +199,7 @@ export class MediaMetaDataService {
     if (azureEnabled) {
       sttPromises.push(
         this.azureService
-          .run(Readable.from(audioBuffer), entity)
+          .run(audioBuffer, entity)
           .catch((err) => {
             this.logger.warn(
               `Azure STT failed for ${entity.id}: ${(err as Error).message}`,
@@ -211,7 +211,7 @@ export class MediaMetaDataService {
     if (reverieEnabled) {
       sttPromises.push(
         this.reverieService
-          .run(Readable.from(audioBuffer), entity)
+          .run(audioBuffer, entity)
           .catch((err) => {
             this.logger.warn(
               `Reverie STT failed for ${entity.id}: ${(err as Error).message}`,

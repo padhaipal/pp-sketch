@@ -20,20 +20,14 @@ export class AzureService {
   ) {}
 
   async run(
-    audioStream: NodeJS.ReadableStream,
+    audioBuffer: Buffer,
     parentMedia: MediaMetaData,
   ): Promise<MediaMetaData> {
-    // 1. Buffer stream
-    const chunks: Buffer[] = [];
-    for await (const chunk of audioStream as AsyncIterable<Buffer>) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    const audioBuffer = Buffer.concat(chunks);
     if (audioBuffer.length === 0) {
       this.logger.warn(
-        `Azure: empty audio stream for ${parentMedia.id}`,
+        `Azure: empty audio buffer for ${parentMedia.id}`,
       );
-      throw new Error('Empty audio stream');
+      throw new Error('Empty audio buffer');
     }
 
     // 2. POST to Azure Fast Transcription
@@ -44,7 +38,7 @@ export class AzureService {
     const formData = new FormData();
     formData.append(
       'audio',
-      new Blob([audioBuffer], {
+      new Blob([Uint8Array.from(audioBuffer)], {
         type:
           (parentMedia.media_details?.mime_type as string) ?? 'audio/ogg',
       }),

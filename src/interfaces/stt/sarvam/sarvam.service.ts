@@ -20,25 +20,17 @@ export class SarvamService {
   ) {}
 
   async run(
-    audioStream: NodeJS.ReadableStream,
+    audioBuffer: Buffer,
     parentMedia: MediaMetaData,
   ): Promise<MediaMetaData> {
     const t0 = Date.now();
 
-    // 1. Buffer stream
-    const chunks: Buffer[] = [];
-    for await (const chunk of audioStream as AsyncIterable<Buffer>) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    const audioBuffer = Buffer.concat(chunks);
     if (audioBuffer.length === 0) {
       this.logger.warn(
-        `Sarvam: empty audio stream for ${parentMedia.id}`,
+        `Sarvam: empty audio buffer for ${parentMedia.id}`,
       );
-      throw new Error('Empty audio stream');
+      throw new Error('Empty audio buffer');
     }
-
-    const tBuffered = Date.now();
 
     // 2. POST to Sarvam
     const sttTimeCap = parseInt(process.env.STT_TIME_CAP ?? '5') * 1000;
@@ -48,7 +40,7 @@ export class SarvamService {
     const formData = new FormData();
     formData.append(
       'file',
-      new Blob([audioBuffer], {
+      new Blob([Uint8Array.from(audioBuffer)], {
         type:
           (parentMedia.media_details?.mime_type as string) ?? 'audio/ogg',
       }),
@@ -131,7 +123,7 @@ export class SarvamService {
     const saved = await this.mediaRepo.save(entity);
 
     this.logger.log(
-      `[HPTRACE] Sarvam STT ${parentMedia.id}: buffer=${tBuffered - t0}ms api=${tResponse - tBuffered}ms db=${Date.now() - tResponse}ms total=${Date.now() - t0}ms bytes=${audioBuffer.length}`,
+      `[HPTRACE] Sarvam STT ${parentMedia.id}: api=${tResponse - t0}ms db=${Date.now() - tResponse}ms total=${Date.now() - t0}ms bytes=${audioBuffer.length}`,
     );
 
     return saved;

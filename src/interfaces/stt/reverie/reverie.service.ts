@@ -20,20 +20,14 @@ export class ReverieService {
   ) {}
 
   async run(
-    audioStream: NodeJS.ReadableStream,
+    audioBuffer: Buffer,
     parentMedia: MediaMetaData,
   ): Promise<MediaMetaData> {
-    // 1. Buffer stream
-    const chunks: Buffer[] = [];
-    for await (const chunk of audioStream as AsyncIterable<Buffer>) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    const audioBuffer = Buffer.concat(chunks);
     if (audioBuffer.length === 0) {
       this.logger.warn(
-        `Reverie: empty audio stream for ${parentMedia.id}`,
+        `Reverie: empty audio buffer for ${parentMedia.id}`,
       );
-      throw new Error('Empty audio stream');
+      throw new Error('Empty audio buffer');
     }
 
     // 2. POST to Reverie
@@ -44,7 +38,7 @@ export class ReverieService {
     const formData = new FormData();
     formData.append(
       'audio_file',
-      new Blob([audioBuffer]),
+      new Blob([Uint8Array.from(audioBuffer)]),
       `${parentMedia.id}.ogg`,
     );
 
