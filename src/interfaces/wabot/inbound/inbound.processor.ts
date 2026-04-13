@@ -155,6 +155,7 @@ export async function processWabotInboundJob(
 
       // Build outbound media: welcome + first lesson
       const onboardingMedia: OutboundMediaItem[] = [];
+      const onboardingStids: string[] = [];
 
       try {
         const welcomeMedia =
@@ -162,6 +163,7 @@ export async function processWabotInboundJob(
             WELCOME_MESSAGE_STATE_TRANSITION_ID,
           );
         appendMediaItems(onboardingMedia, welcomeMedia);
+        onboardingStids.push(WELCOME_MESSAGE_STATE_TRANSITION_ID);
       } catch (err) {
         logger.warn(
           `Failed to fetch welcome media: ${(err as Error).message}`,
@@ -179,6 +181,7 @@ export async function processWabotInboundJob(
               lessonResult.stateTransitionId,
             );
           appendMediaItems(onboardingMedia, lessonMedia);
+          onboardingStids.push(lessonResult.stateTransitionId);
         } catch (err) {
           logger.warn(
             `Failed to start first lesson for new user: ${(err as Error).message}`,
@@ -188,6 +191,7 @@ export async function processWabotInboundJob(
 
       if (onboardingMedia.length > 0) {
         try {
+          logger.log(`[HPTRACE] sending onboarding to wabot user=${user.external_id} stids=[${onboardingStids.join(', ')}] mediaCount=${onboardingMedia.length}`);
           const result = await wabotOutbound.sendMessage({
             user_external_id: user.external_id,
             wamid: payload.message.id,
@@ -226,6 +230,7 @@ export async function processWabotInboundJob(
             AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID,
           );
         if (audioOnlyMedia.video) {
+          logger.log(`[HPTRACE] sending audio-only-request to wabot user=${user.external_id} stid=${AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID}`);
           const result = await wabotOutbound.sendMessage({
             user_external_id: user.external_id,
             wamid: payload.message.id,
@@ -305,7 +310,7 @@ export async function processWabotInboundJob(
     logger.log(`[HPTRACE] outboundMedia count=${outboundMedia.length}`);
 
     // 10. Send outbound
-    logger.log(`[HPTRACE] sending outbound to wabot for ${user.external_id}`);
+    logger.log(`[HPTRACE] sending outbound to wabot user=${user.external_id} stids=[${stateTransitionIds.join(', ')}] mediaCount=${outboundMedia.length}`);
     const sendResult = await wabotOutbound.sendMessage({
       user_external_id: user.external_id,
       wamid: payload.message.id,
@@ -377,6 +382,7 @@ async function sendFallbackAndHandle(
 ): Promise<void> {
   try {
     const fallbackUrl = process.env.FALL_BACK_MESSAGE_PUBLIC_URL!;
+    logger.log(`[HPTRACE] sending fallback to wabot user=${payload.message.from} stid=fallback`);
     await wabotOutbound.sendMessage({
       user_external_id: payload.message.from,
       wamid: payload.message.id,
