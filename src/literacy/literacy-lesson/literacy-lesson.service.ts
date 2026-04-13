@@ -63,7 +63,7 @@ export class LiteracyLessonService {
     } else {
       const age =
         Date.now() - new Date(currentState.created_at).getTime();
-      if (age > 60_000) {
+      if (age > 120_000) {
         startFresh = true;
         this.logger.log(`[HPTRACE] processAnswer: startFresh=true reason=stale age=${age}ms`);
       } else if (currentState.snapshot?.status === 'done') {
