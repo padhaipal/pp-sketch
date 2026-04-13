@@ -172,21 +172,27 @@ export async function processWabotInboundJob(
 
       if (userMessageId) {
         try {
+          logger.log(`[HPTRACE] new-user first lesson: calling processAnswer user=${user.id} userMessageId=${userMessageId}`);
           const lessonResult = await literacyLessonService.processAnswer({
             user,
             user_message_id: userMessageId,
           });
+          logger.log(`[HPTRACE] new-user first lesson: processAnswer returned stid=${lessonResult.stateTransitionId} isComplete=${lessonResult.isComplete}`);
           const lessonMedia =
             await mediaMetaDataService.findMediaByStateTransitionId(
               lessonResult.stateTransitionId,
             );
+          const lessonMediaTypes = Object.keys(lessonMedia);
+          logger.log(`[HPTRACE] new-user first lesson: findMedia stid=${lessonResult.stateTransitionId} mediaTypes=[${lessonMediaTypes.join(', ')}]`);
           appendMediaItems(onboardingMedia, lessonMedia);
           onboardingStids.push(lessonResult.stateTransitionId);
         } catch (err) {
           logger.warn(
-            `Failed to start first lesson for new user: ${(err as Error).message}`,
+            `[HPTRACE] Failed to start first lesson for new user ${user.external_id}: ${(err as Error).message}\n${(err as Error).stack}`,
           );
         }
+      } else {
+        logger.warn(`[HPTRACE] new-user first lesson: skipped because userMessageId is undefined`);
       }
 
       if (onboardingMedia.length > 0) {

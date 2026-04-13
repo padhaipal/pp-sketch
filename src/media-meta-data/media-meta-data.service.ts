@@ -354,9 +354,13 @@ export class MediaMetaDataService {
       await this.cacheService.get<FindMediaByStateTransitionIdResult>(
         CACHE_KEYS.mediaByStateTransitionId(stateTransitionId),
       );
-    if (cached) return cached;
+    if (cached) {
+      this.logger.log(`[HPTRACE] findMediaBySTID: CACHE HIT stid="${stateTransitionId}" mediaTypes=[${Object.keys(cached).join(', ')}]`);
+      return cached;
+    }
 
     const keys = genericKey ? [stateTransitionId, genericKey] : [stateTransitionId];
+    this.logger.log(`[HPTRACE] findMediaBySTID: stid="${stateTransitionId}" genericKey="${genericKey}" queryKeys=[${keys.join(', ')}]`);
     const rows = await this.dataSource.query(
       `SELECT * FROM media_metadata
        WHERE state_transition_id = ANY($1::text[])
@@ -364,6 +368,7 @@ export class MediaMetaDataService {
          AND (wa_media_url IS NOT NULL OR media_type = 'text')`,
       [keys],
     );
+    this.logger.log(`[HPTRACE] findMediaBySTID: stid="${stateTransitionId}" dbRows=${rows.length}${rows.length > 0 ? ` types=[${rows.map((r: any) => `${r.media_type}:${r.state_transition_id}`).join(', ')}]` : ''}`);
 
     const specificByType = new Map<string, MediaMetaData[]>();
     const genericByType = new Map<string, MediaMetaData[]>();
@@ -385,7 +390,14 @@ export class MediaMetaDataService {
       }
     }
 
-    if (Object.keys(result).length > 0) {
+    const resultTypes = Object.keys(result);
+    if (resultTypes.length === 0) {
+      this.logger.warn(`[HPTRACE] findMediaBySTID: NO MEDIA FOUND for stid="${stateTransitionId}" (keys=[${keys.join(', ')}])`);
+    } else {
+      this.logger.log(`[HPTRACE] findMediaBySTID: stid="${stateTransitionId}" returning mediaTypes=[${resultTypes.join(', ')}]`);
+    }
+
+    if (resultTypes.length > 0) {
       await this.cacheService.set(
         CACHE_KEYS.mediaByStateTransitionId(stateTransitionId),
         result,
