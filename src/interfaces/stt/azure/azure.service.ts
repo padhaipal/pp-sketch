@@ -60,7 +60,7 @@ export class AzureService {
     let response: Response;
     try {
       response = await fetch(
-        `${endpoint}/speechtotext/transcriptions:transcribe?api-version=2025-10-15`,
+        `${endpoint}/speechtotext/transcriptions:transcribe?api-version=2024-11-15`,
         {
           method: 'POST',
           headers: {

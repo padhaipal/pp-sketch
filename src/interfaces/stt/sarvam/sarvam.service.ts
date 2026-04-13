@@ -23,6 +23,8 @@ export class SarvamService {
     audioStream: NodeJS.ReadableStream,
     parentMedia: MediaMetaData,
   ): Promise<MediaMetaData> {
+    const t0 = Date.now();
+
     // 1. Buffer stream
     const chunks: Buffer[] = [];
     for await (const chunk of audioStream as AsyncIterable<Buffer>) {
@@ -35,6 +37,8 @@ export class SarvamService {
       );
       throw new Error('Empty audio stream');
     }
+
+    const tBuffered = Date.now();
 
     // 2. POST to Sarvam
     const sttTimeCap = parseInt(process.env.STT_TIME_CAP ?? '5') * 1000;
@@ -76,6 +80,8 @@ export class SarvamService {
     } finally {
       clearTimeout(timeout);
     }
+
+    const tResponse = Date.now();
 
     // 3. Handle response
     if (response.status >= 400 && response.status < 500) {
@@ -122,6 +128,12 @@ export class SarvamService {
       },
     });
 
-    return await this.mediaRepo.save(entity);
+    const saved = await this.mediaRepo.save(entity);
+
+    this.logger.log(
+      `[HPTRACE] Sarvam STT ${parentMedia.id}: buffer=${tBuffered - t0}ms api=${tResponse - tBuffered}ms db=${Date.now() - tResponse}ms total=${Date.now() - t0}ms bytes=${audioBuffer.length}`,
+    );
+
+    return saved;
   }
 }

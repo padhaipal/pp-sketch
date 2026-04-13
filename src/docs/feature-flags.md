@@ -6,8 +6,8 @@ For the backing provider, use [LaunchDarkly](https://launchdarkly.com/). If the 
 
 ### Flag keys
 
-| Key | Type | Default | Used by | Purpose |
-|-----|------|---------|---------|---------|
-| `stt.sarvam.enabled` | boolean | `true` | `createWhatsappAudioMedia` | Enable/disable Sarvam STT provider |
-| `stt.azure.enabled` | boolean | `true` | `createWhatsappAudioMedia` | Enable/disable Azure STT provider |
-| `stt.reverie.enabled` | boolean | `true` | `createWhatsappAudioMedia` | Enable/disable Reverie STT provider |
+| Key | Type | Purpose |
+|-----|------|---------|
+| `stt.sarvam.enabled` | boolean | Enable/disable Sarvam STT provider |
+| `stt.azure.enabled` | boolean | Enable/disable Azure STT provider |
+| `stt.reverie.enabled` | boolean | Enable/disable Reverie STT provider |
