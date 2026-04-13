@@ -2,6 +2,13 @@
 See src/docs/database.md for redis/database details and fallback patterns.
 Inject CacheService from src/interfaces/redis/cache.ts. See cache.dto for key builders and TTLs.
 
+## DB access pattern
+Uses TypeORM Repository API (`@InjectRepository(MediaMetaDataEntity)`) for all simple CRUD (findOneBy, find, save, update).
+Uses raw SQL via `DataSource.query()` only for:
+- `findMediaByStateTransitionId`: uses `ANY($1::text[])` for multi-key lookup
+- `markRolledBack`: PL/pgSQL block with dynamic FK discovery
+Do NOT use `DataSource.query()` for simple reads/writes — use the Repository.
+
 Enum enforcement: MediaStatus, MediaType, and MediaSource are stored as plain text in pg (no custom pg enum types).
 All writes and updates MUST call the assertion helpers (assertValidMediaStatus, assertValidMediaType, assertValidMediaSource) from media-meta-data.dto before touching the database, so that adding or removing enum values is a code-only change.
 

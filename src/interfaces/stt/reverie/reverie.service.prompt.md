@@ -31,13 +31,10 @@ run(audioStream: NodeJS.ReadableStream, parentMedia: MediaMetaData): Promise<Med
   * If success === true and final === true: proceed to step 4.
   * On HTTP error / timeout / network error: log WARN (details, parentMedia.id). Throw.
 
-4.) Create the transcript entity via mediaMetaDataService.createTextMedia():
-  * text = response.display_text (post-processed transcript with number normalisation and punctuation)
-  * user: pass parentMedia.user_id as user: { id: parentMedia.user_id } (trusted path — no DB hit)
-  * source = 'reverie'
-  * input_media_id = parentMedia.id
-  * media_details = { raw_text: response.text, confidence: response.confidence, reverie_request_id: response.id, cause: response.cause }
-  Note: the service must inject MediaMetaDataService (not DataSource directly).
+4.) Create the transcript entity via `@InjectRepository(MediaMetaDataEntity)` Repository:
+  * Uses `mediaRepo.create()` + `mediaRepo.save()` to insert the text entity.
+  * Fields: id = uuid(), media_type = 'text', source = 'reverie', status = 'ready', text = response.display_text, input_media_id = parentMedia.id, user_id = parentMedia.user_id, rolled_back = false, media_details = { raw_text, confidence, reverie_request_id, cause }.
+  Note: this service injects the MediaMetaDataEntity repository directly (not MediaMetaDataService or DataSource).
 
 5.) Return the created MediaMetaData entity.
 

@@ -1,5 +1,7 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { LetterEntity } from './letter.entity';
 import {
   Letter,
   CreateLetterOptions,
@@ -14,20 +16,20 @@ import {
 
 @Injectable()
 export class LetterService {
-  private readonly logger = new Logger(LetterService.name);
-
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectRepository(LetterEntity)
+    private readonly letterRepo: Repository<LetterEntity>,
+  ) {}
 
   async create(options: CreateLetterOptions): Promise<Letter> {
     const validated = validateCreateLetterOptions(options);
 
     try {
-      const rows = await this.dataSource.query(
-        `INSERT INTO letters (grapheme, media_metadata_id)
-         VALUES ($1, $2) RETURNING *`,
-        [validated.grapheme, validated.media_metadata_id ?? null],
-      );
-      return rows[0];
+      const entity = this.letterRepo.create({
+        grapheme: validated.grapheme,
+        media_metadata_id: validated.media_metadata_id ?? null,
+      });
+      return await this.letterRepo.save(entity);
     } catch (err: any) {
       if (err.code === '23505') {
         throw new BadRequestException(
@@ -41,21 +43,15 @@ export class LetterService {
   async createBulk(options: CreateBulkLetterOptions): Promise<Letter[]> {
     const validated = validateCreateBulkLetterOptions(options);
 
-    const values: string[] = [];
-    const params: unknown[] = [];
-    let idx = 1;
-    for (const item of validated.items) {
-      values.push(`($${idx++}, $${idx++})`);
-      params.push(item.grapheme, item.media_metadata_id ?? null);
-    }
+    const entities = validated.items.map((item) =>
+      this.letterRepo.create({
+        grapheme: item.grapheme,
+        media_metadata_id: item.media_metadata_id ?? null,
+      }),
+    );
 
     try {
-      const rows = await this.dataSource.query(
-        `INSERT INTO letters (grapheme, media_metadata_id)
-         VALUES ${values.join(', ')} RETURNING *`,
-        params,
-      );
-      return rows;
+      return await this.letterRepo.save(entities);
     } catch (err: any) {
       if (err.code === '23505') {
         throw new BadRequestException(
@@ -69,28 +65,20 @@ export class LetterService {
   async update(options: UpdateLetterOptions): Promise<Letter | null> {
     const validated = validateUpdateLetterOptions(options);
 
-    const setClauses: string[] = [];
-    const params: unknown[] = [];
-    let idx = 1;
+    const existing = await this.letterRepo.findOneBy({
+      grapheme: validated.grapheme,
+    });
+    if (!existing) return null;
 
     if (validated.new_grapheme !== undefined) {
-      setClauses.push(`grapheme = $${idx++}`);
-      params.push(validated.new_grapheme);
+      existing.grapheme = validated.new_grapheme;
     }
     if (validated.new_media_metadata_id !== undefined) {
-      setClauses.push(`media_metadata_id = $${idx++}`);
-      params.push(validated.new_media_metadata_id);
+      existing.media_metadata_id = validated.new_media_metadata_id;
     }
 
-    params.push(validated.grapheme);
-
     try {
-      const rows = await this.dataSource.query(
-        `UPDATE letters SET ${setClauses.join(', ')}
-         WHERE grapheme = $${idx} RETURNING *`,
-        params,
-      );
-      return rows[0] ?? null;
+      return await this.letterRepo.save(existing);
     } catch (err: any) {
       if (err.code === '23505') {
         throw new BadRequestException(
@@ -105,11 +93,10 @@ export class LetterService {
     const validated = validateDeleteLetterOptions(options);
 
     try {
-      const rows = await this.dataSource.query(
-        'DELETE FROM letters WHERE grapheme = $1 RETURNING id',
-        [validated.grapheme],
-      );
-      return rows.length > 0;
+      const result = await this.letterRepo.delete({
+        grapheme: validated.grapheme,
+      });
+      return (result.affected ?? 0) > 0;
     } catch (err: any) {
       if (err.code === '23503') {
         throw new BadRequestException(

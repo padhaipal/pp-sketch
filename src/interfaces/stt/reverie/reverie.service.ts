@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { v4 as uuid } from 'uuid';
-import { DataSource } from 'typeorm';
+import { MediaMetaDataEntity } from '../../../media-meta-data/media-meta-data.entity';
 import {
   MediaMetaData,
   assertValidMediaType,
@@ -12,7 +14,10 @@ import {
 export class ReverieService {
   private readonly logger = new Logger(ReverieService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectRepository(MediaMetaDataEntity)
+    private readonly mediaRepo: Repository<MediaMetaDataEntity>,
+  ) {}
 
   async run(
     audioStream: NodeJS.ReadableStream,
@@ -102,24 +107,23 @@ export class ReverieService {
     assertValidMediaStatus('ready');
 
     // 5. Create media_metadata row
-    const id = uuid();
-    const rows = await this.dataSource.query(
-      `INSERT INTO media_metadata (id, media_type, source, status, text, input_media_id, user_id, rolled_back, media_details)
-       VALUES ($1, 'text', 'reverie', 'ready', $2, $3, $4, false, $5) RETURNING *`,
-      [
-        id,
-        result.display_text,
-        parentMedia.id,
-        parentMedia.user_id,
-        JSON.stringify({
-          raw_text: result.text,
-          confidence: result.confidence,
-          reverie_request_id: result.id,
-          cause: result.cause,
-        }),
-      ],
-    );
+    const entity = this.mediaRepo.create({
+      id: uuid(),
+      media_type: 'text',
+      source: 'reverie',
+      status: 'ready',
+      text: result.display_text,
+      input_media_id: parentMedia.id,
+      user_id: parentMedia.user_id,
+      rolled_back: false,
+      media_details: {
+        raw_text: result.text,
+        confidence: result.confidence,
+        reverie_request_id: result.id,
+        cause: result.cause,
+      },
+    });
 
-    return rows[0];
+    return await this.mediaRepo.save(entity);
   }
 }

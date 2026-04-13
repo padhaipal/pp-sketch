@@ -1,12 +1,13 @@
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
-import { DataSource } from 'typeorm';
+import { Repository } from 'typeorm';
+import { MediaMetaDataEntity } from './media-meta-data.entity';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS } from '../interfaces/redis/cache.dto';
 import { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound.service';
 import { WabotOutboundService } from '../interfaces/wabot/outbound/outbound.service';
 import { createQueue, QUEUE_NAMES } from '../interfaces/redis/queues';
-import { WhatsappPreloadJobDto, MediaMetaData } from './media-meta-data.dto';
+import { WhatsappPreloadJobDto } from './media-meta-data.dto';
 import { startChildSpan, injectCarrier } from '../otel/otel';
 
 const logger = new Logger('WhatsappPreloadProcessor');
@@ -17,7 +18,7 @@ export async function processWhatsappPreloadJob(
   mediaBucket: MediaBucketService,
   wabotOutbound: WabotOutboundService,
   cacheService: CacheService,
-  dataSource: DataSource,
+  mediaRepo: Repository<MediaMetaDataEntity>,
 ): Promise<void> {
   const span = startChildSpan(
     'whatsapp-preload-processor',
@@ -28,18 +29,14 @@ export async function processWhatsappPreloadJob(
     const { media_metadata_id, s3_key, reload } = job.data;
 
     // 2. Look up entity
-    const rows = await dataSource.query(
-      'SELECT * FROM media_metadata WHERE id = $1',
-      [media_metadata_id],
-    );
+    const entity = await mediaRepo.findOneBy({ id: media_metadata_id });
 
-    if (rows.length === 0) {
+    if (!entity) {
       logger.warn(`Entity ${media_metadata_id} not found — skipping`);
       span.end();
       return;
     }
 
-    const entity = rows[0];
     if (entity.rolled_back) {
       logger.warn(`Entity ${media_metadata_id} rolled back — skipping`);
       span.end();
@@ -103,10 +100,7 @@ export async function processWhatsappPreloadJob(
       const status = statusMatch ? parseInt(statusMatch[1]) : 0;
       if (status >= 400 && status < 500) {
         logger.error(`uploadMedia 4XX for ${media_metadata_id}`);
-        await dataSource.query(
-          "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
-          [media_metadata_id],
-        );
+        await mediaRepo.update(media_metadata_id, { status: 'failed' });
       } else {
         logger.warn(`uploadMedia 5XX for ${media_metadata_id}`);
       }
@@ -116,15 +110,12 @@ export async function processWhatsappPreloadJob(
 
     // 6. Update entity
     if (reload) {
-      await dataSource.query(
-        'UPDATE media_metadata SET wa_media_url = $1 WHERE id = $2',
-        [wa_media_url, media_metadata_id],
-      );
+      await mediaRepo.update(media_metadata_id, { wa_media_url });
     } else {
-      await dataSource.query(
-        "UPDATE media_metadata SET wa_media_url = $1, status = 'ready' WHERE id = $2",
-        [wa_media_url, media_metadata_id],
-      );
+      await mediaRepo.update(media_metadata_id, {
+        wa_media_url,
+        status: 'ready',
+      });
     }
 
     // 7. Invalidate cache

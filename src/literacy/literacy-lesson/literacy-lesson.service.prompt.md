@@ -3,6 +3,13 @@ See src/docs/database.md for redis/database details and fallback patterns.
 
 Wraps the pure XState machine (literacy-lesson.machine.ts) with persistence and lifecycle management. The machine handles state transitions; this service handles I/O (DB reads/writes, word selection).
 
+## DB access pattern
+Uses TypeORM Repository API (`@InjectRepository(LiteracyLessonStateEntity)`) for simple reads (findCurrentState).
+Uses raw SQL via `DataSource.query()` for:
+- `processAnswer` step 8: INSERT...SELECT with rolled_back guard on media_metadata
+- `selectNextWord`: multi-CTE query (recent words, scores, word length logic)
+Do NOT use `DataSource.query()` for simple reads — use the Repository.
+
 ## processAnswer(options: ProcessAnswerOptions): Promise\<ProcessAnswerResult>
 
 The main entry point called by the inbound processor at step 7. Handles the full lesson interaction cycle: find-or-create state, run the machine, persist, return result.

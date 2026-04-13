@@ -1,7 +1,8 @@
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { Readable } from 'stream';
-import { DataSource } from 'typeorm';
+import { Repository } from 'typeorm';
+import { MediaMetaDataEntity } from '../../../media-meta-data/media-meta-data.entity';
 import { MediaBucketService } from '../../media-bucket/outbound/outbound.service';
 import { createQueue, QUEUE_NAMES } from '../../redis/queues';
 import { TtsRequest, TtsVoiceSettings } from './outbound.dto';
@@ -30,7 +31,7 @@ export interface ElevenlabsGenerateJobData {
 export async function processElevenlabsGenerateJob(
   job: Job<ElevenlabsGenerateJobData>,
   mediaBucket: MediaBucketService,
-  dataSource: DataSource,
+  mediaRepo: Repository<MediaMetaDataEntity>,
 ): Promise<void> {
   const span = startChildSpan(
     'elevenlabs-generate-processor',
@@ -74,19 +75,14 @@ export async function processElevenlabsGenerateJob(
 
       const byteSize = response.headers.get('content-length');
 
-      await dataSource.query(
-        `UPDATE media_metadata
-         SET s3_key = $1, media_details = $2, status = 'queued'
-         WHERE id = $3`,
-        [
-          s3Key,
-          JSON.stringify({
-            mime_type: 'audio/mpeg',
-            byte_size: byteSize ? parseInt(byteSize) : null,
-          }),
-          media_metadata_id,
-        ],
-      );
+      await mediaRepo.update(media_metadata_id, {
+        s3_key: s3Key,
+        media_details: {
+          mime_type: 'audio/mpeg',
+          byte_size: byteSize ? parseInt(byteSize) : null,
+        },
+        status: 'queued',
+      } as any);
 
       await whatsappPreloadQueue.add(`preload-${media_metadata_id}`, {
         media_metadata_id,
@@ -100,10 +96,10 @@ export async function processElevenlabsGenerateJob(
       logger.error(
         `ElevenLabs TTS ${response.status}: ${JSON.stringify(errorBody)}`,
       );
-      await dataSource.query(
-        `UPDATE media_metadata SET status = 'failed', media_details = $1 WHERE id = $2`,
-        [JSON.stringify({ error: errorBody }), media_metadata_id],
-      );
+      await mediaRepo.update(media_metadata_id, {
+        status: 'failed',
+        media_details: { error: errorBody },
+      });
       span.end();
       throw new Error(`ElevenLabs TTS ${response.status}`);
     } else {
@@ -114,10 +110,10 @@ export async function processElevenlabsGenerateJob(
         logger.error(
           `ElevenLabs TTS 5XX (final attempt): ${errorBody}`,
         );
-        await dataSource.query(
-          `UPDATE media_metadata SET status = 'failed', media_details = $1 WHERE id = $2`,
-          [JSON.stringify({ error: errorBody }), media_metadata_id],
-        );
+        await mediaRepo.update(media_metadata_id, {
+          status: 'failed',
+          media_details: { error: errorBody },
+        });
       } else {
         logger.warn(
           `ElevenLabs TTS 5XX (attempt ${job.attemptsMade + 1}): ${errorBody}`,

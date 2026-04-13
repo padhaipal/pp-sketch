@@ -1,6 +1,13 @@
 See src/docs/database.md for redis/database details and fallback patterns.
 Inject CacheService from src/interfaces/redis/cache.ts. See cache.dto for key builders and TTLs.
 
+## DB access pattern
+Uses TypeORM Repository API (`@InjectRepository(UserEntity)`) for simple CRUD (find, save, remove).
+Uses raw SQL via `DataSource.query()` only for:
+- Recursive CTE cycle detection (referral chain check in create/update)
+- INSERT...SELECT with referrer lookup by external_id (create with referrer_external_id)
+Do NOT use `DataSource.query()` for simple reads/writes — use the Repository.
+
 find(options: FindUserOptions): Promise<User | null>
 * Validate options at runtime with validateFindUserOptions(). If it fails, log WARN and let the BadRequestException propagate.
 * Determine the cache key: if options.id is provided, use CACHE_KEYS.userById(options.id). If options.external_id is provided, use CACHE_KEYS.userByExternalId(options.external_id).

@@ -1,7 +1,8 @@
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { Readable } from 'stream';
-import { DataSource } from 'typeorm';
+import { Repository } from 'typeorm';
+import { MediaMetaDataEntity } from '../../../media-meta-data/media-meta-data.entity';
 import { MediaBucketService } from '../../media-bucket/outbound/outbound.service';
 import { createQueue, QUEUE_NAMES } from '../../redis/queues';
 import {
@@ -10,7 +11,7 @@ import {
   TtsRequest,
   TtsResponse,
 } from './outbound.dto';
-import { WhatsappPreloadJobDto, MediaMetaData } from '../../../media-meta-data/media-meta-data.dto';
+import { WhatsappPreloadJobDto } from '../../../media-meta-data/media-meta-data.dto';
 import type { OtelCarrier } from '../../../otel/otel.dto';
 import { startChildSpan, injectCarrier } from '../../../otel/otel';
 
@@ -44,7 +45,7 @@ export interface HeygenGenerateJobData {
 export async function processHeygenGenerateJob(
   job: Job<HeygenGenerateJobData>,
   mediaBucket: MediaBucketService,
-  dataSource: DataSource,
+  mediaRepo: Repository<MediaMetaDataEntity>,
 ): Promise<void> {
   const span = startChildSpan(
     'heygen-generate-processor',
@@ -100,25 +101,20 @@ export async function processHeygenGenerateJob(
       if (response.ok) {
         const body =
           (await response.json()) as VideoGenerateResponse;
-        await dataSource.query(
-          `UPDATE media_metadata
-           SET media_details = $1, status = 'queued'
-           WHERE id = $2`,
-          [
-            JSON.stringify({ video_id: body.data.video_id }),
-            media_metadata_id,
-          ],
-        );
+        await mediaRepo.update(media_metadata_id, {
+          media_details: { video_id: body.data.video_id },
+          status: 'queued',
+        });
         span.end();
       } else if (response.status >= 400 && response.status < 500) {
         const errorBody = await response.json();
         logger.error(
           `HeyGen video 4XX: ${JSON.stringify(errorBody)}`,
         );
-        await dataSource.query(
-          `UPDATE media_metadata SET status = 'failed', media_details = $1 WHERE id = $2`,
-          [JSON.stringify({ error: errorBody }), media_metadata_id],
-        );
+        await mediaRepo.update(media_metadata_id, {
+          status: 'failed',
+          media_details: { error: errorBody },
+        });
         span.end();
         throw new Error(`HeyGen 4XX: ${response.status}`);
       } else {
@@ -126,10 +122,10 @@ export async function processHeygenGenerateJob(
         const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
         if (isLastAttempt) {
           logger.error(`HeyGen video 5XX (final attempt): ${errorBody}`);
-          await dataSource.query(
-            `UPDATE media_metadata SET status = 'failed', media_details = $1 WHERE id = $2`,
-            [JSON.stringify({ error: errorBody }), media_metadata_id],
-          );
+          await mediaRepo.update(media_metadata_id, {
+            status: 'failed',
+            media_details: { error: errorBody },
+          });
         } else {
           logger.warn(`HeyGen video 5XX (attempt ${job.attemptsMade + 1}): ${errorBody}`);
         }
@@ -182,22 +178,17 @@ export async function processHeygenGenerateJob(
         // Get byte_size from Content-Length if available
         const byteSize = audioResponse.headers.get('content-length');
 
-        await dataSource.query(
-          `UPDATE media_metadata
-           SET s3_key = $1, media_details = $2, status = 'queued'
-           WHERE id = $3`,
-          [
-            s3Key,
-            JSON.stringify({
-              mime_type: 'audio/mpeg',
-              duration,
-              byte_size: byteSize ? parseInt(byteSize) : null,
-              request_id,
-              word_timestamps,
-            }),
-            media_metadata_id,
-          ],
-        );
+        await mediaRepo.update(media_metadata_id, {
+          s3_key: s3Key,
+          media_details: {
+            mime_type: 'audio/mpeg',
+            duration,
+            byte_size: byteSize ? parseInt(byteSize) : null,
+            request_id,
+            word_timestamps,
+          },
+          status: 'queued',
+        } as any);
 
         // Enqueue WHATSAPP_PRELOAD
         await whatsappPreloadQueue.add(
@@ -215,10 +206,10 @@ export async function processHeygenGenerateJob(
         logger.error(
           `HeyGen TTS 4XX: ${JSON.stringify(errorBody)}`,
         );
-        await dataSource.query(
-          `UPDATE media_metadata SET status = 'failed', media_details = $1 WHERE id = $2`,
-          [JSON.stringify({ error: errorBody }), media_metadata_id],
-        );
+        await mediaRepo.update(media_metadata_id, {
+          status: 'failed',
+          media_details: { error: errorBody },
+        });
         span.end();
         throw new Error(`HeyGen TTS 4XX: ${response.status}`);
       } else {
@@ -226,10 +217,10 @@ export async function processHeygenGenerateJob(
         const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
         if (isLastAttempt) {
           logger.error(`HeyGen TTS 5XX (final attempt): ${errorBody}`);
-          await dataSource.query(
-            `UPDATE media_metadata SET status = 'failed', media_details = $1 WHERE id = $2`,
-            [JSON.stringify({ error: errorBody }), media_metadata_id],
-          );
+          await mediaRepo.update(media_metadata_id, {
+            status: 'failed',
+            media_details: { error: errorBody },
+          });
         } else {
           logger.warn(`HeyGen TTS 5XX (attempt ${job.attemptsMade + 1}): ${errorBody}`);
         }

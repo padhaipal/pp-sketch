@@ -1,8 +1,10 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
 import * as path from 'path';
 import * as fs from 'fs';
 import { createActor } from 'xstate';
-import { DataSource } from 'typeorm';
+import { LiteracyLessonStateEntity } from './literacy-lesson-state.entity';
 import { ScoreService } from '../score/score.service';
 import { machine } from './literacy-lesson.machine';
 import {
@@ -25,6 +27,8 @@ export class LiteracyLessonService {
   private readonly wordList: string[];
 
   constructor(
+    @InjectRepository(LiteracyLessonStateEntity)
+    private readonly lessonStateRepo: Repository<LiteracyLessonStateEntity>,
     private readonly dataSource: DataSource,
     private readonly scoreService: ScoreService,
   ) {
@@ -186,14 +190,11 @@ export class LiteracyLessonService {
   async findCurrentState(
     userId: string,
   ): Promise<LiteracyLessonState | null> {
-    const rows = await this.dataSource.query(
-      `SELECT * FROM literacy_lesson_states
-       WHERE user_id = $1
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [userId],
-    );
-    return rows[0] ?? null;
+    const entity = await this.lessonStateRepo.findOne({
+      where: { user_id: userId },
+      order: { created_at: 'DESC' },
+    });
+    return entity ?? null;
   }
 
   private async selectNextWord(userId: string): Promise<string> {

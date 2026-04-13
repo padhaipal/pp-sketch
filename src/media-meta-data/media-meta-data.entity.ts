@@ -8,6 +8,7 @@ import {
   Index,
 } from 'typeorm';
 import { UserEntity } from '../users/user.entity';
+import type { MediaType, MediaSource, MediaStatus } from './media-meta-data.dto';
 
 @Index('idx_media_metadata_content_hash_stid', ['content_hash', 'state_transition_id'], {
   where: '"content_hash" IS NOT NULL',
@@ -18,13 +19,13 @@ export class MediaMetaDataEntity {
   id: string;
 
   @Column({ type: 'text' })
-  media_type: string;
+  media_type: MediaType;
 
   @Column({ type: 'text' })
-  source: string;
+  source: MediaSource;
 
   @Column({ type: 'text', default: 'created' })
-  status: string;
+  status: MediaStatus;
 
   @Index('idx_media_metadata_wa_media_url')
   @Column({ type: 'text', nullable: true })

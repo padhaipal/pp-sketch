@@ -4,10 +4,12 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, DataSource, In } from 'typeorm';
 import { Readable, PassThrough } from 'stream';
 import { v4 as uuid } from 'uuid';
 import * as crypto from 'crypto';
-import { DataSource } from 'typeorm';
+import { MediaMetaDataEntity } from './media-meta-data.entity';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
 import { UserService } from '../users/user.service';
@@ -72,6 +74,8 @@ export class MediaMetaDataService {
   );
 
   constructor(
+    @InjectRepository(MediaMetaDataEntity)
+    private readonly mediaRepo: Repository<MediaMetaDataEntity>,
     private readonly dataSource: DataSource,
     private readonly cacheService: CacheService,
     private readonly userService: UserService,
@@ -107,34 +111,34 @@ export class MediaMetaDataService {
     }
 
     // 3. Check existing
-    const existing = await this.dataSource.query(
-      'SELECT * FROM media_metadata WHERE wa_media_url = $1',
-      [validated.wa_media_url],
-    );
+    const existing = await this.mediaRepo.findOneBy({
+      wa_media_url: validated.wa_media_url,
+    });
 
-    let entity: MediaMetaData;
+    let entity: MediaMetaDataEntity;
 
-    if (existing.length > 0) {
-      if (existing[0].status === 'failed') {
-        await this.dataSource.query(
-          "UPDATE media_metadata SET status = 'created' WHERE id = $1",
-          [existing[0].id],
-        );
-        entity = { ...existing[0], status: 'created' };
+    if (existing) {
+      if (existing.status === 'failed') {
+        existing.status = 'created';
+        await this.mediaRepo.save(existing);
+        entity = existing;
       } else {
         this.logger.warn(
-          `createWhatsappAudioMedia: duplicate wa_media_url ${validated.wa_media_url} with status ${existing[0].status}`,
+          `createWhatsappAudioMedia: duplicate wa_media_url ${validated.wa_media_url} with status ${existing.status}`,
         );
-        return existing[0];
+        return existing;
       }
     } else {
-      const id = uuid();
-      const rows = await this.dataSource.query(
-        `INSERT INTO media_metadata (id, wa_media_url, status, media_type, source, user_id, rolled_back)
-         VALUES ($1, $2, 'created', 'audio', 'whatsapp', $3, false) RETURNING *`,
-        [id, validated.wa_media_url, userId],
-      );
-      entity = rows[0];
+      entity = this.mediaRepo.create({
+        id: uuid(),
+        wa_media_url: validated.wa_media_url,
+        status: 'created',
+        media_type: 'audio',
+        source: 'whatsapp',
+        user_id: userId,
+        rolled_back: false,
+      });
+      entity = await this.mediaRepo.save(entity);
     }
 
     // 4. Download and stream to S3 + STT providers in parallel
@@ -156,10 +160,8 @@ export class MediaMetaDataService {
         content_type,
       );
     } catch (err) {
-      await this.dataSource.query(
-        "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
-        [entity.id],
-      );
+      entity.status = 'failed';
+      await this.mediaRepo.save(entity);
       this.logger.warn(
         `createWhatsappAudioMedia: S3 upload failed for ${entity.id}`,
       );
@@ -220,10 +222,8 @@ export class MediaMetaDataService {
     );
 
     if (successfulStt.length === 0 && sttPromises.length > 0) {
-      await this.dataSource.query(
-        "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
-        [entity.id],
-      );
+      entity.status = 'failed';
+      await this.mediaRepo.save(entity);
       this.logger.warn(
         `createWhatsappAudioMedia: all STT providers failed for ${entity.id}`,
       );
@@ -231,31 +231,16 @@ export class MediaMetaDataService {
     }
 
     // 5. Update the audio entity
-    const updated = await this.dataSource.query(
-      `UPDATE media_metadata
-       SET s3_key = $1, media_details = $2, status = 'ready'
-       WHERE id = $3 RETURNING *`,
-      [
-        s3Key,
-        JSON.stringify({
-          mime_type: content_type,
-          byte_size: audioBuffer.length,
-          ...validated.media_details,
-        }),
-        entity.id,
-      ],
-    );
+    entity.s3_key = s3Key;
+    entity.media_details = {
+      mime_type: content_type,
+      byte_size: audioBuffer.length,
+      ...validated.media_details,
+    };
+    entity.status = 'ready';
+    const saved = await this.mediaRepo.save(entity);
 
-    this.logger.log(
-      `[HPTRACE-SHAPE] updated typeof=${typeof updated} isArray=${Array.isArray(updated)} length=${(updated as unknown as { length?: number })?.length} keys=${updated && typeof updated === 'object' ? Object.keys(updated as object).join(',') : 'N/A'} json=${JSON.stringify(updated)}`,
-    );
-    if (Array.isArray(updated) && updated.length > 0) {
-      this.logger.log(
-        `[HPTRACE-SHAPE] updated[0] typeof=${typeof updated[0]} isArray=${Array.isArray(updated[0])} keys=${updated[0] && typeof updated[0] === 'object' ? Object.keys(updated[0] as object).join(',') : 'N/A'}`,
-      );
-    }
-
-    return updated[0];
+    return saved;
   }
 
   async createTextMedia(
@@ -287,23 +272,19 @@ export class MediaMetaDataService {
     assertValidMediaSource(source);
     assertValidMediaStatus('ready');
 
-    const id = uuid();
-    const rows = await this.dataSource.query(
-      `INSERT INTO media_metadata (id, text, status, media_type, source, user_id, input_media_id, media_details, rolled_back)
-       VALUES ($1, $2, 'ready', 'text', $3, $4, $5, $6, false) RETURNING *`,
-      [
-        id,
-        validated.text,
-        source,
-        userId,
-        validated.input_media_id ?? null,
-        validated.media_details
-          ? JSON.stringify(validated.media_details)
-          : null,
-      ],
-    );
+    const entity = this.mediaRepo.create({
+      id: uuid(),
+      text: validated.text,
+      status: 'ready',
+      media_type: 'text',
+      source,
+      user_id: userId,
+      input_media_id: validated.input_media_id ?? null,
+      media_details: validated.media_details ?? null,
+      rolled_back: false,
+    });
 
-    return rows[0];
+    return await this.mediaRepo.save(entity);
   }
 
   async findTranscripts(
@@ -317,21 +298,21 @@ export class MediaMetaDataService {
     } else if (validated.media_metadata_id) {
       resolvedId = validated.media_metadata_id;
     } else {
-      const rows = await this.dataSource.query(
-        'SELECT id FROM media_metadata WHERE wa_media_url = $1',
-        [validated.media_metadata_wa_media_url],
-      );
-      if (rows.length === 0) return [];
-      resolvedId = rows[0].id;
+      const row = await this.mediaRepo.findOneBy({
+        wa_media_url: validated.media_metadata_wa_media_url!,
+      });
+      if (!row) return [];
+      resolvedId = row.id;
     }
 
-    const rows = await this.dataSource.query(
-      `SELECT * FROM media_metadata
-       WHERE input_media_id = $1 AND media_type = 'text' AND status = 'ready'
-       ORDER BY created_at ASC`,
-      [resolvedId],
-    );
-    return rows;
+    return await this.mediaRepo.find({
+      where: {
+        input_media_id: resolvedId,
+        media_type: 'text',
+        status: 'ready',
+      },
+      order: { created_at: 'ASC' },
+    });
   }
 
   async findMediaByStateTransitionId(
@@ -359,6 +340,7 @@ export class MediaMetaDataService {
       return cached;
     }
 
+    // Raw SQL — uses ANY($1::text[]) for multi-key lookup
     const keys = genericKey ? [stateTransitionId, genericKey] : [stateTransitionId];
     this.logger.log(`[HPTRACE] findMediaBySTID: stid="${stateTransitionId}" genericKey="${genericKey}" queryKeys=[${keys.join(', ')}]`);
     const rows = await this.dataSource.query(
@@ -416,12 +398,10 @@ export class MediaMetaDataService {
     }
 
     // Fetch s3_key before DB transaction
-    const rows = await this.dataSource.query(
-      'SELECT s3_key FROM media_metadata WHERE id = $1',
-      [mediaId],
-    );
-    const s3Key: string | null = rows.length > 0 ? rows[0].s3_key : null;
+    const entity = await this.mediaRepo.findOneBy({ id: mediaId });
+    const s3Key: string | null = entity?.s3_key ?? null;
 
+    // Raw SQL — PL/pgSQL block (complex query #1)
     await this.dataSource.query(
       `DO $$
       DECLARE
@@ -472,44 +452,45 @@ export class MediaMetaDataService {
   ): Promise<MediaMetaData[]> {
     const validated = validateCreateHeygenMediaOptions(options);
 
-    const entities: MediaMetaData[] = [];
+    const entities: MediaMetaDataEntity[] = [];
     const jobPayloads: any[] = [];
 
     for (const item of validated.items) {
       assertValidMediaType(item.media_type);
       assertValidMediaSource('heygen');
 
-      const id = uuid();
-      const rows = await this.dataSource.query(
-        `INSERT INTO media_metadata (id, state_transition_id, wa_media_url, status, media_type, source, user_id, rolled_back, generation_request_json)
-         VALUES ($1, $2, NULL, 'created', $3, 'heygen', NULL, false, $4) RETURNING *`,
-        [
-          id,
-          item.state_transition_id,
-          item.media_type,
-          JSON.stringify({
-            script_text: item.script_text,
-            state_transition_id: item.state_transition_id,
-            media_type: item.media_type,
-            ...(item.avatar_id && item.avatar_id !== process.env.HEYGEN_AVATAR_ID && { avatar_id: item.avatar_id }),
-            ...(item.avatar_style && { avatar_style: item.avatar_style }),
-            ...(item.voice_id && item.voice_id !== process.env.HEYGEN_VOICE_ID && { voice_id: item.voice_id }),
-            ...(item.speed !== undefined && { speed: item.speed }),
-            ...(item.emotion && { emotion: item.emotion }),
-            ...(item.locale && { locale: item.locale }),
-            ...(item.language && { language: item.language }),
-            ...(item.title && { title: item.title }),
-            ...(item.dimension && { dimension: item.dimension }),
-            ...(item.background && { background: item.background }),
-          }),
-        ],
-      );
-      entities.push(rows[0]);
+      const entity = this.mediaRepo.create({
+        id: uuid(),
+        state_transition_id: item.state_transition_id,
+        wa_media_url: null,
+        status: 'created',
+        media_type: item.media_type,
+        source: 'heygen',
+        user_id: null,
+        rolled_back: false,
+        generation_request_json: {
+          script_text: item.script_text,
+          state_transition_id: item.state_transition_id,
+          media_type: item.media_type,
+          ...(item.avatar_id && item.avatar_id !== process.env.HEYGEN_AVATAR_ID && { avatar_id: item.avatar_id }),
+          ...(item.avatar_style && { avatar_style: item.avatar_style }),
+          ...(item.voice_id && item.voice_id !== process.env.HEYGEN_VOICE_ID && { voice_id: item.voice_id }),
+          ...(item.speed !== undefined && { speed: item.speed }),
+          ...(item.emotion && { emotion: item.emotion }),
+          ...(item.locale && { locale: item.locale }),
+          ...(item.language && { language: item.language }),
+          ...(item.title && { title: item.title }),
+          ...(item.dimension && { dimension: item.dimension }),
+          ...(item.background && { background: item.background }),
+        },
+      });
+      const saved = await this.mediaRepo.save(entity);
+      entities.push(saved);
 
       jobPayloads.push({
-        name: `heygen-generate-${id}`,
+        name: `heygen-generate-${saved.id}`,
         data: {
-          media_metadata_id: id,
+          media_metadata_id: saved.id,
           media_type: item.media_type,
           otel_carrier,
           heygen_params: {
@@ -540,11 +521,7 @@ export class MediaMetaDataService {
       } catch (err) {
         if (Date.now() - startTime > 10_000) {
           const ids = entities.map((e) => e.id);
-          const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
-          await this.dataSource.query(
-            `UPDATE media_metadata SET status = 'failed' WHERE id IN (${placeholders})`,
-            ids,
-          );
+          await this.mediaRepo.update(ids, { status: 'failed' });
           this.logger.error(
             `createHeygenMedia: failed to enqueue after 10s`,
           );
@@ -557,11 +534,7 @@ export class MediaMetaDataService {
 
     // Mark as queued
     const ids = entities.map((e) => e.id);
-    const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
-    await this.dataSource.query(
-      `UPDATE media_metadata SET status = 'queued' WHERE id IN (${placeholders})`,
-      ids,
-    );
+    await this.mediaRepo.update(ids, { status: 'queued' });
 
     return entities.map((e) => ({ ...e, status: 'queued' as const }));
   }
@@ -572,36 +545,38 @@ export class MediaMetaDataService {
   ): Promise<MediaMetaData[]> {
     const validated = validateCreateElevenlabsMediaOptions(options);
 
-    const entities: MediaMetaData[] = [];
+    const entities: MediaMetaDataEntity[] = [];
     const jobPayloads: any[] = [];
 
     for (const item of validated.items) {
       assertValidMediaType('audio');
       assertValidMediaSource('elevenlabs');
 
-      const id = uuid();
-      const rows = await this.dataSource.query(
-        `INSERT INTO media_metadata (id, state_transition_id, wa_media_url, status, media_type, source, user_id, rolled_back, generation_request_json)
-         VALUES ($1, $2, NULL, 'created', 'audio', 'elevenlabs', NULL, false, $3) RETURNING *`,
-        [
-          id,
-          item.state_transition_id,
-          JSON.stringify({
-            script_text: item.script_text,
-            state_transition_id: item.state_transition_id,
-            ...(item.voice_id && item.voice_id !== process.env.ELEVENLABS_VOICE_ID && { voice_id: item.voice_id }),
-            ...(item.model_id && { model_id: item.model_id }),
-            ...(item.language_code && { language_code: item.language_code }),
-            ...(item.voice_settings && { voice_settings: item.voice_settings }),
-          }),
-        ],
-      );
-      entities.push(rows[0]);
+      const entity = this.mediaRepo.create({
+        id: uuid(),
+        state_transition_id: item.state_transition_id,
+        wa_media_url: null,
+        status: 'created',
+        media_type: 'audio',
+        source: 'elevenlabs',
+        user_id: null,
+        rolled_back: false,
+        generation_request_json: {
+          script_text: item.script_text,
+          state_transition_id: item.state_transition_id,
+          ...(item.voice_id && item.voice_id !== process.env.ELEVENLABS_VOICE_ID && { voice_id: item.voice_id }),
+          ...(item.model_id && { model_id: item.model_id }),
+          ...(item.language_code && { language_code: item.language_code }),
+          ...(item.voice_settings && { voice_settings: item.voice_settings }),
+        },
+      });
+      const saved = await this.mediaRepo.save(entity);
+      entities.push(saved);
 
       jobPayloads.push({
-        name: `elevenlabs-generate-${id}`,
+        name: `elevenlabs-generate-${saved.id}`,
         data: {
-          media_metadata_id: id,
+          media_metadata_id: saved.id,
           otel_carrier,
           elevenlabs_params: {
             script_text: item.script_text,
@@ -625,11 +600,7 @@ export class MediaMetaDataService {
       } catch (err) {
         if (Date.now() - startTime > 10_000) {
           const ids = entities.map((e) => e.id);
-          const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
-          await this.dataSource.query(
-            `UPDATE media_metadata SET status = 'failed' WHERE id IN (${placeholders})`,
-            ids,
-          );
+          await this.mediaRepo.update(ids, { status: 'failed' });
           this.logger.error(
             `createElevenlabsMedia: failed to enqueue after 10s`,
           );
@@ -642,11 +613,7 @@ export class MediaMetaDataService {
 
     // Mark as queued
     const ids = entities.map((e) => e.id);
-    const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
-    await this.dataSource.query(
-      `UPDATE media_metadata SET status = 'queued' WHERE id IN (${placeholders})`,
-      ids,
-    );
+    await this.mediaRepo.update(ids, { status: 'queued' });
 
     return entities.map((e) => ({ ...e, status: 'queued' as const }));
   }
@@ -668,41 +635,44 @@ export class MediaMetaDataService {
           assertValidMediaType('text');
           assertValidMediaSource('dashboard');
 
-          const dupRows = await this.dataSource.query(
-            `SELECT * FROM media_metadata
-             WHERE state_transition_id = $1
-               AND media_type = 'text'
-               AND text = $2
-             LIMIT 1`,
-            [item.state_transition_id, item.text],
-          );
+          const dupRow = await this.mediaRepo.findOne({
+            where: {
+              state_transition_id: item.state_transition_id,
+              media_type: 'text',
+              text: item.text,
+            },
+          });
 
-          if (dupRows.length > 0 && dupRows[0].status === 'ready') {
+          if (dupRow && dupRow.status === 'ready') {
             results.push({
               index: i,
               status: 'duplicate_skipped',
-              entity: dupRows[0],
+              entity: dupRow,
             });
             continue;
           }
 
-          let entity: MediaMetaData;
-          if (dupRows.length > 0 && dupRows[0].status === 'failed') {
-            const rows = await this.dataSource.query(
-              `UPDATE media_metadata
-               SET status = 'ready', rolled_back = false
-               WHERE id = $1 RETURNING *`,
-              [dupRows[0].id],
-            );
-            entity = rows[0];
+          let entity: MediaMetaDataEntity;
+          if (dupRow && dupRow.status === 'failed') {
+            dupRow.status = 'ready';
+            dupRow.rolled_back = false;
+            entity = await this.mediaRepo.save(dupRow);
           } else {
-            const id = uuid();
-            const rows = await this.dataSource.query(
-              `INSERT INTO media_metadata (id, state_transition_id, media_type, source, status, text, s3_key, content_hash, wa_media_url, user_id, rolled_back, media_details)
-               VALUES ($1, $2, 'text', 'dashboard', 'ready', $3, NULL, NULL, NULL, NULL, false, NULL) RETURNING *`,
-              [id, item.state_transition_id, item.text],
-            );
-            entity = rows[0];
+            entity = this.mediaRepo.create({
+              id: uuid(),
+              state_transition_id: item.state_transition_id,
+              media_type: 'text',
+              source: 'dashboard',
+              status: 'ready',
+              text: item.text,
+              s3_key: null,
+              content_hash: null,
+              wa_media_url: null,
+              user_id: null,
+              rolled_back: false,
+              media_details: null,
+            });
+            entity = await this.mediaRepo.save(entity);
           }
 
           results.push({ index: i, status: 'created', entity });
@@ -730,7 +700,7 @@ export class MediaMetaDataService {
           .update(file.buffer)
           .digest('hex');
 
-        // 2. Infer media type from file (already validated by assertValidStaticMediaFile)
+        // 2. Infer media type from file
         const mimeToType: Record<string, MediaType> = {
           'image/jpeg': 'image',
           'image/png': 'image',
@@ -749,24 +719,23 @@ export class MediaMetaDataService {
         }
 
         // 3. Dedup check
-        const dupRows = await this.dataSource.query(
-          `SELECT * FROM media_metadata
-           WHERE content_hash = $1 AND state_transition_id = $2
-           LIMIT 1`,
-          [content_hash, item.state_transition_id],
-        );
+        const dupRow = await this.mediaRepo.findOne({
+          where: {
+            content_hash,
+            state_transition_id: item.state_transition_id,
+          },
+        });
 
-        if (dupRows.length > 0) {
-          const dup = dupRows[0];
+        if (dupRow) {
           if (
-            dup.status === 'created' ||
-            dup.status === 'queued' ||
-            dup.status === 'ready'
+            dupRow.status === 'created' ||
+            dupRow.status === 'queued' ||
+            dupRow.status === 'ready'
           ) {
             results.push({
               index: i,
               status: 'duplicate_skipped',
-              entity: dup,
+              entity: dupRow,
             });
             continue;
           }
@@ -793,41 +762,35 @@ export class MediaMetaDataService {
         }
 
         // 5. Create or update media_metadata row
-        let entity: MediaMetaData;
+        let entity: MediaMetaDataEntity;
         try {
-          if (dupRows.length > 0 && dupRows[0].status === 'failed') {
-            const rows = await this.dataSource.query(
-              `UPDATE media_metadata
-               SET s3_key = $1, status = 'created', media_details = $2, rolled_back = false
-               WHERE id = $3 RETURNING *`,
-              [
-                s3Key,
-                JSON.stringify({
-                  mime_type: file.mimetype,
-                  byte_size: file.size,
-                }),
-                dupRows[0].id,
-              ],
-            );
-            entity = rows[0];
+          if (dupRow && dupRow.status === 'failed') {
+            dupRow.s3_key = s3Key;
+            dupRow.status = 'created';
+            dupRow.media_details = {
+              mime_type: file.mimetype,
+              byte_size: file.size,
+            };
+            dupRow.rolled_back = false;
+            entity = await this.mediaRepo.save(dupRow);
           } else {
-            const id = uuid();
-            const rows = await this.dataSource.query(
-              `INSERT INTO media_metadata (id, state_transition_id, s3_key, content_hash, wa_media_url, media_type, source, status, user_id, rolled_back, media_details)
-               VALUES ($1, $2, $3, $4, NULL, $5, 'dashboard', 'created', NULL, false, $6) RETURNING *`,
-              [
-                id,
-                item.state_transition_id,
-                s3Key,
-                content_hash,
-                media_type,
-                JSON.stringify({
-                  mime_type: file.mimetype,
-                  byte_size: file.size,
-                }),
-              ],
-            );
-            entity = rows[0];
+            entity = this.mediaRepo.create({
+              id: uuid(),
+              state_transition_id: item.state_transition_id,
+              s3_key: s3Key,
+              content_hash,
+              wa_media_url: null,
+              media_type,
+              source: 'dashboard',
+              status: 'created',
+              user_id: null,
+              rolled_back: false,
+              media_details: {
+                mime_type: file.mimetype,
+                byte_size: file.size,
+              },
+            });
+            entity = await this.mediaRepo.save(entity);
           }
         } catch (err) {
           this.logger.warn(
@@ -856,10 +819,8 @@ export class MediaMetaDataService {
           this.logger.warn(
             `uploadStaticMedia[${i}]: enqueue failed: ${(err as Error).message}`,
           );
-          await this.dataSource.query(
-            "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
-            [entity.id],
-          );
+          entity.status = 'failed';
+          await this.mediaRepo.save(entity);
           results.push({
             index: i,
             status: 'failed',
@@ -869,10 +830,8 @@ export class MediaMetaDataService {
         }
 
         // 7. Mark as queued
-        await this.dataSource.query(
-          "UPDATE media_metadata SET status = 'queued' WHERE id = $1",
-          [entity.id],
-        );
+        entity.status = 'queued';
+        await this.mediaRepo.save(entity);
 
         results.push({
           index: i,

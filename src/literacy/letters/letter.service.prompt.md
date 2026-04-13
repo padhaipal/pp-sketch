@@ -1,6 +1,10 @@
 // pp-sketch/src/literacy/letters/letter.service.prompt.md
 // Called exclusively by the admin dashboard via letter.controller.ts.
 // No caching — letters are static content managed infrequently by admins.
+//
+// ## DB access pattern
+// Uses TypeORM Repository API (`@InjectRepository(LetterEntity)`) for all CRUD.
+// No raw SQL — all queries are simple single-table operations.
 
 create(options: CreateLetterOptions): Promise<Letter>
 * Validate options with validateCreateLetterOptions(). If fails, log WARN and let BadRequestException propagate.

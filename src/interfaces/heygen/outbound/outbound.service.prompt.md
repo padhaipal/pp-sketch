@@ -3,6 +3,8 @@
 // HEYGEN_GENERATE BullMQ worker.
 // Dequeues jobs and dispatches to the correct HeyGen endpoint based on media_type.
 // Job payload shape: see src/media-meta-data/media-meta-data.service.prompt.md (createHeygenMedia step 2).
+//
+// DB access: receives `Repository<MediaMetaDataEntity>` (not DataSource). Uses repo.update() for all queries.
 
 // Environment variables:
 //   HEYGEN_API_KEY      — sent as X-Api-Key header on every request

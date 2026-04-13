@@ -3,6 +3,8 @@
 // HEYGEN_INBOUND BullMQ worker.
 // Processes completed/failed HeyGen video generation callbacks.
 // Job payload shape: HeygenInboundJobDto (see inbound.dto.prompt.md).
+//
+// DB access: receives `Repository<MediaMetaDataEntity>` (not DataSource). Uses repo.findOneBy() and repo.update() for all queries.
 
 processJob(job)
 

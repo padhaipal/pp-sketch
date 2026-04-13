@@ -3,6 +3,8 @@
 // ELEVENLABS_GENERATE BullMQ worker.
 // Dequeues jobs and calls ElevenLabs TTS API. Audio returned synchronously in HTTP response body (binary).
 // Job payload shape: see src/media-meta-data/media-meta-data.service.prompt.md (createElevenlabsMedia step 2).
+//
+// DB access: receives `Repository<MediaMetaDataEntity>` (not DataSource). Uses repo.update() for all queries.
 
 // Environment variables:
 //   ELEVENLABS_API_KEY   — sent as xi-api-key header

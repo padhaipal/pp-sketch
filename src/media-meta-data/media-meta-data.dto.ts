@@ -29,7 +29,7 @@ export interface MediaMetaData {
   status: MediaStatus;
   media_type: MediaType;
   source: MediaSource;
-  media_details?: Record<string, unknown>;
+  media_details?: Record<string, unknown> | null;
   user_id?: string | null;
   input_media_id?: string | null;
   generation_request_json?: Record<string, unknown> | null;

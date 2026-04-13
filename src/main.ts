@@ -10,6 +10,7 @@ import { json, urlencoded } from 'express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { DataSource } from 'typeorm';
 import { AppModule } from './app.module';
+import { MediaMetaDataEntity } from './media-meta-data/media-meta-data.entity';
 import { createWorker, QUEUE_NAMES } from './interfaces/redis/queues';
 import { processWabotInboundJob } from './interfaces/wabot/inbound/inbound.processor';
 import { processHeygenInboundJob } from './interfaces/heygen/inbound/inbound.processor';
@@ -59,6 +60,7 @@ async function bootstrap() {
 
   // Resolve services for BullMQ processors
   const dataSource = app.get(DataSource);
+  const mediaRepo = dataSource.getRepository(MediaMetaDataEntity);
   const userService = app.get(UserService);
   const mediaMetaDataService = app.get(MediaMetaDataService);
   const literacyLessonService = app.get(LiteracyLessonService);
@@ -88,15 +90,15 @@ async function bootstrap() {
   wabotInboundWorker.on('stalled', (jobId) => logger.warn(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) STALLED job id=${jobId}`));
 
   createWorker(QUEUE_NAMES.HEYGEN_GENERATE, async (job) => {
-    await processHeygenGenerateJob(job, mediaBucket, dataSource);
+    await processHeygenGenerateJob(job, mediaBucket, mediaRepo);
   });
 
   createWorker(QUEUE_NAMES.ELEVENLABS_GENERATE, async (job) => {
-    await processElevenlabsGenerateJob(job, mediaBucket, dataSource);
+    await processElevenlabsGenerateJob(job, mediaBucket, mediaRepo);
   });
 
   createWorker(QUEUE_NAMES.HEYGEN_INBOUND, async (job) => {
-    await processHeygenInboundJob(job, mediaBucket, dataSource);
+    await processHeygenInboundJob(job, mediaBucket, mediaRepo);
   });
 
   createWorker(QUEUE_NAMES.WHATSAPP_PRELOAD, async (job) => {
@@ -105,7 +107,7 @@ async function bootstrap() {
       mediaBucket,
       wabotOutbound,
       cacheService,
-      dataSource,
+      mediaRepo,
     );
   });
 

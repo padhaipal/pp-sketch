@@ -1,3 +1,6 @@
+## DB access pattern
+All queries use raw SQL via `DataSource.query()`. The score queries are complex (multi-table INSERT...SELECT with rolled_back guards, dynamic WHERE clauses, UNION ALL bulk inserts) and don't map cleanly to Repository API.
+
 ## create(options: CreateScoreOptions): Promise<Score>
 
 Single database round-trip. Inserts a row into `scores` using `INSERT ... SELECT ... RETURNING *`.

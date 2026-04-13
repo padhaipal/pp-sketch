@@ -1,10 +1,11 @@
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { Readable } from 'stream';
-import { DataSource } from 'typeorm';
+import { Repository } from 'typeorm';
+import { MediaMetaDataEntity } from '../../../media-meta-data/media-meta-data.entity';
 import { MediaBucketService } from '../../media-bucket/outbound/outbound.service';
 import { createQueue, QUEUE_NAMES } from '../../redis/queues';
-import { WhatsappPreloadJobDto, MediaMetaData } from '../../../media-meta-data/media-meta-data.dto';
+import { WhatsappPreloadJobDto } from '../../../media-meta-data/media-meta-data.dto';
 import { HeygenInboundJobDto } from './inbound.dto';
 import { startChildSpan, injectCarrier } from '../../../otel/otel';
 
@@ -14,7 +15,7 @@ const whatsappPreloadQueue = createQueue(QUEUE_NAMES.WHATSAPP_PRELOAD);
 export async function processHeygenInboundJob(
   job: Job<HeygenInboundJobDto>,
   mediaBucket: MediaBucketService,
-  dataSource: DataSource,
+  mediaRepo: Repository<MediaMetaDataEntity>,
 ): Promise<void> {
   const span = startChildSpan(
     'heygen-inbound-processor',
@@ -37,11 +38,8 @@ export async function processHeygenInboundJob(
       }
 
       // b. Look up entity
-      const rows = await dataSource.query(
-        'SELECT * FROM media_metadata WHERE id = $1',
-        [callback_id],
-      );
-      if (rows.length === 0) {
+      const entity = await mediaRepo.findOneBy({ id: callback_id });
+      if (!entity) {
         logger.error(
           `avatar_video.success: entity ${callback_id} not found`,
         );
@@ -57,10 +55,7 @@ export async function processHeygenInboundJob(
           logger.error(
             `avatar_video.success: failed to download video from ${url} (final attempt)`,
           );
-          await dataSource.query(
-            "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
-            [callback_id],
-          );
+          await mediaRepo.update(callback_id, { status: 'failed' });
         } else {
           logger.warn(
             `avatar_video.success: failed to download video from ${url} (attempt ${job.attemptsMade + 1})`,
@@ -81,10 +76,7 @@ export async function processHeygenInboundJob(
           logger.error(
             `avatar_video.success: S3 upload failed for ${callback_id} (final attempt)`,
           );
-          await dataSource.query(
-            "UPDATE media_metadata SET status = 'failed' WHERE id = $1",
-            [callback_id],
-          );
+          await mediaRepo.update(callback_id, { status: 'failed' });
         } else {
           logger.warn(
             `avatar_video.success: S3 upload failed for ${callback_id} (attempt ${job.attemptsMade + 1})`,
@@ -95,19 +87,14 @@ export async function processHeygenInboundJob(
       }
 
       // e. Update entity
-      await dataSource.query(
-        `UPDATE media_metadata
-         SET s3_key = $1, media_details = $2, status = 'queued'
-         WHERE id = $3`,
-        [
-          s3Key,
-          JSON.stringify({
-            video_url: url,
-            mime_type: 'video/mp4',
-          }),
-          callback_id,
-        ],
-      );
+      await mediaRepo.update(callback_id, {
+        s3_key: s3Key,
+        media_details: {
+          video_url: url,
+          mime_type: 'video/mp4',
+        },
+        status: 'queued',
+      });
 
       // f. Enqueue WHATSAPP_PRELOAD
       await whatsappPreloadQueue.add(`preload-${callback_id}`, {
@@ -131,11 +118,8 @@ export async function processHeygenInboundJob(
       }
 
       // b. Look up entity
-      const rows = await dataSource.query(
-        'SELECT * FROM media_metadata WHERE id = $1',
-        [callback_id],
-      );
-      if (rows.length === 0) {
+      const entity = await mediaRepo.findOneBy({ id: callback_id });
+      if (!entity) {
         logger.error(
           `avatar_video.fail: entity ${callback_id} not found`,
         );
@@ -144,10 +128,10 @@ export async function processHeygenInboundJob(
       }
 
       // c. Update entity
-      await dataSource.query(
-        `UPDATE media_metadata SET status = 'failed', media_details = $1 WHERE id = $2`,
-        [JSON.stringify({ error_msg: msg }), callback_id],
-      );
+      await mediaRepo.update(callback_id, {
+        status: 'failed',
+        media_details: { error_msg: msg },
+      });
 
       // d. Log
       logger.error(

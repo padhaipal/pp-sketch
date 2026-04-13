@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { MediaMetaDataEntity } from './media-meta-data.entity';
 import { MediaMetaDataService } from './media-meta-data.service';
 import { MediaMetaDataController } from './media-meta-data.controller';
 import { UserModule } from '../users/user.module';
@@ -10,7 +12,7 @@ import { AzureService } from '../interfaces/stt/azure/azure.service';
 import { ReverieService } from '../interfaces/stt/reverie/reverie.service';
 
 @Module({
-  imports: [UserModule],
+  imports: [TypeOrmModule.forFeature([MediaMetaDataEntity]), UserModule],
   controllers: [MediaMetaDataController],
   providers: [
     MediaMetaDataService,
@@ -21,6 +23,6 @@ import { ReverieService } from '../interfaces/stt/reverie/reverie.service';
     AzureService,
     ReverieService,
   ],
-  exports: [MediaMetaDataService],
+  exports: [MediaMetaDataService, TypeOrmModule],
 })
 export class MediaMetaDataModule {}

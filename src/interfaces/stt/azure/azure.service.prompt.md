@@ -24,13 +24,10 @@ run(audioStream: NodeJS.ReadableStream, parentMedia: MediaMetaData): Promise<Med
   * Non-200 — parse error JSON: `{ error: { code: string, message: string } }`. Log WARN (status, error.code, error.message, parentMedia.id). Throw.
   * Timeout / network error — log WARN (details, parentMedia.id). Throw.
 
-4.) Create the transcript entity via mediaMetaDataService.createTextMedia():
-  * text = combinedPhrases[0].text (display form — Azure returns punctuated, capitalised text; may be empty string if no speech detected)
-  * user: pass parentMedia.user_id as user: { id: parentMedia.user_id } (trusted path — no DB hit)
-  * source = 'azure'
-  * input_media_id = parentMedia.id
-  * media_details = { duration_ms: response.durationMilliseconds, locale: phrases[0]?.locale ?? null, confidence: average of phrases[].confidence (null if no phrases) }
-  Note: the service must inject MediaMetaDataService (not DataSource directly).
+4.) Create the transcript entity via `@InjectRepository(MediaMetaDataEntity)` Repository:
+  * Uses `mediaRepo.create()` + `mediaRepo.save()` to insert the text entity.
+  * Fields: id = uuid(), media_type = 'text', source = 'azure', status = 'ready', text = combinedPhrases[0].text, input_media_id = parentMedia.id, user_id = parentMedia.user_id, rolled_back = false, media_details = { duration_ms, locale, confidence }.
+  Note: this service injects the MediaMetaDataEntity repository directly (not MediaMetaDataService or DataSource).
 
 5.) Return the created MediaMetaData entity.
 

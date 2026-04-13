@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
+import { UserEntity } from './user.entity';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
 import {
@@ -17,6 +19,8 @@ export class UserService {
   private readonly logger = new Logger(UserService.name);
 
   constructor(
+    @InjectRepository(UserEntity)
+    private readonly userRepo: Repository<UserEntity>,
     private readonly dataSource: DataSource,
     private readonly cacheService: CacheService,
   ) {}
@@ -32,17 +36,10 @@ export class UserService {
     const cached = await this.cacheService.get<User>(cacheKey);
     if (cached) return cached;
 
-    const rows = validated.id
-      ? await this.dataSource.query(
-          'SELECT * FROM users WHERE id = $1',
-          [validated.id],
-        )
-      : await this.dataSource.query(
-          'SELECT * FROM users WHERE external_id = $1',
-          [validated.external_id],
-        );
+    const user = validated.id
+      ? await this.userRepo.findOneBy({ id: validated.id })
+      : await this.userRepo.findOneBy({ external_id: validated.external_id! });
 
-    const user = rows[0] ?? null;
     if (user) {
       await Promise.all([
         this.cacheService.set(
@@ -57,45 +54,42 @@ export class UserService {
         ),
       ]);
     }
-    return user;
+    return user ?? null;
   }
 
   async update(options: UpdateUserOptions): Promise<User | null> {
     const validated = validateUpdateUserOptions(options);
 
-    const setClauses: string[] = [];
-    const params: unknown[] = [];
-    let paramIdx = 1;
+    // Build update payload
+    const updateFields: Partial<UserEntity> = {};
 
     if (validated.new_external_id !== undefined) {
-      setClauses.push(`external_id = $${paramIdx++}`);
-      params.push(validated.new_external_id);
+      updateFields.external_id = validated.new_external_id;
     }
 
     if (validated.new_referrer_user_id !== undefined) {
-      setClauses.push(`referrer_user_id = $${paramIdx++}`);
-      params.push(validated.new_referrer_user_id);
+      updateFields.referrer_user_id = validated.new_referrer_user_id;
     } else if (validated.new_referrer_external_id !== undefined) {
-      setClauses.push(
-        `referrer_user_id = (SELECT id FROM users WHERE external_id = $${paramIdx++})`,
-      );
-      params.push(validated.new_referrer_external_id);
+      // Resolve referrer by external_id — needs raw SQL subquery
+      const referrerRows = await this.userRepo.findOneBy({
+        external_id: validated.new_referrer_external_id,
+      });
+      updateFields.referrer_user_id = referrerRows?.id ?? null;
     }
 
-    const whereClause = validated.id
-      ? `id = $${paramIdx++}`
-      : `external_id = $${paramIdx++}`;
-    params.push(validated.id ?? validated.external_id);
+    // Find the user first
+    const where = validated.id
+      ? { id: validated.id }
+      : { external_id: validated.external_id! };
 
-    const rows = await this.dataSource.query(
-      `UPDATE users SET ${setClauses.join(', ')} WHERE ${whereClause} RETURNING *`,
-      params,
-    );
+    const existingUser = await this.userRepo.findOneBy(where);
+    if (!existingUser) return null;
 
-    const updatedUser = rows[0] ?? null;
-    if (!updatedUser) return null;
+    // Apply updates and save
+    Object.assign(existingUser, updateFields);
+    const updatedUser = await this.userRepo.save(existingUser);
 
-    // Cycle check if referrer was set
+    // Cycle check if referrer was set (raw SQL — recursive CTE)
     const referrerWasSet =
       validated.new_referrer_user_id !== undefined ||
       validated.new_referrer_external_id !== undefined;
@@ -114,10 +108,8 @@ export class UserService {
 
       if (cycleRows.length > 0) {
         // Roll back by removing the referrer
-        await this.dataSource.query(
-          'UPDATE users SET referrer_user_id = NULL WHERE id = $1',
-          [updatedUser.id],
-        );
+        updatedUser.referrer_user_id = null;
+        await this.userRepo.save(updatedUser);
         const { BadRequestException } = await import('@nestjs/common');
         throw new BadRequestException(
           'update() would create a referral cycle',
@@ -160,18 +152,16 @@ export class UserService {
     this.logger.log(`[HPTRACE] UserService.create ${JSON.stringify(options)}`);
     const validated = validateCreateUserOptions(options);
 
-    let query: string;
-    let params: unknown[];
+    let user: UserEntity;
 
     if (validated.referrer_user_id) {
-      query = `INSERT INTO users (external_id, referrer_user_id)
-               VALUES ($1, $2) RETURNING *`;
-      params = [validated.external_id, validated.referrer_user_id];
+      user = this.userRepo.create({
+        external_id: validated.external_id,
+        referrer_user_id: validated.referrer_user_id,
+      });
+      user = await this.userRepo.save(user);
 
-      const rows = await this.dataSource.query(query, params);
-      const user = rows[0];
-
-      // Cycle check
+      // Cycle check (raw SQL — recursive CTE)
       if (user.referrer_user_id) {
         const cycleRows = await this.dataSource.query(
           `WITH RECURSIVE chain AS (
@@ -185,7 +175,7 @@ export class UserService {
           [user.referrer_user_id, user.id],
         );
         if (cycleRows.length > 0) {
-          await this.dataSource.query('DELETE FROM users WHERE id = $1', [user.id]);
+          await this.userRepo.remove(user);
           const { BadRequestException } = await import('@nestjs/common');
           throw new BadRequestException(
             'create() would create a referral cycle',
@@ -196,25 +186,26 @@ export class UserService {
       await this.populateUserCache(user);
       return user;
     } else if (validated.referrer_external_id) {
-      query = `INSERT INTO users (external_id, referrer_user_id)
+      // INSERT...SELECT with referrer lookup — raw SQL (complex query #5)
+      const rows = await this.dataSource.query(
+        `INSERT INTO users (external_id, referrer_user_id)
                SELECT $1, id FROM users WHERE external_id = $2
-               RETURNING *`;
-      params = [validated.external_id, validated.referrer_external_id];
+               RETURNING *`,
+        [validated.external_id, validated.referrer_external_id],
+      );
 
-      // If referrer not found, insert without referrer
-      const rows = await this.dataSource.query(query, params);
       if (rows.length === 0) {
-        const fallbackRows = await this.dataSource.query(
-          'INSERT INTO users (external_id) VALUES ($1) RETURNING *',
-          [validated.external_id],
-        );
-        const user = fallbackRows[0];
+        // Referrer not found — insert without referrer
+        user = this.userRepo.create({
+          external_id: validated.external_id,
+        });
+        user = await this.userRepo.save(user);
         await this.populateUserCache(user);
         return user;
       }
-      const user = rows[0];
+      user = rows[0];
 
-      // Cycle check
+      // Cycle check (raw SQL — recursive CTE)
       if (user.referrer_user_id) {
         const cycleRows = await this.dataSource.query(
           `WITH RECURSIVE chain AS (
@@ -239,13 +230,13 @@ export class UserService {
       await this.populateUserCache(user);
       return user;
     } else {
-      query = 'INSERT INTO users (external_id) VALUES ($1) RETURNING *';
-      params = [validated.external_id];
+      user = this.userRepo.create({
+        external_id: validated.external_id,
+      });
     }
 
     this.logger.log(`[HPTRACE] UserService.create executing INSERT`);
-    const rows = await this.dataSource.query(query, params);
-    const user = rows[0];
+    user = await this.userRepo.save(user);
     this.logger.log(`[HPTRACE] UserService.create INSERT returned id=${user?.id}`);
     await this.populateUserCache(user);
     return user;
