@@ -27,7 +27,6 @@ export class WabotInboundController {
     // 1. Validate
     const dto = plainToInstance(MessageJobDto, body);
     const errors = await validate(dto);
-    this.logger.log(`[HPTRACE] /wabot/inbound validated, errors=${errors.length}`);
     if (errors.length > 0) {
       throw new BadRequestException(
         'Invalid message payload: ' +
@@ -56,8 +55,7 @@ export class WabotInboundController {
     const startTime = Date.now();
     while (!enqueued) {
       try {
-        const job = await wabotInboundQueue.add('wabot-inbound', jobPayload);
-        this.logger.log(`[HPTRACE] /wabot/inbound ENQUEUED jobId=${job.id} from=${dto.message.from}`);
+        await wabotInboundQueue.add('wabot-inbound', jobPayload);
         enqueued = true;
       } catch (err) {
         if (Date.now() - startTime > 10_000) {
@@ -74,7 +72,6 @@ export class WabotInboundController {
     }
 
     // 5. Return 202
-    this.logger.log(`[HPTRACE] /wabot/inbound returning 202 from=${dto.message.from}`);
     span.end();
     return { status: 'accepted' };
   }

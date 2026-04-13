@@ -63,11 +63,9 @@ export async function processWabotInboundJob(
     }
 
     // 3. Find or create user
-    logger.log(`[HPTRACE] looking up user external_id=${payload.message.from}`);
     let user = await userService.find({
       external_id: payload.message.from,
     });
-    logger.log(`[HPTRACE] user lookup result: ${user ? `FOUND id=${user.id}` : 'NOT FOUND'}`);
 
     if (!user) {
       // Try to find referrer from text body
@@ -182,8 +180,6 @@ export async function processWabotInboundJob(
             await mediaMetaDataService.findMediaByStateTransitionId(
               lessonResult.stateTransitionId,
             );
-          const lessonMediaTypes = Object.keys(lessonMedia);
-          logger.log(`[HPTRACE] new-user first lesson: findMedia stid=${lessonResult.stateTransitionId} mediaTypes=[${lessonMediaTypes.join(', ')}]`);
           appendMediaItems(onboardingMedia, lessonMedia);
           onboardingStids.push(lessonResult.stateTransitionId);
         } catch (err) {
@@ -260,7 +256,6 @@ export async function processWabotInboundJob(
     }
 
     // 6. Process audio message
-    logger.log(`[HPTRACE] creating whatsapp audio media for user ${user.id}`);
     const audioEntity =
       await mediaMetaDataService.createWhatsappAudioMedia({
         wa_media_url: payload.message.audio!.url,
@@ -271,11 +266,9 @@ export async function processWabotInboundJob(
     logger.log(`[HPTRACE] audio media created id=${userMessageId}`);
 
     // 7. Find transcripts
-    logger.log(`[HPTRACE] finding transcripts for media ${userMessageId}`);
     const transcripts = await mediaMetaDataService.findTranscripts({
       media_metadata: audioEntity,
     });
-    logger.log(`[HPTRACE] transcripts found count=${transcripts.length}`);
 
     if (transcripts.length === 0) {
       logger.error(`No transcripts found for audio ${audioEntity.id}`);
@@ -284,7 +277,6 @@ export async function processWabotInboundJob(
     }
 
     // 8. Process answer
-    logger.log(`[HPTRACE] calling processAnswer`);
     const result1 = await literacyLessonService.processAnswer({
       user,
       transcripts,
@@ -307,13 +299,10 @@ export async function processWabotInboundJob(
     const outboundMedia: OutboundMediaItem[] = [];
 
     for (const stid of stateTransitionIds) {
-      logger.log(`[HPTRACE] looking up media stid=${stid}`);
       const media =
         await mediaMetaDataService.findMediaByStateTransitionId(stid);
-      logger.log(`[HPTRACE] media keys=${Object.keys(media).join(',') || 'EMPTY'} for stid=${stid}`);
       appendMediaItems(outboundMedia, media);
     }
-    logger.log(`[HPTRACE] outboundMedia count=${outboundMedia.length}`);
 
     // 10. Send outbound
     logger.log(`[HPTRACE] sending outbound to wabot user=${user.external_id} stids=[${stateTransitionIds.join(', ')}] mediaCount=${outboundMedia.length}`);

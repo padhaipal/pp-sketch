@@ -142,8 +142,10 @@ export class MediaMetaDataService {
     }
 
     // 4. Download and stream to S3 + STT providers in parallel
+    const tDlStart = Date.now();
     const { stream: audioStream, content_type } =
       await this.wabotOutbound.downloadMedia(validated.wa_media_url, validated.otel_carrier);
+    const tFirstByte = Date.now();
 
     // Buffer the stream so we can fan it out
     const chunks: Buffer[] = [];
@@ -151,6 +153,9 @@ export class MediaMetaDataService {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
     const audioBuffer = Buffer.concat(chunks);
+    this.logger.log(
+      `[HPTRACE] WA download ${entity.id}: ttfb=${tFirstByte - tDlStart}ms stream=${Date.now() - tFirstByte}ms total=${Date.now() - tDlStart}ms bytes=${audioBuffer.length}`,
+    );
 
     // S3 upload
     let s3Key: string;
@@ -342,7 +347,6 @@ export class MediaMetaDataService {
 
     // Raw SQL — uses ANY($1::text[]) for multi-key lookup
     const keys = genericKey ? [stateTransitionId, genericKey] : [stateTransitionId];
-    this.logger.log(`[HPTRACE] findMediaBySTID: stid="${stateTransitionId}" genericKey="${genericKey}" queryKeys=[${keys.join(', ')}]`);
     const rows = await this.dataSource.query(
       `SELECT * FROM media_metadata
        WHERE state_transition_id = ANY($1::text[])
@@ -350,8 +354,6 @@ export class MediaMetaDataService {
          AND (wa_media_url IS NOT NULL OR media_type = 'text')`,
       [keys],
     );
-    this.logger.log(`[HPTRACE] findMediaBySTID: stid="${stateTransitionId}" dbRows=${rows.length}${rows.length > 0 ? ` types=[${rows.map((r: any) => `${r.media_type}:${r.state_transition_id}:${r.id}`).join(', ')}]` : ''}`);
-
     const specificByType = new Map<string, MediaMetaData[]>();
     const genericByType = new Map<string, MediaMetaData[]>();
     for (const row of rows) {
