@@ -11,6 +11,7 @@ import {
 export class WabotOutboundService {
   private readonly logger = new Logger(WabotOutboundService.name);
   private readonly baseUrl = process.env.WABOT_INTERNAL_BASE_URL!;
+  private readonly apiKey = process.env.WABOT_API_KEY!;
 
   async sendMessage(options: {
     user_external_id: string;
@@ -32,7 +33,7 @@ export class WabotOutboundService {
     try {
       response = await fetch(`${this.baseUrl}/sendMessage`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-api-key': this.apiKey },
         body: JSON.stringify(requestBody),
       });
     } catch (err) {
@@ -51,7 +52,7 @@ export class WabotOutboundService {
   ): Promise<{ stream: NodeJS.ReadableStream; content_type: string }> {
     const response = await fetch(`${this.baseUrl}/downloadMedia`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': this.apiKey },
       body: JSON.stringify({
         media_url,
         otel: { carrier: otel_carrier },
@@ -100,6 +101,7 @@ export class WabotOutboundService {
         headers: {
           'Content-Type': content_type,
           'X-Media-Type': media_type,
+          'x-api-key': this.apiKey,
         },
         body: ab,
       });

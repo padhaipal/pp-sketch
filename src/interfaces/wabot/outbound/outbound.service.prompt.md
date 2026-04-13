@@ -1,5 +1,6 @@
 sendMessage(options: { user_external_id: string; wamid: string; consecutive?: boolean; media: OutboundMediaItem[]; otel_carrier: Record<string, string> }): Promise<{ status: number; body: { delivered: boolean; reason?: string } }>
-WABOT_INTERNAL_BASE_URL is available in .env.
+WABOT_INTERNAL_BASE_URL and WABOT_API_KEY are available in .env.
+All requests to wabot-sketch must include header `x-api-key` set to WABOT_API_KEY.
 Request shape: see src/interfaces/wabot/outbound/outbound.dto.prompt.md SendMessageRequest.
 * Build the SendMessageRequest body from the options.
 * POST to ${WABOT_INTERNAL_BASE_URL}/sendMessage.
