@@ -86,15 +86,8 @@ export class LiteracyLessonService {
       });
       actor.start();
 
-      if (combinedTranscript !== undefined) {
-        this.logger.log(`[HPTRACE] processAnswer: sending ANSWER to fresh actor transcript="${combinedTranscript}"`);
-        actor.send({
-          type: 'ANSWER',
-          studentAnswer: combinedTranscript,
-        });
-      } else {
-        this.logger.log(`[HPTRACE] processAnswer: no transcript, actor stays in initial state`);
-      }
+      this.logger.log(`[HPTRACE] processAnswer: no transcript, actor stays in initial state${combinedTranscript !== undefined ? ' (transcript discarded — stale lesson)' : ''}`);
+
 
       snapshot = actor.getSnapshot();
       this.logger.log(`[HPTRACE] processAnswer: fresh snapshot state=${JSON.stringify(snapshot.value)} status=${snapshot.status} stid=${snapshot.context.stateTransitionId}`);
