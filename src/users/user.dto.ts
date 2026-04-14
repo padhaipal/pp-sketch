@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { parsePhoneNumberFromString } from 'libphonenumber-js';
+import { IsString, IsNotEmpty, IsIn } from 'class-validator';
 
 export interface User {
   id: string;
@@ -13,13 +14,25 @@ export interface User {
 export type UserRole = 'admin' | 'dev';
 
 export class LoginDto {
+  @IsString()
+  @IsNotEmpty()
   phone: string;
+
+  @IsString()
+  @IsNotEmpty()
   password: string;
 }
 
 export class SetRoleDto {
+  @IsString()
+  @IsNotEmpty()
   phone: string;
+
+  @IsString()
+  @IsNotEmpty()
   password: string;
+
+  @IsIn(['admin', 'dev'])
   role: UserRole;
 }
 
