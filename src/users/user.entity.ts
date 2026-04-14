@@ -24,6 +24,12 @@ export class UserEntity {
   @JoinColumn({ name: 'referrer_user_id' })
   referrer: UserEntity | null;
 
+  @Column({ type: 'text', nullable: true })
+  password_hash: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  role: string | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;
 }

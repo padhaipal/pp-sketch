@@ -5,7 +5,22 @@ export interface User {
   id: string;
   external_id: string;
   referrer_user_id: string | null;
+  password_hash: string | null;
+  role: string | null;
   created_at: Date;
+}
+
+export type UserRole = 'admin' | 'dev';
+
+export class LoginDto {
+  phone: string;
+  password: string;
+}
+
+export class SetRoleDto {
+  phone: string;
+  password: string;
+  role: UserRole;
 }
 
 export interface FindUserOptions {
