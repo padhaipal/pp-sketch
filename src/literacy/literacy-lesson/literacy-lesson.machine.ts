@@ -18,7 +18,6 @@ interface Context {
   letterImageErrors: number;
   letterNoImageErrors: number;
   answer: string | undefined;
-  previousAnswer: string | undefined;
   answerCorrect: boolean | null;
   stateTransitionId: string;
   userMessageId: string;
@@ -102,7 +101,6 @@ export const machine = setup({
     letterImageErrors: 0,
     letterNoImageErrors: 0,
     answer: input.word,
-    previousAnswer: input.word,
     answerCorrect: null,
     stateTransitionId: `${input.word}-start-word-initial`,
     userMessageId: input.userMessageId,
@@ -113,7 +111,6 @@ export const machine = setup({
   states: {
     word: {
       entry: [
-        assign({ previousAnswer: ({ context }) => context.answer }),
         assign({
           answer: ({ context }) => context.word,
           wrongLetters: () => [],
@@ -290,7 +287,6 @@ export const machine = setup({
 
     letter: {
       entry: [
-        assign({ previousAnswer: ({ context }) => context.answer }),
         assign({ answer: ({ context }) => context.wrongLetters[0] }),
       ],
       on: {
@@ -347,7 +343,6 @@ export const machine = setup({
 
     image: {
       entry: [
-        assign({ previousAnswer: ({ context }) => context.answer }),
         assign({ answer: ({ context }) => context.wrongLetters[0] }),
       ],
       on: {
@@ -389,7 +384,6 @@ export const machine = setup({
 
     letterImage: {
       entry: [
-        assign({ previousAnswer: ({ context }) => context.answer }),
         assign({ answer: ({ context }) => context.wrongLetters[0] }),
       ],
       on: {
@@ -485,7 +479,6 @@ export const machine = setup({
 
     letterNoImage: {
       entry: [
-        assign({ previousAnswer: ({ context }) => context.answer }),
         assign({ answer: ({ context }) => context.wrongLetters[0] }),
       ],
       on: {

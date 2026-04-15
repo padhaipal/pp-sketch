@@ -182,6 +182,30 @@ export class UserController {
       });
     }
 
+    // The DB answer column holds the correct answer for the NEXT state (after
+    // entry actions run), not for the state the user just answered in. To display
+    // the correct answer the user was asked, we offset by one: each row's
+    // displayed answer is the chronologically previous lesson state's answer.
+    // When a new word starts (or for the first row), use lesson.word instead.
+    // Media is ordered created_at DESC, so iterate in reverse for chronological order.
+    const displayedAnswerMap = new Map<string, string | null>();
+    let prevAnswer: string | null = null;
+    let prevWord: string | null = null;
+    for (let i = media.length - 1; i >= 0; i--) {
+      const lesson = lessonMap.get(media[i].id);
+      if (!lesson) {
+        displayedAnswerMap.set(media[i].id, null);
+        continue;
+      }
+      if (prevWord === null || lesson.word !== prevWord) {
+        displayedAnswerMap.set(media[i].id, lesson.word);
+      } else {
+        displayedAnswerMap.set(media[i].id, prevAnswer);
+      }
+      prevAnswer = lesson.answer;
+      prevWord = lesson.word;
+    }
+
     return {
       user: { name: user.name, phone: user.external_id },
       media: media.map((m) => {
@@ -192,7 +216,7 @@ export class UserController {
           has_audio: !!m.s3_key,
           transcripts: transcriptMap.get(m.id) ?? [],
           word: lesson?.word ?? null,
-          answer: lesson?.answer ?? null,
+          answer: displayedAnswerMap.get(m.id) ?? null,
           answer_correct: lesson?.answer_correct ?? null,
         };
       }),
