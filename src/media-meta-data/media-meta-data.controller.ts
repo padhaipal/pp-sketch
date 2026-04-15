@@ -97,6 +97,24 @@ export class MediaMetaDataController {
   @Post('upload-static')
   @HttpCode(HttpStatus.CREATED)
   @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        items: {
+          type: 'string',
+          description:
+            'JSON array of items, e.g. [{"state_transition_id":"x","media_type":"image"}]',
+        },
+        files: {
+          type: 'array',
+          items: { type: 'string', format: 'binary' },
+          description: 'One file per non-text item, matched in order',
+        },
+      },
+      required: ['items', 'files'],
+    },
+  })
   @ApiResponse({ status: 201 })
   @UseInterceptors(FilesInterceptor('files', 50))
   async uploadStaticMedia(
