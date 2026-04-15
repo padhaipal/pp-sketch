@@ -130,10 +130,11 @@ export class LiteracyLessonService {
       snapshot.context.pendingIncorrect ?? [];
 
     // 8. Persist snapshot
-    this.logger.log(`[HPTRACE] processAnswer: persisting snapshot word=${snapshot.context.word} stid=${snapshot.context.stateTransitionId} userMessageId=${validated.user_message_id}`);
+    const answerCorrect: boolean | null = snapshot.context.answerCorrect ?? null;
+    this.logger.log(`[HPTRACE] processAnswer: persisting snapshot word=${snapshot.context.word} answerCorrect=${answerCorrect} stid=${snapshot.context.stateTransitionId} userMessageId=${validated.user_message_id}`);
     const rows = await this.dataSource.query(
-      `INSERT INTO literacy_lesson_states (user_id, user_message_id, word, snapshot, created_at)
-       SELECT $1, $2, $3, $4, now()
+      `INSERT INTO literacy_lesson_states (user_id, user_message_id, word, answer_correct, snapshot, created_at)
+       SELECT $1, $2, $3, $4, $5, now()
        FROM media_metadata m
        WHERE m.id = $2 AND m.rolled_back = false
        RETURNING *`,
@@ -141,6 +142,7 @@ export class LiteracyLessonService {
         validated.user.id,
         validated.user_message_id,
         snapshot.context.word,
+        answerCorrect,
         JSON.stringify(snapshot),
       ],
     );

@@ -18,6 +18,7 @@ interface Context {
   letterImageErrors: number;
   letterNoImageErrors: number;
   answer: string | undefined;
+  answerCorrect: boolean | null;
   stateTransitionId: string;
   userMessageId: string;
   pendingCorrect: string[];
@@ -98,6 +99,7 @@ export const machine = setup({
     letterImageErrors: 0,
     letterNoImageErrors: 0,
     answer: input.word,
+    answerCorrect: null,
     stateTransitionId: `${input.word}-start-word-initial`,
     userMessageId: input.userMessageId,
     pendingCorrect: [],
@@ -121,6 +123,7 @@ export const machine = setup({
             target: 'complete',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-complete-correct-first` }),
               assign({ pendingCorrect: ({ context }) => Array.from(context.word) }),
             ]
@@ -131,6 +134,7 @@ export const machine = setup({
             target: 'complete',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-complete-correct-retry` }),
             ]
           },
@@ -140,6 +144,7 @@ export const machine = setup({
             target: 'complete',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-complete-maxErrors` }),
             ]
           },
@@ -152,6 +157,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-endMatra-first` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
               assign({ pendingCorrect: ({ context }) => Array.from(context.word) }),
@@ -163,6 +169,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-endMatra-retry` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
             ]
@@ -176,6 +183,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-middleMatra-first` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
               assign({ pendingCorrect: ({ context }) => Array.from(context.word) }),
@@ -187,6 +195,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-middleMatra-retry` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
             ]
@@ -200,6 +209,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-insertion-first` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
               assign({ pendingCorrect: ({ context }) => Array.from(context.word) }),
@@ -211,6 +221,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-insertion-retry` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
             ]
@@ -221,6 +232,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.word}-word-word-loopBack` }),
               { type: 'increment', params: { keys: 'wordErrors' } },
             ],
@@ -231,6 +243,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               { type: 'increment', params: { keys: 'wordErrors' } },
               assign({
                 wrongLetters: ({ context, event }) => {
@@ -283,6 +296,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
               assign({ stateTransitionId: ({ context }) => `${context.word}-letter-word-correct-last` }),
               assign({ pendingCorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'dropFirstWrongLetter' },
@@ -294,6 +308,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[1]}-letter-routeWrongLetter-correct-more` }),
               assign({ pendingCorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'dropFirstWrongLetter' },
@@ -305,6 +320,7 @@ export const machine = setup({
             target: 'image',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letter-image-wrong` }),
               assign({ pendingIncorrect: ({ context }) => [context.wrongLetters[0]] }),
             ]
@@ -333,6 +349,7 @@ export const machine = setup({
             target: 'letterImage',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-image-letterImage-correct` }),
             ],
           },
@@ -342,6 +359,7 @@ export const machine = setup({
             target: 'letterImage',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-image-letterImage-maxErrors` }),
               { type: 'resetToZero', params: { keys: 'imageErrors' } },
             ],
@@ -351,6 +369,7 @@ export const machine = setup({
             target: 'image',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-image-image-wrong-first` }),
               { type: 'increment', params: { keys: 'imageErrors' } },
             ],
@@ -374,6 +393,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-word-correct-last` }),
               { type: 'dropFirstWrongLetter' },
             ]
@@ -384,6 +404,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[1]}-letterImage-routeWrongLetter-correct-more` }),
               { type: 'dropFirstWrongLetter' },
             ]
@@ -394,6 +415,7 @@ export const machine = setup({
             target: 'letterImage',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-letterImage-wrong-first` }),
               { type: 'increment', params: { keys: 'letterErrors' } },
             ]
@@ -404,6 +426,7 @@ export const machine = setup({
             target: 'letterImage',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-letterImage-wrong-second` }),
               { type: 'increment', params: { keys: 'letterErrors' } },
             ]
@@ -417,6 +440,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterImage-word-maxErrors-last` }),
               { type: 'resetToZero', params: { keys: 'letterErrors' } },
               { type: 'dropFirstWrongLetter' },
@@ -431,6 +455,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[1]}-letterImage-routeWrongLetter-maxErrors-more` }),
               { type: 'resetToZero', params: { keys: 'letterErrors' } },
               { type: 'dropFirstWrongLetter' },
@@ -464,6 +489,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-word-correct-first-last` }),
               assign({ pendingCorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'dropFirstWrongLetter' },
@@ -479,6 +505,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[1]}-letterNoImage-routeWrongLetter-correct-first-more` }),
               assign({ pendingCorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'dropFirstWrongLetter' },
@@ -494,6 +521,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-word-correct-retry-last` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
@@ -509,6 +537,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[1]}-letterNoImage-routeWrongLetter-correct-retry-more` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
@@ -522,6 +551,7 @@ export const machine = setup({
             target: 'letterNoImage',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-letterNoImage-wrong-first` }),
               assign({ pendingIncorrect: ({ context }) => [context.wrongLetters[0]] }),
               { type: 'increment', params: { keys: 'letterNoImageErrors' } },
@@ -536,6 +566,7 @@ export const machine = setup({
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[0]}-letterNoImage-word-wrong-last` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
@@ -550,6 +581,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
               assign({ stateTransitionId: ({ context }) => `${context.wrongLetters[1]}-letterNoImage-routeWrongLetter-wrong-more` }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
