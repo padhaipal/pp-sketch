@@ -93,8 +93,12 @@ export class AzureService {
       }>;
     };
 
-    const transcript =
-      result.combinedPhrases?.[0]?.text ?? '';
+    const HINDI_DIGITS = ['शून्य', 'एक', 'दो', 'तीन', 'चार', 'पाँच', 'छह', 'सात', 'आठ', 'नौ'];
+    const rawTranscript = result.combinedPhrases?.[0]?.text ?? '';
+    const transcript = rawTranscript.replace(
+      /\d+/g,
+      (match) => match.split('').map((d) => HINDI_DIGITS[+d]).join(' '),
+    );
 
     const avgConfidence =
       result.phrases.length > 0

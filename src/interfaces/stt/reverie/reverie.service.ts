@@ -106,7 +106,7 @@ export class ReverieService {
       media_type: 'text',
       source: 'reverie',
       status: 'ready',
-      text: result.display_text,
+      text: result.text,
       input_media_id: parentMedia.id,
       user_id: parentMedia.user_id,
       rolled_back: false,

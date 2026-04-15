@@ -47,7 +47,7 @@ export class SarvamService {
       `${parentMedia.id}.ogg`,
     );
     formData.append('model', 'saaras:v3');
-    formData.append('mode', 'transcribe');
+    formData.append('mode', 'verbatim');
     formData.append('language_code', 'hi-IN');
 
     let response: Response;
