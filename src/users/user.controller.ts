@@ -166,15 +166,21 @@ export class UserController {
       transcriptMap.get(t.input_media_id)!.push({ text: t.text, source: t.source });
     }
 
-    // Find lesson states where user_message_id matches any of these media IDs
+    // Find lesson states where user_message_id matches any of these media IDs.
+    // Order by created_at ASC so the evaluation row (first insert) comes before
+    // the "start fresh" row when a word is completed and a new lesson begins in
+    // the same processAnswer cycle (both share the same user_message_id).
     const lessonStates = await this.lessonStateRepo
       .createQueryBuilder('ls')
       .select(['ls.user_message_id', 'ls.word', 'ls.answer', 'ls.answer_correct'])
       .where('ls.user_message_id IN (:...mediaIds)', { mediaIds })
+      .orderBy('ls.created_at', 'ASC')
       .getMany();
 
+    // Keep the first (evaluation) row per user_message_id; skip the "start fresh" duplicate.
     const lessonMap = new Map<string, { word: string; answer: string | null; answer_correct: boolean | null }>();
     for (const ls of lessonStates) {
+      if (lessonMap.has(ls.user_message_id)) continue;
       lessonMap.set(ls.user_message_id, {
         word: ls.word,
         answer: ls.answer,
