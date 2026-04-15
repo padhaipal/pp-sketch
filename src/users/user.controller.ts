@@ -1,9 +1,11 @@
 import {
   Controller,
+  Get,
   Post,
   Patch,
   Delete,
   Param,
+  Query,
   Body,
   UnauthorizedException,
   NotFoundException,
@@ -15,6 +17,7 @@ import * as bcrypt from 'bcrypt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserEntity } from './user.entity';
+import { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
 import { LoginDto, PatchUserDto } from './user.dto';
 
 @ApiTags('users')
@@ -25,7 +28,87 @@ export class UserController {
   constructor(
     @InjectRepository(UserEntity)
     private readonly userRepo: Repository<UserEntity>,
+    @InjectRepository(MediaMetaDataEntity)
+    private readonly mediaRepo: Repository<MediaMetaDataEntity>,
   ) {}
+
+  @Get('dashboard')
+  async dashboard(@Query('offset') offsetStr?: string) {
+    const offset = Math.max(0, parseInt(offsetStr || '0', 10) || 0);
+    const limit = 100;
+
+    // Find 100 most recently active user IDs
+    const activeUsers = await this.mediaRepo
+      .createQueryBuilder('mm')
+      .select('mm.user_id', 'user_id')
+      .addSelect('MAX(mm.created_at)', 'last_active')
+      .where('mm.user_id IS NOT NULL')
+      .groupBy('mm.user_id')
+      .orderBy('last_active', 'DESC')
+      .offset(offset)
+      .limit(limit)
+      .getRawMany<{ user_id: string; last_active: Date }>();
+
+    if (activeUsers.length === 0) return [];
+
+    const userIds = activeUsers.map((r) => r.user_id);
+
+    // Fetch user details
+    const users = await this.userRepo
+      .createQueryBuilder('u')
+      .select(['u.id', 'u.name', 'u.external_id'])
+      .whereInIds(userIds)
+      .getMany();
+
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    // Fetch 7-day activity counts per user per day
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
+    const activityRows = await this.mediaRepo
+      .createQueryBuilder('mm')
+      .select('mm.user_id', 'user_id')
+      .addSelect('DATE(mm.created_at)', 'date')
+      .addSelect('COUNT(*)::int', 'count')
+      .where('mm.user_id IN (:...userIds)', { userIds })
+      .andWhere('mm.created_at >= :since', { since: sevenDaysAgo })
+      .groupBy('mm.user_id')
+      .addGroupBy('DATE(mm.created_at)')
+      .getRawMany<{ user_id: string; date: string; count: number }>();
+
+    // Build activity map: userId -> { date -> count }
+    const activityMap = new Map<string, Map<string, number>>();
+    for (const row of activityRows) {
+      if (!activityMap.has(row.user_id)) activityMap.set(row.user_id, new Map());
+      const dateStr = new Date(row.date).toISOString().slice(0, 10);
+      activityMap.get(row.user_id)!.set(dateStr, Number(row.count));
+    }
+
+    // Generate 7-day date range
+    const dates: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(sevenDaysAgo);
+      d.setDate(d.getDate() + i);
+      dates.push(d.toISOString().slice(0, 10));
+    }
+
+    // Assemble response in last_active order
+    return activeUsers.map((r) => {
+      const user = userMap.get(r.user_id);
+      const userActivity = activityMap.get(r.user_id);
+      return {
+        id: r.user_id,
+        name: user?.name ?? null,
+        external_id: user?.external_id ?? '',
+        activity: dates.map((date) => ({
+          date,
+          count: userActivity?.get(date) ?? 0,
+        })),
+      };
+    });
+  }
 
   @Post('login')
   async login(@Body() body: LoginDto) {
