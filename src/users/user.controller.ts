@@ -20,7 +20,16 @@ import { UserEntity } from './user.entity';
 import { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
 import { ScoreEntity } from '../literacy/score/score.entity';
 import { LiteracyLessonStateEntity } from '../literacy/literacy-lesson/literacy-lesson-state.entity';
-import { LoginDto, PatchUserDto } from './user.dto';
+import {
+  LoginDto,
+  PatchUserDto,
+  DashboardUserRow,
+  UserMediaResponse,
+  ScoreRow,
+  LoginResponse,
+  UserResponse,
+  DeleteResponse,
+} from './user.dto';
 
 @ApiTags('users')
 @Controller('users')
@@ -39,7 +48,7 @@ export class UserController {
   ) {}
 
   @Get('dashboard')
-  async dashboard(@Query('offset') offsetStr?: string) {
+  async dashboard(@Query('offset') offsetStr?: string): Promise<DashboardUserRow[]> {
     const offset = Math.max(0, parseInt(offsetStr || '0', 10) || 0);
     const limit = 100;
 
@@ -120,7 +129,7 @@ export class UserController {
   async userMedia(
     @Param('id') id: string,
     @Query('offset') offsetStr?: string,
-  ) {
+  ): Promise<UserMediaResponse> {
     const offset = Math.max(0, parseInt(offsetStr || '0', 10) || 0);
     const limit = 100;
 
@@ -160,29 +169,38 @@ export class UserController {
     // Find lesson states where user_message_id matches any of these media IDs
     const lessonStates = await this.lessonStateRepo
       .createQueryBuilder('ls')
-      .select(['ls.user_message_id', 'ls.word'])
+      .select(['ls.user_message_id', 'ls.word', 'ls.answer', 'ls.answer_correct'])
       .where('ls.user_message_id IN (:...mediaIds)', { mediaIds })
       .getMany();
 
-    const wordMap = new Map<string, string>();
+    const lessonMap = new Map<string, { word: string; answer: string | null; answer_correct: boolean | null }>();
     for (const ls of lessonStates) {
-      wordMap.set(ls.user_message_id, ls.word);
+      lessonMap.set(ls.user_message_id, {
+        word: ls.word,
+        answer: ls.answer,
+        answer_correct: ls.answer_correct,
+      });
     }
 
     return {
       user: { name: user.name, phone: user.external_id },
-      media: media.map((m) => ({
-        id: m.id,
-        created_at: m.created_at,
-        has_audio: !!m.s3_key,
-        transcripts: transcriptMap.get(m.id) ?? [],
-        word: wordMap.get(m.id) ?? null,
-      })),
+      media: media.map((m) => {
+        const lesson = lessonMap.get(m.id);
+        return {
+          id: m.id,
+          created_at: m.created_at,
+          has_audio: !!m.s3_key,
+          transcripts: transcriptMap.get(m.id) ?? [],
+          word: lesson?.word ?? null,
+          answer: lesson?.answer ?? null,
+          answer_correct: lesson?.answer_correct ?? null,
+        };
+      }),
     };
   }
 
   @Get(':id/scores')
-  async userScores(@Param('id') id: string) {
+  async userScores(@Param('id') id: string): Promise<ScoreRow[]> {
     const scores = await this.scoreRepo
       .createQueryBuilder('s')
       .innerJoinAndSelect('s.letter', 'l')
@@ -200,7 +218,7 @@ export class UserController {
   }
 
   @Post('login')
-  async login(@Body() body: LoginDto) {
+  async login(@Body() body: LoginDto): Promise<LoginResponse> {
     const { phone, password } = body;
     this.logger.log(`[HPTRACE] login attempt phone=${phone}`);
 
@@ -226,7 +244,7 @@ export class UserController {
   }
 
   @Patch(':id')
-  async patchUser(@Param('id') id: string, @Body() body: PatchUserDto) {
+  async patchUser(@Param('id') id: string, @Body() body: PatchUserDto): Promise<UserResponse> {
     if (!body.phone && !body.name && !body.password && !body.role) {
       throw new BadRequestException('At least one of phone, name, password, or role required');
     }
@@ -246,7 +264,7 @@ export class UserController {
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string) {
+  async remove(@Param('id') id: string): Promise<DeleteResponse> {
     const user = await this.userRepo.findOneBy({ id });
     if (!user) {
       throw new NotFoundException('User not found');

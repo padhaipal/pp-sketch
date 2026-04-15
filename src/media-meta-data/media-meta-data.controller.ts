@@ -30,6 +30,8 @@ import {
   assertValidMediaType,
   assertValidMediaSource,
   assertValidMediaStatus,
+  DashboardTranscriptResponse,
+  DeleteResponse,
 } from './media-meta-data.dto';
 import { v4 as uuid } from 'uuid';
 import { startRootSpan, injectCarrier } from '../otel/otel';
@@ -146,7 +148,7 @@ export class MediaMetaDataController {
   async createDashboardTranscript(
     @Param('id') id: string,
     @Body() body: { text: string },
-  ) {
+  ): Promise<DashboardTranscriptResponse> {
     if (!body.text?.trim()) throw new BadRequestException('text required');
 
     const parent = await this.mediaRepo.findOneBy({ id });
@@ -173,14 +175,22 @@ export class MediaMetaDataController {
       user_id: parent.user_id,
       rolled_back: false,
     });
-    return this.mediaRepo.save(entity);
+    const saved = await this.mediaRepo.save(entity);
+    return {
+      id: saved.id,
+      text: saved.text,
+      source: saved.source,
+      input_media_id: saved.input_media_id,
+      user_id: saved.user_id,
+      created_at: saved.created_at,
+    };
   }
 
   @Patch(':id/dashboard-transcript')
   async updateDashboardTranscript(
     @Param('id') id: string,
     @Body() body: { text: string },
-  ) {
+  ): Promise<DashboardTranscriptResponse> {
     if (!body.text?.trim()) throw new BadRequestException('text required');
 
     const transcript = await this.mediaRepo.findOneBy({
@@ -191,11 +201,19 @@ export class MediaMetaDataController {
     if (!transcript) throw new NotFoundException('Dashboard transcript not found');
 
     transcript.text = body.text.trim();
-    return this.mediaRepo.save(transcript);
+    const saved = await this.mediaRepo.save(transcript);
+    return {
+      id: saved.id,
+      text: saved.text,
+      source: saved.source,
+      input_media_id: saved.input_media_id,
+      user_id: saved.user_id,
+      created_at: saved.created_at,
+    };
   }
 
   @Delete(':id/dashboard-transcript')
-  async deleteDashboardTranscript(@Param('id') id: string) {
+  async deleteDashboardTranscript(@Param('id') id: string): Promise<DeleteResponse> {
     const transcript = await this.mediaRepo.findOneBy({
       input_media_id: id,
       source: 'dashboard' as any,

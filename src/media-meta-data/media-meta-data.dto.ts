@@ -37,6 +37,23 @@ export interface MediaMetaData {
   created_at: Date;
 }
 
+// ─── Response DTOs ────────────────────────────────────────────────────────────
+
+export interface DashboardTranscriptResponse {
+  id: string;
+  text: string | null;
+  source: string;
+  input_media_id: string | null;
+  user_id: string | null;
+  created_at: Date;
+}
+
+export interface DeleteResponse {
+  deleted: true;
+}
+
+// ─── Internal DTOs ────────────────────────────────────────────────────────────
+
 export interface CreateWhatsappAudioMediaOptions {
   wa_media_url: string;
   user?: User;

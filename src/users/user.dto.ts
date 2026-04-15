@@ -45,6 +45,71 @@ export class PatchUserDto {
   role?: UserRole;
 }
 
+// ─── Response DTOs ────────────────────────────────────────────────────────────
+
+export interface ActivityDay {
+  date: string;
+  count: number;
+}
+
+export interface DashboardUserRow {
+  id: string;
+  name: string | null;
+  external_id: string;
+  activity: ActivityDay[];
+}
+
+export interface TranscriptRow {
+  text: string | null;
+  source: string;
+}
+
+export interface MediaRow {
+  id: string;
+  created_at: Date;
+  has_audio: boolean;
+  transcripts: TranscriptRow[];
+  word: string | null;
+  answer: string | null;
+  answer_correct: boolean | null;
+}
+
+export interface UserInfoRow {
+  name: string | null;
+  phone: string;
+}
+
+export interface UserMediaResponse {
+  user: UserInfoRow;
+  media: MediaRow[];
+}
+
+export interface ScoreRow {
+  score: number;
+  created_at: Date;
+  letter_id: string;
+  grapheme: string;
+}
+
+export interface LoginResponse {
+  id: string;
+  external_id: string;
+  role: string;
+}
+
+export interface UserResponse {
+  id: string;
+  external_id: string;
+  name: string | null;
+  role: string | null;
+}
+
+export interface DeleteResponse {
+  deleted: true;
+}
+
+// ─── Internal DTOs ────────────────────────────────────────────────────────────
+
 export interface FindUserOptions {
   id?: string;
   external_id?: string;
