@@ -60,7 +60,6 @@ export const machine = setup({
         correctAnswer: context.answer,
         studentAnswer: event.studentAnswer,
       });
-      console.log(`[CHECKANSWER] fn=${params.fn.name} correctAnswer="${context.answer}" studentAnswer="${event.studentAnswer}" result=${result}`);
       return result;
     }
   },

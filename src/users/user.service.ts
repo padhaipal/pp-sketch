@@ -26,7 +26,6 @@ export class UserService {
   ) {}
 
   async find(options: FindUserOptions): Promise<User | null> {
-    this.logger.log(`[HPTRACE] UserService.find ${JSON.stringify(options)}`);
     const validated = validateFindUserOptions(options);
 
     const cacheKey = validated.id
@@ -153,7 +152,6 @@ export class UserService {
   }
 
   async create(options: CreateUserOptions): Promise<User> {
-    this.logger.log(`[HPTRACE] UserService.create ${JSON.stringify(options)}`);
     const validated = validateCreateUserOptions(options);
 
     let user: UserEntity;
@@ -242,9 +240,7 @@ export class UserService {
       });
     }
 
-    this.logger.log(`[HPTRACE] UserService.create executing INSERT`);
     user = await this.userRepo.save(user);
-    this.logger.log(`[HPTRACE] UserService.create INSERT returned id=${user?.id}`);
     await this.populateUserCache(user);
     return user;
   }

@@ -77,9 +77,6 @@ export async function processWhatsappPreloadJob(
 
     // 5. Upload to WhatsApp
     let wa_media_url: string;
-    logger.log(
-      `calling wabotOutbound.uploadMedia for ${media_metadata_id}, content_type=${content_type}, media_type=${media_type}, buffer_size=${buffer.length}`,
-    );
     try {
       const result = await wabotOutbound.uploadMedia(
         buffer,
@@ -88,9 +85,6 @@ export async function processWhatsappPreloadJob(
         injectCarrier(span),
       );
       wa_media_url = result.wa_media_url;
-      logger.log(
-        `uploadMedia succeeded for ${media_metadata_id}, wa_media_url=${wa_media_url}`,
-      );
     } catch (err) {
       const msg = (err as Error).message;
       logger.error(

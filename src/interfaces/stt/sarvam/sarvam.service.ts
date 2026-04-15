@@ -122,10 +122,6 @@ export class SarvamService {
 
     const saved = await this.mediaRepo.save(entity);
 
-    this.logger.log(
-      `[HPTRACE] Sarvam STT ${parentMedia.id}: api=${tResponse - t0}ms db=${Date.now() - tResponse}ms total=${Date.now() - t0}ms bytes=${audioBuffer.length}`,
-    );
-
     return saved;
   }
 }

@@ -250,26 +250,25 @@ export class UserController {
   @Post('login')
   async login(@Body() body: LoginDto): Promise<LoginResponse> {
     const { phone, password } = body;
-    this.logger.log(`[HPTRACE] login attempt phone=${phone}`);
 
     if (!phone || !password) {
-      this.logger.warn(`[HPTRACE] login missing fields phone=${!!phone} password=${!!password}`);
+      this.logger.warn(`Login missing fields phone=${!!phone} password=${!!password}`);
       throw new BadRequestException('phone and password required');
     }
 
     const user = await this.userRepo.findOneBy({ external_id: phone });
     if (!user || !user.password_hash || !user.role) {
-      this.logger.warn(`[HPTRACE] login user not found or missing hash/role phone=${phone} found=${!!user}`);
+      this.logger.warn(`Login failed: user not found or missing hash/role phone=${phone}`);
       throw new UnauthorizedException('Invalid credentials');
     }
 
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
-      this.logger.warn(`[HPTRACE] login password mismatch phone=${phone}`);
+      this.logger.warn(`Login failed: password mismatch phone=${phone}`);
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    this.logger.log(`[HPTRACE] login success phone=${phone} id=${user.id} role=${user.role}`);
+    this.logger.log(`Login success phone=${phone} id=${user.id}`);
     return { id: user.id, external_id: user.external_id, role: user.role };
   }
 

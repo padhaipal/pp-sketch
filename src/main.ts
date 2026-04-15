@@ -78,11 +78,9 @@ async function bootstrap() {
       wabotOutbound,
     );
   });
-  wabotInboundWorker.on('ready', () => logger.log(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) READY`));
-  wabotInboundWorker.on('completed', (job) => logger.log(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) COMPLETED job id=${job.id}`));
-  wabotInboundWorker.on('failed', (job, err) => logger.error(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) FAILED job id=${job?.id} err=${err.message}`));
-  wabotInboundWorker.on('error', (err) => logger.error(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) ERROR ${err.message}`));
-  wabotInboundWorker.on('stalled', (jobId) => logger.warn(`[HPTRACE] worker(${QUEUE_NAMES.WABOT_INBOUND}) STALLED job id=${jobId}`));
+  wabotInboundWorker.on('failed', (job, err) => logger.error(`worker(${QUEUE_NAMES.WABOT_INBOUND}) FAILED job id=${job?.id} err=${err.message}`));
+  wabotInboundWorker.on('error', (err) => logger.error(`worker(${QUEUE_NAMES.WABOT_INBOUND}) ERROR ${err.message}`));
+  wabotInboundWorker.on('stalled', (jobId) => logger.warn(`worker(${QUEUE_NAMES.WABOT_INBOUND}) STALLED job id=${jobId}`));
 
   createWorker(QUEUE_NAMES.HEYGEN_GENERATE, async (job) => {
     await processHeygenGenerateJob(job, mediaBucket, mediaRepo);

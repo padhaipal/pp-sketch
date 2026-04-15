@@ -153,9 +153,6 @@ export class MediaMetaDataService {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
     const audioBuffer = Buffer.concat(chunks);
-    this.logger.log(
-      `[HPTRACE] WA download ${entity.id}: ttfb=${tFirstByte - tDlStart}ms stream=${Date.now() - tFirstByte}ms total=${Date.now() - tDlStart}ms bytes=${audioBuffer.length}`,
-    );
 
     // S3 upload
     let s3Key: string;
@@ -341,7 +338,6 @@ export class MediaMetaDataService {
         CACHE_KEYS.mediaByStateTransitionId(stateTransitionId),
       );
     if (cached) {
-      this.logger.log(`[HPTRACE] findMediaBySTID: CACHE HIT stid="${stateTransitionId}" mediaTypes=[${Object.keys(cached).join(', ')}]`);
       return cached;
     }
 
@@ -376,9 +372,7 @@ export class MediaMetaDataService {
 
     const resultTypes = Object.keys(result);
     if (resultTypes.length === 0) {
-      this.logger.warn(`[HPTRACE] findMediaBySTID: NO MEDIA FOUND for stid="${stateTransitionId}" (keys=[${keys.join(', ')}])`);
-    } else {
-      this.logger.log(`[HPTRACE] findMediaBySTID: stid="${stateTransitionId}" sending=[${resultTypes.map(t => `${t}:${result[t]!.state_transition_id}:${result[t]!.id}`).join(', ')}]`);
+      this.logger.warn(`findMediaBySTID: no media found for stid="${stateTransitionId}"`);
     }
 
     if (resultTypes.length > 0) {

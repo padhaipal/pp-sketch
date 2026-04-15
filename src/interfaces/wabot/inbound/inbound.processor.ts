@@ -21,7 +21,6 @@ export async function processWabotInboundJob(
   wabotOutbound: WabotOutboundService,
 ): Promise<void> {
   const payload = job.data;
-  logger.log(`[HPTRACE] processWabotInboundJob START jobId=${job.id} from=${payload.message.from} type=${payload.message.type} consecutive=${payload.consecutive}`);
 
   // 0. Start span
   const span = startChildSpan(
@@ -108,12 +107,10 @@ export async function processWabotInboundJob(
           }
         }
 
-        logger.log(`[HPTRACE] creating user external_id=${payload.message.from} referrer=${referrerExternalId ?? 'none'}`);
         user = await userService.create({
           external_id: payload.message.from,
           referrer_external_id: referrerExternalId,
         });
-        logger.log(`[HPTRACE] user CREATED id=${user.id} external_id=${user.external_id}`);
       } catch (err) {
         logger.error(
           `Failed to create user ${payload.message.from}: ${(err as Error).message}`,
@@ -170,12 +167,10 @@ export async function processWabotInboundJob(
 
       if (userMessageId) {
         try {
-          logger.log(`[HPTRACE] new-user first lesson: calling processAnswer user=${user.id} userMessageId=${userMessageId}`);
           const lessonResult = await literacyLessonService.processAnswer({
             user,
             user_message_id: userMessageId,
           });
-          logger.log(`[HPTRACE] new-user first lesson: processAnswer returned stid=${lessonResult.stateTransitionId} isComplete=${lessonResult.isComplete}`);
           const lessonMedia =
             await mediaMetaDataService.findMediaByStateTransitionId(
               lessonResult.stateTransitionId,
@@ -184,16 +179,15 @@ export async function processWabotInboundJob(
           onboardingStids.push(lessonResult.stateTransitionId);
         } catch (err) {
           logger.warn(
-            `[HPTRACE] Failed to start first lesson for new user ${user.external_id}: ${(err as Error).message}\n${(err as Error).stack}`,
+            `Failed to start first lesson for new user ${user.external_id}: ${(err as Error).message}`,
           );
         }
       } else {
-        logger.warn(`[HPTRACE] new-user first lesson: skipped because userMessageId is undefined`);
+        logger.warn(`New-user first lesson skipped: userMessageId is undefined`);
       }
 
       if (onboardingMedia.length > 0) {
         try {
-          logger.log(`[HPTRACE] sending onboarding to wabot user=${user.external_id} stids=[${onboardingStids.join(', ')}] mediaCount=${onboardingMedia.length}`);
           const result = await wabotOutbound.sendMessage({
             user_external_id: user.external_id,
             wamid: payload.message.id,
@@ -232,7 +226,6 @@ export async function processWabotInboundJob(
             AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID,
           );
         if (audioOnlyMedia.video) {
-          logger.log(`[HPTRACE] sending audio-only-request to wabot user=${user.external_id} stid=${AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID}`);
           const result = await wabotOutbound.sendMessage({
             user_external_id: user.external_id,
             wamid: payload.message.id,
@@ -263,7 +256,6 @@ export async function processWabotInboundJob(
         otel_carrier: injectCarrier(span),
       });
     const userMessageId = audioEntity.id;
-    logger.log(`[HPTRACE] audio media created id=${userMessageId}`);
 
     // 7. Find transcripts
     const transcripts = await mediaMetaDataService.findTranscripts({
@@ -282,8 +274,6 @@ export async function processWabotInboundJob(
       transcripts,
       user_message_id: userMessageId,
     });
-    logger.log(`[HPTRACE] processAnswer result stid=${result1.stateTransitionId} complete=${result1.isComplete}`);
-
     const stateTransitionIds: string[] = [result1.stateTransitionId];
 
     // If lesson complete, start fresh
@@ -305,7 +295,6 @@ export async function processWabotInboundJob(
     }
 
     // 10. Send outbound
-    logger.log(`[HPTRACE] sending outbound to wabot user=${user.external_id} stids=[${stateTransitionIds.join(', ')}] mediaCount=${outboundMedia.length}`);
     const sendResult = await wabotOutbound.sendMessage({
       user_external_id: user.external_id,
       wamid: payload.message.id,
@@ -314,7 +303,6 @@ export async function processWabotInboundJob(
       otel_carrier: injectCarrier(span),
     });
 
-    logger.log(`[HPTRACE] outbound result status=${sendResult.status} delivered=${sendResult.body?.delivered}`);
     if (sendResult.status >= 200 && sendResult.status < 300) {
       if (sendResult.body.delivered) {
         logger.log(`Message delivered to ${user.external_id}`);
@@ -377,7 +365,6 @@ async function sendFallbackAndHandle(
 ): Promise<void> {
   try {
     const fallbackUrl = process.env.FALL_BACK_MESSAGE_PUBLIC_URL!;
-    logger.log(`[HPTRACE] sending fallback to wabot user=${payload.message.from} stid=fallback`);
     await wabotOutbound.sendMessage({
       user_external_id: payload.message.from,
       wamid: payload.message.id,
@@ -395,9 +382,7 @@ function handleSendResult(
   result: { status: number; body: any },
   context: string,
 ): void {
-  if (result.status >= 200 && result.status < 300) {
-    logger.log(`${context} message sent successfully`);
-  } else if (result.status >= 400 && result.status < 500) {
+  if (result.status >= 400 && result.status < 500) {
     logger.error(`${context} sendMessage 4XX: ${result.status}`);
   } else if (result.status >= 500) {
     logger.warn(`${context} sendMessage 5XX: ${result.status}`);

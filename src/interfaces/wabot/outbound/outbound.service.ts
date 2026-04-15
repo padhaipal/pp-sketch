@@ -28,7 +28,6 @@ export class WabotOutboundService {
       otel: { carrier: options.otel_carrier },
     };
 
-    this.logger.log(`[HPTRACE] WabotOutbound.sendMessage POST ${this.baseUrl}/sendMessage user=${options.user_external_id} mediaCount=${options.media.length}`);
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/sendMessage`, {
@@ -37,11 +36,9 @@ export class WabotOutboundService {
         body: JSON.stringify(requestBody),
       });
     } catch (err) {
-      this.logger.error(`[HPTRACE] WabotOutbound.sendMessage fetch threw: ${(err as Error).message}`);
+      this.logger.error(`WabotOutbound.sendMessage fetch threw: ${(err as Error).message}`);
       throw err;
     }
-    this.logger.log(`[HPTRACE] WabotOutbound.sendMessage response status=${response.status}`);
-
     const body = (await response.json()) as SendMessageResponse;
     return { status: response.status, body };
   }
@@ -89,9 +86,6 @@ export class WabotOutboundService {
   ): Promise<{ wa_media_url: string }> {
     const otelParam = encodeURIComponent(JSON.stringify(otel_carrier));
     const url = `${this.baseUrl}/uploadMedia?otel=${otelParam}`;
-    this.logger.log(
-      `POST ${this.baseUrl}/uploadMedia content_type=${content_type} media_type=${media_type} body_size=${data.byteLength}`,
-    );
     const ab = new ArrayBuffer(data.byteLength);
     new Uint8Array(ab).set(data);
     let response: Response;
@@ -111,8 +105,6 @@ export class WabotOutboundService {
       );
       throw err;
     }
-
-    this.logger.log(`uploadMedia response status=${response.status}`);
 
     if (response.status >= 400 && response.status < 500) {
       const text = await response.text();

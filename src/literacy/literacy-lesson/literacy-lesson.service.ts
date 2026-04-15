@@ -49,28 +49,21 @@ export class LiteracyLessonService {
         .map((t) => t.text ?? '')
         .join(' ');
     }
-    this.logger.log(`[HPTRACE] processAnswer: user=${validated.user.id} userMessageId=${validated.user_message_id} hasTranscripts=${!!validated.transcripts} combinedTranscript=${combinedTranscript !== undefined ? `"${combinedTranscript}"` : 'undefined'}`);
 
     // 3. Find current state
     const currentState = await this.findCurrentState(validated.user.id);
-    this.logger.log(`[HPTRACE] processAnswer: currentState=${currentState ? `id=${currentState.id} word=${currentState.word} status=${currentState.snapshot?.status} age=${Date.now() - new Date(currentState.created_at).getTime()}ms` : 'null'}`);
 
     // 4. Determine fresh or continue
     let startFresh = false;
     if (!currentState) {
       startFresh = true;
-      this.logger.log(`[HPTRACE] processAnswer: startFresh=true reason=noCurrentState`);
     } else {
       const age =
         Date.now() - new Date(currentState.created_at).getTime();
       if (age > 120_000) {
         startFresh = true;
-        this.logger.log(`[HPTRACE] processAnswer: startFresh=true reason=stale age=${age}ms`);
       } else if (currentState.snapshot?.status === 'done') {
         startFresh = true;
-        this.logger.log(`[HPTRACE] processAnswer: startFresh=true reason=lessonDone`);
-      } else {
-        this.logger.log(`[HPTRACE] processAnswer: startFresh=false continuing existing lesson`);
       }
     }
 
@@ -78,19 +71,13 @@ export class LiteracyLessonService {
 
     if (startFresh) {
       // 5. Start a new lesson
-      this.logger.log(`[HPTRACE] processAnswer: selecting next word for user=${validated.user.id}`);
       const word = await this.selectNextWord(validated.user.id);
-      this.logger.log(`[HPTRACE] processAnswer: selectedWord="${word}"`);
       const actor = createActor(machine, {
         input: { word, userMessageId: validated.user_message_id },
       });
       actor.start();
 
-      this.logger.log(`[HPTRACE] processAnswer: no transcript, actor stays in initial state${combinedTranscript !== undefined ? ' (transcript discarded — stale lesson)' : ''}`);
-
-
       snapshot = actor.getSnapshot();
-      this.logger.log(`[HPTRACE] processAnswer: fresh snapshot state=${JSON.stringify(snapshot.value)} status=${snapshot.status} stid=${snapshot.context.stateTransitionId}`);
       actor.stop();
     } else {
       // 6. Rehydrate and run
@@ -132,7 +119,6 @@ export class LiteracyLessonService {
     // 8. Persist snapshot
     const answer: string | null = snapshot.context.answer ?? null;
     const answerCorrect: boolean | null = snapshot.context.answerCorrect ?? null;
-    this.logger.log(`[HPTRACE] processAnswer: persisting snapshot word=${snapshot.context.word} answer=${answer} answerCorrect=${answerCorrect} stid=${snapshot.context.stateTransitionId} userMessageId=${validated.user_message_id}`);
     const rows = await this.dataSource.query(
       `INSERT INTO literacy_lesson_states (user_id, user_message_id, word, answer, answer_correct, snapshot, created_at)
        SELECT $1, $2, $3, $4, $5, $6, now()
@@ -151,14 +137,12 @@ export class LiteracyLessonService {
 
     if (rows.length === 0) {
       this.logger.error(
-        `[HPTRACE] processAnswer: INSERT returned 0 rows — media ${validated.user_message_id} rolled_back=true or does not exist`,
+        `processAnswer: INSERT returned 0 rows — media ${validated.user_message_id} rolled_back=true or does not exist`,
       );
       throw new Error(
         'Media was rolled back — cannot persist lesson state',
       );
     }
-    this.logger.log(`[HPTRACE] processAnswer: snapshot persisted id=${rows[0].id}`);
-
     // 9. Record scores
     if (pendingCorrect.length > 0 || pendingIncorrect.length > 0) {
       try {
@@ -250,8 +234,6 @@ export class LiteracyLessonService {
     const topNSnapshotCount: number = Number(data.top_n_snapshot_count);
     const distinctWordCount: number = Number(data.distinct_word_count);
 
-    this.logger.log(`[HPTRACE] selectNextWord: user=${userId} distinctWordCount=${distinctWordCount} recentWords=[${recentWords.join(', ')}] topNSnapshotCount=${topNSnapshotCount} letterScoresCount=${letterScores.length}`);
-
     // Build score map
     const scoreMap = new Map<string, number>();
     for (const ls of letterScores) {
@@ -280,13 +262,10 @@ export class LiteracyLessonService {
     }
     maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR);
 
-    this.logger.log(`[HPTRACE] selectNextWord: maxLength=${maxLength} candidatesBeforeLengthFilter=${candidates.length}`);
-
     // Filter by length
     candidates = candidates.filter(
       (w) => Array.from(w).length <= maxLength,
     );
-    this.logger.log(`[HPTRACE] selectNextWord: candidatesAfterLengthFilter=${candidates.length}`);
 
     // Score each word
     const scored = candidates.map((word) => {

@@ -23,7 +23,6 @@ export class WabotInboundController {
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
   async receive(@Body() body: unknown) {
-    this.logger.log(`[HPTRACE] /wabot/inbound RECEIVED from=${(body as any)?.message?.from} type=${(body as any)?.message?.type} wamid=${(body as any)?.message?.id}`);
     // 1. Validate
     const dto = plainToInstance(MessageJobDto, body);
     const errors = await validate(dto);
