@@ -57,10 +57,12 @@ export const machine = setup({
           'checkAnswer guard requires context.answer and event.studentAnswer to be set',
         );
       }
-      return params.fn({
+      const result = params.fn({
         correctAnswer: context.answer,
         studentAnswer: event.studentAnswer,
       });
+      console.log(`[CHECKANSWER] fn=${params.fn.name} correctAnswer="${context.answer}" studentAnswer="${event.studentAnswer}" result=${result}`);
+      return result;
     }
   },
 
