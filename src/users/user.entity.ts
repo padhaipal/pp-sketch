@@ -25,6 +25,9 @@ export class UserEntity {
   referrer: UserEntity | null;
 
   @Column({ type: 'text', nullable: true })
+  name!: string | null;
+
+  @Column({ type: 'text', nullable: true })
   password_hash: string | null;
 
   @Column({ type: 'text', nullable: true })

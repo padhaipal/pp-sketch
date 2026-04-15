@@ -55,8 +55,8 @@ export class UserController {
 
   @Patch(':id')
   async patchUser(@Param('id') id: string, @Body() body: PatchUserDto) {
-    if (!body.phone && !body.password && !body.role) {
-      throw new BadRequestException('At least one of phone, password, or role required');
+    if (!body.phone && !body.name && !body.password && !body.role) {
+      throw new BadRequestException('At least one of phone, name, password, or role required');
     }
 
     const user = await this.userRepo.findOneBy({ id });
@@ -65,11 +65,12 @@ export class UserController {
     }
 
     if (body.phone) user.external_id = body.phone;
+    if (body.name) user.name = body.name;
     if (body.password) user.password_hash = await bcrypt.hash(body.password, 10);
     if (body.role) user.role = body.role;
     await this.userRepo.save(user);
 
-    return { id: user.id, external_id: user.external_id, role: user.role };
+    return { id: user.id, external_id: user.external_id, name: user.name, role: user.role };
   }
 
   @Delete(':id')

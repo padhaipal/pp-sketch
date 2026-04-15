@@ -7,6 +7,7 @@ export interface User {
   id: string;                      // UUID PK
   external_id: string;             // unique, the user's WhatsApp phone number
   referrer_user_id: string | null; // FK -> users.id
+  name: string | null;             // optional display name, nullable
   password_hash: string | null;    // bcrypt hash, nullable
   role: string | null;             // 'admin' | 'dev', nullable
   created_at: Date;                // TIMESTAMPTZ, default now()
@@ -22,9 +23,10 @@ export class LoginDto {
   @IsString() @IsNotEmpty() password: string;
 }
 
-// PATCH /users/:id — update any combination of phone, password, role
+// PATCH /users/:id — update any combination of phone, name, password, role
 export class PatchUserDto {
   @IsString() @IsNotEmpty() @IsOptional() phone?: string;
+  @IsString() @IsNotEmpty() @IsOptional() name?: string;
   @IsString() @IsNotEmpty() @IsOptional() password?: string;
   @IsIn(['admin', 'dev']) @IsOptional() role?: UserRole;
 }
@@ -40,12 +42,14 @@ export interface UpdateUserOptions {
   id?: string;
   external_id?: string;
   new_external_id?: string;
+  new_name?: string;
   new_referrer_user_id?: string | null;
   new_referrer_external_id?: string;
 }
 
 export interface CreateUserOptions {
   external_id: string;
+  name?: string;
   referrer_external_id?: string;
   referrer_user_id?: string;
 }
@@ -127,8 +131,8 @@ export function validateUpdateUserOptions(options: unknown): UpdateUserOptions {
   if (new_referrer_user_id !== undefined && new_referrer_external_id !== undefined) {
     throw new BadRequestException('update() requires at most one of new_referrer_user_id or new_referrer_external_id, not both');
   }
-  if (new_external_id === undefined && new_referrer_user_id === undefined && new_referrer_external_id === undefined) {
-    throw new BadRequestException('update() requires at least one field to update (new_external_id, new_referrer_user_id, new_referrer_external_id)');
+  if (new_external_id === undefined && new_name === undefined && new_referrer_user_id === undefined && new_referrer_external_id === undefined) {
+    throw new BadRequestException('update() requires at least one field to update (new_external_id, new_name, new_referrer_user_id, new_referrer_external_id)');
   }
   return { id, external_id: validatedExternalId, new_external_id: validatedNewExternalId, new_referrer_user_id, new_referrer_external_id: validatedNewReferrerExternalId } as UpdateUserOptions;
 }

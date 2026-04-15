@@ -67,6 +67,10 @@ export class UserService {
       updateFields.external_id = validated.new_external_id;
     }
 
+    if (validated.new_name !== undefined) {
+      updateFields.name = validated.new_name;
+    }
+
     if (validated.new_referrer_user_id !== undefined) {
       updateFields.referrer_user_id = validated.new_referrer_user_id;
     } else if (validated.new_referrer_external_id !== undefined) {
@@ -157,6 +161,7 @@ export class UserService {
     if (validated.referrer_user_id) {
       user = this.userRepo.create({
         external_id: validated.external_id,
+        name: validated.name ?? null,
         referrer_user_id: validated.referrer_user_id,
       });
       user = await this.userRepo.save(user);
@@ -188,16 +193,17 @@ export class UserService {
     } else if (validated.referrer_external_id) {
       // INSERT...SELECT with referrer lookup — raw SQL (complex query #5)
       const rows = await this.dataSource.query(
-        `INSERT INTO users (external_id, referrer_user_id)
-               SELECT $1, id FROM users WHERE external_id = $2
+        `INSERT INTO users (external_id, name, referrer_user_id)
+               SELECT $1, $2, id FROM users WHERE external_id = $3
                RETURNING *`,
-        [validated.external_id, validated.referrer_external_id],
+        [validated.external_id, validated.name ?? null, validated.referrer_external_id],
       );
 
       if (rows.length === 0) {
         // Referrer not found — insert without referrer
         user = this.userRepo.create({
           external_id: validated.external_id,
+          name: validated.name ?? null,
         });
         user = await this.userRepo.save(user);
         await this.populateUserCache(user);
@@ -232,6 +238,7 @@ export class UserService {
     } else {
       user = this.userRepo.create({
         external_id: validated.external_id,
+        name: validated.name ?? null,
       });
     }
 

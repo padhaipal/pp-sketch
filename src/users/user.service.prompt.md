@@ -32,9 +32,10 @@ update(options: UpdateUserOptions): Promise<User | null>
   ```
 * Updatable fields:
   * new_external_id replaces the user's external_id, discarding the old one.
+  * new_name sets the user's name (optional display name).
   * new_referrer_user_id sets the user's referrer_user_id directly by UUID (pass null to remove the referral).
   * new_referrer_external_id looks up the referrer by external_id and sets referrer_user_id to the found user's id.
-  * Only one of new_referrer_user_id/new_referrer_external_id may be provided. Can be combined with new_external_id.
+  * Only one of new_referrer_user_id/new_referrer_external_id may be provided. Can be combined with new_external_id or new_name.
 * If the user was found and updated: invalidate the cache. Delete all keys that might reference stale data:
   * CACHE_KEYS.userById(updatedUser.id)
   * CACHE_KEYS.userByExternalId(updatedUser.external_id) — the NEW external_id

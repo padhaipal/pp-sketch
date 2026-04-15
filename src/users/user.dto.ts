@@ -6,6 +6,7 @@ export interface User {
   id: string;
   external_id: string;
   referrer_user_id: string | null;
+  name: string | null;
   password_hash: string | null;
   role: string | null;
   created_at: Date;
@@ -32,6 +33,11 @@ export class PatchUserDto {
   @IsString()
   @IsNotEmpty()
   @IsOptional()
+  name?: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @IsOptional()
   password?: string;
 
   @IsIn(['admin', 'dev'])
@@ -48,12 +54,14 @@ export interface UpdateUserOptions {
   id?: string;
   external_id?: string;
   new_external_id?: string;
+  new_name?: string;
   new_referrer_user_id?: string | null;
   new_referrer_external_id?: string;
 }
 
 export interface CreateUserOptions {
   external_id: string;
+  name?: string;
   referrer_external_id?: string;
   referrer_user_id?: string;
 }
@@ -112,6 +120,7 @@ export function validateUpdateUserOptions(
     id,
     external_id,
     new_external_id,
+    new_name,
     new_referrer_user_id,
     new_referrer_external_id,
   } = options as Record<string, unknown>;
@@ -173,6 +182,11 @@ export function validateUpdateUserOptions(
       'update() options.new_referrer_external_id',
     );
   }
+  if (new_name !== undefined && typeof new_name !== 'string') {
+    throw new BadRequestException(
+      'update() options.new_name must be a string',
+    );
+  }
   if (
     new_referrer_user_id !== undefined &&
     new_referrer_external_id !== undefined
@@ -183,17 +197,19 @@ export function validateUpdateUserOptions(
   }
   if (
     new_external_id === undefined &&
+    new_name === undefined &&
     new_referrer_user_id === undefined &&
     new_referrer_external_id === undefined
   ) {
     throw new BadRequestException(
-      'update() requires at least one field to update (new_external_id, new_referrer_user_id, new_referrer_external_id)',
+      'update() requires at least one field to update (new_external_id, new_name, new_referrer_user_id, new_referrer_external_id)',
     );
   }
   return {
     id,
     external_id: validatedExternalId,
     new_external_id: validatedNewExternalId,
+    new_name,
     new_referrer_user_id,
     new_referrer_external_id: validatedNewReferrerExternalId,
   } as UpdateUserOptions;
@@ -205,7 +221,7 @@ export function validateCreateUserOptions(
   if (!options || typeof options !== 'object') {
     throw new BadRequestException('create() options must be an object');
   }
-  const { external_id, referrer_external_id, referrer_user_id } =
+  const { external_id, name, referrer_external_id, referrer_user_id } =
     options as Record<string, unknown>;
   if (typeof external_id !== 'string') {
     throw new BadRequestException(
@@ -216,6 +232,11 @@ export function validateCreateUserOptions(
     external_id,
     'create() options.external_id',
   );
+  if (name !== undefined && typeof name !== 'string') {
+    throw new BadRequestException(
+      'create() options.name must be a string',
+    );
+  }
   let validatedReferrerExternalId: string | undefined;
   if (referrer_external_id !== undefined) {
     if (typeof referrer_external_id !== 'string') {
@@ -240,6 +261,7 @@ export function validateCreateUserOptions(
   }
   return {
     external_id: validatedExternalId,
+    name,
     referrer_external_id: validatedReferrerExternalId,
     referrer_user_id,
   } as CreateUserOptions;
