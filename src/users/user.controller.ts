@@ -18,6 +18,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserEntity } from './user.entity';
 import { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
+import { ScoreEntity } from '../literacy/score/score.entity';
 import { LoginDto, PatchUserDto } from './user.dto';
 
 @ApiTags('users')
@@ -30,6 +31,8 @@ export class UserController {
     private readonly userRepo: Repository<UserEntity>,
     @InjectRepository(MediaMetaDataEntity)
     private readonly mediaRepo: Repository<MediaMetaDataEntity>,
+    @InjectRepository(ScoreEntity)
+    private readonly scoreRepo: Repository<ScoreEntity>,
   ) {}
 
   @Get('dashboard')
@@ -118,7 +121,11 @@ export class UserController {
     const offset = Math.max(0, parseInt(offsetStr || '0', 10) || 0);
     const limit = 100;
 
-    // 100 most recent whatsapp media for this user
+    // Fetch user details
+    const user = await this.userRepo.findOneBy({ id });
+    if (!user) throw new NotFoundException('User not found');
+
+    // 100 most recent whatsapp audio for this user
     const media = await this.mediaRepo.find({
       where: { user_id: id, source: 'whatsapp' as any, media_type: 'audio' as any },
       order: { created_at: 'DESC' },
@@ -126,7 +133,9 @@ export class UserController {
       take: limit,
     });
 
-    if (media.length === 0) return [];
+    if (media.length === 0) {
+      return { user: { name: user.name, phone: user.external_id }, media: [] };
+    }
 
     const mediaIds = media.map((m) => m.id);
 
@@ -145,11 +154,32 @@ export class UserController {
       transcriptMap.get(t.input_media_id)!.push({ text: t.text, source: t.source });
     }
 
-    return media.map((m) => ({
-      id: m.id,
-      created_at: m.created_at,
-      has_audio: !!m.s3_key,
-      transcripts: transcriptMap.get(m.id) ?? [],
+    return {
+      user: { name: user.name, phone: user.external_id },
+      media: media.map((m) => ({
+        id: m.id,
+        created_at: m.created_at,
+        has_audio: !!m.s3_key,
+        transcripts: transcriptMap.get(m.id) ?? [],
+      })),
+    };
+  }
+
+  @Get(':id/scores')
+  async userScores(@Param('id') id: string) {
+    const scores = await this.scoreRepo
+      .createQueryBuilder('s')
+      .innerJoinAndSelect('s.letter', 'l')
+      .select(['s.id', 's.score', 's.created_at', 's.letter_id', 'l.grapheme'])
+      .where('s.user_id = :id', { id })
+      .orderBy('s.created_at', 'ASC')
+      .getMany();
+
+    return scores.map((s) => ({
+      score: s.score,
+      created_at: s.created_at,
+      letter_id: s.letter_id,
+      grapheme: s.letter.grapheme,
     }));
   }
 
