@@ -1,16 +1,25 @@
 import {
   Controller,
+  Get,
   Post,
+  Param,
   Body,
+  Res,
   HttpCode,
   HttpStatus,
   BadRequestException,
+  NotFoundException,
   UseInterceptors,
   UploadedFiles,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiConsumes, ApiResponse, ApiBody } from '@nestjs/swagger';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { MediaMetaDataEntity } from './media-meta-data.entity';
 import { MediaMetaDataService } from './media-meta-data.service';
+import { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound.service';
 import {
   validateCreateHeygenMediaOptions,
   validateCreateElevenlabsMediaOptions,
@@ -24,7 +33,22 @@ import { startRootSpan, injectCarrier } from '../otel/otel';
 export class MediaMetaDataController {
   constructor(
     private readonly mediaMetaDataService: MediaMetaDataService,
+    private readonly mediaBucket: MediaBucketService,
+    @InjectRepository(MediaMetaDataEntity)
+    private readonly mediaRepo: Repository<MediaMetaDataEntity>,
   ) {}
+
+  @Get(':id/audio')
+  async getAudio(@Param('id') id: string, @Res() res: Response) {
+    const media = await this.mediaRepo.findOneBy({ id });
+    if (!media || !media.s3_key) {
+      throw new NotFoundException('Media not found or no audio available');
+    }
+    const { buffer, content_type } = await this.mediaBucket.getBuffer(media.s3_key);
+    res.set('Content-Type', content_type);
+    res.set('Content-Length', buffer.length.toString());
+    res.send(buffer);
+  }
 
   @Post('heygen-generate')
   @HttpCode(HttpStatus.ACCEPTED)

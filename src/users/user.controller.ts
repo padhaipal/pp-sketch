@@ -110,6 +110,49 @@ export class UserController {
     });
   }
 
+  @Get(':id/media')
+  async userMedia(
+    @Param('id') id: string,
+    @Query('offset') offsetStr?: string,
+  ) {
+    const offset = Math.max(0, parseInt(offsetStr || '0', 10) || 0);
+    const limit = 100;
+
+    // 100 most recent whatsapp media for this user
+    const media = await this.mediaRepo.find({
+      where: { user_id: id, source: 'whatsapp' as any, media_type: 'audio' as any },
+      order: { created_at: 'DESC' },
+      skip: offset,
+      take: limit,
+    });
+
+    if (media.length === 0) return [];
+
+    const mediaIds = media.map((m) => m.id);
+
+    // Find all transcripts where input_media_id is one of these media IDs
+    const transcripts = await this.mediaRepo
+      .createQueryBuilder('mm')
+      .select(['mm.id', 'mm.input_media_id', 'mm.text', 'mm.source'])
+      .where('mm.input_media_id IN (:...mediaIds)', { mediaIds })
+      .getMany();
+
+    // Group transcripts by input_media_id
+    const transcriptMap = new Map<string, { text: string | null; source: string }[]>();
+    for (const t of transcripts) {
+      if (!t.input_media_id) continue;
+      if (!transcriptMap.has(t.input_media_id)) transcriptMap.set(t.input_media_id, []);
+      transcriptMap.get(t.input_media_id)!.push({ text: t.text, source: t.source });
+    }
+
+    return media.map((m) => ({
+      id: m.id,
+      created_at: m.created_at,
+      has_audio: !!m.s3_key,
+      transcripts: transcriptMap.get(m.id) ?? [],
+    }));
+  }
+
   @Post('login')
   async login(@Body() body: LoginDto) {
     const { phone, password } = body;
