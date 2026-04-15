@@ -7,7 +7,26 @@ export interface User {
   id: string;                      // UUID PK
   external_id: string;             // unique, the user's WhatsApp phone number
   referrer_user_id: string | null; // FK -> users.id
+  password_hash: string | null;    // bcrypt hash, nullable
+  role: string | null;             // 'admin' | 'dev', nullable
   created_at: Date;                // TIMESTAMPTZ, default now()
+}
+
+export type UserRole = 'admin' | 'dev';
+
+// --- HTTP DTOs (class-validator decorated) ---
+
+// POST /users/login — authenticate by phone + password
+export class LoginDto {
+  @IsString() @IsNotEmpty() phone: string;
+  @IsString() @IsNotEmpty() password: string;
+}
+
+// PATCH /users/:id — update any combination of phone, password, role
+export class PatchUserDto {
+  @IsString() @IsNotEmpty() @IsOptional() phone?: string;
+  @IsString() @IsNotEmpty() @IsOptional() password?: string;
+  @IsIn(['admin', 'dev']) @IsOptional() role?: UserRole;
 }
 
 // --- Options types ---

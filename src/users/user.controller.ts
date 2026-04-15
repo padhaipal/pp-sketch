@@ -15,9 +15,7 @@ import * as bcrypt from 'bcrypt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserEntity } from './user.entity';
-import { LoginDto, SetRoleDto, UserRole } from './user.dto';
-
-const VALID_ROLES: UserRole[] = ['admin', 'dev'];
+import { LoginDto, PatchUserDto } from './user.dto';
 
 @ApiTags('users')
 @Controller('users')
@@ -55,14 +53,10 @@ export class UserController {
     return { id: user.id, external_id: user.external_id, role: user.role };
   }
 
-  @Patch(':id/role')
-  async setRole(@Param('id') id: string, @Body() body: SetRoleDto) {
-    const { phone, password, role } = body;
-    if (!phone || !password || !role) {
-      throw new BadRequestException('phone, password, and role required');
-    }
-    if (!VALID_ROLES.includes(role)) {
-      throw new BadRequestException(`role must be one of: ${VALID_ROLES.join(', ')}`);
+  @Patch(':id')
+  async patchUser(@Param('id') id: string, @Body() body: PatchUserDto) {
+    if (!body.phone && !body.password && !body.role) {
+      throw new BadRequestException('At least one of phone, password, or role required');
     }
 
     const user = await this.userRepo.findOneBy({ id });
@@ -70,9 +64,9 @@ export class UserController {
       throw new NotFoundException('User not found');
     }
 
-    user.external_id = phone;
-    user.password_hash = await bcrypt.hash(password, 10);
-    user.role = role;
+    if (body.phone) user.external_id = body.phone;
+    if (body.password) user.password_hash = await bcrypt.hash(body.password, 10);
+    if (body.role) user.role = body.role;
     await this.userRepo.save(user);
 
     return { id: user.id, external_id: user.external_id, role: user.role };

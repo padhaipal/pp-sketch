@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { parsePhoneNumberFromString } from 'libphonenumber-js';
-import { IsString, IsNotEmpty, IsIn } from 'class-validator';
+import { IsString, IsNotEmpty, IsIn, IsOptional } from 'class-validator';
 
 export interface User {
   id: string;
@@ -23,17 +23,20 @@ export class LoginDto {
   password: string;
 }
 
-export class SetRoleDto {
+export class PatchUserDto {
   @IsString()
   @IsNotEmpty()
-  phone: string;
+  @IsOptional()
+  phone?: string;
 
   @IsString()
   @IsNotEmpty()
-  password: string;
+  @IsOptional()
+  password?: string;
 
   @IsIn(['admin', 'dev'])
-  role: UserRole;
+  @IsOptional()
+  role?: UserRole;
 }
 
 export interface FindUserOptions {
