@@ -6,7 +6,7 @@ export interface Score {
   id: string;
   user_id: string;
   letter_id: string;
-  user_message_id: string;
+  user_message_id: string | null;
   score: number;
   created_at: Date;
 }

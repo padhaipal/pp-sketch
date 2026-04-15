@@ -33,8 +33,8 @@ export class ScoreEntity {
   letter: LetterEntity;
 
   @Index('idx_scores_user_message_id')
-  @Column({ type: 'uuid' })
-  user_message_id: string;
+  @Column({ type: 'uuid', nullable: true })
+  user_message_id: string | null;
 
   @ManyToOne(() => MediaMetaDataEntity)
   @JoinColumn({ name: 'user_message_id' })

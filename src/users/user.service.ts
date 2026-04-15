@@ -14,6 +14,23 @@ import {
   validateCreateUserOptions,
 } from './user.dto';
 
+const SEED_SCORES: { grapheme: string; score: number }[] = [
+  { grapheme: 'ऋ', score: 1 },
+  { grapheme: 'ा', score: 1.5 },
+  { grapheme: 'ी', score: 2 },
+  { grapheme: 'ु', score: 2.5 },
+  { grapheme: 'े', score: 3 },
+  { grapheme: 'ो', score: 3.5 },
+  { grapheme: 'ै', score: 4 },
+  { grapheme: 'ू', score: 4.5 },
+  { grapheme: 'ौ', score: 5 },
+  { grapheme: 'ि', score: 5.5 },
+  { grapheme: 'ं', score: 6 },
+  { grapheme: 'ृ', score: 6.5 },
+  { grapheme: 'ञ', score: 7 },
+  { grapheme: 'ण', score: 7 },
+];
+
 @Injectable()
 export class UserService {
   private readonly logger = new Logger(UserService.name);
@@ -186,6 +203,7 @@ export class UserService {
         }
       }
 
+      await this.createSeedScores(user.id);
       await this.populateUserCache(user);
       return user;
     } else if (validated.referrer_external_id) {
@@ -204,6 +222,7 @@ export class UserService {
           name: validated.name ?? null,
         });
         user = await this.userRepo.save(user);
+        await this.createSeedScores(user.id);
         await this.populateUserCache(user);
         return user;
       }
@@ -231,6 +250,7 @@ export class UserService {
         }
       }
 
+      await this.createSeedScores(user.id);
       await this.populateUserCache(user);
       return user;
     } else {
@@ -241,8 +261,34 @@ export class UserService {
     }
 
     user = await this.userRepo.save(user);
+    await this.createSeedScores(user.id);
     await this.populateUserCache(user);
     return user;
+  }
+
+  private async createSeedScores(userId: string): Promise<void> {
+    if (SEED_SCORES.length === 0) return;
+
+    const params: unknown[] = [userId];
+    const selects: string[] = [];
+
+    for (const { grapheme, score } of SEED_SCORES) {
+      const gIdx = params.push(grapheme);
+      const sIdx = params.push(score);
+      selects.push(
+        `SELECT $1::uuid, l.id, $${sIdx}::double precision FROM letters l WHERE l.grapheme = $${gIdx}`,
+      );
+    }
+
+    const rows = await this.dataSource.query(
+      `INSERT INTO scores (user_id, letter_id, score)
+       ${selects.join('\n       UNION ALL\n       ')}`,
+      params,
+    );
+
+    this.logger.log(
+      `Seed scores: inserted ${rows.length} for user ${userId}`,
+    );
   }
 
   private async populateUserCache(user: User): Promise<void> {
