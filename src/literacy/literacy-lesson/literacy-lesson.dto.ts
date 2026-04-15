@@ -7,6 +7,7 @@ export interface LiteracyLessonState {
   user_id: string;
   user_message_id: string;
   word: string;
+  answer: string | null;
   answer_correct: boolean | null;
   snapshot: any;
   created_at: Date;

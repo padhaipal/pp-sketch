@@ -33,6 +33,9 @@ export class LiteracyLessonStateEntity {
   @Column({ type: 'text' })
   word: string;
 
+  @Column({ type: 'text', nullable: true })
+  answer: string | null;
+
   @Column({ type: 'boolean', nullable: true })
   answer_correct: boolean | null;
 
