@@ -19,6 +19,7 @@ import { Repository } from 'typeorm';
 import { UserEntity } from './user.entity';
 import { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
 import { ScoreEntity } from '../literacy/score/score.entity';
+import { LiteracyLessonStateEntity } from '../literacy/literacy-lesson/literacy-lesson-state.entity';
 import { LoginDto, PatchUserDto } from './user.dto';
 
 @ApiTags('users')
@@ -33,6 +34,8 @@ export class UserController {
     private readonly mediaRepo: Repository<MediaMetaDataEntity>,
     @InjectRepository(ScoreEntity)
     private readonly scoreRepo: Repository<ScoreEntity>,
+    @InjectRepository(LiteracyLessonStateEntity)
+    private readonly lessonStateRepo: Repository<LiteracyLessonStateEntity>,
   ) {}
 
   @Get('dashboard')
@@ -154,6 +157,18 @@ export class UserController {
       transcriptMap.get(t.input_media_id)!.push({ text: t.text, source: t.source });
     }
 
+    // Find lesson states where user_message_id matches any of these media IDs
+    const lessonStates = await this.lessonStateRepo
+      .createQueryBuilder('ls')
+      .select(['ls.user_message_id', 'ls.word'])
+      .where('ls.user_message_id IN (:...mediaIds)', { mediaIds })
+      .getMany();
+
+    const wordMap = new Map<string, string>();
+    for (const ls of lessonStates) {
+      wordMap.set(ls.user_message_id, ls.word);
+    }
+
     return {
       user: { name: user.name, phone: user.external_id },
       media: media.map((m) => ({
@@ -161,6 +176,7 @@ export class UserController {
         created_at: m.created_at,
         has_audio: !!m.s3_key,
         transcripts: transcriptMap.get(m.id) ?? [],
+        word: wordMap.get(m.id) ?? null,
       })),
     };
   }
