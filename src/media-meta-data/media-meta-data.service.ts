@@ -46,7 +46,7 @@ import {
 // Feature flag check (OpenFeature)
 const STT_DEFAULTS: Record<string, boolean> = {
   sarvam: true,
-  azure: false,
+  azure: true,
   reverie: false,
 };
 async function isSttEnabled(provider: string): Promise<boolean> {

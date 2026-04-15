@@ -48,7 +48,7 @@ export class SarvamService {
     );
     formData.append('model', 'saaras:v3');
     formData.append('mode', 'transcribe');
-    formData.append('language_code', 'unknown');
+    formData.append('language_code', 'hi-IN');
 
     let response: Response;
     try {
