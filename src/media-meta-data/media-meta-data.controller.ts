@@ -2,6 +2,8 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
+  Delete,
   Param,
   Body,
   Res,
@@ -25,7 +27,11 @@ import {
   validateCreateElevenlabsMediaOptions,
   validateUploadStaticMediaItems,
   assertValidStaticMediaFile,
+  assertValidMediaType,
+  assertValidMediaSource,
+  assertValidMediaStatus,
 } from './media-meta-data.dto';
+import { v4 as uuid } from 'uuid';
 import { startRootSpan, injectCarrier } from '../otel/otel';
 
 @ApiTags('media-meta-data')
@@ -133,5 +139,71 @@ export class MediaMetaDataController {
     } finally {
       span.end();
     }
+  }
+
+  @Post(':id/dashboard-transcript')
+  @HttpCode(HttpStatus.CREATED)
+  async createDashboardTranscript(
+    @Param('id') id: string,
+    @Body() body: { text: string },
+  ) {
+    if (!body.text?.trim()) throw new BadRequestException('text required');
+
+    const parent = await this.mediaRepo.findOneBy({ id });
+    if (!parent) throw new NotFoundException('Media not found');
+
+    const existing = await this.mediaRepo.findOneBy({
+      input_media_id: id,
+      source: 'dashboard' as any,
+      media_type: 'text' as any,
+    });
+    if (existing) throw new BadRequestException('Dashboard transcript already exists');
+
+    assertValidMediaType('text');
+    assertValidMediaSource('dashboard');
+    assertValidMediaStatus('ready');
+
+    const entity = this.mediaRepo.create({
+      id: uuid(),
+      media_type: 'text',
+      source: 'dashboard',
+      status: 'ready',
+      text: body.text.trim(),
+      input_media_id: id,
+      user_id: parent.user_id,
+      rolled_back: false,
+    });
+    return this.mediaRepo.save(entity);
+  }
+
+  @Patch(':id/dashboard-transcript')
+  async updateDashboardTranscript(
+    @Param('id') id: string,
+    @Body() body: { text: string },
+  ) {
+    if (!body.text?.trim()) throw new BadRequestException('text required');
+
+    const transcript = await this.mediaRepo.findOneBy({
+      input_media_id: id,
+      source: 'dashboard' as any,
+      media_type: 'text' as any,
+    });
+    if (!transcript) throw new NotFoundException('Dashboard transcript not found');
+
+    transcript.text = body.text.trim();
+    return this.mediaRepo.save(transcript);
+  }
+
+  @Delete(':id/dashboard-transcript')
+  async deleteDashboardTranscript(@Param('id') id: string) {
+    const transcript = await this.mediaRepo.findOneBy({
+      input_media_id: id,
+      source: 'dashboard' as any,
+      media_type: 'text' as any,
+    });
+    if (!transcript) throw new NotFoundException('Dashboard transcript not found');
+
+    await this.mediaRepo.remove(transcript);
+    return { deleted: true };
   }
 }
