@@ -18,6 +18,7 @@ interface Context {
   letterImageErrors: number;
   letterNoImageErrors: number;
   answer: string | undefined;
+  previousAnswer: string | undefined;
   answerCorrect: boolean | null;
   stateTransitionId: string;
   userMessageId: string;
@@ -99,6 +100,7 @@ export const machine = setup({
     letterImageErrors: 0,
     letterNoImageErrors: 0,
     answer: input.word,
+    previousAnswer: input.word,
     answerCorrect: null,
     stateTransitionId: `${input.word}-start-word-initial`,
     userMessageId: input.userMessageId,
@@ -108,10 +110,13 @@ export const machine = setup({
 
   states: {
     word: {
-      entry: assign({
-        answer: ({ context }) => context.word,
-        wrongLetters: () => [],
-      }),
+      entry: [
+        assign({ previousAnswer: ({ context }) => context.answer }),
+        assign({
+          answer: ({ context }) => context.word,
+          wrongLetters: () => [],
+        }),
+      ],
       on: {
         ANSWER: [
           // Student got the word correct on the first try, mark all letters in the word as correct.
@@ -282,9 +287,10 @@ export const machine = setup({
     },
 
     letter: {
-      entry: assign({
-        answer: ({ context }) => context.wrongLetters[0],
-      }),
+      entry: [
+        assign({ previousAnswer: ({ context }) => context.answer }),
+        assign({ answer: ({ context }) => context.wrongLetters[0] }),
+      ],
       on: {
         ANSWER: [
           // Student got the letter correct and it is the last letter in wrongLetters, mark the letter as correct and go back to the word state.
@@ -338,9 +344,10 @@ export const machine = setup({
     },
 
     image: {
-      entry: assign({
-        answer: ({ context }) => context.wrongLetters[0],
-      }),
+      entry: [
+        assign({ previousAnswer: ({ context }) => context.answer }),
+        assign({ answer: ({ context }) => context.wrongLetters[0] }),
+      ],
       on: {
         ANSWER: [
           // Student got the image correct, go to the letterImage state.
@@ -379,9 +386,10 @@ export const machine = setup({
     },
 
     letterImage: {
-      entry: assign({
-        answer: ({ context }) => context.wrongLetters[0],
-      }),
+      entry: [
+        assign({ previousAnswer: ({ context }) => context.answer }),
+        assign({ answer: ({ context }) => context.wrongLetters[0] }),
+      ],
       on: {
         ANSWER: [
           // Student got the letter correct and it is the last letter in wrongLetters, go back to the word state.
@@ -474,9 +482,10 @@ export const machine = setup({
     },
 
     letterNoImage: {
-      entry: assign({
-        answer: ({ context }) => context.wrongLetters[0],
-      }),
+      entry: [
+        assign({ previousAnswer: ({ context }) => context.answer }),
+        assign({ answer: ({ context }) => context.wrongLetters[0] }),
+      ],
       on: {
         ANSWER: [
           // Student got the letter correct first go and it is the last letter in wrongLetters, mark the letter as correct and go back to the word state.

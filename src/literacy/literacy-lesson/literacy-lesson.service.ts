@@ -130,7 +130,7 @@ export class LiteracyLessonService {
       snapshot.context.pendingIncorrect ?? [];
 
     // 8. Persist snapshot
-    const answer: string | null = snapshot.context.answer ?? null;
+    const answer: string | null = snapshot.context.previousAnswer ?? null;
     const answerCorrect: boolean | null = snapshot.context.answerCorrect ?? null;
     this.logger.log(`[HPTRACE] processAnswer: persisting snapshot word=${snapshot.context.word} answer=${answer} answerCorrect=${answerCorrect} stid=${snapshot.context.stateTransitionId} userMessageId=${validated.user_message_id}`);
     const rows = await this.dataSource.query(
