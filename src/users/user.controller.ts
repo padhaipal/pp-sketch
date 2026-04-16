@@ -234,7 +234,7 @@ export class UserController {
     const scores = await this.scoreRepo
       .createQueryBuilder('s')
       .innerJoinAndSelect('s.letter', 'l')
-      .select(['s.id', 's.score', 's.created_at', 's.letter_id', 'l.grapheme'])
+      .select(['s.id', 's.score', 's.created_at', 's.letter_id', 's.user_message_id', 'l.grapheme'])
       .where('s.user_id = :id', { id })
       .orderBy('s.created_at', 'ASC')
       .getMany();
@@ -244,6 +244,7 @@ export class UserController {
       created_at: s.created_at,
       letter_id: s.letter_id,
       grapheme: s.letter.grapheme,
+      is_seed: s.user_message_id === null,
     }));
   }
 

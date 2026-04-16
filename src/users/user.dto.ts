@@ -89,6 +89,7 @@ export interface ScoreRow {
   created_at: Date;
   letter_id: string;
   grapheme: string;
+  is_seed: boolean;
 }
 
 export interface LoginResponse {
