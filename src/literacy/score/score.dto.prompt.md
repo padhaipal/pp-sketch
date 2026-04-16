@@ -180,7 +180,19 @@ export interface LettersLearntResult {
   lettersLearnt: string[];  // array of single-grapheme strings (may be empty)
 }
 
-// Accepts a single user identifier (string) or an array of identifiers.
+// Controller query DTO for GET /scores/letters-learnt.
+// Accepts ?users=id1,id2 (comma-separated) or ?users=id1&users=id2 (repeated).
+// @Transform splits comma-separated strings into an array before validation.
+// Validated by the global ValidationPipe (whitelist, forbidNonWhitelisted, transform).
+export class LettersLearntQueryDto {
+  @Transform(/* splits comma-separated string or repeated params into string[] */)
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  users: string[];
+}
+
+// Internal service-level validation. Accepts string | string[].
 // Each identifier can be a UUID (user id) or a phone number (external_id).
 // An array may freely mix both kinds.
 export function validateLettersLearntInput(users: unknown): string[] {

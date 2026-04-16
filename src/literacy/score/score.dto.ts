@@ -1,4 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
+import { Transform } from 'class-transformer';
+import { ArrayMinSize, IsArray, IsString } from 'class-validator';
 import { User } from '../../users/user.dto';
 import { Letter } from '../letters/letter.dto';
 
@@ -257,6 +259,30 @@ export interface LettersLearntResult {
   userId: string;
   userPhone: string;
   lettersLearnt: string[];
+}
+
+export class LettersLearntQueryDto {
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      return value
+        .split(',')
+        .map((s: string) => s.trim())
+        .filter((s: string) => s.length > 0);
+    }
+    if (Array.isArray(value)) {
+      return value.flatMap((s: string) =>
+        s
+          .split(',')
+          .map((t: string) => t.trim())
+          .filter((t: string) => t.length > 0),
+      );
+    }
+    return value;
+  })
+  @IsArray()
+  @ArrayMinSize(1, { message: 'users must contain at least one user identifier' })
+  @IsString({ each: true, message: 'each user identifier must be a string' })
+  users: string[];
 }
 
 export function validateLettersLearntInput(users: unknown): string[] {
