@@ -61,7 +61,9 @@ export class LiteracyLessonService {
     } else {
       const age =
         Date.now() - new Date(currentState.created_at).getTime();
-      if (age > 120_000) {
+      if (age > 900_000) {
+        startFresh = true;
+      } else if (age > 60_000) {
         startFresh = true;
         isStaleRestart = true;
       } else if (currentState.snapshot?.status === 'done') {

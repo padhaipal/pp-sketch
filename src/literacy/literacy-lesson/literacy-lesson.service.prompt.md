@@ -22,7 +22,8 @@ The main entry point called by the inbound processor at step 7. Handles the full
 
 4.) Determine whether to start fresh or continue. Also track whether this is a stale restart (`isStaleRestart`):
 * If `findCurrentState` returned null → start a new lesson (step 5).
-* If `created_at` is older than 120 seconds → start a new lesson (step 5). Set `isStaleRestart = true`.
+* If `created_at` is older than 15 minutes → start a new lesson (step 5). Do NOT set `isStaleRestart` (the student has been away too long for the nudge to make sense).
+* If `created_at` is older than 60 seconds → start a new lesson (step 5). Set `isStaleRestart = true`.
 * If `snapshot.status === 'done'` → start a new lesson (step 5).
 * Else → rehydrate and run (step 6).
 
