@@ -115,7 +115,7 @@ async function bootstrap() {
   );
 
   const notifierWorker = createWorker(QUEUE_NAMES.NOTIFIER, async (job) => {
-    await processNotifierCronJob(job, dataSource);
+    await processNotifierCronJob(job, dataSource, literacyLessonService, mediaMetaDataService);
   });
   notifierWorker.on('failed', (job, err) => logger.error(`worker(${QUEUE_NAMES.NOTIFIER}) FAILED job id=${job?.id} err=${err.message}`));
   notifierWorker.on('error', (err) => logger.error(`worker(${QUEUE_NAMES.NOTIFIER}) ERROR ${err.message}`));

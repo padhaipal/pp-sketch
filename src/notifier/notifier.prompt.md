@@ -3,8 +3,15 @@
 Evening notification system. Every day at 7 PM IST a cron job finds users whose most
 recent message was between 19 and 24 hours ago (i.e. between yesterday 7 PM and today
 midnight IST). Users who messaged more recently are skipped — their 24-hour window is
-still wide open. For each qualifying user, a random notification video is queued as a
-rate-limited WhatsApp video send (2 msg/s), ordered by soonest-expiring 24-hour window.
+still wide open. For each qualifying user, the cron job:
+  1. Picks a random notification video (evening_notification_message).
+  2. Calls literacyLessonService.processAnswer() using the user's most recent
+     media_metadata id as user_message_id. This detects the stale lesson and starts
+     a fresh one, returning stateTransitionIds.
+  3. Resolves those stateTransitionIds into media items via findMediaByStateTransitionId().
+  4. Combines the notification video + lesson media into a single OutboundMediaItem[] array.
+  5. Enqueues a rate-limited NOTIFIER_SEND job (2 msg/s) with the full media array,
+     ordered by soonest-expiring 24-hour window.
 
 ## Architecture overview
 
@@ -40,10 +47,15 @@ Add two queue names:
 
 ## 2. pp-sketch notifier processor (notifier/notifier.processor.ts)
 
-### processNotifierCronJob(job, dataSource)
+### processNotifierCronJob(job, dataSource, literacyLessonService, mediaMetaDataService)
 
-1.) Query distinct user_ids whose most recent message falls in the 19–24 hour window:
-    SELECT mm.user_id, u.external_id, MAX(mm.created_at) AS last_message_at
+1.) Query distinct user_ids whose most recent message falls in the 19–24 hour window,
+    including each user's most recent media_metadata id:
+
+    SELECT mm.user_id, u.external_id, MAX(mm.created_at) AS last_message_at,
+           (SELECT m2.id FROM media_metadata m2
+            WHERE m2.user_id = mm.user_id AND m2.source = 'whatsapp'
+            ORDER BY m2.created_at DESC LIMIT 1) AS last_message_id
     FROM media_metadata mm
     JOIN users u ON u.id = mm.user_id
     WHERE mm.source = 'whatsapp'
@@ -68,20 +80,24 @@ Add two queue names:
 
     If zero rows returned, log ERROR and return early (no media to send).
 
-3.) For each user, compute their 24-hour expiry: last_message_at + 24 hours.
-    Sort users ascending by expiry (soonest-expiring first).
+3.) Sort users ascending by last_message_at (soonest-expiring 24-hour window first).
 
-4.) For each user (in sorted order), enqueue a NOTIFIER_SEND job containing:
-    { user_external_id, wa_media_url (randomly chosen from step 2) }
-
-    No BullMQ delay needed — ordering is handled by enqueueing in sorted order and the
-    NOTIFIER_SEND worker processes sequentially with a rate limiter.
+4.) For each user (in sorted order):
+    a. Start with an OutboundMediaItem[] containing a randomly chosen notification video.
+    b. Call literacyLessonService.processAnswer({ user, user_message_id: last_message_id })
+       to trigger a fresh lesson. The user's last media_metadata id is reused as the
+       user_message_id — this is the same pattern used when a lesson completes and a new
+       one starts within a single inbound message.
+    c. Resolve each returned stateTransitionId into media via
+       mediaMetaDataService.findMediaByStateTransitionId() and append to the array.
+    d. If processAnswer or media resolution fails, log WARN and fall back to sending
+       the notification video only.
+    e. Enqueue a NOTIFIER_SEND job with { user_external_id, media }.
 
 ### processNotifierSendJob(job, wabotOutbound)
 
-1.) Extract { user_external_id, wa_media_url } from job.data.
-2.) Call wabot-sketch POST /sendNotification with:
-    { user_external_id, media: [{ type: 'video', url: wa_media_url }] }
+1.) Extract { user_external_id, media } from job.data.
+2.) Call wabot-sketch POST /sendNotification with: { user_external_id, media }.
 3.) If the response indicates rate-limit (130429), throw to trigger BullMQ retry.
 4.) If the response indicates 24-hour window expired (131047), log WARN in pp-sketch
     and return (do not throw — this user is permanently undeliverable this cycle).
@@ -120,7 +136,8 @@ New class SendNotificationDto:
 ## 4. pp-sketch main.ts wiring
 
 1.) Import processNotifierCronJob and processNotifierSendJob from notifier.processor.
-2.) Create the NOTIFIER worker: createWorker(QUEUE_NAMES.NOTIFIER, ...) passing dataSource.
+2.) Create the NOTIFIER worker: createWorker(QUEUE_NAMES.NOTIFIER, ...) passing dataSource,
+    literacyLessonService, and mediaMetaDataService.
 3.) Create the NOTIFIER_SEND worker: createWorker(QUEUE_NAMES.NOTIFIER_SEND, ...) passing
     wabotOutbound. Configure the worker with BullMQ limiter: { max: 2, duration: 1000 }
     to enforce 2 messages per second.
