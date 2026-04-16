@@ -7,6 +7,8 @@ export const QUEUE_NAMES = {
   HEYGEN_INBOUND: 'heygen-inbound',
   ELEVENLABS_GENERATE: 'elevenlabs-generate',
   WHATSAPP_PRELOAD: 'whatsapp-preload',
+  NOTIFIER: 'notifier',
+  NOTIFIER_SEND: 'notifier-send',
 } as const;
 
 const connection = new Redis(process.env.BULLMQ_REDIS_URL!, {
@@ -43,6 +45,17 @@ export const DEFAULT_JOB_OPTIONS: Record<string, JobsOptions> = {
   [QUEUE_NAMES.WHATSAPP_PRELOAD]: {
     attempts: 5,
     backoff: { type: 'exponential', delay: 10000 },
+    removeOnComplete: true,
+    removeOnFail: { count: 5000 },
+  },
+  [QUEUE_NAMES.NOTIFIER]: {
+    attempts: 1,
+    removeOnComplete: true,
+    removeOnFail: { count: 500 },
+  },
+  [QUEUE_NAMES.NOTIFIER_SEND]: {
+    attempts: 5,
+    backoff: { type: 'exponential', delay: 3000 },
     removeOnComplete: true,
     removeOnFail: { count: 5000 },
   },

@@ -29,3 +29,14 @@ export interface DownloadMediaRequest {
 export interface UploadMediaResponse {
   wa_media_url: string;
 }
+
+export interface SendNotificationRequest {
+  user_external_id: string;
+  media: OutboundMediaItem[];
+}
+
+export interface SendNotificationResponse {
+  status: number;
+  delivered: boolean;
+  error_code?: number;
+}

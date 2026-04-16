@@ -1,0 +1,130 @@
+// pp-sketch/src/notifier/notifier.prompt.md
+
+Evening notification system. Every day at 7 PM IST a cron job finds users who messaged
+the bot in the last 24 hours, picks a random notification video for each, and queues
+rate-limited WhatsApp video sends (2 msg/s) ordered by soonest-expiring 24-hour window.
+
+## Architecture overview
+
+Two new BullMQ queues in pp-sketch:
+
+* NOTIFIER — a single repeatable job that fires at 7 PM IST daily (cron: `30 13 * * *` UTC).
+  The processor queries the database then fans out into NOTIFIER_SEND jobs.
+* NOTIFIER_SEND — one job per user. Rate-limited to 2 jobs/second via BullMQ `limiter`
+  on the Worker. Each job calls the new wabot-sketch `POST /sendNotification` endpoint.
+
+A new wabot-sketch endpoint `POST /sendNotification` sends a video message to a user
+without requiring a wamid or inflight-key check (the 24-hour window is still relevant
+but is NOT enforced by pp-sketch since all recipients messaged within the last 24 hours).
+wabot-sketch handles WhatsApp error codes:
+  - 130429 (rate limit hit): throw so BullMQ retries with exponential backoff, log WARN.
+  - 131047 (outside 24-hour window): log ERROR, do NOT retry (return success to avoid
+    infinite retries on a permanent failure).
+
+## 1. pp-sketch queues (interfaces/redis/queues.ts)
+
+Add two queue names:
+
+* NOTIFIER: 'notifier'
+  - DEFAULT_JOB_OPTIONS: attempts: 1, removeOnComplete: true, removeOnFail: { count: 500 }
+  - Rationale: the cron trigger itself should not retry; if it fails we wait for the
+    next daily run. Single attempt is sufficient.
+
+* NOTIFIER_SEND: 'notifier-send'
+  - DEFAULT_JOB_OPTIONS: attempts: 5, backoff: { type: 'exponential', delay: 3000 },
+    removeOnComplete: true, removeOnFail: { count: 5000 }
+  - Rationale: each send may hit WhatsApp rate-limit error 130429 which is retryable.
+    5 attempts with exponential backoff from 3 s gives ~45 s total retry window.
+
+## 2. pp-sketch notifier processor (notifier/notifier.processor.ts)
+
+### processNotifierCronJob(job, dataSource)
+
+1.) Query distinct user_ids who sent a message since 7 PM IST yesterday:
+    SELECT DISTINCT mm.user_id, u.external_id, MAX(mm.created_at) AS last_message_at
+    FROM media_metadata mm
+    JOIN users u ON u.id = mm.user_id
+    WHERE mm.source = 'whatsapp'
+      AND mm.user_id IS NOT NULL
+      AND mm.created_at >= <7 PM IST yesterday>
+    GROUP BY mm.user_id, u.external_id
+
+    Compute the cutoff in code: take current Date, set to IST (UTC+5:30) 19:00 of
+    yesterday, then convert back to UTC.
+
+2.) Query all notification video URLs:
+    SELECT wa_media_url
+    FROM media_metadata
+    WHERE state_transition_id = 'evening_notification_message'
+      AND media_type = 'video'
+      AND status = 'ready'
+      AND wa_media_url IS NOT NULL
+
+    If zero rows returned, log ERROR and return early (no media to send).
+
+3.) For each user, compute their 24-hour expiry: last_message_at + 24 hours.
+    Sort users ascending by expiry (soonest-expiring first).
+
+4.) For each user (in sorted order), enqueue a NOTIFIER_SEND job containing:
+    { user_external_id, wa_media_url (randomly chosen from step 2) }
+
+    No BullMQ delay needed — ordering is handled by enqueueing in sorted order and the
+    NOTIFIER_SEND worker processes sequentially with a rate limiter.
+
+### processNotifierSendJob(job, wabotOutbound)
+
+1.) Extract { user_external_id, wa_media_url } from job.data.
+2.) Call wabot-sketch POST /sendNotification with:
+    { user_external_id, media: [{ type: 'video', url: wa_media_url }] }
+3.) If the response indicates rate-limit (130429), throw to trigger BullMQ retry.
+4.) If the response indicates 24-hour window expired (131047), log WARN in pp-sketch
+    and return (do not throw — this user is permanently undeliverable this cycle).
+5.) If response is success, return normally.
+
+## 3. wabot-sketch new endpoint: POST /sendNotification
+
+### Controller (interfaces/pp/inbound/inbound.controller.ts)
+
+Add a new `@Post('sendNotification')` method to PpInboundController.
+Validates body using a new SendNotificationDto:
+  - user_external_id: string (required)
+  - media: OutboundMediaItemDto[] (required, min 1)
+
+No wamid field. No inflight/consecutive Redis key check.
+
+### Service (interfaces/whatsapp/outbound/outbound.service.ts)
+
+Add a new `sendNotification` function that:
+1.) Builds the same WhatsApp Graph API payload as sendMessage but without
+    any inflight key logic.
+2.) Calls the Graph API.
+3.) Parses the response. If the response body contains error.code:
+    - 130429: return { status: 429, error_code: 130429 } so the controller can
+      relay this to pp-sketch for retry.
+    - 131047: log ERROR ("Message failed: outside 24-hour window for user {user_id}"),
+      return { status: 403, error_code: 131047 }.
+4.) On success return { status: 200, delivered: true }.
+
+### DTO (interfaces/pp/inbound/inbound.dto.ts)
+
+New class SendNotificationDto:
+  - user_external_id: string @IsString
+  - media: OutboundMediaItemDto[] @IsArray @ArrayMinSize(1) @ValidateNested
+
+## 4. pp-sketch main.ts wiring
+
+1.) Import processNotifierCronJob and processNotifierSendJob from notifier.processor.
+2.) Create the NOTIFIER worker: createWorker(QUEUE_NAMES.NOTIFIER, ...) passing dataSource.
+3.) Create the NOTIFIER_SEND worker: createWorker(QUEUE_NAMES.NOTIFIER_SEND, ...) passing
+    wabotOutbound. Configure the worker with BullMQ limiter: { max: 2, duration: 1000 }
+    to enforce 2 messages per second.
+4.) Create the NOTIFIER queue with createQueue and add a repeatable job:
+    queue.add('notifier-cron', {}, { repeat: { pattern: '30 13 * * *' } })
+    (13:30 UTC = 19:00 IST).
+5.) Add error/failed listeners matching existing pattern.
+
+## 5. pp-sketch WabotOutboundService (interfaces/wabot/outbound/outbound.service.ts)
+
+Add a `sendNotification` method that POSTs to `${baseUrl}/sendNotification` with:
+  { user_external_id, media }
+Returns { status, body } where body may contain error_code for pp-sketch to inspect.

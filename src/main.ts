@@ -11,12 +11,14 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { DataSource } from 'typeorm';
 import { AppModule } from './app.module';
 import { MediaMetaDataEntity } from './media-meta-data/media-meta-data.entity';
-import { createWorker, QUEUE_NAMES } from './interfaces/redis/queues';
+import { createQueue, createWorker, QUEUE_NAMES, queueRedisConnection } from './interfaces/redis/queues';
+import { Worker } from 'bullmq';
 import { processWabotInboundJob } from './interfaces/wabot/inbound/inbound.processor';
 import { processHeygenInboundJob } from './interfaces/heygen/inbound/inbound.processor';
 import { processHeygenGenerateJob } from './interfaces/heygen/outbound/outbound.service';
 import { processElevenlabsGenerateJob } from './interfaces/elevenlabs/outbound/outbound.service';
 import { processWhatsappPreloadJob } from './media-meta-data/whatsapp-preload.processor';
+import { processNotifierCronJob, processNotifierSendJob } from './notifier/notifier.processor';
 import { UserService } from './users/user.service';
 import { MediaMetaDataService } from './media-meta-data/media-meta-data.service';
 import { LiteracyLessonService } from './literacy/literacy-lesson/literacy-lesson.service';
@@ -104,7 +106,34 @@ async function bootstrap() {
     );
   });
 
-  logger.log('BullMQ workers started for all 5 queues');
+  // Notifier cron: fires daily at 13:30 UTC = 19:00 IST
+  const notifierQueue = createQueue(QUEUE_NAMES.NOTIFIER);
+  await notifierQueue.add(
+    'notifier-cron',
+    {},
+    { repeat: { pattern: '30 13 * * *' } },
+  );
+
+  const notifierWorker = createWorker(QUEUE_NAMES.NOTIFIER, async (job) => {
+    await processNotifierCronJob(job, dataSource);
+  });
+  notifierWorker.on('failed', (job, err) => logger.error(`worker(${QUEUE_NAMES.NOTIFIER}) FAILED job id=${job?.id} err=${err.message}`));
+  notifierWorker.on('error', (err) => logger.error(`worker(${QUEUE_NAMES.NOTIFIER}) ERROR ${err.message}`));
+
+  const notifierSendWorker = new Worker(
+    QUEUE_NAMES.NOTIFIER_SEND,
+    async (job) => {
+      await processNotifierSendJob(job, wabotOutbound);
+    },
+    {
+      connection: queueRedisConnection,
+      limiter: { max: 2, duration: 1000 },
+    },
+  );
+  notifierSendWorker.on('failed', (job, err) => logger.error(`worker(${QUEUE_NAMES.NOTIFIER_SEND}) FAILED job id=${job?.id} err=${err.message}`));
+  notifierSendWorker.on('error', (err) => logger.error(`worker(${QUEUE_NAMES.NOTIFIER_SEND}) ERROR ${err.message}`));
+
+  logger.log('BullMQ workers started for all 7 queues');
 
   await app.listen(process.env.PORT ?? 3000);
   logger.log(`Application listening on port ${process.env.PORT ?? 3000}`);

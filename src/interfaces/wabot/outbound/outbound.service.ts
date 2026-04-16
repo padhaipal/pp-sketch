@@ -4,6 +4,8 @@ import {
   OutboundMediaItem,
   SendMessageRequest,
   SendMessageResponse,
+  SendNotificationRequest,
+  SendNotificationResponse,
   UploadMediaResponse,
 } from './outbound.dto';
 
@@ -41,6 +43,29 @@ export class WabotOutboundService {
     }
     const body = (await response.json()) as SendMessageResponse;
     return { status: response.status, body };
+  }
+
+  async sendNotification(options: {
+    user_external_id: string;
+    media: OutboundMediaItem[];
+  }): Promise<SendNotificationResponse> {
+    const requestBody: SendNotificationRequest = {
+      user_external_id: options.user_external_id,
+      media: options.media,
+    };
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/sendNotification`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': this.apiKey },
+        body: JSON.stringify(requestBody),
+      });
+    } catch (err) {
+      this.logger.error(`WabotOutbound.sendNotification fetch threw: ${(err as Error).message}`);
+      throw err;
+    }
+    return (await response.json()) as SendNotificationResponse;
   }
 
   async downloadMedia(
