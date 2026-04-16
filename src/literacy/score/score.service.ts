@@ -10,10 +10,12 @@ import {
   CreateScoreOptions,
   FindScoreOptions,
   GradeAndRecordOptions,
+  LettersLearntResult,
   DEFAULT_FIND_SCORE_LIMIT,
   validateCreateScoreOptions,
   validateFindScoreOptions,
   validateGradeAndRecordOptions,
+  validateLettersLearntInput,
 } from './score.dto';
 import { User } from '../../users/user.dto';
 import { Letter } from '../letters/letter.dto';
@@ -71,6 +73,9 @@ function buildLetterWhere(
     nextIdx: startIdx + 1,
   };
 }
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function calculateNewScore(
   average: number,
@@ -304,5 +309,134 @@ export class ScoreService {
     }
 
     return rows;
+  }
+
+  async getLettersLearnt(
+    users: string | string[],
+  ): Promise<LettersLearntResult | LettersLearntResult[]> {
+    const isSingleInput = typeof users === 'string';
+    const normalized = validateLettersLearntInput(users);
+
+    const ids: string[] = [];
+    const phones: string[] = [];
+    for (const u of normalized) {
+      if (UUID_REGEX.test(u)) {
+        ids.push(u);
+      } else {
+        phones.push(u);
+      }
+    }
+
+    // Resolve all users in a single round-trip
+    const userParams: unknown[] = [];
+    const userConditions: string[] = [];
+    let idx = 1;
+
+    if (ids.length > 0) {
+      const placeholders = ids.map((_, i) => `$${idx + i}`).join(',');
+      userParams.push(...ids);
+      userConditions.push(`id IN (${placeholders})`);
+      idx += ids.length;
+    }
+    if (phones.length > 0) {
+      const placeholders = phones.map((_, i) => `$${idx + i}`).join(',');
+      userParams.push(...phones);
+      userConditions.push(`external_id IN (${placeholders})`);
+      idx += phones.length;
+    }
+
+    const userRows: { id: string; external_id: string }[] =
+      await this.dataSource.query(
+        `SELECT id, external_id FROM users WHERE ${userConditions.join(' OR ')}`,
+        userParams,
+      );
+
+    const foundById = new Map(userRows.map((u) => [u.id, u]));
+    const foundByPhone = new Map(userRows.map((u) => [u.external_id, u]));
+
+    for (const id of ids) {
+      if (!foundById.has(id)) {
+        throw new NotFoundException(`User not found: ${id}`);
+      }
+    }
+    for (const phone of phones) {
+      if (!foundByPhone.has(phone)) {
+        throw new NotFoundException(`User not found: ${phone}`);
+      }
+    }
+
+    const userIds = userRows.map((u) => u.id);
+
+    // Fetch all scores for all resolved users with letter graphemes, ordered
+    // for grouping: user → letter → chronological
+    const scorePlaceholders = userIds.map((_, i) => `$${i + 1}`).join(',');
+    const scoreRows: {
+      user_id: string;
+      score: number;
+      grapheme: string;
+    }[] = await this.dataSource.query(
+      `SELECT s.user_id, s.score, l.grapheme
+       FROM scores s
+       JOIN letters l ON l.id = s.letter_id
+       WHERE s.user_id IN (${scorePlaceholders})
+       ORDER BY s.user_id, l.grapheme, s.created_at ASC`,
+      userIds,
+    );
+
+    // Group: user_id → grapheme → scores (already chronological from ORDER BY)
+    const userScores = new Map<string, Map<string, number[]>>();
+    for (const row of scoreRows) {
+      if (!userScores.has(row.user_id)) {
+        userScores.set(row.user_id, new Map());
+      }
+      const letterMap = userScores.get(row.user_id)!;
+      if (!letterMap.has(row.grapheme)) {
+        letterMap.set(row.grapheme, []);
+      }
+      letterMap.get(row.grapheme)!.push(row.score);
+    }
+
+    // Build a lookup from any input identifier to the resolved user
+    const inputToUser = new Map<string, { id: string; external_id: string }>();
+    for (const u of userRows) {
+      inputToUser.set(u.id, u);
+      inputToUser.set(u.external_id, u);
+    }
+
+    // Process each user in input order, deduplicating by user id
+    const results: LettersLearntResult[] = [];
+    const seen = new Set<string>();
+
+    for (const input of normalized) {
+      const user = inputToUser.get(input)!;
+      if (seen.has(user.id)) continue;
+      seen.add(user.id);
+
+      const letterMap = userScores.get(user.id) ?? new Map<string, number[]>();
+      const lettersLearnt: string[] = [];
+
+      for (const [grapheme, scores] of letterMap) {
+        if (scores.length < 4) continue;
+
+        const firstScore = scores[0];
+        const lastScore = scores[scores.length - 1];
+        if (lastScore < firstScore) continue;
+
+        for (let i = 1; i < scores.length; i++) {
+          if (scores[i] <= firstScore - 4) {
+            lettersLearnt.push(grapheme);
+            break;
+          }
+        }
+      }
+
+      results.push({
+        userId: user.id,
+        userPhone: user.external_id,
+        lettersLearnt,
+      });
+    }
+
+    return isSingleInput ? results[0] : results;
   }
 }

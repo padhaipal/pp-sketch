@@ -172,6 +172,24 @@ function validateLetterOutcomes(value: unknown, fieldName: string): string[] {
   );
 }
 
+// --- Letters Learnt types ---
+
+export interface LettersLearntResult {
+  userId: string;       // users.id
+  userPhone: string;    // users.external_id
+  lettersLearnt: string[];  // array of single-grapheme strings (may be empty)
+}
+
+// Accepts a single user identifier (string) or an array of identifiers.
+// Each identifier can be a UUID (user id) or a phone number (external_id).
+// An array may freely mix both kinds.
+export function validateLettersLearntInput(users: unknown): string[] {
+  // Normalises a bare string to [string]. Rejects empty strings, empty arrays,
+  // and non-string items. Returns the normalised string[].
+}
+
+// --- Grade and Record validation ---
+
 export function validateGradeAndRecordOptions(
   options: unknown,
 ): GradeAndRecordOptions & { _correct: string[]; _incorrect: string[] } {

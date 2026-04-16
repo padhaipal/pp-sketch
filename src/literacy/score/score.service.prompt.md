@@ -53,3 +53,31 @@ function calculateNewScore(
   return correct ? base + 1.01 : base - 5.01;
 }
 ```
+
+## getLettersLearnt(users: string | string[]): Promise\<LettersLearntResult | LettersLearntResult[]>
+
+Two database round-trips. Accepts one or more user identifiers (UUIDs or phone numbers, freely mixed) and returns which letters each user has "learnt".
+
+Input is `string | string[]`. A single string returns a single `LettersLearntResult`; an array returns `LettersLearntResult[]`. The `users` parameter is required.
+
+Each identifier is classified as a UUID (regex `^[0-9a-f-]{36}$`) or a phone number (everything else). Duplicate users (same user referenced by both id and phone) are deduplicated; results preserve input order.
+
+1.) Validate with `validateLettersLearntInput()` — normalises a bare string into a one-element array, rejects empty strings and non-string array items.
+
+2.) **DB hit 1** — resolve all users in one query:
+    `SELECT id, external_id FROM users WHERE id IN (...) OR external_id IN (...)`
+    Throws `NotFoundException` for any identifier that doesn't match a row.
+
+3.) **DB hit 2** — fetch every score for the resolved users with letter graphemes:
+    `SELECT s.user_id, s.score, l.grapheme FROM scores s JOIN letters l ON l.id = s.letter_id WHERE s.user_id IN (...) ORDER BY s.user_id, l.grapheme, s.created_at ASC`
+    The `ORDER BY` groups rows by user → letter → chronological, so no in-memory sort is needed.
+
+4.) Group scores into `Map<user_id, Map<grapheme, number[]>>` (score values only, already in chronological order).
+
+5.) For each user, iterate over each letter's score series and apply the "learnt" heuristic:
+   - **Skip** if the letter has fewer than 4 scores.
+   - Let `firstScore = scores[0]` and `lastScore = scores[scores.length - 1]`.
+   - **Skip** if `lastScore < firstScore` (overall regression).
+   - Otherwise scan `scores[1..]`: if any value is ≤ `firstScore − 4`, the letter is learnt — add its grapheme to the result and move on.
+
+6.) Return `{ userId, userPhone, lettersLearnt }` (single object) or an array thereof.

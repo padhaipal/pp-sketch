@@ -253,6 +253,41 @@ function validateLetterOutcomes(
   );
 }
 
+export interface LettersLearntResult {
+  userId: string;
+  userPhone: string;
+  lettersLearnt: string[];
+}
+
+export function validateLettersLearntInput(users: unknown): string[] {
+  if (typeof users === 'string') {
+    if (users.length === 0) {
+      throw new BadRequestException(
+        'getLettersLearnt() users must be a non-empty string',
+      );
+    }
+    return [users];
+  }
+  if (Array.isArray(users)) {
+    if (users.length === 0) {
+      throw new BadRequestException(
+        'getLettersLearnt() users array must not be empty',
+      );
+    }
+    for (const item of users) {
+      if (typeof item !== 'string' || item.length === 0) {
+        throw new BadRequestException(
+          'getLettersLearnt() users array items must be non-empty strings',
+        );
+      }
+    }
+    return users;
+  }
+  throw new BadRequestException(
+    'getLettersLearnt() users must be a string or array of strings',
+  );
+}
+
 export function validateGradeAndRecordOptions(
   options: unknown,
 ): GradeAndRecordOptions & { _correct: string[]; _incorrect: string[] } {
