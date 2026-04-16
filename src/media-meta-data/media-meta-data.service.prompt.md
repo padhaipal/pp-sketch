@@ -80,7 +80,7 @@ Generic key derivation: replace the substring before the first `-` with `_`. Exa
     AND (wa_media_url IS NOT NULL OR media_type = 'text')
   ```
 5.) Partition rows into two groups by `state_transition_id`: specific-rows and generic-rows. Within each group, sub-group by `media_type`.
-6.) For each media type (audio, video, text, image):
+6.) For each media type (audio, video, text, image, sticker):
   * If specific-rows has one or more entries of that type, randomly select one from specific-rows.
   * Else if generic-rows has one or more entries of that type, randomly select one from generic-rows.
   * Else omit the key.
@@ -198,7 +198,7 @@ Identical pattern to createHeygenMedia, but source = 'elevenlabs', media_type al
 uploadStaticMedia(files: Express.Multer.File[], items: UploadStaticMediaItem[], otel_carrier: Record<string, string>): Promise<UploadStaticMediaResult>
 
 Creates admin-supplied static media_metadata rows. Handles two flows:
-  * Non-text items (image/video/audio): upload bytes to S3, INSERT/UPDATE row (status 'created' → 'queued'), enqueue WHATSAPP_PRELOAD.
+  * Non-text items (image/video/audio/sticker): upload bytes to S3, INSERT/UPDATE row (status 'created' → 'queued'), enqueue WHATSAPP_PRELOAD.
   * Text items: no S3 upload, no preload — INSERT row directly with status 'ready' and the inline `text` field.
 Processes items sequentially in items[] order. Files are matched to non-text items in order: maintain a running `fileCursor` that advances only when the current item is non-text; files[fileCursor] is the file for the current non-text item.
 Dedup (non-text only): SHA-256 content hash + state_transition_id prevents re-uploading identical bytes for the same transition.

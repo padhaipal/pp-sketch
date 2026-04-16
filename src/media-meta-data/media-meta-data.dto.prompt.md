@@ -9,7 +9,7 @@ import { User } from '../users/user.dto';
 const VALID_MEDIA_STATUSES = ['created', 'queued', 'ready', 'failed'] as const;
 export type MediaStatus = (typeof VALID_MEDIA_STATUSES)[number];
 
-const VALID_MEDIA_TYPES = ['audio', 'text', 'video', 'image'] as const;
+const VALID_MEDIA_TYPES = ['audio', 'text', 'video', 'image', 'sticker'] as const;
 export type MediaType = (typeof VALID_MEDIA_TYPES)[number];
 
 const VALID_MEDIA_SOURCES = ['whatsapp', 'heygen', 'elevenlabs', 'azure', 'sarvam', 'reverie', 'dashboard'] as const;
@@ -26,7 +26,7 @@ export type MediaSource = (typeof VALID_MEDIA_SOURCES)[number];
 
 // media_type → field rules (enforced at service layer):
 //   'text'                  — s3_key is NULL, text is REQUIRED
-//   'audio' | 'video' | 'image' — s3_key is REQUIRED, text is NULL
+//   'audio' | 'video' | 'image' | 'sticker' — s3_key is REQUIRED, text is NULL
 
 export interface MediaMetaData {
   id: string;                              // UUID PK
@@ -168,22 +168,23 @@ type StaticMediaMimeType = (typeof VALID_STATIC_MEDIA_MIME_TYPES)[number];
 const MIME_TO_MEDIA_TYPE: Record<StaticMediaMimeType, MediaType> = {
   'image/jpeg': 'image',
   'image/png': 'image',
-  'image/webp': 'image',
+  'image/webp': 'sticker',
   'video/mp4': 'video',
   'audio/ogg': 'audio',
 };
 
-const STATIC_MEDIA_MAX_BYTES: Record<'image' | 'video' | 'audio', number> = {
+const STATIC_MEDIA_MAX_BYTES: Record<'image' | 'video' | 'audio' | 'sticker', number> = {
   image: 5 * 1024 * 1024,    // 5 MB — WhatsApp image limit
   video: 16 * 1024 * 1024,   // 16 MB — WhatsApp video limit
   audio: 16 * 1024 * 1024,   // 16 MB — WhatsApp audio limit
+  sticker: 500 * 1024,       // 500 KB — WhatsApp animated sticker limit (static: 100 KB, enforced in WebP branch)
 };
 
 const STATIC_TEXT_MAX_CHARS = 4096;          // WhatsApp text body limit
 
 export interface UploadStaticMediaItem {
   state_transition_id: string;             // required — the lesson state transition this media is for
-  media_type: MediaType;                   // required — 'image' | 'video' | 'audio' | 'text'. For non-text, must match MIME-inferred type for the corresponding file.
+  media_type: MediaType;                   // required — 'image' | 'video' | 'audio' | 'sticker' | 'text'. For non-text, must match MIME-inferred type for the corresponding file (WebP infers to 'sticker').
   text?: string;                           // required iff media_type === 'text'; forbidden otherwise. Non-empty, ≤ STATIC_TEXT_MAX_CHARS.
 }
 
@@ -218,6 +219,7 @@ export interface FindMediaByStateTransitionIdResult {
   video?: MediaMetaData;
   text?: MediaMetaData;
   image?: MediaMetaData;
+  sticker?: MediaMetaData;
 }
 
 // --- WHATSAPP_PRELOAD job payload ---

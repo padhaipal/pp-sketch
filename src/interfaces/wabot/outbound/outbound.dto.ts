@@ -4,7 +4,7 @@ export interface OutboundMediaItem {
   type: 'audio' | 'video' | 'image' | 'sticker' | 'text';
   url?: string;
   body?: string;
-  // Optional mime hint. wabot promotes type='image' + mime_type='image/webp' to a sticker.
+  // Optional MIME type hint (informational).
   mime_type?: string;
 }
 

@@ -5,7 +5,7 @@ import { User } from '../users/user.dto';
 const VALID_MEDIA_STATUSES = ['created', 'queued', 'ready', 'failed'] as const;
 export type MediaStatus = (typeof VALID_MEDIA_STATUSES)[number];
 
-const VALID_MEDIA_TYPES = ['audio', 'text', 'video', 'image'] as const;
+const VALID_MEDIA_TYPES = ['audio', 'text', 'video', 'image', 'sticker'] as const;
 export type MediaType = (typeof VALID_MEDIA_TYPES)[number];
 
 const VALID_MEDIA_SOURCES = [
@@ -128,15 +128,16 @@ type StaticMediaMimeType = (typeof VALID_STATIC_MEDIA_MIME_TYPES)[number];
 const MIME_TO_MEDIA_TYPE: Record<StaticMediaMimeType, MediaType> = {
   'image/jpeg': 'image',
   'image/png': 'image',
-  'image/webp': 'image',
+  'image/webp': 'sticker',
   'video/mp4': 'video',
   'audio/ogg': 'audio',
 };
 
-const STATIC_MEDIA_MAX_BYTES: Record<'image' | 'video' | 'audio', number> = {
+const STATIC_MEDIA_MAX_BYTES: Record<'image' | 'video' | 'audio' | 'sticker', number> = {
   image: 5 * 1024 * 1024,
   video: 16 * 1024 * 1024,
   audio: 16 * 1024 * 1024,
+  sticker: 500 * 1024,
 };
 
 // WhatsApp sticker limits (https://developers.facebook.com/docs/whatsapp/cloud-api/reference/media)
@@ -227,6 +228,7 @@ export interface FindMediaByStateTransitionIdResult {
   video?: MediaMetaData;
   text?: MediaMetaData;
   image?: MediaMetaData;
+  sticker?: MediaMetaData;
 }
 
 export interface WhatsappPreloadJobDto {
@@ -787,7 +789,7 @@ export function assertValidStaticMediaFile(
   }
 
   const maxBytes =
-    STATIC_MEDIA_MAX_BYTES[media_type as 'image' | 'video' | 'audio'];
+    STATIC_MEDIA_MAX_BYTES[media_type as 'image' | 'video' | 'audio' | 'sticker'];
   if (file.size > maxBytes) {
     throw new BadRequestException(
       `uploadStaticMedia() files[${idx}]: file size ${file.size} bytes exceeds ${maxBytes} byte limit for ${media_type}`,

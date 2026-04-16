@@ -345,7 +345,7 @@ function appendMediaItems(
   items: OutboundMediaItem[],
   media: FindMediaByStateTransitionIdResult,
 ): void {
-  for (const type of ['video', 'audio', 'image', 'text'] as const) {
+  for (const type of ['video', 'audio', 'image', 'sticker', 'text'] as const) {
     const entity = media[type];
     if (!entity) continue;
     if (type === 'text') {

@@ -18,7 +18,7 @@ OutboundMediaItem — one media message to send.
   type: 'audio' | 'video' | 'image' | 'sticker' | 'text';
   url?: string;                            // WhatsApp media reference — either an external URL (starts with "http") or a WhatsApp media ID (from preloaded upload). Required for audio, video, image, sticker; absent for text.
   body?: string;                           // text content — required for text type; absent for audio, video, image, sticker
-  mime_type?: string;                      // optional mime hint. wabot auto-promotes type='image' + mime_type='image/webp' to a sticker (WA does not accept webp via the image message type).
+  mime_type?: string;                      // optional MIME type hint (informational). Stickers are sent with type='sticker' explicitly.
 }
 
 // type → field rules (enforced at wabot validation layer):
@@ -50,7 +50,7 @@ DownloadMediaResponse — wabot streams the response back.
 UploadMediaRequest — raw binary body with metadata in headers.
 * HTTP request body: raw binary bytes (the media file contents).
 * HTTP request header Content-Type: the mime type of the media (e.g. "audio/mpeg", "video/mp4").
-* HTTP request header X-Media-Type: the WhatsApp media type ("audio", "video", "image").
+* HTTP request header X-Media-Type: the WhatsApp media type ("audio", "video", "image", "sticker").
 * HTTP request query param ?otel=<JSON>: serialized OTel carrier for distributed tracing.
 
 UploadMediaResponse — wabot's JSON response.

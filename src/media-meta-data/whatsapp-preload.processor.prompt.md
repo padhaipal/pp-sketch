@@ -22,7 +22,7 @@ processJob(job)
 3.) Call src/interfaces/media-bucket/outbound/outbound.service.ts/getBuffer(s3_key) to fetch the raw media bytes and content_type from S3.
     * If getBuffer() throws: log ERROR, end the span, fail the job (BullMQ retries with backoff).
 
-4.) Determine the WhatsApp media_type from the media_metadata row's media_type field ('audio', 'video', or 'image').
+4.) Determine the WhatsApp media_type from the media_metadata row's media_type field ('audio', 'video', 'image', or 'sticker').
 
 5.) Call src/interfaces/wabot/outbound/outbound.service.ts/uploadMedia(buffer, content_type, media_type, injectCarrier(span)).
     * On success: extract wa_media_url from the response.

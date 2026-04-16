@@ -363,7 +363,7 @@ export class MediaMetaDataService {
     }
 
     const result: FindMediaByStateTransitionIdResult = {};
-    for (const type of ['audio', 'video', 'text', 'image'] as const) {
+    for (const type of ['audio', 'video', 'text', 'image', 'sticker'] as const) {
       const items = specificByType.get(type) ?? genericByType.get(type);
       if (items && items.length > 0) {
         result[type] = items[Math.floor(Math.random() * items.length)];
@@ -700,7 +700,7 @@ export class MediaMetaDataService {
         const mimeToType: Record<string, MediaType> = {
           'image/jpeg': 'image',
           'image/png': 'image',
-          'image/webp': 'image',
+          'image/webp': 'sticker',
           'video/mp4': 'video',
           'audio/ogg': 'audio',
         };
