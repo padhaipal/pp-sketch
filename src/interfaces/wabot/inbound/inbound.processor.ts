@@ -171,12 +171,12 @@ export async function processWabotInboundJob(
             user,
             user_message_id: userMessageId,
           });
-          const lessonMedia =
-            await mediaMetaDataService.findMediaByStateTransitionId(
-              lessonResult.stateTransitionId,
-            );
-          appendMediaItems(onboardingMedia, lessonMedia);
-          onboardingStids.push(lessonResult.stateTransitionId);
+          for (const stid of lessonResult.stateTransitionIds) {
+            const lessonMedia =
+              await mediaMetaDataService.findMediaByStateTransitionId(stid);
+            appendMediaItems(onboardingMedia, lessonMedia);
+            onboardingStids.push(stid);
+          }
         } catch (err) {
           logger.warn(
             `Failed to start first lesson for new user ${user.external_id}: ${(err as Error).message}`,
@@ -274,7 +274,7 @@ export async function processWabotInboundJob(
       transcripts,
       user_message_id: userMessageId,
     });
-    const stateTransitionIds: string[] = [result1.stateTransitionId];
+    const stateTransitionIds: string[] = [...result1.stateTransitionIds];
 
     // If lesson complete, start fresh
     if (result1.isComplete) {
@@ -282,7 +282,7 @@ export async function processWabotInboundJob(
         user,
         user_message_id: userMessageId,
       });
-      stateTransitionIds.push(result2.stateTransitionId);
+      stateTransitionIds.push(...result2.stateTransitionIds);
     }
 
     // 9. Build outbound media

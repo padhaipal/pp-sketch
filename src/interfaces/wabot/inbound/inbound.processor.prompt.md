@@ -27,7 +27,7 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
       * If saving throws: log WARN, continue without userMessageId.
     * Build an OutboundMediaItem[] array for onboarding:
       * Fetch welcome media via findMediaByStateTransitionId(WELCOME_MESSAGE_STATE_TRANSITION_ID), append items. If fetch fails, log WARN, continue.
-      * If userMessageId is defined: call literacyLessonService.processAnswer({ user, user_message_id: userMessageId }) (no transcripts — starts a fresh lesson). Fetch lesson media via findMediaByStateTransitionId(result.stateTransitionId), append items. If processAnswer or media fetch fails, log WARN, continue.
+      * If userMessageId is defined: call literacyLessonService.processAnswer({ user, user_message_id: userMessageId }) (no transcripts — starts a fresh lesson). For each stateTransitionId in `result.stateTransitionIds`, fetch lesson media via findMediaByStateTransitionId() and append items. If processAnswer or media fetch fails, log WARN, continue.
     * If the outbound array is non-empty: send via sendMessage(). See sendMessage() notes below for how to handle the http response.
     * End span, return.
 * Else: I now have the existing user's information and continue to the next step. 
@@ -54,11 +54,11 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
   * user: the User entity from step 3 (trusted path, no extra DB hit)
   * transcripts: the transcript mediaMetaData entities obtained in step 7
   * user_message_id: the `userMessageId` from step 6
-* processAnswer() internally handles: finding or creating the lesson state, rehydrating or starting a fresh machine, running the ANSWER event, and persisting the new snapshot. It returns `{ stateTransitionId, isComplete }`. Save the stateTransitionId in a variable.
+* processAnswer() internally handles: finding or creating the lesson state, rehydrating or starting a fresh machine, running the ANSWER event, and persisting the new snapshot. It returns `{ stateTransitionIds, isComplete }`. Spread `stateTransitionIds` into a local array.
 * If processAnswer() throws then log ERROR, end the span and fail the job.
-* If processAnswer() returns isComplete === true then call processAnswer() again with just user and user_message_id (omit transcripts — this starts a fresh lesson without sending an ANSWER event). This will return a second stateTransitionId, save it in a variable as well. 
+* If processAnswer() returns isComplete === true then call processAnswer() again with just user and user_message_id (omit transcripts — this starts a fresh lesson without sending an ANSWER event). Spread the second result's `stateTransitionIds` into the same local array. 
 
-9.) For each stateTransitionId (there may be one or two), call src/media-meta-data/media-meta-data.service.ts/findMediaByStateTransitionId().
+9.) For each stateTransitionId in the array, call src/media-meta-data/media-meta-data.service.ts/findMediaByStateTransitionId().
   * Each call returns a `FindMediaByStateTransitionIdResult` with one randomly selected entity per media type (audio, video, text, image), or undefined for types with no matching media.
   * Build an ordered `OutboundMediaItem[]` array from the results. For each stateTransitionId's result, append items in this order: video, audio, image, sticker, text (skipping any type that is undefined). If there are two stateTransitionIds, the first stateTransitionId's items come before the second's.
   * For each media entity, construct the OutboundMediaItem:

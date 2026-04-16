@@ -20,9 +20,9 @@ The main entry point called by the inbound processor at step 7. Handles the full
 
 3.) Call `findCurrentState(options.user.id)` to get the current lesson state from the database.
 
-4.) Determine whether to start fresh or continue:
+4.) Determine whether to start fresh or continue. Also track whether this is a stale restart (`isStaleRestart`):
 * If `findCurrentState` returned null → start a new lesson (step 5).
-* If `created_at` is older than 60 seconds → start a new lesson (step 5).
+* If `created_at` is older than 120 seconds → start a new lesson (step 5). Set `isStaleRestart = true`.
 * If `snapshot.status === 'done'` → start a new lesson (step 5).
 * Else → rehydrate and run (step 6).
 
@@ -67,7 +67,7 @@ The main entry point called by the inbound processor at step 7. Handles the full
   * userMessageId: `options.user_message_id`
 * Await the result. If `gradeAndRecord()` throws, log WARN but do NOT re-throw — a scoring failure must not prevent the outbound message from being sent to the student.
 
-10.) Return `{ stateTransitionId: snapshot.context.stateTransitionId, isComplete: snapshot.status === 'done' }`.
+10.) Build `stateTransitionIds`: if `isStaleRestart` is true, prepend `STALE_LESSON_RESTART_STATE_TRANSITION_ID` before the snapshot's `stateTransitionId`; otherwise the array contains only the snapshot's `stateTransitionId`. Return `{ stateTransitionIds, isComplete: snapshot.status === 'done' }`.
 
 ## findCurrentState(userId: string): Promise\<LiteracyLessonState | null>
 

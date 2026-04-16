@@ -6,6 +6,7 @@ import { identifyCharacterStatus } from "./identify-character-status.utils";
 
 export const WELCOME_MESSAGE_STATE_TRANSITION_ID = 'welcome-message';
 export const AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID = 'audio-only-request';
+export const STALE_LESSON_RESTART_STATE_TRANSITION_ID = 'stale-lesson-restart';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

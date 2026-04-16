@@ -20,7 +20,7 @@ export interface ProcessAnswerOptions {
 }
 
 export interface ProcessAnswerResult {
-  stateTransitionId: string;
+  stateTransitionIds: string[];
   isComplete: boolean;
 }
 

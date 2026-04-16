@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import { createActor } from 'xstate';
 import { LiteracyLessonStateEntity } from './literacy-lesson-state.entity';
 import { ScoreService } from '../score/score.service';
-import { machine } from './literacy-lesson.machine';
+import { machine, STALE_LESSON_RESTART_STATE_TRANSITION_ID } from './literacy-lesson.machine';
 import {
   LiteracyLessonState,
   ProcessAnswerOptions,
@@ -55,6 +55,7 @@ export class LiteracyLessonService {
 
     // 4. Determine fresh or continue
     let startFresh = false;
+    let isStaleRestart = false;
     if (!currentState) {
       startFresh = true;
     } else {
@@ -62,6 +63,7 @@ export class LiteracyLessonService {
         Date.now() - new Date(currentState.created_at).getTime();
       if (age > 120_000) {
         startFresh = true;
+        isStaleRestart = true;
       } else if (currentState.snapshot?.status === 'done') {
         startFresh = true;
       }
@@ -162,8 +164,12 @@ export class LiteracyLessonService {
     }
 
     // 10. Return
+    const stateTransitionIds = isStaleRestart
+      ? [STALE_LESSON_RESTART_STATE_TRANSITION_ID, snapshot.context.stateTransitionId]
+      : [snapshot.context.stateTransitionId];
+
     return {
-      stateTransitionId: snapshot.context.stateTransitionId,
+      stateTransitionIds,
       isComplete: snapshot.status === 'done',
     };
   }
