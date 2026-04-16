@@ -17,32 +17,33 @@ export interface NotifierSendJobData {
   wa_media_url: string;
 }
 
-function getYesterdayIST7pm(): Date {
+function getISTTimeToday(hour: number, minute = 0): Date {
   const now = new Date();
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
   const nowIST = new Date(now.getTime() + IST_OFFSET_MS);
 
-  const yesterday7pmIST = new Date(
+  // Date.UTC handles overflow/underflow (e.g. negative minutes) by rolling back.
+  return new Date(
     Date.UTC(
       nowIST.getUTCFullYear(),
       nowIST.getUTCMonth(),
-      nowIST.getUTCDate() - 1,
-      19 - 5,
-      0 - 30,
+      nowIST.getUTCDate(),
+      hour - 5,
+      minute - 30,
       0,
     ),
   );
-
-  // Normalize: Date.UTC handles negative minutes by rolling back the hour/day.
-  return yesterday7pmIST;
 }
 
 export async function processNotifierCronJob(
   _job: Job,
   dataSource: DataSource,
 ): Promise<void> {
-  const cutoff = getYesterdayIST7pm();
-  logger.log(`Notifier cron fired. Cutoff: ${cutoff.toISOString()}`);
+  const windowStart = getISTTimeToday(19 - 24, 0); // yesterday 7 PM IST (24h ago)
+  const windowEnd = getISTTimeToday(19 - 19, 0); // today 12 AM IST (19h ago)
+  logger.log(
+    `Notifier cron fired. Window: ${windowStart.toISOString()} – ${windowEnd.toISOString()}`,
+  );
 
   const activeUsers: ActiveUser[] = await dataSource.query(
     `SELECT mm.user_id, u.external_id, MAX(mm.created_at) AS last_message_at
@@ -51,12 +52,13 @@ export async function processNotifierCronJob(
      WHERE mm.source = 'whatsapp'
        AND mm.user_id IS NOT NULL
        AND mm.created_at >= $1
-     GROUP BY mm.user_id, u.external_id`,
-    [cutoff],
+     GROUP BY mm.user_id, u.external_id
+     HAVING MAX(mm.created_at) <= $2`,
+    [windowStart, windowEnd],
   );
 
   if (activeUsers.length === 0) {
-    logger.log('No active users found since cutoff — skipping.');
+    logger.log('No active users found in notification window — skipping.');
     return;
   }
 

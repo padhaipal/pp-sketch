@@ -1,8 +1,10 @@
 // pp-sketch/src/notifier/notifier.prompt.md
 
-Evening notification system. Every day at 7 PM IST a cron job finds users who messaged
-the bot in the last 24 hours, picks a random notification video for each, and queues
-rate-limited WhatsApp video sends (2 msg/s) ordered by soonest-expiring 24-hour window.
+Evening notification system. Every day at 7 PM IST a cron job finds users whose most
+recent message was between 19 and 24 hours ago (i.e. between yesterday 7 PM and today
+midnight IST). Users who messaged more recently are skipped — their 24-hour window is
+still wide open. For each qualifying user, a random notification video is queued as a
+rate-limited WhatsApp video send (2 msg/s), ordered by soonest-expiring 24-hour window.
 
 ## Architecture overview
 
@@ -40,17 +42,21 @@ Add two queue names:
 
 ### processNotifierCronJob(job, dataSource)
 
-1.) Query distinct user_ids who sent a message since 7 PM IST yesterday:
-    SELECT DISTINCT mm.user_id, u.external_id, MAX(mm.created_at) AS last_message_at
+1.) Query distinct user_ids whose most recent message falls in the 19–24 hour window:
+    SELECT mm.user_id, u.external_id, MAX(mm.created_at) AS last_message_at
     FROM media_metadata mm
     JOIN users u ON u.id = mm.user_id
     WHERE mm.source = 'whatsapp'
       AND mm.user_id IS NOT NULL
-      AND mm.created_at >= <7 PM IST yesterday>
+      AND mm.created_at >= <7 PM IST yesterday>   -- 24h ago (window start)
     GROUP BY mm.user_id, u.external_id
+    HAVING MAX(mm.created_at) <= <12 AM IST today> -- 19h ago (window end)
 
-    Compute the cutoff in code: take current Date, set to IST (UTC+5:30) 19:00 of
-    yesterday, then convert back to UTC.
+    The HAVING clause ensures users who messaged more recently than 19 hours ago
+    are excluded — their 24-hour window is still wide open.
+
+    Compute both cutoffs in code using a shared helper `getISTTimeToday(hour)`
+    that builds a UTC Date for a given IST hour on today's date.
 
 2.) Query all notification video URLs:
     SELECT wa_media_url
