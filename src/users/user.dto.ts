@@ -62,6 +62,7 @@ export interface DashboardUserRow {
 export interface TranscriptRow {
   text: string | null;
   source: string;
+  created_at: Date;
 }
 
 export interface MediaRow {

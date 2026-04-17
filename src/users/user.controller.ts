@@ -154,16 +154,16 @@ export class UserController {
     // Find all transcripts where input_media_id is one of these media IDs
     const transcripts = await this.mediaRepo
       .createQueryBuilder('mm')
-      .select(['mm.id', 'mm.input_media_id', 'mm.text', 'mm.source'])
+      .select(['mm.id', 'mm.input_media_id', 'mm.text', 'mm.source', 'mm.created_at'])
       .where('mm.input_media_id IN (:...mediaIds)', { mediaIds })
       .getMany();
 
     // Group transcripts by input_media_id
-    const transcriptMap = new Map<string, { text: string | null; source: string }[]>();
+    const transcriptMap = new Map<string, { text: string | null; source: string; created_at: Date }[]>();
     for (const t of transcripts) {
       if (!t.input_media_id) continue;
       if (!transcriptMap.has(t.input_media_id)) transcriptMap.set(t.input_media_id, []);
-      transcriptMap.get(t.input_media_id)!.push({ text: t.text, source: t.source });
+      transcriptMap.get(t.input_media_id)!.push({ text: t.text, source: t.source, created_at: t.created_at });
     }
 
     // Find lesson states where user_message_id matches any of these media IDs.
