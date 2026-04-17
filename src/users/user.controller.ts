@@ -188,6 +188,33 @@ export class UserController {
       });
     }
 
+    // Fetch score changes with previous values via window function
+    const scoreChangeRows: { user_message_id: string; grapheme: string; score: number; prev_score: number | null }[] =
+      await this.scoreRepo.manager.query(
+        `WITH windowed AS (
+          SELECT s.user_message_id, s.score, l.grapheme,
+                 LAG(s.score) OVER (PARTITION BY s.letter_id ORDER BY s.created_at) AS prev_score
+          FROM scores s
+          JOIN letters l ON l.id = s.letter_id
+          WHERE s.user_id = $1
+        )
+        SELECT user_message_id, grapheme, score, prev_score
+        FROM windowed
+        WHERE user_message_id = ANY($2)
+        ORDER BY user_message_id, grapheme`,
+        [id, mediaIds],
+      );
+
+    const scoreChangeMap = new Map<string, { grapheme: string; score: number; prev_score: number | null }[]>();
+    for (const row of scoreChangeRows) {
+      if (!scoreChangeMap.has(row.user_message_id)) scoreChangeMap.set(row.user_message_id, []);
+      scoreChangeMap.get(row.user_message_id)!.push({
+        grapheme: row.grapheme,
+        score: Number(row.score),
+        prev_score: row.prev_score !== null ? Number(row.prev_score) : null,
+      });
+    }
+
     // The DB answer column holds the correct answer for the NEXT state (after
     // entry actions run), not for the state the user just answered in. To display
     // the correct answer the user was asked, we offset by one: each row's
@@ -224,6 +251,7 @@ export class UserController {
           word: lesson?.word ?? null,
           answer: displayedAnswerMap.get(m.id) ?? null,
           answer_correct: lesson?.answer_correct ?? null,
+          score_changes: scoreChangeMap.get(m.id) ?? [],
         };
       }),
     };

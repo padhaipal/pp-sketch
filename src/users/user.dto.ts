@@ -65,6 +65,12 @@ export interface TranscriptRow {
   created_at: Date;
 }
 
+export interface ScoreChangeRow {
+  grapheme: string;
+  score: number;
+  prev_score: number | null;
+}
+
 export interface MediaRow {
   id: string;
   created_at: Date;
@@ -73,6 +79,7 @@ export interface MediaRow {
   word: string | null;
   answer: string | null;
   answer_correct: boolean | null;
+  score_changes: ScoreChangeRow[];
 }
 
 export interface UserInfoRow {
