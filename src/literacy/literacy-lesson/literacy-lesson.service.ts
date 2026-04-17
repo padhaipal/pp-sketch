@@ -63,7 +63,7 @@ export class LiteracyLessonService {
         Date.now() - new Date(currentState.created_at).getTime();
       if (age > 900_000) {
         startFresh = true;
-      } else if (age > 60_000) {
+      } else if (age > 300_000) {
         startFresh = true;
         isStaleRestart = true;
       } else if (currentState.snapshot?.status === 'done') {
