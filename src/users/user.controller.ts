@@ -172,19 +172,31 @@ export class UserController {
     // the same processAnswer cycle (both share the same user_message_id).
     const lessonStates = await this.lessonStateRepo
       .createQueryBuilder('ls')
-      .select(['ls.user_message_id', 'ls.word', 'ls.answer', 'ls.answer_correct'])
+      .select(['ls.user_message_id', 'ls.word', 'ls.answer', 'ls.answer_correct', 'ls.snapshot'])
       .where('ls.user_message_id IN (:...mediaIds)', { mediaIds })
       .orderBy('ls.created_at', 'ASC')
       .getMany();
 
     // Keep the first (evaluation) row per user_message_id; skip the "start fresh" duplicate.
-    const lessonMap = new Map<string, { word: string; answer: string | null; answer_correct: boolean | null }>();
+    const lessonMap = new Map<string, { word: string; answer: string | null; answer_correct: boolean | null; starting_state: string | null; final_state: string | null }>();
     for (const ls of lessonStates) {
       if (lessonMap.has(ls.user_message_id)) continue;
+      const transitionId: string | undefined = (ls.snapshot as any)?.context?.stateTransitionId;
+      let startingState: string | null = null;
+      let finalState: string | null = null;
+      if (transitionId) {
+        const parts = transitionId.split('-');
+        if (parts.length >= 3) {
+          startingState = parts[1];
+          finalState = parts[2];
+        }
+      }
       lessonMap.set(ls.user_message_id, {
         word: ls.word,
         answer: ls.answer,
         answer_correct: ls.answer_correct,
+        starting_state: startingState,
+        final_state: finalState,
       });
     }
 
@@ -249,9 +261,11 @@ export class UserController {
           has_audio: !!m.s3_key,
           transcripts: transcriptMap.get(m.id) ?? [],
           word: lesson?.word ?? null,
+          starting_state: lesson?.starting_state ?? null,
           answer: displayedAnswerMap.get(m.id) ?? null,
           answer_correct: lesson?.answer_correct ?? null,
           score_changes: scoreChangeMap.get(m.id) ?? [],
+          final_state: lesson?.final_state ?? null,
         };
       }),
     };

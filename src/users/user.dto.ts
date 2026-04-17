@@ -77,9 +77,11 @@ export interface MediaRow {
   has_audio: boolean;
   transcripts: TranscriptRow[];
   word: string | null;
+  starting_state: string | null;
   answer: string | null;
   answer_correct: boolean | null;
   score_changes: ScoreChangeRow[];
+  final_state: string | null;
 }
 
 export interface UserInfoRow {
