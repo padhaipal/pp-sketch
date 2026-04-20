@@ -186,9 +186,7 @@ export function validateFindUserOptions(options: unknown): FindUserOptions {
   return { id, external_id: validatedExternalId } as FindUserOptions;
 }
 
-export function validateUpdateUserOptions(
-  options: unknown,
-): UpdateUserOptions {
+export function validateUpdateUserOptions(options: unknown): UpdateUserOptions {
   if (!options || typeof options !== 'object') {
     throw new BadRequestException('update() options must be an object');
   }
@@ -259,9 +257,7 @@ export function validateUpdateUserOptions(
     );
   }
   if (new_name !== undefined && typeof new_name !== 'string') {
-    throw new BadRequestException(
-      'update() options.new_name must be a string',
-    );
+    throw new BadRequestException('update() options.new_name must be a string');
   }
   if (
     new_referrer_user_id !== undefined &&
@@ -291,9 +287,7 @@ export function validateUpdateUserOptions(
   } as UpdateUserOptions;
 }
 
-export function validateCreateUserOptions(
-  options: unknown,
-): CreateUserOptions {
+export function validateCreateUserOptions(options: unknown): CreateUserOptions {
   if (!options || typeof options !== 'object') {
     throw new BadRequestException('create() options must be an object');
   }
@@ -309,9 +303,7 @@ export function validateCreateUserOptions(
     'create() options.external_id',
   );
   if (name !== undefined && typeof name !== 'string') {
-    throw new BadRequestException(
-      'create() options.name must be a string',
-    );
+    throw new BadRequestException('create() options.name must be a string');
   }
   let validatedReferrerExternalId: string | undefined;
   if (referrer_external_id !== undefined) {

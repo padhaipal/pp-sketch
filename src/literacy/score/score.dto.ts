@@ -54,10 +54,8 @@ export type FindScoreOptions = { limit?: number } & OptionalUserRef &
 
 export const DEFAULT_FIND_SCORE_LIMIT = 100_000;
 
-function exactlyOne(fields: Record<string, unknown>, label: string): void {
-  const provided = Object.entries(fields).filter(
-    ([, v]) => v !== undefined,
-  );
+function exactlyOne(fields: Record<string, unknown>, _label: string): void {
+  const provided = Object.entries(fields).filter(([, v]) => v !== undefined);
   if (provided.length !== 1) {
     const names = Object.keys(fields).join(', ');
     throw new BadRequestException(
@@ -66,13 +64,8 @@ function exactlyOne(fields: Record<string, unknown>, label: string): void {
   }
 }
 
-function atMostOne(
-  fields: Record<string, unknown>,
-  methodName: string,
-): void {
-  const provided = Object.entries(fields).filter(
-    ([, v]) => v !== undefined,
-  );
+function atMostOne(fields: Record<string, unknown>, methodName: string): void {
+  const provided = Object.entries(fields).filter(([, v]) => v !== undefined);
   if (provided.length > 1) {
     const names = Object.keys(fields).join(', ');
     throw new BadRequestException(
@@ -153,10 +146,7 @@ export function validateCreateScoreOptions(
     );
   }
 
-  if (
-    typeof o.user_message_id !== 'string' ||
-    o.user_message_id.length === 0
-  ) {
+  if (typeof o.user_message_id !== 'string' || o.user_message_id.length === 0) {
     throw new BadRequestException(
       'create() options.user_message_id is required and must be a non-empty string',
     );
@@ -180,9 +170,7 @@ export function validateCreateScoreOptions(
   return o as unknown as CreateScoreOptions;
 }
 
-export function validateFindScoreOptions(
-  options: unknown,
-): FindScoreOptions {
+export function validateFindScoreOptions(options: unknown): FindScoreOptions {
   if (!options || typeof options !== 'object') {
     throw new BadRequestException('find() options must be an object');
   }
@@ -223,10 +211,7 @@ export function validateFindScoreOptions(
   return o as unknown as FindScoreOptions;
 }
 
-function validateLetterOutcomes(
-  value: unknown,
-  fieldName: string,
-): string[] {
+function validateLetterOutcomes(value: unknown, fieldName: string): string[] {
   if (typeof value === 'string') {
     if (value.length === 0) {
       throw new BadRequestException(
@@ -280,7 +265,9 @@ export class LettersLearntQueryDto {
     return value;
   })
   @IsArray()
-  @ArrayMinSize(1, { message: 'users must contain at least one user identifier' })
+  @ArrayMinSize(1, {
+    message: 'users must contain at least one user identifier',
+  })
   @IsString({ each: true, message: 'each user identifier must be a string' })
   users: string[];
 }
@@ -318,9 +305,7 @@ export function validateGradeAndRecordOptions(
   options: unknown,
 ): GradeAndRecordOptions & { _correct: string[]; _incorrect: string[] } {
   if (!options || typeof options !== 'object') {
-    throw new BadRequestException(
-      'gradeAndRecord() options must be an object',
-    );
+    throw new BadRequestException('gradeAndRecord() options must be an object');
   }
   const o = options as Record<string, unknown>;
 
@@ -330,10 +315,7 @@ export function validateGradeAndRecordOptions(
   );
   validateUserRefFields(o, 'gradeAndRecord()');
 
-  if (
-    typeof o.userMessageId !== 'string' ||
-    (o.userMessageId as string).length === 0
-  ) {
+  if (typeof o.userMessageId !== 'string' || o.userMessageId.length === 0) {
     throw new BadRequestException(
       'gradeAndRecord() options.userMessageId is required and must be a non-empty string',
     );
@@ -346,9 +328,7 @@ export function validateGradeAndRecordOptions(
   }
 
   const _correct =
-    o.correct !== undefined
-      ? validateLetterOutcomes(o.correct, 'correct')
-      : [];
+    o.correct !== undefined ? validateLetterOutcomes(o.correct, 'correct') : [];
   const _incorrect =
     o.incorrect !== undefined
       ? validateLetterOutcomes(o.incorrect, 'incorrect')

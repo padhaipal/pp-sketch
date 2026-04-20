@@ -27,7 +27,6 @@ export async function processHeygenInboundJob(
 
     if (event_type === 'avatar_video.success') {
       // a. Validate
-      const video_id = event_data.video_id as string;
       const url = event_data.url as string;
       const callback_id = event_data.callback_id as string;
 
@@ -40,9 +39,7 @@ export async function processHeygenInboundJob(
       // b. Look up entity
       const entity = await mediaRepo.findOneBy({ id: callback_id });
       if (!entity) {
-        logger.error(
-          `avatar_video.success: entity ${callback_id} not found`,
-        );
+        logger.error(`avatar_video.success: entity ${callback_id} not found`);
         span.end();
         throw new Error('Entity not found');
       }
@@ -120,9 +117,7 @@ export async function processHeygenInboundJob(
       // b. Look up entity
       const entity = await mediaRepo.findOneBy({ id: callback_id });
       if (!entity) {
-        logger.error(
-          `avatar_video.fail: entity ${callback_id} not found`,
-        );
+        logger.error(`avatar_video.fail: entity ${callback_id} not found`);
         span.end();
         throw new Error('Entity not found');
       }

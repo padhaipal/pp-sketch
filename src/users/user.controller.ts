@@ -48,7 +48,9 @@ export class UserController {
   ) {}
 
   @Get('dashboard')
-  async dashboard(@Query('offset') offsetStr?: string): Promise<DashboardUserRow[]> {
+  async dashboard(
+    @Query('offset') offsetStr?: string,
+  ): Promise<DashboardUserRow[]> {
     const offset = Math.max(0, parseInt(offsetStr || '0', 10) || 0);
     const limit = 100;
 
@@ -96,7 +98,8 @@ export class UserController {
     // Build activity map: userId -> { date -> count }
     const activityMap = new Map<string, Map<string, number>>();
     for (const row of activityRows) {
-      if (!activityMap.has(row.user_id)) activityMap.set(row.user_id, new Map());
+      if (!activityMap.has(row.user_id))
+        activityMap.set(row.user_id, new Map());
       const dateStr = new Date(row.date).toISOString().slice(0, 10);
       activityMap.get(row.user_id)!.set(dateStr, Number(row.count));
     }
@@ -139,7 +142,11 @@ export class UserController {
 
     // 100 most recent whatsapp audio for this user
     const media = await this.mediaRepo.find({
-      where: { user_id: id, source: 'whatsapp' as any, media_type: 'audio' as any },
+      where: {
+        user_id: id,
+        source: 'whatsapp' as any,
+        media_type: 'audio' as any,
+      },
       order: { created_at: 'DESC' },
       skip: offset,
       take: limit,
@@ -154,16 +161,28 @@ export class UserController {
     // Find all transcripts where input_media_id is one of these media IDs
     const transcripts = await this.mediaRepo
       .createQueryBuilder('mm')
-      .select(['mm.id', 'mm.input_media_id', 'mm.text', 'mm.source', 'mm.created_at'])
+      .select([
+        'mm.id',
+        'mm.input_media_id',
+        'mm.text',
+        'mm.source',
+        'mm.created_at',
+      ])
       .where('mm.input_media_id IN (:...mediaIds)', { mediaIds })
       .getMany();
 
     // Group transcripts by input_media_id
-    const transcriptMap = new Map<string, { text: string | null; source: string; created_at: Date }[]>();
+    const transcriptMap = new Map<
+      string,
+      { text: string | null; source: string; created_at: Date }[]
+    >();
     for (const t of transcripts) {
       if (!t.input_media_id) continue;
-      if (!transcriptMap.has(t.input_media_id)) transcriptMap.set(t.input_media_id, []);
-      transcriptMap.get(t.input_media_id)!.push({ text: t.text, source: t.source, created_at: t.created_at });
+      if (!transcriptMap.has(t.input_media_id))
+        transcriptMap.set(t.input_media_id, []);
+      transcriptMap
+        .get(t.input_media_id)!
+        .push({ text: t.text, source: t.source, created_at: t.created_at });
     }
 
     // Find lesson states where user_message_id matches any of these media IDs.
@@ -172,16 +191,32 @@ export class UserController {
     // the same processAnswer cycle (both share the same user_message_id).
     const lessonStates = await this.lessonStateRepo
       .createQueryBuilder('ls')
-      .select(['ls.user_message_id', 'ls.word', 'ls.answer', 'ls.answer_correct', 'ls.snapshot'])
+      .select([
+        'ls.user_message_id',
+        'ls.word',
+        'ls.answer',
+        'ls.answer_correct',
+        'ls.snapshot',
+      ])
       .where('ls.user_message_id IN (:...mediaIds)', { mediaIds })
       .orderBy('ls.created_at', 'ASC')
       .getMany();
 
     // Keep the first (evaluation) row per user_message_id; skip the "start fresh" duplicate.
-    const lessonMap = new Map<string, { word: string; answer: string | null; answer_correct: boolean | null; starting_state: string | null; final_state: string | null }>();
+    const lessonMap = new Map<
+      string,
+      {
+        word: string;
+        answer: string | null;
+        answer_correct: boolean | null;
+        starting_state: string | null;
+        final_state: string | null;
+      }
+    >();
     for (const ls of lessonStates) {
       if (lessonMap.has(ls.user_message_id)) continue;
-      const transitionId: string | undefined = (ls.snapshot as any)?.context?.stateTransitionId;
+      const transitionId: string | undefined = (ls.snapshot as any)?.context
+        ?.stateTransitionId;
       let startingState: string | null = null;
       let finalState: string | null = null;
       if (transitionId) {
@@ -201,9 +236,13 @@ export class UserController {
     }
 
     // Fetch score changes with previous values via window function
-    const scoreChangeRows: { user_message_id: string; grapheme: string; score: number; prev_score: number | null }[] =
-      await this.scoreRepo.manager.query(
-        `WITH windowed AS (
+    const scoreChangeRows: {
+      user_message_id: string;
+      grapheme: string;
+      score: number;
+      prev_score: number | null;
+    }[] = await this.scoreRepo.manager.query(
+      `WITH windowed AS (
           SELECT s.user_message_id, s.score, l.grapheme,
                  LAG(s.score) OVER (PARTITION BY s.letter_id ORDER BY s.created_at) AS prev_score
           FROM scores s
@@ -214,12 +253,16 @@ export class UserController {
         FROM windowed
         WHERE user_message_id = ANY($2)
         ORDER BY user_message_id, grapheme`,
-        [id, mediaIds],
-      );
+      [id, mediaIds],
+    );
 
-    const scoreChangeMap = new Map<string, { grapheme: string; score: number; prev_score: number | null }[]>();
+    const scoreChangeMap = new Map<
+      string,
+      { grapheme: string; score: number; prev_score: number | null }[]
+    >();
     for (const row of scoreChangeRows) {
-      if (!scoreChangeMap.has(row.user_message_id)) scoreChangeMap.set(row.user_message_id, []);
+      if (!scoreChangeMap.has(row.user_message_id))
+        scoreChangeMap.set(row.user_message_id, []);
       scoreChangeMap.get(row.user_message_id)!.push({
         grapheme: row.grapheme,
         score: Number(row.score),
@@ -276,7 +319,14 @@ export class UserController {
     const scores = await this.scoreRepo
       .createQueryBuilder('s')
       .innerJoinAndSelect('s.letter', 'l')
-      .select(['s.id', 's.score', 's.created_at', 's.letter_id', 's.user_message_id', 'l.grapheme'])
+      .select([
+        's.id',
+        's.score',
+        's.created_at',
+        's.letter_id',
+        's.user_message_id',
+        'l.grapheme',
+      ])
       .where('s.user_id = :id', { id })
       .orderBy('s.created_at', 'ASC')
       .getMany();
@@ -295,13 +345,17 @@ export class UserController {
     const { phone, password } = body;
 
     if (!phone || !password) {
-      this.logger.warn(`Login missing fields phone=${!!phone} password=${!!password}`);
+      this.logger.warn(
+        `Login missing fields phone=${!!phone} password=${!!password}`,
+      );
       throw new BadRequestException('phone and password required');
     }
 
     const user = await this.userRepo.findOneBy({ external_id: phone });
     if (!user || !user.password_hash || !user.role) {
-      this.logger.warn(`Login failed: user not found or missing hash/role phone=${phone}`);
+      this.logger.warn(
+        `Login failed: user not found or missing hash/role phone=${phone}`,
+      );
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -316,9 +370,14 @@ export class UserController {
   }
 
   @Patch(':id')
-  async patchUser(@Param('id') id: string, @Body() body: PatchUserDto): Promise<UserResponse> {
+  async patchUser(
+    @Param('id') id: string,
+    @Body() body: PatchUserDto,
+  ): Promise<UserResponse> {
     if (!body.phone && !body.name && !body.password && !body.role) {
-      throw new BadRequestException('At least one of phone, name, password, or role required');
+      throw new BadRequestException(
+        'At least one of phone, name, password, or role required',
+      );
     }
 
     const user = await this.userRepo.findOneBy({ id });
@@ -328,11 +387,17 @@ export class UserController {
 
     if (body.phone) user.external_id = body.phone;
     if (body.name) user.name = body.name;
-    if (body.password) user.password_hash = await bcrypt.hash(body.password, 10);
+    if (body.password)
+      user.password_hash = await bcrypt.hash(body.password, 10);
     if (body.role) user.role = body.role;
     await this.userRepo.save(user);
 
-    return { id: user.id, external_id: user.external_id, name: user.name, role: user.role };
+    return {
+      id: user.id,
+      external_id: user.external_id,
+      name: user.name,
+      role: user.role,
+    };
   }
 
   @Delete(':id')

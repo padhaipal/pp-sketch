@@ -52,7 +52,9 @@ export class MediaMetaDataController {
     if (!media || !media.s3_key) {
       throw new NotFoundException('Media not found or no audio available');
     }
-    const { buffer, content_type } = await this.mediaBucket.getBuffer(media.s3_key);
+    const { buffer, content_type } = await this.mediaBucket.getBuffer(
+      media.s3_key,
+    );
     res.set('Content-Type', content_type);
     res.set('Content-Length', buffer.length.toString());
     res.send(buffer);
@@ -60,7 +62,9 @@ export class MediaMetaDataController {
 
   @Post('heygen-generate')
   @HttpCode(HttpStatus.ACCEPTED)
-  @ApiBody({ schema: { type: 'object', properties: { items: { type: 'array' } } } })
+  @ApiBody({
+    schema: { type: 'object', properties: { items: { type: 'array' } } },
+  })
   @ApiResponse({ status: 202 })
   async generateHeygenMedia(@Body() body: unknown) {
     const validated = validateCreateHeygenMediaOptions(body);
@@ -78,7 +82,9 @@ export class MediaMetaDataController {
 
   @Post('elevenlabs-generate')
   @HttpCode(HttpStatus.ACCEPTED)
-  @ApiBody({ schema: { type: 'object', properties: { items: { type: 'array' } } } })
+  @ApiBody({
+    schema: { type: 'object', properties: { items: { type: 'array' } } },
+  })
   @ApiResponse({ status: 202 })
   async generateElevenlabsMedia(@Body() body: unknown) {
     const validated = validateCreateElevenlabsMediaOptions(body);
@@ -125,9 +131,7 @@ export class MediaMetaDataController {
     let rawItems: unknown;
     try {
       rawItems =
-        typeof body.items === 'string'
-          ? JSON.parse(body.items)
-          : body.items;
+        typeof body.items === 'string' ? JSON.parse(body.items) : body.items;
     } catch {
       throw new BadRequestException('items must be valid JSON');
     }
@@ -177,7 +181,8 @@ export class MediaMetaDataController {
       source: 'dashboard' as any,
       media_type: 'text' as any,
     });
-    if (existing) throw new BadRequestException('Dashboard transcript already exists');
+    if (existing)
+      throw new BadRequestException('Dashboard transcript already exists');
 
     assertValidMediaType('text');
     assertValidMediaSource('dashboard');
@@ -216,7 +221,8 @@ export class MediaMetaDataController {
       source: 'dashboard' as any,
       media_type: 'text' as any,
     });
-    if (!transcript) throw new NotFoundException('Dashboard transcript not found');
+    if (!transcript)
+      throw new NotFoundException('Dashboard transcript not found');
 
     transcript.text = body.text.trim();
     const saved = await this.mediaRepo.save(transcript);
@@ -231,13 +237,16 @@ export class MediaMetaDataController {
   }
 
   @Delete(':id/dashboard-transcript')
-  async deleteDashboardTranscript(@Param('id') id: string): Promise<DeleteResponse> {
+  async deleteDashboardTranscript(
+    @Param('id') id: string,
+  ): Promise<DeleteResponse> {
     const transcript = await this.mediaRepo.findOneBy({
       input_media_id: id,
       source: 'dashboard' as any,
       media_type: 'text' as any,
     });
-    if (!transcript) throw new NotFoundException('Dashboard transcript not found');
+    if (!transcript)
+      throw new NotFoundException('Dashboard transcript not found');
 
     await this.mediaRepo.remove(transcript);
     return { deleted: true };

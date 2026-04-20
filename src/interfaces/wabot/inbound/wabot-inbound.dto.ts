@@ -12,9 +12,7 @@ import {
 import { OtelCarrierDto } from '../../../otel/otel.dto';
 
 @ValidatorConstraint({ name: 'typeMatchesPayload', async: false })
-class TypeMatchesPayloadConstraint
-  implements ValidatorConstraintInterface
-{
+class TypeMatchesPayloadConstraint implements ValidatorConstraintInterface {
   validate(_: unknown, args: ValidationArguments): boolean {
     const dto = args.object as MessageDto;
 
@@ -29,9 +27,7 @@ class TypeMatchesPayloadConstraint
       ([, value]) => value !== undefined,
     );
 
-    return (
-      presentFields.length === 1 && presentFields[0][0] === dto.type
-    );
+    return presentFields.length === 1 && presentFields[0][0] === dto.type;
   }
 
   defaultMessage(args: ValidationArguments): string {

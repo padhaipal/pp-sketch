@@ -14,7 +14,10 @@ import {
   injectCarrierFromContext,
 } from '../../../otel/otel';
 import { FindMediaByStateTransitionIdResult } from '../../../media-meta-data/media-meta-data.dto';
-import { WELCOME_MESSAGE_STATE_TRANSITION_ID, AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID } from '../../../literacy/literacy-lesson/literacy-lesson.machine';
+import {
+  WELCOME_MESSAGE_STATE_TRANSITION_ID,
+  AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID,
+} from '../../../literacy/literacy-lesson/literacy-lesson.machine';
 
 const logger = new Logger('WabotInboundProcessor');
 
@@ -60,9 +63,7 @@ export async function processWabotInboundJob(
 
     // 2. Consecutive message — ignore
     if (payload.consecutive) {
-      logger.log(
-        `Ignoring consecutive message from ${payload.message.from}`,
-      );
+      logger.log(`Ignoring consecutive message from ${payload.message.from}`);
       span.end();
       return;
     }
@@ -166,9 +167,7 @@ export async function processWabotInboundJob(
         appendMediaItems(onboardingMedia, welcomeMedia);
         onboardingStids.push(WELCOME_MESSAGE_STATE_TRANSITION_ID);
       } catch (err) {
-        logger.warn(
-          `Failed to fetch welcome media: ${(err as Error).message}`,
-        );
+        logger.warn(`Failed to fetch welcome media: ${(err as Error).message}`);
       }
 
       if (userMessageId) {
@@ -189,7 +188,9 @@ export async function processWabotInboundJob(
           );
         }
       } else {
-        logger.warn(`New-user first lesson skipped: userMessageId is undefined`);
+        logger.warn(
+          `New-user first lesson skipped: userMessageId is undefined`,
+        );
       }
 
       if (onboardingMedia.length > 0) {
@@ -255,12 +256,11 @@ export async function processWabotInboundJob(
     }
 
     // 6. Process audio message
-    const audioEntity =
-      await mediaMetaDataService.createWhatsappAudioMedia({
-        wa_media_url: payload.message.audio!.url,
-        user,
-        otel_carrier: injectCarrier(span),
-      });
+    const audioEntity = await mediaMetaDataService.createWhatsappAudioMedia({
+      wa_media_url: payload.message.audio!.url,
+      user,
+      otel_carrier: injectCarrier(span),
+    });
     const userMessageId = audioEntity.id;
 
     // 7. Find transcripts
@@ -314,9 +314,7 @@ export async function processWabotInboundJob(
         logger.log(`Message delivered to ${user.external_id}`);
       } else {
         // Inflight expired — roll back
-        logger.log(
-          `Inflight expired for ${user.external_id} — rolling back`,
-        );
+        logger.log(`Inflight expired for ${user.external_id} — rolling back`);
         await mediaMetaDataService.markRolledBack(userMessageId);
       }
     } else if (sendResult.status >= 400 && sendResult.status < 500) {
@@ -378,9 +376,7 @@ async function sendFallbackAndHandle(
       otel_carrier: injectCarrierFromContext(ctx),
     });
   } catch (err) {
-    logger.warn(
-      `Failed to send fallback message: ${(err as Error).message}`,
-    );
+    logger.warn(`Failed to send fallback message: ${(err as Error).message}`);
   }
 }
 

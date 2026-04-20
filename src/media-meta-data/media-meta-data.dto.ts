@@ -5,7 +5,13 @@ import { User } from '../users/user.dto';
 const VALID_MEDIA_STATUSES = ['created', 'queued', 'ready', 'failed'] as const;
 export type MediaStatus = (typeof VALID_MEDIA_STATUSES)[number];
 
-const VALID_MEDIA_TYPES = ['audio', 'text', 'video', 'image', 'sticker'] as const;
+const VALID_MEDIA_TYPES = [
+  'audio',
+  'text',
+  'video',
+  'image',
+  'sticker',
+] as const;
 export type MediaType = (typeof VALID_MEDIA_TYPES)[number];
 
 const VALID_MEDIA_SOURCES = [
@@ -133,7 +139,10 @@ const MIME_TO_MEDIA_TYPE: Record<StaticMediaMimeType, MediaType> = {
   'audio/ogg': 'audio',
 };
 
-const STATIC_MEDIA_MAX_BYTES: Record<'image' | 'video' | 'audio' | 'sticker', number> = {
+const STATIC_MEDIA_MAX_BYTES: Record<
+  'image' | 'video' | 'audio' | 'sticker',
+  number
+> = {
   image: 5 * 1024 * 1024,
   video: 16 * 1024 * 1024,
   audio: 16 * 1024 * 1024,
@@ -282,8 +291,7 @@ export function validateCreateWhatsappAudioMediaOptions(
   }
   if (
     hasUserExternalId &&
-    (typeof o.user_external_id !== 'string' ||
-      (o.user_external_id as string).length === 0)
+    (typeof o.user_external_id !== 'string' || o.user_external_id.length === 0)
   ) {
     throw new BadRequestException(
       'createWhatsappAudioMedia() options.user_external_id must be a non-empty string',
@@ -364,8 +372,7 @@ export function validateCreateTextMediaOptions(
   }
   if (
     hasUserExternalId &&
-    (typeof o.user_external_id !== 'string' ||
-      (o.user_external_id as string).length === 0)
+    (typeof o.user_external_id !== 'string' || o.user_external_id.length === 0)
   ) {
     throw new BadRequestException(
       'createTextMedia() options.user_external_id must be a non-empty string',
@@ -378,8 +385,7 @@ export function validateCreateTextMediaOptions(
 
   if (
     o.input_media_id !== undefined &&
-    (typeof o.input_media_id !== 'string' ||
-      (o.input_media_id as string).length === 0)
+    (typeof o.input_media_id !== 'string' || o.input_media_id.length === 0)
   ) {
     throw new BadRequestException(
       'createTextMedia() options.input_media_id must be a non-empty string',
@@ -439,7 +445,7 @@ export function validateFindTranscriptsOptions(
   if (
     hasId &&
     (typeof o.media_metadata_id !== 'string' ||
-      (o.media_metadata_id as string).length === 0)
+      o.media_metadata_id.length === 0)
   ) {
     throw new BadRequestException(
       'findTranscripts() options.media_metadata_id must be a non-empty string',
@@ -448,7 +454,7 @@ export function validateFindTranscriptsOptions(
   if (
     hasWaMediaUrl &&
     (typeof o.media_metadata_wa_media_url !== 'string' ||
-      (o.media_metadata_wa_media_url as string).length === 0)
+      o.media_metadata_wa_media_url.length === 0)
   ) {
     throw new BadRequestException(
       'findTranscripts() options.media_metadata_wa_media_url must be a non-empty string',
@@ -465,9 +471,13 @@ const VALID_HEYGEN_MEDIA_TYPES: Array<CreateHeygenMediaItem['media_type']> = [
 const VALID_AVATAR_STYLES: Array<
   NonNullable<CreateHeygenMediaItem['avatar_style']>
 > = ['normal', 'circle', 'closeUp'];
-const VALID_EMOTIONS: Array<
-  NonNullable<CreateHeygenMediaItem['emotion']>
-> = ['Excited', 'Friendly', 'Serious', 'Soothing', 'Broadcaster'];
+const VALID_EMOTIONS: Array<NonNullable<CreateHeygenMediaItem['emotion']>> = [
+  'Excited',
+  'Friendly',
+  'Serious',
+  'Soothing',
+  'Broadcaster',
+];
 const VALID_BG_TYPES: Array<'color' | 'image' | 'video'> = [
   'color',
   'image',
@@ -645,9 +655,7 @@ export function validateCreateHeygenMediaOptions(
           );
         }
         const bg = item.background as Record<string, unknown>;
-        if (
-          !VALID_BG_TYPES.includes(bg.type as 'color' | 'image' | 'video')
-        ) {
+        if (!VALID_BG_TYPES.includes(bg.type as 'color' | 'image' | 'video')) {
           throw new BadRequestException(
             `createHeygenMedia() items[${idx}].background.type must be one of: ${VALID_BG_TYPES.join(', ')}`,
           );
@@ -789,7 +797,9 @@ export function assertValidStaticMediaFile(
   }
 
   const maxBytes =
-    STATIC_MEDIA_MAX_BYTES[media_type as 'image' | 'video' | 'audio' | 'sticker'];
+    STATIC_MEDIA_MAX_BYTES[
+      media_type as 'image' | 'video' | 'audio' | 'sticker'
+    ];
   if (file.size > maxBytes) {
     throw new BadRequestException(
       `uploadStaticMedia() files[${idx}]: file size ${file.size} bytes exceeds ${maxBytes} byte limit for ${media_type}`,

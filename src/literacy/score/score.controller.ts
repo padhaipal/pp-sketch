@@ -12,6 +12,8 @@ export class ScoreController {
   async lettersLearnt(
     @Query() query: LettersLearntQueryDto,
   ): Promise<LettersLearntResult[]> {
-    return this.scoreService.getLettersLearnt(query.users) as Promise<LettersLearntResult[]>;
+    return this.scoreService.getLettersLearnt(query.users) as Promise<
+      LettersLearntResult[]
+    >;
   }
 }

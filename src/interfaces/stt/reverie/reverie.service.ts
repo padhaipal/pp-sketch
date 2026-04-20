@@ -24,9 +24,7 @@ export class ReverieService {
     parentMedia: MediaMetaData,
   ): Promise<MediaMetaData> {
     if (audioBuffer.length === 0) {
-      this.logger.warn(
-        `Reverie: empty audio buffer for ${parentMedia.id}`,
-      );
+      this.logger.warn(`Reverie: empty audio buffer for ${parentMedia.id}`);
       throw new Error('Empty audio buffer');
     }
 

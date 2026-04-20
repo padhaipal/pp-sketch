@@ -43,9 +43,7 @@ export async function processWhatsappPreloadJob(
       return;
     }
     if (entity.status === 'failed') {
-      logger.warn(
-        `Entity ${media_metadata_id} has failed status — skipping`,
-      );
+      logger.warn(`Entity ${media_metadata_id} has failed status — skipping`);
       span.end();
       return;
     }
@@ -87,9 +85,7 @@ export async function processWhatsappPreloadJob(
       wa_media_url = result.wa_media_url;
     } catch (err) {
       const msg = (err as Error).message;
-      logger.error(
-        `uploadMedia threw for ${media_metadata_id}: ${msg}`,
-      );
+      logger.error(`uploadMedia threw for ${media_metadata_id}: ${msg}`);
       const statusMatch = msg.match(/(\d{3})/);
       const status = statusMatch ? parseInt(statusMatch[1]) : 0;
       if (status >= 400 && status < 500) {
@@ -115,9 +111,7 @@ export async function processWhatsappPreloadJob(
     // 7. Invalidate cache
     if (entity.state_transition_id) {
       await cacheService.del(
-        CACHE_KEYS.mediaByStateTransitionId(
-          entity.state_transition_id,
-        ),
+        CACHE_KEYS.mediaByStateTransitionId(entity.state_transition_id),
       );
     }
 
@@ -139,7 +133,7 @@ export async function processWhatsappPreloadJob(
           { delay: TWENTY_DAYS_MS },
         );
         reloadEnqueued = true;
-      } catch (err) {
+      } catch {
         if (Date.now() - startTime > 10_000) {
           logger.error(
             `Failed to enqueue reload for ${media_metadata_id} — media will expire`,

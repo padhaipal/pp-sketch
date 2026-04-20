@@ -24,9 +24,7 @@ export class AzureService {
     parentMedia: MediaMetaData,
   ): Promise<MediaMetaData> {
     if (audioBuffer.length === 0) {
-      this.logger.warn(
-        `Azure: empty audio buffer for ${parentMedia.id}`,
-      );
+      this.logger.warn(`Azure: empty audio buffer for ${parentMedia.id}`);
       throw new Error('Empty audio buffer');
     }
 
@@ -39,15 +37,11 @@ export class AzureService {
     formData.append(
       'audio',
       new Blob([Uint8Array.from(audioBuffer)], {
-        type:
-          (parentMedia.media_details?.mime_type as string) ?? 'audio/ogg',
+        type: (parentMedia.media_details?.mime_type as string) ?? 'audio/ogg',
       }),
       `${parentMedia.id}.ogg`,
     );
-    formData.append(
-      'definition',
-      JSON.stringify({ locales: ['hi-IN'] }),
-    );
+    formData.append('definition', JSON.stringify({ locales: ['hi-IN'] }));
 
     const endpoint = process.env.AZURE_SPEECH_ENDPOINT!;
 
@@ -76,7 +70,7 @@ export class AzureService {
 
     // 3. Handle response
     if (response.status !== 200) {
-      const errorBody = await response.json().catch(() => ({})) as any;
+      const errorBody = await response.json().catch(() => ({}));
       this.logger.warn(
         `Azure ${response.status} for ${parentMedia.id}: ${errorBody?.error?.code} ${errorBody?.error?.message}`,
       );
@@ -93,11 +87,24 @@ export class AzureService {
       }>;
     };
 
-    const HINDI_DIGITS = ['शून्य', 'एक', 'दो', 'तीन', 'चार', 'पाँच', 'छह', 'सात', 'आठ', 'नौ'];
+    const HINDI_DIGITS = [
+      'शून्य',
+      'एक',
+      'दो',
+      'तीन',
+      'चार',
+      'पाँच',
+      'छह',
+      'सात',
+      'आठ',
+      'नौ',
+    ];
     const rawTranscript = result.combinedPhrases?.[0]?.text ?? '';
-    const transcript = rawTranscript.replace(
-      /\d+/g,
-      (match) => match.split('').map((d) => HINDI_DIGITS[+d]).join(' '),
+    const transcript = rawTranscript.replace(/\d+/g, (match) =>
+      match
+        .split('')
+        .map((d) => HINDI_DIGITS[+d])
+        .join(' '),
     );
 
     const avgConfidence =

@@ -2,7 +2,6 @@ import { NodeSDK } from '@opentelemetry/sdk-node';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import {
-  context,
   propagation,
   trace,
   Span,
@@ -28,10 +27,7 @@ export function extractSpan(carrier: OtelCarrier): Context {
   return propagation.extract(ROOT_CONTEXT, carrier);
 }
 
-export function startChildSpan(
-  name: string,
-  carrier: OtelCarrier,
-): Span {
+export function startChildSpan(name: string, carrier: OtelCarrier): Span {
   const parentCtx = extractSpan(carrier);
   return tracer.startSpan(name, {}, parentCtx);
 }

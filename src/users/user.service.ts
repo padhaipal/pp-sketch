@@ -171,9 +171,7 @@ export class UserService {
         updatedUser.referrer_user_id = null;
         await this.userRepo.save(updatedUser);
         const { BadRequestException } = await import('@nestjs/common');
-        throw new BadRequestException(
-          'update() would create a referral cycle',
-        );
+        throw new BadRequestException('update() would create a referral cycle');
       }
     }
 
@@ -186,9 +184,7 @@ export class UserService {
       validated.new_external_id !== undefined &&
       validated.external_id !== undefined
     ) {
-      keysToDelete.push(
-        CACHE_KEYS.userByExternalId(validated.external_id),
-      );
+      keysToDelete.push(CACHE_KEYS.userByExternalId(validated.external_id));
     }
     await this.cacheService.del(keysToDelete);
 
@@ -252,7 +248,11 @@ export class UserService {
         `INSERT INTO users (external_id, name, referrer_user_id)
                SELECT $1, $2, id FROM users WHERE external_id = $3
                RETURNING *`,
-        [validated.external_id, validated.name ?? null, validated.referrer_external_id],
+        [
+          validated.external_id,
+          validated.name ?? null,
+          validated.referrer_external_id,
+        ],
       );
 
       if (rows.length === 0) {
@@ -282,7 +282,9 @@ export class UserService {
           [user.referrer_user_id, user.id],
         );
         if (cycleRows.length > 0) {
-          await this.dataSource.query('DELETE FROM users WHERE id = $1', [user.id]);
+          await this.dataSource.query('DELETE FROM users WHERE id = $1', [
+            user.id,
+          ]);
           const { BadRequestException } = await import('@nestjs/common');
           throw new BadRequestException(
             'create() would create a referral cycle',
@@ -326,18 +328,12 @@ export class UserService {
       params,
     );
 
-    this.logger.log(
-      `Seed scores: inserted ${rows.length} for user ${userId}`,
-    );
+    this.logger.log(`Seed scores: inserted ${rows.length} for user ${userId}`);
   }
 
   private async populateUserCache(user: User): Promise<void> {
     await Promise.all([
-      this.cacheService.set(
-        CACHE_KEYS.userById(user.id),
-        user,
-        CACHE_TTL.USER,
-      ),
+      this.cacheService.set(CACHE_KEYS.userById(user.id), user, CACHE_TTL.USER),
       this.cacheService.set(
         CACHE_KEYS.userByExternalId(user.external_id),
         user,

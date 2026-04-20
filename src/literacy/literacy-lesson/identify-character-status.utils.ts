@@ -210,7 +210,10 @@ class IdentifyCharacterStatus {
         bestMatches = matches;
 
         const mismatched = new Set(
-          operations.filter((o) => o.type !== 'equal').map((o) => o.bChar).filter(Boolean),
+          operations
+            .filter((o) => o.type !== 'equal')
+            .map((o) => o.bChar)
+            .filter(Boolean),
         );
         bestCorrectSet = new Set(
           [...allCorrectChars].filter((c) => !mismatched.has(c)),
@@ -220,7 +223,9 @@ class IdentifyCharacterStatus {
 
     return {
       correctChars: [...allCorrectChars].filter((c) => bestCorrectSet.has(c)),
-      incorrectChars: [...allCorrectChars].filter((c) => !bestCorrectSet.has(c)),
+      incorrectChars: [...allCorrectChars].filter(
+        (c) => !bestCorrectSet.has(c),
+      ),
     };
   }
 }

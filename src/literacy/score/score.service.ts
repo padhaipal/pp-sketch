@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import {
   Score,
@@ -78,7 +73,7 @@ const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function calculateNewScore(
-  average: number,
+  _average: number,
   previousScore: number | undefined,
   correct: boolean,
 ): number {
@@ -180,9 +175,7 @@ export class ScoreService {
     const limitIdx = idx++;
 
     const whereStr =
-      whereClauses.length > 0
-        ? `WHERE ${whereClauses.join(' AND ')}`
-        : '';
+      whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
     const rows = await this.dataSource.query(
       `SELECT s.* FROM ${fromClause} ${whereStr}
@@ -192,9 +185,7 @@ export class ScoreService {
     return rows;
   }
 
-  async gradeAndRecord(
-    options: GradeAndRecordOptions,
-  ): Promise<Score[]> {
+  async gradeAndRecord(options: GradeAndRecordOptions): Promise<Score[]> {
     const validated = validateGradeAndRecordOptions(options);
     const { _correct, _incorrect } = validated;
 
@@ -227,7 +218,10 @@ export class ScoreService {
         letterIds,
       );
       const idToGrapheme = new Map<string, string>(
-        letterRows.map((r: { id: string; grapheme: string }) => [r.id, r.grapheme]),
+        letterRows.map((r: { id: string; grapheme: string }) => [
+          r.id,
+          r.grapheme,
+        ]),
       );
 
       for (const [letterId, score] of latestPerLetter) {
@@ -270,7 +264,7 @@ export class ScoreService {
 
     // DB hit 2 — single multi-row INSERT
     const userRef = validated.user
-      ? { clause: 'u.id = $1', param: (validated.user as User).id }
+      ? { clause: 'u.id = $1', param: validated.user.id }
       : validated.user_id
         ? { clause: 'u.id = $1', param: validated.user_id }
         : {

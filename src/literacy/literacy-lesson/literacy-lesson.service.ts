@@ -6,7 +6,10 @@ import * as fs from 'fs';
 import { createActor } from 'xstate';
 import { LiteracyLessonStateEntity } from './literacy-lesson-state.entity';
 import { ScoreService } from '../score/score.service';
-import { machine, STALE_LESSON_RESTART_STATE_TRANSITION_ID } from './literacy-lesson.machine';
+import {
+  machine,
+  STALE_LESSON_RESTART_STATE_TRANSITION_ID,
+} from './literacy-lesson.machine';
 import {
   LiteracyLessonState,
   ProcessAnswerOptions,
@@ -59,8 +62,7 @@ export class LiteracyLessonService {
     if (!currentState) {
       startFresh = true;
     } else {
-      const age =
-        Date.now() - new Date(currentState.created_at).getTime();
+      const age = Date.now() - new Date(currentState.created_at).getTime();
       if (age > 900_000) {
         startFresh = true;
       } else if (age > 300_000) {
@@ -115,14 +117,13 @@ export class LiteracyLessonService {
     }
 
     // 7. Read pending scores
-    const pendingCorrect: string[] =
-      snapshot.context.pendingCorrect ?? [];
-    const pendingIncorrect: string[] =
-      snapshot.context.pendingIncorrect ?? [];
+    const pendingCorrect: string[] = snapshot.context.pendingCorrect ?? [];
+    const pendingIncorrect: string[] = snapshot.context.pendingIncorrect ?? [];
 
     // 8. Persist snapshot
     const answer: string | null = snapshot.context.answer ?? null;
-    const answerCorrect: boolean | null = snapshot.context.answerCorrect ?? null;
+    const answerCorrect: boolean | null =
+      snapshot.context.answerCorrect ?? null;
     const rows = await this.dataSource.query(
       `INSERT INTO literacy_lesson_states (user_id, user_message_id, word, answer, answer_correct, snapshot, created_at)
        SELECT $1, $2, $3, $4, $5, $6, now()
@@ -143,19 +144,15 @@ export class LiteracyLessonService {
       this.logger.error(
         `processAnswer: INSERT returned 0 rows — media ${validated.user_message_id} rolled_back=true or does not exist`,
       );
-      throw new Error(
-        'Media was rolled back — cannot persist lesson state',
-      );
+      throw new Error('Media was rolled back — cannot persist lesson state');
     }
     // 9. Record scores
     if (pendingCorrect.length > 0 || pendingIncorrect.length > 0) {
       try {
         await this.scoreService.gradeAndRecord({
           user: validated.user,
-          correct:
-            pendingCorrect.length > 0 ? pendingCorrect : undefined,
-          incorrect:
-            pendingIncorrect.length > 0 ? pendingIncorrect : undefined,
+          correct: pendingCorrect.length > 0 ? pendingCorrect : undefined,
+          incorrect: pendingIncorrect.length > 0 ? pendingIncorrect : undefined,
           userMessageId: validated.user_message_id,
         });
       } catch (err) {
@@ -167,7 +164,10 @@ export class LiteracyLessonService {
 
     // 10. Return
     const stateTransitionIds = isStaleRestart
-      ? [STALE_LESSON_RESTART_STATE_TRANSITION_ID, snapshot.context.stateTransitionId]
+      ? [
+          STALE_LESSON_RESTART_STATE_TRANSITION_ID,
+          snapshot.context.stateTransitionId,
+        ]
       : [snapshot.context.stateTransitionId];
 
     return {
@@ -176,9 +176,7 @@ export class LiteracyLessonService {
     };
   }
 
-  async findCurrentState(
-    userId: string,
-  ): Promise<LiteracyLessonState | null> {
+  async findCurrentState(userId: string): Promise<LiteracyLessonState | null> {
     const entity = await this.lessonStateRepo.findOne({
       where: { user_id: userId },
       order: { created_at: 'DESC' },
@@ -260,9 +258,7 @@ export class LiteracyLessonService {
       const mostRecentWordLen = Array.from(recentWords[0]).length;
       if (topNSnapshotCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH) {
         maxLength = mostRecentWordLen + 1;
-      } else if (
-        topNSnapshotCount < SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME
-      ) {
+      } else if (topNSnapshotCount < SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME) {
         maxLength = mostRecentWordLen;
       } else {
         maxLength = mostRecentWordLen - 1;
@@ -271,9 +267,7 @@ export class LiteracyLessonService {
     maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR);
 
     // Filter by length
-    candidates = candidates.filter(
-      (w) => Array.from(w).length <= maxLength,
-    );
+    candidates = candidates.filter((w) => Array.from(w).length <= maxLength);
 
     // Score each word
     const scored = candidates.map((word) => {
@@ -289,9 +283,7 @@ export class LiteracyLessonService {
       this.logger.warn(
         'selectNextWord: no candidates after filtering — falling back to random word',
       );
-      return this.wordList[
-        Math.floor(Math.random() * this.wordList.length)
-      ];
+      return this.wordList[Math.floor(Math.random() * this.wordList.length)];
     }
 
     // Find minimum score

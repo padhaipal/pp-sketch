@@ -5,8 +5,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, In } from 'typeorm';
-import { Readable, PassThrough } from 'stream';
+import { Repository, DataSource } from 'typeorm';
+import { Readable } from 'stream';
 import { v4 as uuid } from 'uuid';
 import * as crypto from 'crypto';
 import { MediaMetaDataEntity } from './media-meta-data.entity';
@@ -142,10 +142,11 @@ export class MediaMetaDataService {
     }
 
     // 4. Download and stream to S3 + STT providers in parallel
-    const tDlStart = Date.now();
     const { stream: audioStream, content_type } =
-      await this.wabotOutbound.downloadMedia(validated.wa_media_url, validated.otel_carrier);
-    const tFirstByte = Date.now();
+      await this.wabotOutbound.downloadMedia(
+        validated.wa_media_url,
+        validated.otel_carrier,
+      );
 
     // Buffer the stream so we can fan it out
     const chunks: Buffer[] = [];
@@ -173,48 +174,40 @@ export class MediaMetaDataService {
     // STT providers in parallel (feature flag gated)
     const sttPromises: Promise<MediaMetaData | null>[] = [];
 
-    const [sarvamEnabled, azureEnabled, reverieEnabled] = await Promise.all(
-      [
-        isSttEnabled('sarvam'),
-        isSttEnabled('azure'),
-        isSttEnabled('reverie'),
-      ],
-    );
+    const [sarvamEnabled, azureEnabled, reverieEnabled] = await Promise.all([
+      isSttEnabled('sarvam'),
+      isSttEnabled('azure'),
+      isSttEnabled('reverie'),
+    ]);
 
     if (sarvamEnabled) {
       sttPromises.push(
-        this.sarvamService
-          .run(audioBuffer, entity)
-          .catch((err) => {
-            this.logger.warn(
-              `Sarvam STT failed for ${entity.id}: ${(err as Error).message}`,
-            );
-            return null;
-          }),
+        this.sarvamService.run(audioBuffer, entity).catch((err) => {
+          this.logger.warn(
+            `Sarvam STT failed for ${entity.id}: ${(err as Error).message}`,
+          );
+          return null;
+        }),
       );
     }
     if (azureEnabled) {
       sttPromises.push(
-        this.azureService
-          .run(audioBuffer, entity)
-          .catch((err) => {
-            this.logger.warn(
-              `Azure STT failed for ${entity.id}: ${(err as Error).message}`,
-            );
-            return null;
-          }),
+        this.azureService.run(audioBuffer, entity).catch((err) => {
+          this.logger.warn(
+            `Azure STT failed for ${entity.id}: ${(err as Error).message}`,
+          );
+          return null;
+        }),
       );
     }
     if (reverieEnabled) {
       sttPromises.push(
-        this.reverieService
-          .run(audioBuffer, entity)
-          .catch((err) => {
-            this.logger.warn(
-              `Reverie STT failed for ${entity.id}: ${(err as Error).message}`,
-            );
-            return null;
-          }),
+        this.reverieService.run(audioBuffer, entity).catch((err) => {
+          this.logger.warn(
+            `Reverie STT failed for ${entity.id}: ${(err as Error).message}`,
+          );
+          return null;
+        }),
       );
     }
 
@@ -342,7 +335,9 @@ export class MediaMetaDataService {
     }
 
     // Raw SQL — uses ANY($1::text[]) for multi-key lookup
-    const keys = genericKey ? [stateTransitionId, genericKey] : [stateTransitionId];
+    const keys = genericKey
+      ? [stateTransitionId, genericKey]
+      : [stateTransitionId];
     const rows = await this.dataSource.query(
       `SELECT * FROM media_metadata
        WHERE state_transition_id = ANY($1::text[])
@@ -363,7 +358,13 @@ export class MediaMetaDataService {
     }
 
     const result: FindMediaByStateTransitionIdResult = {};
-    for (const type of ['audio', 'video', 'text', 'image', 'sticker'] as const) {
+    for (const type of [
+      'audio',
+      'video',
+      'text',
+      'image',
+      'sticker',
+    ] as const) {
       const items = specificByType.get(type) ?? genericByType.get(type);
       if (items && items.length > 0) {
         result[type] = items[Math.floor(Math.random() * items.length)];
@@ -372,7 +373,9 @@ export class MediaMetaDataService {
 
     const resultTypes = Object.keys(result);
     if (resultTypes.length === 0) {
-      this.logger.warn(`findMediaBySTID: no media found for stid="${stateTransitionId}"`);
+      this.logger.warn(
+        `findMediaBySTID: no media found for stid="${stateTransitionId}"`,
+      );
     }
 
     if (resultTypes.length > 0) {
@@ -388,9 +391,7 @@ export class MediaMetaDataService {
 
   async markRolledBack(mediaId: string): Promise<void> {
     if (typeof mediaId !== 'string' || mediaId.length === 0) {
-      throw new BadRequestException(
-        'mediaId must be a non-empty string',
-      );
+      throw new BadRequestException('mediaId must be a non-empty string');
     }
 
     // Fetch s3_key before DB transaction
@@ -468,9 +469,15 @@ export class MediaMetaDataService {
           script_text: item.script_text,
           state_transition_id: item.state_transition_id,
           media_type: item.media_type,
-          ...(item.avatar_id && item.avatar_id !== process.env.HEYGEN_AVATAR_ID && { avatar_id: item.avatar_id }),
+          ...(item.avatar_id &&
+            item.avatar_id !== process.env.HEYGEN_AVATAR_ID && {
+              avatar_id: item.avatar_id,
+            }),
           ...(item.avatar_style && { avatar_style: item.avatar_style }),
-          ...(item.voice_id && item.voice_id !== process.env.HEYGEN_VOICE_ID && { voice_id: item.voice_id }),
+          ...(item.voice_id &&
+            item.voice_id !== process.env.HEYGEN_VOICE_ID && {
+              voice_id: item.voice_id,
+            }),
           ...(item.speed !== undefined && { speed: item.speed }),
           ...(item.emotion && { emotion: item.emotion }),
           ...(item.locale && { locale: item.locale }),
@@ -518,9 +525,7 @@ export class MediaMetaDataService {
         if (Date.now() - startTime > 10_000) {
           const ids = entities.map((e) => e.id);
           await this.mediaRepo.update(ids, { status: 'failed' });
-          this.logger.error(
-            `createHeygenMedia: failed to enqueue after 10s`,
-          );
+          this.logger.error(`createHeygenMedia: failed to enqueue after 10s`);
           throw err;
         }
         await new Promise((r) => setTimeout(r, delay));
@@ -560,7 +565,10 @@ export class MediaMetaDataService {
         generation_request_json: {
           script_text: item.script_text,
           state_transition_id: item.state_transition_id,
-          ...(item.voice_id && item.voice_id !== process.env.ELEVENLABS_VOICE_ID && { voice_id: item.voice_id }),
+          ...(item.voice_id &&
+            item.voice_id !== process.env.ELEVENLABS_VOICE_ID && {
+              voice_id: item.voice_id,
+            }),
           ...(item.model_id && { model_id: item.model_id }),
           ...(item.language_code && { language_code: item.language_code }),
           ...(item.voice_settings && { voice_settings: item.voice_settings }),
@@ -802,15 +810,12 @@ export class MediaMetaDataService {
 
         // 6. Enqueue WHATSAPP_PRELOAD
         try {
-          await this.whatsappPreloadQueue.add(
-            `preload-${entity.id}`,
-            {
-              media_metadata_id: entity.id,
-              s3_key: s3Key,
-              reload: false,
-              otel_carrier,
-            } as WhatsappPreloadJobDto,
-          );
+          await this.whatsappPreloadQueue.add(`preload-${entity.id}`, {
+            media_metadata_id: entity.id,
+            s3_key: s3Key,
+            reload: false,
+            otel_carrier,
+          } as WhatsappPreloadJobDto);
         } catch (err) {
           this.logger.warn(
             `uploadStaticMedia[${i}]: enqueue failed: ${(err as Error).message}`,
@@ -845,9 +850,8 @@ export class MediaMetaDataService {
 
     const summary = {
       created: results.filter((r) => r.status === 'created').length,
-      duplicate_skipped: results.filter(
-        (r) => r.status === 'duplicate_skipped',
-      ).length,
+      duplicate_skipped: results.filter((r) => r.status === 'duplicate_skipped')
+        .length,
       failed: results.filter((r) => r.status === 'failed').length,
     };
 

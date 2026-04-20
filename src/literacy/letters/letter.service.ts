@@ -32,9 +32,7 @@ export class LetterService {
       return await this.letterRepo.save(entity);
     } catch (err: any) {
       if (err.code === '23505') {
-        throw new BadRequestException(
-          'create() grapheme already exists',
-        );
+        throw new BadRequestException('create() grapheme already exists');
       }
       throw err;
     }
@@ -81,9 +79,7 @@ export class LetterService {
       return await this.letterRepo.save(existing);
     } catch (err: any) {
       if (err.code === '23505') {
-        throw new BadRequestException(
-          'update() new_grapheme already exists',
-        );
+        throw new BadRequestException('update() new_grapheme already exists');
       }
       throw err;
     }

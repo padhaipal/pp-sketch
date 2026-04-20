@@ -104,12 +104,9 @@ export async function processElevenlabsGenerateJob(
       throw new Error(`ElevenLabs TTS ${response.status}`);
     } else {
       const errorBody = await response.text();
-      const isLastAttempt =
-        job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+      const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
       if (isLastAttempt) {
-        logger.error(
-          `ElevenLabs TTS 5XX (final attempt): ${errorBody}`,
-        );
+        logger.error(`ElevenLabs TTS 5XX (final attempt): ${errorBody}`);
         await mediaRepo.update(media_metadata_id, {
           status: 'failed',
           media_details: { error: errorBody },

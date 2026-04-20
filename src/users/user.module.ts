@@ -9,7 +9,14 @@ import { UserController } from './user.controller';
 import { CacheService } from '../interfaces/redis/cache';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([UserEntity, MediaMetaDataEntity, ScoreEntity, LiteracyLessonStateEntity])],
+  imports: [
+    TypeOrmModule.forFeature([
+      UserEntity,
+      MediaMetaDataEntity,
+      ScoreEntity,
+      LiteracyLessonStateEntity,
+    ]),
+  ],
   controllers: [UserController],
   providers: [UserService, CacheService],
   exports: [UserService],

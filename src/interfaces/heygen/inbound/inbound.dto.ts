@@ -1,9 +1,4 @@
-import {
-  IsIn,
-  IsNotEmptyObject,
-  IsOptional,
-  IsString,
-} from 'class-validator';
+import { IsIn, IsNotEmptyObject, IsOptional, IsString } from 'class-validator';
 import type { OtelCarrier } from '../../../otel/otel.dto';
 
 export class VideoSuccessEventDataDto {

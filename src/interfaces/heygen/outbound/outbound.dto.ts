@@ -13,12 +13,7 @@ export interface VideoVoice {
   input_text: string;
   speed?: number;
   pitch?: number;
-  emotion?:
-    | 'Excited'
-    | 'Friendly'
-    | 'Serious'
-    | 'Soothing'
-    | 'Broadcaster';
+  emotion?: 'Excited' | 'Friendly' | 'Serious' | 'Soothing' | 'Broadcaster';
   locale?: string;
 }
 

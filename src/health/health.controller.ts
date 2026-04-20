@@ -1,9 +1,4 @@
-import {
-  Controller,
-  Get,
-  HttpStatus,
-  Res,
-} from '@nestjs/common';
+import { Controller, Get, HttpStatus, Res } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { DataSource } from 'typeorm';
@@ -71,9 +66,7 @@ export class HealthController {
       latency_ms: Date.now() - rcStart,
     };
 
-    const allUp = Object.values(checks).every(
-      (c) => c.status === 'up',
-    );
+    const allUp = Object.values(checks).every((c) => c.status === 'up');
     const status = allUp ? 'ok' : 'degraded';
 
     const body = {

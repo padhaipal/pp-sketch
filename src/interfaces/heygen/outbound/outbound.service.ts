@@ -63,8 +63,7 @@ export async function processHeygenGenerateJob(
             character: {
               type: 'avatar',
               avatar_id: heygen_params.avatar_id ?? HEYGEN_AVATAR_ID,
-              avatar_style:
-                (heygen_params.avatar_style as any) ?? 'normal',
+              avatar_style: (heygen_params.avatar_style as any) ?? 'normal',
             },
             voice: {
               type: 'text',
@@ -86,21 +85,17 @@ export async function processHeygenGenerateJob(
         },
       };
 
-      const response = await fetch(
-        'https://api.heygen.com/v2/video/generate',
-        {
-          method: 'POST',
-          headers: {
-            'X-Api-Key': HEYGEN_API_KEY,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(requestBody),
+      const response = await fetch('https://api.heygen.com/v2/video/generate', {
+        method: 'POST',
+        headers: {
+          'X-Api-Key': HEYGEN_API_KEY,
+          'Content-Type': 'application/json',
         },
-      );
+        body: JSON.stringify(requestBody),
+      });
 
       if (response.ok) {
-        const body =
-          (await response.json()) as VideoGenerateResponse;
+        const body = (await response.json()) as VideoGenerateResponse;
         await mediaRepo.update(media_metadata_id, {
           media_details: { video_id: body.data.video_id },
           status: 'queued',
@@ -108,9 +103,7 @@ export async function processHeygenGenerateJob(
         span.end();
       } else if (response.status >= 400 && response.status < 500) {
         const errorBody = await response.json();
-        logger.error(
-          `HeyGen video 4XX: ${JSON.stringify(errorBody)}`,
-        );
+        logger.error(`HeyGen video 4XX: ${JSON.stringify(errorBody)}`);
         await mediaRepo.update(media_metadata_id, {
           status: 'failed',
           media_details: { error: errorBody },
@@ -127,7 +120,9 @@ export async function processHeygenGenerateJob(
             media_details: { error: errorBody },
           });
         } else {
-          logger.warn(`HeyGen video 5XX (attempt ${job.attemptsMade + 1}): ${errorBody}`);
+          logger.warn(
+            `HeyGen video 5XX (attempt ${job.attemptsMade + 1}): ${errorBody}`,
+          );
         }
         span.end();
         throw new Error(`HeyGen 5XX: ${response.status}`);
@@ -137,9 +132,7 @@ export async function processHeygenGenerateJob(
       const requestBody: TtsRequest = {
         text: heygen_params.script_text,
         voice_id: heygen_params.voice_id ?? HEYGEN_VOICE_ID,
-        speed: heygen_params.speed
-          ? String(heygen_params.speed)
-          : undefined,
+        speed: heygen_params.speed ? String(heygen_params.speed) : undefined,
         language: heygen_params.language,
         locale: heygen_params.locale,
       };
@@ -158,8 +151,7 @@ export async function processHeygenGenerateJob(
 
       if (response.ok) {
         const body = (await response.json()) as TtsResponse;
-        const { audio_url, duration, request_id, word_timestamps } =
-          body.data;
+        const { audio_url, duration, request_id, word_timestamps } = body.data;
 
         // Download audio from HeyGen
         const audioResponse = await fetch(audio_url);
@@ -170,10 +162,7 @@ export async function processHeygenGenerateJob(
         }
 
         const stream = Readable.fromWeb(audioResponse.body! as any);
-        const s3Key = await mediaBucket.stream(
-          stream,
-          'audio/mpeg',
-        );
+        const s3Key = await mediaBucket.stream(stream, 'audio/mpeg');
 
         // Get byte_size from Content-Length if available
         const byteSize = audioResponse.headers.get('content-length');
@@ -191,21 +180,16 @@ export async function processHeygenGenerateJob(
         } as any);
 
         // Enqueue WHATSAPP_PRELOAD
-        await whatsappPreloadQueue.add(
-          `preload-${media_metadata_id}`,
-          {
-            media_metadata_id,
-            s3_key: s3Key,
-            otel_carrier: injectCarrier(span),
-          } as WhatsappPreloadJobDto,
-        );
+        await whatsappPreloadQueue.add(`preload-${media_metadata_id}`, {
+          media_metadata_id,
+          s3_key: s3Key,
+          otel_carrier: injectCarrier(span),
+        } as WhatsappPreloadJobDto);
 
         span.end();
       } else if (response.status >= 400 && response.status < 500) {
         const errorBody = await response.json();
-        logger.error(
-          `HeyGen TTS 4XX: ${JSON.stringify(errorBody)}`,
-        );
+        logger.error(`HeyGen TTS 4XX: ${JSON.stringify(errorBody)}`);
         await mediaRepo.update(media_metadata_id, {
           status: 'failed',
           media_details: { error: errorBody },
@@ -222,7 +206,9 @@ export async function processHeygenGenerateJob(
             media_details: { error: errorBody },
           });
         } else {
-          logger.warn(`HeyGen TTS 5XX (attempt ${job.attemptsMade + 1}): ${errorBody}`);
+          logger.warn(
+            `HeyGen TTS 5XX (attempt ${job.attemptsMade + 1}): ${errorBody}`,
+          );
         }
         span.end();
         throw new Error(`HeyGen TTS 5XX: ${response.status}`);

@@ -23,12 +23,8 @@ export class SarvamService {
     audioBuffer: Buffer,
     parentMedia: MediaMetaData,
   ): Promise<MediaMetaData> {
-    const t0 = Date.now();
-
     if (audioBuffer.length === 0) {
-      this.logger.warn(
-        `Sarvam: empty audio buffer for ${parentMedia.id}`,
-      );
+      this.logger.warn(`Sarvam: empty audio buffer for ${parentMedia.id}`);
       throw new Error('Empty audio buffer');
     }
 
@@ -41,8 +37,7 @@ export class SarvamService {
     formData.append(
       'file',
       new Blob([Uint8Array.from(audioBuffer)], {
-        type:
-          (parentMedia.media_details?.mime_type as string) ?? 'audio/ogg',
+        type: (parentMedia.media_details?.mime_type as string) ?? 'audio/ogg',
       }),
       `${parentMedia.id}.ogg`,
     );
@@ -52,17 +47,14 @@ export class SarvamService {
 
     let response: Response;
     try {
-      response = await fetch(
-        'https://api.sarvam.ai/speech-to-text',
-        {
-          method: 'POST',
-          headers: {
-            'api-subscription-key': process.env.SARVAM_API_KEY!,
-          },
-          body: formData,
-          signal: controller.signal,
+      response = await fetch('https://api.sarvam.ai/speech-to-text', {
+        method: 'POST',
+        headers: {
+          'api-subscription-key': process.env.SARVAM_API_KEY!,
         },
-      );
+        body: formData,
+        signal: controller.signal,
+      });
     } catch (err) {
       clearTimeout(timeout);
       this.logger.warn(
@@ -72,8 +64,6 @@ export class SarvamService {
     } finally {
       clearTimeout(timeout);
     }
-
-    const tResponse = Date.now();
 
     // 3. Handle response
     if (response.status >= 400 && response.status < 500) {

@@ -34,11 +34,16 @@ export class WabotOutboundService {
     try {
       response = await fetch(`${this.baseUrl}/sendMessage`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': this.apiKey },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.apiKey,
+        },
         body: JSON.stringify(requestBody),
       });
     } catch (err) {
-      this.logger.error(`WabotOutbound.sendMessage fetch threw: ${(err as Error).message}`);
+      this.logger.error(
+        `WabotOutbound.sendMessage fetch threw: ${(err as Error).message}`,
+      );
       throw err;
     }
     const body = (await response.json()) as SendMessageResponse;
@@ -58,11 +63,16 @@ export class WabotOutboundService {
     try {
       response = await fetch(`${this.baseUrl}/sendNotification`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': this.apiKey },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.apiKey,
+        },
         body: JSON.stringify(requestBody),
       });
     } catch (err) {
-      this.logger.error(`WabotOutbound.sendNotification fetch threw: ${(err as Error).message}`);
+      this.logger.error(
+        `WabotOutbound.sendNotification fetch threw: ${(err as Error).message}`,
+      );
       throw err;
     }
     return (await response.json()) as SendNotificationResponse;

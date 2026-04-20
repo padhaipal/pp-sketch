@@ -8,11 +8,19 @@ import {
   Index,
 } from 'typeorm';
 import { UserEntity } from '../users/user.entity';
-import type { MediaType, MediaSource, MediaStatus } from './media-meta-data.dto';
+import type {
+  MediaType,
+  MediaSource,
+  MediaStatus,
+} from './media-meta-data.dto';
 
-@Index('idx_media_metadata_content_hash_stid', ['content_hash', 'state_transition_id'], {
-  where: '"content_hash" IS NOT NULL',
-})
+@Index(
+  'idx_media_metadata_content_hash_stid',
+  ['content_hash', 'state_transition_id'],
+  {
+    where: '"content_hash" IS NOT NULL',
+  },
+)
 @Entity('media_metadata')
 export class MediaMetaDataEntity {
   @PrimaryGeneratedColumn('uuid')

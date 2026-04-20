@@ -11,14 +11,28 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { DataSource } from 'typeorm';
 import { AppModule } from './app.module';
 import { MediaMetaDataEntity } from './media-meta-data/media-meta-data.entity';
-import { createQueue, createWorker, QUEUE_NAMES, queueRedisConnection } from './interfaces/redis/queues';
+import {
+  createQueue,
+  createWorker,
+  QUEUE_NAMES,
+  queueRedisConnection,
+} from './interfaces/redis/queues';
 import { Worker } from 'bullmq';
 import { processWabotInboundJob } from './interfaces/wabot/inbound/inbound.processor';
 import { processHeygenInboundJob } from './interfaces/heygen/inbound/inbound.processor';
 import { processHeygenGenerateJob } from './interfaces/heygen/outbound/outbound.service';
 import { processElevenlabsGenerateJob } from './interfaces/elevenlabs/outbound/outbound.service';
 import { processWhatsappPreloadJob } from './media-meta-data/whatsapp-preload.processor';
-import { processNotifierCronJob, processNotifierSendJob } from './notifier/notifier.processor';
+import {
+  processNotifierCronJob,
+  processNotifierSendJob,
+} from './notifier/notifier.processor';
+import type { MessageJobDto } from './interfaces/wabot/inbound/wabot-inbound.dto';
+import type { HeygenGenerateJobData } from './interfaces/heygen/outbound/outbound.service';
+import type { ElevenlabsGenerateJobData } from './interfaces/elevenlabs/outbound/outbound.service';
+import type { HeygenInboundJobDto } from './interfaces/heygen/inbound/inbound.dto';
+import type { WhatsappPreloadJobDto } from './media-meta-data/media-meta-data.dto';
+import type { NotifierSendJobData } from './notifier/notifier.processor';
 import { UserService } from './users/user.service';
 import { MediaMetaDataService } from './media-meta-data/media-meta-data.service';
 import { LiteracyLessonService } from './literacy/literacy-lesson/literacy-lesson.service';
@@ -71,40 +85,60 @@ async function bootstrap() {
   const cacheService = app.get(CacheService);
 
   // BullMQ workers
-  const wabotInboundWorker = createWorker(QUEUE_NAMES.WABOT_INBOUND, async (job) => {
-    await processWabotInboundJob(
-      job,
-      userService,
-      mediaMetaDataService,
-      literacyLessonService,
-      wabotOutbound,
-    );
-  });
-  wabotInboundWorker.on('failed', (job, err) => logger.error(`worker(${QUEUE_NAMES.WABOT_INBOUND}) FAILED job id=${job?.id} err=${err.message}`));
-  wabotInboundWorker.on('error', (err) => logger.error(`worker(${QUEUE_NAMES.WABOT_INBOUND}) ERROR ${err.message}`));
-  wabotInboundWorker.on('stalled', (jobId) => logger.warn(`worker(${QUEUE_NAMES.WABOT_INBOUND}) STALLED job id=${jobId}`));
+  const wabotInboundWorker = createWorker<MessageJobDto>(
+    QUEUE_NAMES.WABOT_INBOUND,
+    async (job) => {
+      await processWabotInboundJob(
+        job,
+        userService,
+        mediaMetaDataService,
+        literacyLessonService,
+        wabotOutbound,
+      );
+    },
+  );
+  wabotInboundWorker.on('failed', (job, err) =>
+    logger.error(
+      `worker(${QUEUE_NAMES.WABOT_INBOUND}) FAILED job id=${job?.id} err=${err.message}`,
+    ),
+  );
+  wabotInboundWorker.on('error', (err) =>
+    logger.error(`worker(${QUEUE_NAMES.WABOT_INBOUND}) ERROR ${err.message}`),
+  );
+  wabotInboundWorker.on('stalled', (jobId) =>
+    logger.warn(`worker(${QUEUE_NAMES.WABOT_INBOUND}) STALLED job id=${jobId}`),
+  );
 
-  createWorker(QUEUE_NAMES.HEYGEN_GENERATE, async (job) => {
-    await processHeygenGenerateJob(job, mediaBucket, mediaRepo);
-  });
+  createWorker<HeygenGenerateJobData>(
+    QUEUE_NAMES.HEYGEN_GENERATE,
+    async (job) => {
+      await processHeygenGenerateJob(job, mediaBucket, mediaRepo);
+    },
+  );
 
-  createWorker(QUEUE_NAMES.ELEVENLABS_GENERATE, async (job) => {
-    await processElevenlabsGenerateJob(job, mediaBucket, mediaRepo);
-  });
+  createWorker<ElevenlabsGenerateJobData>(
+    QUEUE_NAMES.ELEVENLABS_GENERATE,
+    async (job) => {
+      await processElevenlabsGenerateJob(job, mediaBucket, mediaRepo);
+    },
+  );
 
-  createWorker(QUEUE_NAMES.HEYGEN_INBOUND, async (job) => {
+  createWorker<HeygenInboundJobDto>(QUEUE_NAMES.HEYGEN_INBOUND, async (job) => {
     await processHeygenInboundJob(job, mediaBucket, mediaRepo);
   });
 
-  createWorker(QUEUE_NAMES.WHATSAPP_PRELOAD, async (job) => {
-    await processWhatsappPreloadJob(
-      job,
-      mediaBucket,
-      wabotOutbound,
-      cacheService,
-      mediaRepo,
-    );
-  });
+  createWorker<WhatsappPreloadJobDto>(
+    QUEUE_NAMES.WHATSAPP_PRELOAD,
+    async (job) => {
+      await processWhatsappPreloadJob(
+        job,
+        mediaBucket,
+        wabotOutbound,
+        cacheService,
+        mediaRepo,
+      );
+    },
+  );
 
   // Notifier cron: fires daily at 13:30 UTC = 19:00 IST
   const notifierQueue = createQueue(QUEUE_NAMES.NOTIFIER);
@@ -115,12 +149,23 @@ async function bootstrap() {
   );
 
   const notifierWorker = createWorker(QUEUE_NAMES.NOTIFIER, async (job) => {
-    await processNotifierCronJob(job, dataSource, literacyLessonService, mediaMetaDataService);
+    await processNotifierCronJob(
+      job,
+      dataSource,
+      literacyLessonService,
+      mediaMetaDataService,
+    );
   });
-  notifierWorker.on('failed', (job, err) => logger.error(`worker(${QUEUE_NAMES.NOTIFIER}) FAILED job id=${job?.id} err=${err.message}`));
-  notifierWorker.on('error', (err) => logger.error(`worker(${QUEUE_NAMES.NOTIFIER}) ERROR ${err.message}`));
+  notifierWorker.on('failed', (job, err) =>
+    logger.error(
+      `worker(${QUEUE_NAMES.NOTIFIER}) FAILED job id=${job?.id} err=${err.message}`,
+    ),
+  );
+  notifierWorker.on('error', (err) =>
+    logger.error(`worker(${QUEUE_NAMES.NOTIFIER}) ERROR ${err.message}`),
+  );
 
-  const notifierSendWorker = new Worker(
+  const notifierSendWorker = new Worker<NotifierSendJobData>(
     QUEUE_NAMES.NOTIFIER_SEND,
     async (job) => {
       await processNotifierSendJob(job, wabotOutbound);
@@ -130,8 +175,14 @@ async function bootstrap() {
       limiter: { max: 2, duration: 1000 },
     },
   );
-  notifierSendWorker.on('failed', (job, err) => logger.error(`worker(${QUEUE_NAMES.NOTIFIER_SEND}) FAILED job id=${job?.id} err=${err.message}`));
-  notifierSendWorker.on('error', (err) => logger.error(`worker(${QUEUE_NAMES.NOTIFIER_SEND}) ERROR ${err.message}`));
+  notifierSendWorker.on('failed', (job, err) =>
+    logger.error(
+      `worker(${QUEUE_NAMES.NOTIFIER_SEND}) FAILED job id=${job?.id} err=${err.message}`,
+    ),
+  );
+  notifierSendWorker.on('error', (err) =>
+    logger.error(`worker(${QUEUE_NAMES.NOTIFIER_SEND}) ERROR ${err.message}`),
+  );
 
   logger.log('BullMQ workers started for all 7 queues');
 

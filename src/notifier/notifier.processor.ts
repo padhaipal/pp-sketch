@@ -138,7 +138,10 @@ async function buildUserMedia(
 
   try {
     const lessonResult = await literacyLessonService.processAnswer({
-      user: { id: activeUser.user_id, external_id: activeUser.external_id } as User,
+      user: {
+        id: activeUser.user_id,
+        external_id: activeUser.external_id,
+      } as User,
       user_message_id: activeUser.last_message_id,
     });
 

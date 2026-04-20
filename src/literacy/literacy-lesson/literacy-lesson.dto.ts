@@ -28,9 +28,7 @@ export function validateProcessAnswerOptions(
   options: unknown,
 ): ProcessAnswerOptions {
   if (!options || typeof options !== 'object') {
-    throw new BadRequestException(
-      'processAnswer() options must be an object',
-    );
+    throw new BadRequestException('processAnswer() options must be an object');
   }
   const o = options as Record<string, unknown>;
 
@@ -63,10 +61,7 @@ export function validateProcessAnswerOptions(
     }
   }
 
-  if (
-    typeof o.user_message_id !== 'string' ||
-    o.user_message_id.length === 0
-  ) {
+  if (typeof o.user_message_id !== 'string' || o.user_message_id.length === 0) {
     throw new BadRequestException(
       'processAnswer() options.user_message_id is required and must be a non-empty string',
     );
@@ -75,6 +70,6 @@ export function validateProcessAnswerOptions(
   return {
     user: o.user as User,
     transcripts: o.transcripts as MediaMetaData[] | undefined,
-    user_message_id: o.user_message_id as string,
+    user_message_id: o.user_message_id,
   };
 }

@@ -83,13 +83,9 @@ export class HeygenInboundController {
         if (Date.now() - startTime > 10_000) {
           this.logger.error('Failed to enqueue HeyGen inbound job');
           span.end();
-          throw new InternalServerErrorException(
-            'Failed to process webhook',
-          );
+          throw new InternalServerErrorException('Failed to process webhook');
         }
-        this.logger.warn(
-          `Enqueue retry: ${(err as Error).message}`,
-        );
+        this.logger.warn(`Enqueue retry: ${(err as Error).message}`);
         await new Promise((r) => setTimeout(r, delay));
         delay = Math.min(delay * 2, 10_000);
       }

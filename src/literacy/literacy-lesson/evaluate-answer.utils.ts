@@ -43,9 +43,7 @@ const FAMILIES: string[][] = [
 const sameFamily = (a: string, b: string) =>
   FAMILIES.some((fam) => fam.includes(a) && fam.includes(b));
 
-const MATRAS = new Set([
-  'ा', 'ि', 'ी', 'ु', 'ू', 'ृ', 'े', 'ै', 'ो', 'ौ',
-]);
+const MATRAS = new Set(['ा', 'ि', 'ी', 'ु', 'ू', 'ृ', 'े', 'ै', 'ो', 'ौ']);
 
 type MarkArgs = { correctAnswer: string; studentAnswer: string };
 
@@ -83,58 +81,110 @@ class EvaluateAnswer {
       if (cleanedStudentWord === cleanedCorrectAnswer) return true;
 
       // Hard coding some common transcription engine mistakes.
-      if (cleanedCorrectAnswer === 'ईख' && cleanedStudentWord === 'एक') return true;
-      if (cleanedCorrectAnswer === 'दरवाज़ा' && cleanedStudentWord === 'दरवाजा') return true;
-      if (cleanedCorrectAnswer === 'हथौड़ा' && cleanedStudentWord === 'हथौड़ी') return true;
-      if (cleanedCorrectAnswer === 'हथौड़ी' && cleanedStudentWord === 'हथौड़ा') return true;
-      if (cleanedCorrectAnswer === 'और' && cleanedStudentWord === 'ओर') return true;
-      if (cleanedCorrectAnswer === 'ओर' && cleanedStudentWord === 'और') return true;
-      if (cleanedCorrectAnswer === 'पढ़' && cleanedStudentWord === 'पड़') return true;
-      if (cleanedCorrectAnswer === 'पड़' && cleanedStudentWord === 'पढ़') return true;
-      if (cleanedCorrectAnswer === 'गए' && cleanedStudentWord === 'गये') return true;
-      if (cleanedCorrectAnswer === 'गये' && cleanedStudentWord === 'गए') return true;
-      if (cleanedCorrectAnswer === 'डर' && cleanedStudentWord === 'दर') return true;
-      if (cleanedCorrectAnswer === 'दर' && cleanedStudentWord === 'डर') return true;
-      if (cleanedCorrectAnswer === 'एक' && cleanedStudentWord === '1') return true;
-      if (cleanedCorrectAnswer === 'एक' && cleanedStudentWord === 'एकाएक') return true;
-      if (cleanedCorrectAnswer === 'दो' && cleanedStudentWord === '2') return true;
-      if (cleanedCorrectAnswer === 'तीन' && cleanedStudentWord === '3') return true;
-      if (cleanedCorrectAnswer === 'चार' && cleanedStudentWord === '4') return true;
-      if (cleanedCorrectAnswer === 'पाँच' && cleanedStudentWord === '5') return true;
-      if (cleanedCorrectAnswer === 'छह' && cleanedStudentWord === '6') return true;
-      if (cleanedCorrectAnswer === 'सात' && cleanedStudentWord === '7') return true;
-      if (cleanedCorrectAnswer === 'आठ' && cleanedStudentWord === '8') return true;
-      if (cleanedCorrectAnswer === 'नौ' && cleanedStudentWord === '9') return true;
-      if (cleanedCorrectAnswer === 'दस' && cleanedStudentWord === '10') return true;
-      if (cleanedCorrectAnswer === 'बीस' && cleanedStudentWord === '20') return true;
-      if (cleanedCorrectAnswer === 'तीस' && cleanedStudentWord === '30') return true;
-      if (cleanedCorrectAnswer === 'चालीस' && cleanedStudentWord === '40') return true;
-      if (cleanedCorrectAnswer === 'पचास' && cleanedStudentWord === '50') return true;
-      if (cleanedCorrectAnswer === 'साठ' && cleanedStudentWord === '60') return true;
-      if (cleanedCorrectAnswer === 'सत्तर' && cleanedStudentWord === '70') return true;
-      if (cleanedCorrectAnswer === 'अस्सी' && cleanedStudentWord === '80') return true;
-      if (cleanedCorrectAnswer === 'नब्बे' && cleanedStudentWord === '90') return true;
-      if (cleanedCorrectAnswer === 'सौ' && cleanedStudentWord === '100') return true;
-      if (cleanedCorrectAnswer === 'चख' && cleanedStudentWord === 'चकाचक') return true;
-      if (cleanedCorrectAnswer === 'ठप' && cleanedStudentWord === 'थपाथप') return true;
-      if (cleanedCorrectAnswer === 'तन' && cleanedStudentWord === 'टनाटन') return true;
-      if (cleanedCorrectAnswer === 'फट' && cleanedStudentWord === 'फटाफट') return true;
-      if (cleanedCorrectAnswer === 'भर' && cleanedStudentWord === 'बराबर') return true;
-      if (cleanedCorrectAnswer === 'हट' && cleanedStudentWord === 'हताहत') return true;
-      if (cleanedCorrectAnswer === 'गुण' && cleanedStudentWord === 'गुन') return true;
-      if (cleanedCorrectAnswer === 'गुण' && cleanedStudentWord === 'गुड़') return true;
-      if (cleanedCorrectAnswer === 'गुण' && cleanedStudentWord === 'गुर') return true;
-      if (cleanedCorrectAnswer === 'गुण' && cleanedStudentWord === 'गुड') return true;
-      if (cleanedCorrectAnswer === 'नहीं' && cleanedStudentWord === 'नई') return true;
-      if (cleanedCorrectAnswer === 'नई' && cleanedStudentWord === 'नहीं') return true;
-      if (cleanedCorrectAnswer === 'बच' && cleanedStudentWord === 'बच्च') return true;
-      if (cleanedCorrectAnswer === 'हाँ' && cleanedStudentWord === 'हां') return true;
-      if (cleanedCorrectAnswer === 'भय' && cleanedStudentWord === 'भाई') return true;
-      if (cleanedCorrectAnswer === 'ऊन' && cleanedStudentWord === 'उन') return true;
-      if (cleanedCorrectAnswer === 'उन' && cleanedStudentWord === 'ऊन') return true;
-      if (cleanedCorrectAnswer === 'वह' && cleanedStudentWord === 'वे') return true;
-      if (cleanedCorrectAnswer === 'वे' && cleanedStudentWord === 'वह') return true;
-      if (cleanedCorrectAnswer === 'इडली' && cleanedStudentWord === 'इटली') return true;
+      if (cleanedCorrectAnswer === 'ईख' && cleanedStudentWord === 'एक')
+        return true;
+      if (cleanedCorrectAnswer === 'दरवाज़ा' && cleanedStudentWord === 'दरवाजा')
+        return true;
+      if (cleanedCorrectAnswer === 'हथौड़ा' && cleanedStudentWord === 'हथौड़ी')
+        return true;
+      if (cleanedCorrectAnswer === 'हथौड़ी' && cleanedStudentWord === 'हथौड़ा')
+        return true;
+      if (cleanedCorrectAnswer === 'और' && cleanedStudentWord === 'ओर')
+        return true;
+      if (cleanedCorrectAnswer === 'ओर' && cleanedStudentWord === 'और')
+        return true;
+      if (cleanedCorrectAnswer === 'पढ़' && cleanedStudentWord === 'पड़')
+        return true;
+      if (cleanedCorrectAnswer === 'पड़' && cleanedStudentWord === 'पढ़')
+        return true;
+      if (cleanedCorrectAnswer === 'गए' && cleanedStudentWord === 'गये')
+        return true;
+      if (cleanedCorrectAnswer === 'गये' && cleanedStudentWord === 'गए')
+        return true;
+      if (cleanedCorrectAnswer === 'डर' && cleanedStudentWord === 'दर')
+        return true;
+      if (cleanedCorrectAnswer === 'दर' && cleanedStudentWord === 'डर')
+        return true;
+      if (cleanedCorrectAnswer === 'एक' && cleanedStudentWord === '1')
+        return true;
+      if (cleanedCorrectAnswer === 'एक' && cleanedStudentWord === 'एकाएक')
+        return true;
+      if (cleanedCorrectAnswer === 'दो' && cleanedStudentWord === '2')
+        return true;
+      if (cleanedCorrectAnswer === 'तीन' && cleanedStudentWord === '3')
+        return true;
+      if (cleanedCorrectAnswer === 'चार' && cleanedStudentWord === '4')
+        return true;
+      if (cleanedCorrectAnswer === 'पाँच' && cleanedStudentWord === '5')
+        return true;
+      if (cleanedCorrectAnswer === 'छह' && cleanedStudentWord === '6')
+        return true;
+      if (cleanedCorrectAnswer === 'सात' && cleanedStudentWord === '7')
+        return true;
+      if (cleanedCorrectAnswer === 'आठ' && cleanedStudentWord === '8')
+        return true;
+      if (cleanedCorrectAnswer === 'नौ' && cleanedStudentWord === '9')
+        return true;
+      if (cleanedCorrectAnswer === 'दस' && cleanedStudentWord === '10')
+        return true;
+      if (cleanedCorrectAnswer === 'बीस' && cleanedStudentWord === '20')
+        return true;
+      if (cleanedCorrectAnswer === 'तीस' && cleanedStudentWord === '30')
+        return true;
+      if (cleanedCorrectAnswer === 'चालीस' && cleanedStudentWord === '40')
+        return true;
+      if (cleanedCorrectAnswer === 'पचास' && cleanedStudentWord === '50')
+        return true;
+      if (cleanedCorrectAnswer === 'साठ' && cleanedStudentWord === '60')
+        return true;
+      if (cleanedCorrectAnswer === 'सत्तर' && cleanedStudentWord === '70')
+        return true;
+      if (cleanedCorrectAnswer === 'अस्सी' && cleanedStudentWord === '80')
+        return true;
+      if (cleanedCorrectAnswer === 'नब्बे' && cleanedStudentWord === '90')
+        return true;
+      if (cleanedCorrectAnswer === 'सौ' && cleanedStudentWord === '100')
+        return true;
+      if (cleanedCorrectAnswer === 'चख' && cleanedStudentWord === 'चकाचक')
+        return true;
+      if (cleanedCorrectAnswer === 'ठप' && cleanedStudentWord === 'थपाथप')
+        return true;
+      if (cleanedCorrectAnswer === 'तन' && cleanedStudentWord === 'टनाटन')
+        return true;
+      if (cleanedCorrectAnswer === 'फट' && cleanedStudentWord === 'फटाफट')
+        return true;
+      if (cleanedCorrectAnswer === 'भर' && cleanedStudentWord === 'बराबर')
+        return true;
+      if (cleanedCorrectAnswer === 'हट' && cleanedStudentWord === 'हताहत')
+        return true;
+      if (cleanedCorrectAnswer === 'गुण' && cleanedStudentWord === 'गुन')
+        return true;
+      if (cleanedCorrectAnswer === 'गुण' && cleanedStudentWord === 'गुड़')
+        return true;
+      if (cleanedCorrectAnswer === 'गुण' && cleanedStudentWord === 'गुर')
+        return true;
+      if (cleanedCorrectAnswer === 'गुण' && cleanedStudentWord === 'गुड')
+        return true;
+      if (cleanedCorrectAnswer === 'नहीं' && cleanedStudentWord === 'नई')
+        return true;
+      if (cleanedCorrectAnswer === 'नई' && cleanedStudentWord === 'नहीं')
+        return true;
+      if (cleanedCorrectAnswer === 'बच' && cleanedStudentWord === 'बच्च')
+        return true;
+      if (cleanedCorrectAnswer === 'हाँ' && cleanedStudentWord === 'हां')
+        return true;
+      if (cleanedCorrectAnswer === 'भय' && cleanedStudentWord === 'भाई')
+        return true;
+      if (cleanedCorrectAnswer === 'ऊन' && cleanedStudentWord === 'उन')
+        return true;
+      if (cleanedCorrectAnswer === 'उन' && cleanedStudentWord === 'ऊन')
+        return true;
+      if (cleanedCorrectAnswer === 'वह' && cleanedStudentWord === 'वे')
+        return true;
+      if (cleanedCorrectAnswer === 'वे' && cleanedStudentWord === 'वह')
+        return true;
+      if (cleanedCorrectAnswer === 'इडली' && cleanedStudentWord === 'इटली')
+        return true;
 
       // Schwa deletion: ignore trailing long ā (ा) in correctAnswer
       if (
@@ -157,7 +207,12 @@ class EvaluateAnswer {
       if (cleanedStudentWord.length >= cleanedCorrectAnswer.length) {
         const offset = cleanedStudentWord.length - cleanedCorrectAnswer.length;
         for (let i = 0; i < cleanedCorrectAnswer.length; i++) {
-          if (!isEquivalent(cleanedStudentWord[i + offset], cleanedCorrectAnswer[i])) {
+          if (
+            !isEquivalent(
+              cleanedStudentWord[i + offset],
+              cleanedCorrectAnswer[i],
+            )
+          ) {
             return false;
           }
         }
@@ -186,10 +241,17 @@ class EvaluateAnswer {
       const cleanedStudentWord = this.clean(studentWord);
       const cleanedStudentChars = this.splitWord(cleanedStudentWord);
 
-      if (cleanedExampleChars.length === 0 || cleanedStudentChars.length === 0) {
+      if (
+        cleanedExampleChars.length === 0 ||
+        cleanedStudentChars.length === 0
+      ) {
         continue;
       }
-      if (cleanedExampleChars[0] !== cleanedStudentChars[0] && !sameFamily(cleanedExampleChars[0], cleanedStudentChars[0])) continue;
+      if (
+        cleanedExampleChars[0] !== cleanedStudentChars[0] &&
+        !sameFamily(cleanedExampleChars[0], cleanedStudentChars[0])
+      )
+        continue;
       // Todo: I need to hard code checks for matra images here since those words don't start with the matra character.
       return true;
     }
@@ -262,7 +324,8 @@ class EvaluateAnswer {
 
     if (baseMatches) {
       if (word.slice(1) === correctAnswer.slice(1)) return true;
-      if (word.slice(1) === LONG_A && correctAnswer.slice(1) === '') return true;
+      if (word.slice(1) === LONG_A && correctAnswer.slice(1) === '')
+        return true;
     }
     return false;
   }
@@ -271,7 +334,10 @@ class EvaluateAnswer {
     return word === correctAnswer;
   }
 
-  static detectIncorrectEndMatra({ correctAnswer, studentAnswer }: MarkArgs): boolean {
+  static detectIncorrectEndMatra({
+    correctAnswer,
+    studentAnswer,
+  }: MarkArgs): boolean {
     const cleanedCorrect = this.clean(correctAnswer);
     return studentAnswer
       .trim()
@@ -302,7 +368,10 @@ class EvaluateAnswer {
     });
   }
 
-  static detectIncorrectMiddleMatra({ correctAnswer, studentAnswer }: MarkArgs): boolean {
+  static detectIncorrectMiddleMatra({
+    correctAnswer,
+    studentAnswer,
+  }: MarkArgs): boolean {
     const cleanT = correctAnswer.normalize('NFC');
     const cleanS = studentAnswer.normalize('NFC');
 

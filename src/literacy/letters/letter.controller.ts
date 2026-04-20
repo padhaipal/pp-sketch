@@ -83,7 +83,7 @@ export class LetterController {
       }
     } catch (err) {
       if (err instanceof BadRequestException) {
-        throw new ConflictException((err as BadRequestException).message);
+        throw new ConflictException(err.message);
       }
       throw err;
     } finally {

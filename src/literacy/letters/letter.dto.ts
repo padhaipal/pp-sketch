@@ -26,13 +26,9 @@ export interface DeleteLetterOptions {
   grapheme: string;
 }
 
-export function validateCreateLetterOptions(
-  raw: unknown,
-): CreateLetterOptions {
+export function validateCreateLetterOptions(raw: unknown): CreateLetterOptions {
   if (!raw || typeof raw !== 'object') {
-    throw new BadRequestException(
-      'createLetter() options must be an object',
-    );
+    throw new BadRequestException('createLetter() options must be an object');
   }
   const o = raw as Record<string, unknown>;
   if (typeof o.grapheme !== 'string' || o.grapheme.length === 0) {
@@ -51,8 +47,8 @@ export function validateCreateLetterOptions(
     );
   }
   return {
-    grapheme: o.grapheme as string,
-    media_metadata_id: o.media_metadata_id as string | null | undefined,
+    grapheme: o.grapheme,
+    media_metadata_id: o.media_metadata_id,
   };
 }
 
@@ -60,9 +56,7 @@ export function validateCreateBulkLetterOptions(
   raw: unknown,
 ): CreateBulkLetterOptions {
   if (!raw || typeof raw !== 'object') {
-    throw new BadRequestException(
-      'createBulk() options must be an object',
-    );
+    throw new BadRequestException('createBulk() options must be an object');
   }
   const o = raw as Record<string, unknown>;
   if (!Array.isArray(o.items) || o.items.length === 0) {
@@ -76,13 +70,9 @@ export function validateCreateBulkLetterOptions(
   return { items };
 }
 
-export function validateUpdateLetterOptions(
-  raw: unknown,
-): UpdateLetterOptions {
+export function validateUpdateLetterOptions(raw: unknown): UpdateLetterOptions {
   if (!raw || typeof raw !== 'object') {
-    throw new BadRequestException(
-      'updateLetter() options must be an object',
-    );
+    throw new BadRequestException('updateLetter() options must be an object');
   }
   const o = raw as Record<string, unknown>;
   if (typeof o.grapheme !== 'string' || o.grapheme.length === 0) {
@@ -108,31 +98,21 @@ export function validateUpdateLetterOptions(
       'updateLetter() options.new_media_metadata_id must be a non-empty string or null',
     );
   }
-  if (
-    o.new_grapheme === undefined &&
-    o.new_media_metadata_id === undefined
-  ) {
+  if (o.new_grapheme === undefined && o.new_media_metadata_id === undefined) {
     throw new BadRequestException(
       'updateLetter() requires at least one of new_grapheme or new_media_metadata_id',
     );
   }
   return {
-    grapheme: o.grapheme as string,
-    new_grapheme: o.new_grapheme as string | undefined,
-    new_media_metadata_id: o.new_media_metadata_id as
-      | string
-      | null
-      | undefined,
+    grapheme: o.grapheme,
+    new_grapheme: o.new_grapheme,
+    new_media_metadata_id: o.new_media_metadata_id,
   };
 }
 
-export function validateDeleteLetterOptions(
-  raw: unknown,
-): DeleteLetterOptions {
+export function validateDeleteLetterOptions(raw: unknown): DeleteLetterOptions {
   if (!raw || typeof raw !== 'object') {
-    throw new BadRequestException(
-      'deleteLetter() options must be an object',
-    );
+    throw new BadRequestException('deleteLetter() options must be an object');
   }
   const o = raw as Record<string, unknown>;
   if (typeof o.grapheme !== 'string' || o.grapheme.length === 0) {
@@ -140,5 +120,5 @@ export function validateDeleteLetterOptions(
       'deleteLetter() options.grapheme is required and must be a non-empty string',
     );
   }
-  return { grapheme: o.grapheme as string };
+  return { grapheme: o.grapheme };
 }

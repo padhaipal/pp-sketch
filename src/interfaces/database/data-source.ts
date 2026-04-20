@@ -8,7 +8,13 @@ import { LiteracyLessonStateEntity } from '../../literacy/literacy-lesson/litera
 export const AppDataSource = new DataSource({
   type: 'postgres',
   url: process.env.DATABASE_URL,
-  entities: [UserEntity, LetterEntity, MediaMetaDataEntity, ScoreEntity, LiteracyLessonStateEntity],
+  entities: [
+    UserEntity,
+    LetterEntity,
+    MediaMetaDataEntity,
+    ScoreEntity,
+    LiteracyLessonStateEntity,
+  ],
   migrations: ['dist/interfaces/database/migrations/*.js'],
   synchronize: false,
   logging: process.env.TYPEORM_LOGGING === 'true',
