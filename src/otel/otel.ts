@@ -36,6 +36,23 @@ export function startChildSpan(
   return tracer.startSpan(name, {}, parentCtx);
 }
 
+/**
+ * Like startChildSpan() but returns both the span AND a Context that preserves
+ * baggage (and any other context entries) from the incoming carrier, in addition
+ * to setting the new child span on that context. Use this when the carrier may
+ * contain W3C Baggage that needs to flow through to downstream services —
+ * observability metadata, tenant IDs, feature flags, etc.
+ */
+export function startChildSpanWithContext(
+  name: string,
+  carrier: OtelCarrier,
+): { span: Span; ctx: Context } {
+  const parentCtx = extractSpan(carrier);
+  const span = tracer.startSpan(name, {}, parentCtx);
+  const ctx = trace.setSpan(parentCtx, span);
+  return { span, ctx };
+}
+
 export function startRootSpan(name: string): Span {
   return tracer.startSpan(name);
 }
@@ -43,5 +60,17 @@ export function startRootSpan(name: string): Span {
 export function injectCarrier(span: Span): OtelCarrier {
   const carrier: OtelCarrier = {};
   propagation.inject(trace.setSpan(ROOT_CONTEXT, span), carrier);
+  return carrier;
+}
+
+/**
+ * Like injectCarrier() but takes a full Context (not just a Span) so that
+ * any baggage attached to that context is preserved in the outgoing carrier.
+ * Pair with startChildSpanWithContext() on the receiving end to keep W3C
+ * Baggage flowing through the entire call chain.
+ */
+export function injectCarrierFromContext(ctx: Context): OtelCarrier {
+  const carrier: OtelCarrier = {};
+  propagation.inject(ctx, carrier);
   return carrier;
 }

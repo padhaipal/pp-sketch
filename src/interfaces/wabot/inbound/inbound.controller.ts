@@ -12,7 +12,10 @@ import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { MessageJobDto } from './wabot-inbound.dto';
 import { createQueue, QUEUE_NAMES } from '../../redis/queues';
-import { startChildSpan, injectCarrier } from '../../../otel/otel';
+import {
+  startChildSpanWithContext,
+  injectCarrierFromContext,
+} from '../../../otel/otel';
 
 const wabotInboundQueue = createQueue(QUEUE_NAMES.WABOT_INBOUND);
 
@@ -36,16 +39,16 @@ export class WabotInboundController {
       );
     }
 
-    // 2. Start child span
-    const span = startChildSpan(
+    // 2. Start child span (preserve baggage from incoming carrier)
+    const { span, ctx } = startChildSpanWithContext(
       'wabot-inbound-controller',
       dto.otel.carrier,
     );
 
-    // 3. Inject carrier
+    // 3. Inject carrier (carries baggage + new span forward to worker)
     const jobPayload = {
       ...dto,
-      otel: { carrier: injectCarrier(span) },
+      otel: { carrier: injectCarrierFromContext(ctx) },
     };
 
     // 4. Enqueue with retry

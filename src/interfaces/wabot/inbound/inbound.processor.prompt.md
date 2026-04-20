@@ -1,7 +1,7 @@
 // pp-sketch/src/interfaces/wabot/inbound/inbound.processor.prompt.md
 Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interfaces/wabot/inbound/wabot-inbound.dto.ts (MessageJobDto).
 
-0.) Start a child span: `startChildSpan('wabot-inbound-processor', payload.otel.carrier)`. See src/otel/otel.prompt.md for helpers.
+0.) Start a child span AND preserve the incoming baggage so that every outbound HTTP call back to wabot in this processor carries it onwards: `const { span, ctx } = startChildSpanWithContext('wabot-inbound-processor', payload.otel.carrier)`. See src/otel/otel.prompt.md for helpers. Whenever this processor calls `src/interfaces/wabot/outbound/outbound.service.ts/sendMessage()`, pass `otel_carrier: injectCarrierFromContext(ctx)` (NOT `injectCarrier(span)`) so wabot's outbound pipeline can read `wabot.msg.ts_ms` baggage and record true user-perceived delivery latency. Purely internal fan-out (e.g. `mediaMetaDataService.createWhatsappAudioMedia(...)`, elevenlabs/heygen preload jobs) may keep using `injectCarrier(span)` since those paths never call back to wabot.
 
 1.) If payload.message.type is "system" (Note that system messages are only used to communicate changes to the user's phone number and nothing else. It is important not to miss these because if we do the user with the new phone number will look like a new user. payload.message.from is the user's OLD phone number. payload.message.system.wa_id is the user's NEW phone number).
 * Call users/user.service.ts/update() with external_id = payload.message.from (identifies the existing user by their old number) and new_external_id = payload.message.system.wa_id (sets their new number).
@@ -70,7 +70,7 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
   * wamid: payload.message.id
   * consecutive: payload.consecutive
   * media: the OutboundMediaItem[] array built in step 9
-  * otel_carrier: injectCarrier(span)
+  * otel_carrier: injectCarrierFromContext(ctx)
 Note that sendMessage() returns { status, body } where body has a `delivered` flag.
   * If 2XX and `delivered: true` then log INFO, end the span and mark the job as successful.
   * If 2XX and `delivered: false` then the inflight window expired and wabot already sent the fallback message. Roll back all writes associated with this interaction:

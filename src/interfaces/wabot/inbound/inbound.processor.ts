@@ -1,13 +1,18 @@
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { parsePhoneNumberFromString } from 'libphonenumber-js';
+import type { Context } from '@opentelemetry/api';
 import { MessageJobDto } from './wabot-inbound.dto';
 import { UserService } from '../../../users/user.service';
 import { MediaMetaDataService } from '../../../media-meta-data/media-meta-data.service';
 import { LiteracyLessonService } from '../../../literacy/literacy-lesson/literacy-lesson.service';
 import { WabotOutboundService } from '../outbound/outbound.service';
 import { OutboundMediaItem } from '../outbound/outbound.dto';
-import { startChildSpan, injectCarrier } from '../../../otel/otel';
+import {
+  startChildSpanWithContext,
+  injectCarrier,
+  injectCarrierFromContext,
+} from '../../../otel/otel';
 import { FindMediaByStateTransitionIdResult } from '../../../media-meta-data/media-meta-data.dto';
 import { WELCOME_MESSAGE_STATE_TRANSITION_ID, AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID } from '../../../literacy/literacy-lesson/literacy-lesson.machine';
 
@@ -22,8 +27,9 @@ export async function processWabotInboundJob(
 ): Promise<void> {
   const payload = job.data;
 
-  // 0. Start span
-  const span = startChildSpan(
+  // 0. Start span (preserve baggage from incoming carrier so it flows back
+  //    out to wabot on any outbound sendMessage calls)
+  const { span, ctx } = startChildSpanWithContext(
     'wabot-inbound-processor',
     payload.otel.carrier,
   );
@@ -115,7 +121,7 @@ export async function processWabotInboundJob(
         logger.error(
           `Failed to create user ${payload.message.from}: ${(err as Error).message}`,
         );
-        await sendFallbackAndHandle(wabotOutbound, payload, span);
+        await sendFallbackAndHandle(wabotOutbound, payload, ctx);
         span.end();
         throw err;
       }
@@ -192,7 +198,7 @@ export async function processWabotInboundJob(
             user_external_id: user.external_id,
             wamid: payload.message.id,
             media: onboardingMedia,
-            otel_carrier: injectCarrier(span),
+            otel_carrier: injectCarrierFromContext(ctx),
           });
           handleSendResult(result, 'new-user-onboarding');
         } catch (err) {
@@ -235,7 +241,7 @@ export async function processWabotInboundJob(
                 url: audioOnlyMedia.video.wa_media_url!,
               },
             ],
-            otel_carrier: injectCarrier(span),
+            otel_carrier: injectCarrierFromContext(ctx),
           });
           handleSendResult(result, 'audio-only');
         }
@@ -300,7 +306,7 @@ export async function processWabotInboundJob(
       wamid: payload.message.id,
       consecutive: payload.consecutive,
       media: outboundMedia,
-      otel_carrier: injectCarrier(span),
+      otel_carrier: injectCarrierFromContext(ctx),
     });
 
     if (sendResult.status >= 200 && sendResult.status < 300) {
@@ -361,7 +367,7 @@ function appendMediaItems(
 async function sendFallbackAndHandle(
   wabotOutbound: WabotOutboundService,
   payload: MessageJobDto,
-  span: any,
+  ctx: Context,
 ): Promise<void> {
   try {
     const fallbackUrl = process.env.FALL_BACK_MESSAGE_PUBLIC_URL!;
@@ -369,7 +375,7 @@ async function sendFallbackAndHandle(
       user_external_id: payload.message.from,
       wamid: payload.message.id,
       media: [{ type: 'video', url: fallbackUrl }],
-      otel_carrier: injectCarrier(span),
+      otel_carrier: injectCarrierFromContext(ctx),
     });
   } catch (err) {
     logger.warn(
