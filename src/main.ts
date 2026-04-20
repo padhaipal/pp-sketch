@@ -6,6 +6,7 @@ initOtel();
 
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
+import { OtelLogger } from './otel/otel-logger';
 import { json, urlencoded } from 'express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { DataSource } from 'typeorm';
@@ -46,6 +47,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     rawBody: true,
     bodyParser: false,
+    logger: new OtelLogger(),
   });
 
   // Route-scoped 5mb body limit for bulk audio-generation endpoints; must be registered BEFORE the

@@ -7,10 +7,13 @@ const meter = metrics.getMeter('pp');
  * measured from dequeue to job-completion (success or terminal failure).
  *
  * Attributes:
- *   outcome: one of "success" | "dedupe" | "error"
- *     - "success"  — the job ran end-to-end and pp-sketch handed a reply back to wabot
- *     - "dedupe"   — short-circuited because the message was already being / had been processed
- *     - "error"    — the job threw and will be retried / dead-lettered by BullMQ
+ *   outcome: one of "success" | "skipped" | "error"
+ *     - "success"  — the job ran through a terminal branch that delivered a reply to the user
+ *                    (includes the audio-reply path, new-user onboarding, non-audio redirect,
+ *                    and the system-message phone-update branch).
+ *     - "skipped"  — the job short-circuited before doing meaningful work
+ *                    (consecutive message, or the incoming WhatsApp timestamp was >20s stale).
+ *     - "error"    — the job threw and will be retried / dead-lettered by BullMQ.
  *
  * Note: this is pp-internal stage latency. End-to-end user-perceived delivery latency
  * is already captured by `wabot.message.e2e_duration_ms` on the wabot side via W3C
