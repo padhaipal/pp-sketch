@@ -17,7 +17,7 @@ import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import type { OtelCarrier } from './otel.dto';
 
-export const tracer = trace.getTracer(process.env.OTEL_SERVICE_NAME ?? 'pp');
+export const tracer = trace.getTracer('pp-sketch');
 
 const diagLevelMap: Record<string, DiagLogLevel> = {
   WARN: DiagLogLevel.WARN,

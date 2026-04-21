@@ -1,6 +1,6 @@
 import { metrics } from '@opentelemetry/api';
 
-const meter = metrics.getMeter('pp');
+const meter = metrics.getMeter('pp-sketch');
 
 /**
  * Milliseconds spent inside pp-sketch handling a single wabot-inbound BullMQ job,
