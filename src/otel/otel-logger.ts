@@ -2,7 +2,7 @@ import { ConsoleLogger } from '@nestjs/common';
 import { logs, SeverityNumber } from '@opentelemetry/api-logs';
 
 export class OtelLogger extends ConsoleLogger {
-  private readonly otelLogger = logs.getLogger('pp-sketch');
+  private readonly otelLogger = logs.getLogger('pp');
 
   override log(message: any, ...optionalParams: any[]): void {
     super.log(message, ...optionalParams);
