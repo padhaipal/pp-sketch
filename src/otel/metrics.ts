@@ -25,5 +25,11 @@ export const wabotInboundJobDuration = meter.createHistogram(
     description:
       'Milliseconds pp-sketch spent handling a wabot-inbound BullMQ job, from dequeue to completion.',
     unit: 'ms',
+    advice: {
+      explicitBucketBoundaries: [
+        5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000,
+        15000, 20000, 25000, 30000, 60000,
+      ],
+    },
   },
 );
