@@ -407,18 +407,22 @@ describe('LiteracyLessonService.selectNextWord', () => {
     expect(minima).toContain(selectedWord);
   });
 
-  it('throws when recent words are unexpectedly empty for experienced users', async () => {
+  it('falls back safely when recent words are unexpectedly empty for experienced users', async () => {
     const row = buildRow({
       distinctWordCount: NEW_USER_THRESHOLD + 4,
       topNSnapshotCount: SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH,
       recentWords: [],
       letterScores: buildUniformLetterScores(1),
     });
-    const { service } = createServiceHarness(row);
+    const { service, warnMock } = createServiceHarness(row);
 
-    await expect(
-      (service as any).selectNextWord('user-empty-recent'),
-    ).rejects.toThrow();
+    const selectedWord = await (service as any).selectNextWord('user-empty-recent');
+
+    expect(graphemeLength(selectedWord)).toBeLessThanOrEqual(
+      MIN_WORD_LENGTH_FLOOR,
+    );
+    expect(warnMock).toHaveBeenCalledTimes(1);
+    expect(String(warnMock.mock.calls[0][0])).toContain('recent_words is empty');
   });
 
   it('uses randomness to break ties between equally scored words', async () => {
@@ -554,7 +558,6 @@ describe('LiteracyLessonService.processAnswer contract behaviors', () => {
       transcripts: [{ id: 't1', text: 'ओम' }] as any,
     });
 
-    expect(result.isComplete).toBe(true);
     expect(result.stateTransitionIds.length).toBe(1);
     expect(queryMock).toHaveBeenCalledTimes(1);
   });

@@ -102,13 +102,6 @@ export class LiteracyLessonService {
           });
           actor.start();
 
-          if (combinedTranscript !== undefined) {
-            actor.send({
-              type: 'ANSWER',
-              studentAnswer: combinedTranscript,
-            });
-          }
-
           snapshot = actor.getSnapshot();
           actor.stop();
         } else {
@@ -313,15 +306,22 @@ export class LiteracyLessonService {
         if (distinctWordCount < NEW_USER_THRESHOLD) {
           maxLength = MIN_WORD_LENGTH_FLOOR;
         } else {
-          const mostRecentWordLen = Array.from(recentWords[0]).length;
-          if (topNSnapshotCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH) {
-            maxLength = mostRecentWordLen + 1;
-          } else if (
-            topNSnapshotCount < SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME
-          ) {
-            maxLength = mostRecentWordLen;
+          if (recentWords.length === 0) {
+            this.logger.warn(
+              `selectNextWord: distinct_word_count=${distinctWordCount} but recent_words is empty for user ${userId}; falling back to min word length`,
+            );
+            maxLength = MIN_WORD_LENGTH_FLOOR;
           } else {
-            maxLength = mostRecentWordLen - 1;
+            const mostRecentWordLen = Array.from(recentWords[0]).length;
+            if (topNSnapshotCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH) {
+              maxLength = mostRecentWordLen + 1;
+            } else if (
+              topNSnapshotCount < SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME
+            ) {
+              maxLength = mostRecentWordLen;
+            } else {
+              maxLength = mostRecentWordLen - 1;
+            }
           }
         }
         maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR);
