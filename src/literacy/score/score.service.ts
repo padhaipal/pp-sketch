@@ -204,9 +204,9 @@ export class ScoreService {
       }
     }
 
-    // Keep only non-integer scores
+    // Keep only non-integer scores (for average calculation)
     const nonIntegerScores = new Map<string, number>();
-    // We also need a way to map grapheme -> letter_id for lookup
+    // We also need a way to map grapheme -> latest score for baseline updates.
     // Fetch letter graphemes for the letter_ids in the map
     const letterIds = [...latestPerLetter.keys()];
     const graphemeToScore = new Map<string, number>();
@@ -225,11 +225,13 @@ export class ScoreService {
       );
 
       for (const [letterId, score] of latestPerLetter) {
-        if (score.score % 1 !== 0) {
-          const grapheme = idToGrapheme.get(letterId);
-          if (grapheme) {
+        const grapheme = idToGrapheme.get(letterId);
+        if (grapheme) {
+          // Baseline for calculateNewScore should always be latest known score,
+          // including integer values (e.g. -100) to avoid unintended reset to 0.
+          graphemeToScore.set(grapheme, score.score);
+          if (score.score % 1 !== 0) {
             nonIntegerScores.set(grapheme, score.score);
-            graphemeToScore.set(grapheme, score.score);
           }
         }
       }
