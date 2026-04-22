@@ -12,16 +12,16 @@ const VOWEL_MATRA_SET = new Set(
 const LONG_A = 'ा';
 
 const FAMILIES: string[][] = [
-  ['क', 'ख', 'क़', 'ख़'],
-  ['ग', 'घ', 'ग़'],
+  ['क', 'ख'],
+  ['ग', 'घ'],
   ['च', 'छ'],
-  ['ज', 'झ', 'ज़'],
+  ['ज', 'झ'],
   ['ट', 'ठ', 'त', 'थ'],
   ['ड', 'ढ', 'द', 'ध'],
-  ['प', 'फ', 'फ़'],
+  ['प', 'फ'],
   ['ब', 'भ'],
   ['श', 'ष', 'स'],
-  ['र', 'ड़', 'ढ़'],
+  ['र'],
   ['य', 'ए', 'ऐ'],
   ['ओ', 'औ'],
   ['अ', 'आ'],
@@ -29,7 +29,7 @@ const FAMILIES: string[][] = [
   ['उ', 'ऊ'],
   ['ऋ', 'ॠ'],
   ['ऌ', 'ॡ'],
-  ['ड', 'ड़'],
+  ['ड'],
   ['ङ'],
   ['ञ'],
   ['ण', 'न', 'र' ],
@@ -42,7 +42,19 @@ const FAMILIES: string[][] = [
 const sameFamily = (a: string, b: string) =>
   FAMILIES.some((fam) => fam.includes(a) && fam.includes(b));
 
-const MATRAS = new Set(['ा', 'ि', 'ी', 'ु', 'ू', 'ृ', 'े', 'ै', 'ो', 'ौ']);
+const MATRA_TO_VOWEL: Record<string, string> = {
+  'ा': 'आ',
+  'ि': 'इ',
+  'ी': 'ई',
+  'ु': 'उ',
+  'ू': 'ऊ',
+  'ृ': 'ऋ',
+  'े': 'ए',
+  'ै': 'ऐ',
+  'ो': 'ओ',
+  'ौ': 'औ',
+  'ं': 'अ',
+};
 
 type MarkArgs = { correctAnswer: string; studentAnswer: string };
 
@@ -227,13 +239,11 @@ class EvaluateAnswer {
     return Array.from(word);
   }
 
-  private static isMatra(char: string): boolean {
-    return MATRAS.has(char);
-  }
-
   static markImage({ correctAnswer, studentAnswer }: MarkArgs): boolean {
     const cleanedExampleWord = this.clean(correctAnswer);
     const cleanedExampleChars = this.splitWord(cleanedExampleWord);
+    const rawTarget = cleanedExampleChars[0];
+    const target = MATRA_TO_VOWEL[rawTarget] ?? rawTarget;
 
     const splitStudentAnswer = studentAnswer.split(/\s+/);
     for (const studentWord of splitStudentAnswer) {
@@ -247,11 +257,10 @@ class EvaluateAnswer {
         continue;
       }
       if (
-        cleanedExampleChars[0] !== cleanedStudentChars[0] &&
-        !sameFamily(cleanedExampleChars[0], cleanedStudentChars[0])
+        target !== cleanedStudentChars[0] &&
+        !sameFamily(target, cleanedStudentChars[0])
       )
         continue;
-      // Todo: I need to hard code checks for matra images here since those words don't start with the matra character.
       return true;
     }
     return false;
