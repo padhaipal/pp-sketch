@@ -284,6 +284,12 @@ export async function processWabotInboundJob(
       });
       const userMessageId = audioEntity.id;
 
+      // On retry, wipe any partial DB writes from prior attempts so
+      // processAnswer runs against a clean slate for this user_message_id.
+      if (job.attemptsMade > 0) {
+        await literacyLessonService.cleanupPartialState(userMessageId);
+      }
+
       // 7. Find transcripts
       const transcripts = await mediaMetaDataService.findTranscripts({
         media_metadata: audioEntity,

@@ -45,6 +45,8 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
 * This will return a mediaMetaData entity for the user's audio message which will contain a link to where that audio is stored in the S3 bucket. There will also be several mediaMetaData text entities associated with that mediaMetaData entity which will contain the transcripts of the audio message.
 * Store the audio mediaMetaData entity's `id` as `userMessageId` — this will be passed to downstream services as the FK linking all writes back to this interaction.
 
+6.5.) If `job.attemptsMade > 0` then this is a BullMQ retry and a prior attempt may have partially written lesson state and/or score rows for this `userMessageId` before failing downstream (e.g. in sendMessage()). Call `literacyLessonService.cleanupPartialState(userMessageId)` to delete any such rows so the rest of the job runs against a clean slate. Runs exactly once per job, before any `processAnswer` call, so the step-8 `isComplete` double-call is unaffected (the second call wouldn't re-enter the cleanup gate anyway). `createWhatsappAudioMedia()` is already idempotent by `wa_media_url`, so retries reuse the same `userMessageId`.
+
 7.) Call src/media-meta-data/media-meta-data.service.ts/findTranscripts() with:
   * media_metadata: the audio mediaMetaData entity from step 6 (trusted path — uses .id directly)
 * If no transcripts are returned then log ERROR, end the span, fail the job.

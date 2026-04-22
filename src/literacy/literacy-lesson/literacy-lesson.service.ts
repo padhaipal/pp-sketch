@@ -232,6 +232,28 @@ export class LiteracyLessonService {
     return entity ?? null;
   }
 
+  async cleanupPartialState(userMessageId: string): Promise<void> {
+    const { scoresDeleted, statesDeleted } = await this.dataSource.transaction(
+      async (manager) => {
+        const scoreRows = await manager.query(
+          `DELETE FROM scores WHERE user_message_id = $1 RETURNING id`,
+          [userMessageId],
+        );
+        const stateRows = await manager.query(
+          `DELETE FROM literacy_lesson_states WHERE user_message_id = $1 RETURNING id`,
+          [userMessageId],
+        );
+        return {
+          scoresDeleted: scoreRows.length,
+          statesDeleted: stateRows.length,
+        };
+      },
+    );
+    this.logger.log(
+      `cleanupPartialState: user_message_id=${userMessageId} scores_deleted=${scoresDeleted} lesson_states_deleted=${statesDeleted}`,
+    );
+  }
+
   private async selectNextWord(userId: string): Promise<string> {
     return tracer.startActiveSpan('literacy.selectNextWord', async (span) => {
       span.setAttribute('pp.user.id', userId);

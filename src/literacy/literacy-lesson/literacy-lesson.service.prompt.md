@@ -77,6 +77,18 @@ Single DB round-trip. Returns the most recent lesson state for the given user.
 Uses the `(user_id, created_at DESC)` index for efficient lookup.
 Returns null if no rows exist.
 
+## cleanupPartialState(userMessageId: string): Promise\<void>
+
+Called by the inbound processor on BullMQ retries (`job.attemptsMade > 0`) to wipe any partial DB writes from a prior attempt on the same `user_message_id`, so `processAnswer` can run against a clean slate.
+
+Two raw-SQL DELETEs wrapped in a single `DataSource.transaction(async (manager) => ...)` so cleanup is atomic — if the second DELETE throws, the first rolls back and the next retry (or this attempt's failure handler) sees untouched state rather than a half-cleaned user_message_id. Both DELETEs are filtered by `user_message_id` and use `RETURNING id` so we can count what was removed:
+1. `DELETE FROM scores WHERE user_message_id = $1 RETURNING id`
+2. `DELETE FROM literacy_lesson_states WHERE user_message_id = $1 RETURNING id`
+
+Order between the two DELETEs is immaterial — neither table has an FK to the other. Both reference `media_metadata.id`, which is not touched here (audio + transcripts are reusable across retries).
+
+Log one INFO line with `user_message_id`, `scores_deleted`, and `lesson_states_deleted` counts so retries are observable. Log only after the transaction commits. No return value.
+
 ## selectNextWord(userId: string): Promise\<string>
 
 Private helper. Selects the next word for a new lesson based on the student's score history and recent performance. The word list is co-located with the service at `src/literacy/literacy-lesson/word-list.json`. Load it with `path.join(__dirname, 'word-list.json')`.
