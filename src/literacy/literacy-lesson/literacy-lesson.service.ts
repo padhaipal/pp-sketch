@@ -81,7 +81,7 @@ export class LiteracyLessonService {
           if (age > 900_000) {
             startFresh = true;
             lessonPath = 'fresh';
-          } else if (age > 300_000) {
+          } else if (age > 60_000) {
             startFresh = true;
             isStaleRestart = true;
             lessonPath = 'stale-restart';
@@ -101,6 +101,13 @@ export class LiteracyLessonService {
             input: { word, userMessageId: validated.user_message_id },
           });
           actor.start();
+
+          if (combinedTranscript !== undefined) {
+            actor.send({
+              type: 'ANSWER',
+              studentAnswer: combinedTranscript,
+            });
+          }
 
           snapshot = actor.getSnapshot();
           actor.stop();
@@ -161,7 +168,7 @@ export class LiteracyLessonService {
         );
 
         if (rows.length === 0) {
-          this.logger.error(
+          this.logger.warn(
             `processAnswer: INSERT returned 0 rows — media ${validated.user_message_id} rolled_back=true or does not exist`,
           );
           throw new Error(
@@ -328,7 +335,7 @@ export class LiteracyLessonService {
         // Score each word
         const scored = candidates.map((word) => {
           const wordScore = Array.from(word).reduce(
-            (sum, char) => sum + (scoreMap.get(char) ?? 0),
+            (sum, char) => sum + (scoreMap.get(char) ?? -100),
             0,
           );
           return { word, wordScore };
