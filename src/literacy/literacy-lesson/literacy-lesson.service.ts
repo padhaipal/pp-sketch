@@ -337,11 +337,14 @@ export class LiteracyLessonService {
         // Safety fallback
         if (scored.length === 0) {
           this.logger.warn(
-            'selectNextWord: no candidates after filtering — falling back to random word',
+            'selectNextWord: no candidates after filtering — falling back to random two-letter word',
+          );
+          const twoLetterWords = this.wordList.filter(
+            (w) => Array.from(w).length === 2,
           );
           const fallbackWord =
-            this.wordList[Math.floor(Math.random() * this.wordList.length)];
-          span.setAttribute('pp.lesson.word.selection', 'fallback-random');
+            twoLetterWords[Math.floor(Math.random() * twoLetterWords.length)];
+          span.setAttribute('pp.lesson.word.selection', 'fallback-random-two-letter');
           span.setAttribute('pp.lesson.word.selected', fallbackWord);
           return fallbackWord;
         }

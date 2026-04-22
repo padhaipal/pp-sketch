@@ -98,79 +98,40 @@ Use `Array.from(word).length` throughout — consistent with how the machine dec
 
 ### Algorithm
 
-1.) **Single DB round-trip.** Fetch letter scores, recent words, snapshot count, and distinct-word count in one query:
+1.) **Single DB round-trip.** Fetch letter scores, recent words, snapshot count, and distinct-word count in one query.
 
-```sql
-WITH recent_distinct_words AS (
-  SELECT word, MAX(created_at) AS latest_at
-  FROM literacy_lesson_states
-  WHERE user_id = $1
-  GROUP BY word
-  ORDER BY latest_at DESC
-  LIMIT $RECENT_WORDS_TO_EXCLUDE
-),
-top_n_words AS (
-  SELECT word FROM recent_distinct_words
-  ORDER BY latest_at DESC
-  LIMIT $SNAPSHOT_WORDS_TO_COUNT
-),
-top_n_snapshot_count AS (
-  SELECT COUNT(*)::int AS count
-  FROM literacy_lesson_states
-  WHERE user_id = $1 AND word IN (SELECT word FROM top_n_words)
-),
-latest_scores AS (
-  SELECT DISTINCT ON (s.letter_id) l.grapheme, s.score
-  FROM scores s
-  JOIN letters l ON l.id = s.letter_id
-  WHERE s.user_id = $1
-  ORDER BY s.letter_id, s.created_at DESC
-),
-distinct_word_count AS (
-  SELECT COUNT(DISTINCT word)::int AS count
-  FROM literacy_lesson_states
-  WHERE user_id = $1
-)
-SELECT
-  COALESCE(
-    (SELECT json_agg(json_build_object('grapheme', grapheme, 'score', score))
-     FROM latest_scores),
-    '[]'::json
-  ) AS letter_scores,
-  COALESCE(
-    (SELECT json_agg(word ORDER BY latest_at DESC)
-     FROM recent_distinct_words),
-    '[]'::json
-  ) AS recent_words,
-  COALESCE((SELECT count FROM top_n_snapshot_count), 0) AS top_n_snapshot_count,
-  COALESCE((SELECT count FROM distinct_word_count), 0) AS distinct_word_count
+2.) **Determine max word length.** In pseudocode:
+
+```
+if distinct_word_count < NEW_USER_THRESHOLD:
+    maxLength = MIN_WORD_LENGTH_FLOOR
+else:
+    mostRecentWordLen = grapheme_length(recent_words[0])
+    if top_n_snapshot_count < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH:
+        maxLength = mostRecentWordLen + 1
+    elif top_n_snapshot_count < SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME:
+        maxLength = mostRecentWordLen
+    else:
+        maxLength = mostRecentWordLen - 1
+maxLength = max(maxLength, MIN_WORD_LENGTH_FLOOR)
 ```
 
-Returns a single row with:
-* `letter_scores` — array of `{ grapheme, score }`, the latest score per letter for this user.
-* `recent_words` — array of up to `RECENT_WORDS_TO_EXCLUDE` most recently covered distinct words (most recent first).
-* `top_n_snapshot_count` — total number of `literacy_lesson_states` rows whose word matches one of the `SNAPSHOT_WORDS_TO_COUNT` most recent distinct words.
-* `distinct_word_count` — total number of distinct words this user has ever been taught.
+The floor ensures one- and two-character words are never removed by the length rule.
 
-2.) Build a `Map<string, number>` from `letter_scores`, mapping each grapheme to its latest score.
+3.) **Filter candidates.** In pseudocode:
 
-3.) **Exclude recent words.** Remove every word that appears in `recent_words` from the word list.
+```
+candidates = [w for w in wordList
+              if grapheme_length(w) <= maxLength
+              and w not in recent_words]
+```
 
-4.) **Determine max word length:**
+This enforces the max-length rule and avoids repeating any of the last `RECENT_WORDS_TO_EXCLUDE` distinct words, so the student doesn't see the same word too many times in a row.
 
-* If `distinct_word_count < NEW_USER_THRESHOLD` → `maxLength = MIN_WORD_LENGTH_FLOOR`.
-* Otherwise, let `mostRecentWordLen = Array.from(recent_words[0]).length`:
-  * If `top_n_snapshot_count < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH` → `maxLength = mostRecentWordLen + 1`.
-  * Else if `top_n_snapshot_count < SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME` → `maxLength = mostRecentWordLen`.
-  * Else → `maxLength = mostRecentWordLen - 1`.
-* Apply floor: `maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR)` (one- and two-character words are never removed).
+4.) **Score each remaining word.** For each candidate, add up the scores of all its letters. If a letter has no recorded score, use `-100` as the default (this shouldn't happen in practice, but serves as a defensive fallback).
 
-5.) **Filter by length.** Remove words where `Array.from(word).length > maxLength`.
+5.) **Select the lowest-scored word.** Find the minimum word score among candidates. If multiple words tie, pick one at random.
 
-6.) **Score each remaining word.** For each word, compute `wordScore = Array.from(word).reduce((sum, char) => sum + (scoreMap.get(char) ?? 0), 0)`.
+6.) **Safety fallback.** If the filtered list is empty (should not happen given the word list size), fall back to a random two-letter word from the full word list and log a WARN.
 
-7.) **Select the lowest-scored word.** Find the minimum `wordScore` among remaining words. If multiple words tie, pick one at random.
-
-8.) **Safety fallback.** If the filtered list is empty (should not happen given the word list size), fall back to a random word from the full word list and log a WARN.
-
-9.) Return the selected word.
+7.) Return the selected word.
