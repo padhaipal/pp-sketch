@@ -247,25 +247,34 @@ export async function processWabotInboundJob(
       // 5. Non-audio message — send "audio only" video
       if (payload.message.type !== 'audio') {
         path = 'non-audio-redirect';
+        const audioOnlyMedia =
+          await mediaMetaDataService.findMediaByStateTransitionId(
+            AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID,
+          );
+        // Config/data bug: the audio-only prompt media must be seeded for this
+        // state transition. Fail loud so it shows up in alerts; the user still
+        // gets wabot's timeout fallback so UX doesn't regress.
+        if (!audioOnlyMedia.video) {
+          logger.error(
+            `Missing media for ${AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID} — cannot send audio-only prompt`,
+          );
+          throw new Error(
+            `audio-only redirect media missing for ${AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID}`,
+          );
+        }
         try {
-          const audioOnlyMedia =
-            await mediaMetaDataService.findMediaByStateTransitionId(
-              AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID,
-            );
-          if (audioOnlyMedia.video) {
-            const result = await wabotOutbound.sendMessage({
-              user_external_id: user.external_id,
-              wamid: payload.message.id,
-              media: [
-                {
-                  type: 'video',
-                  url: audioOnlyMedia.video.wa_media_url!,
-                },
-              ],
-              otel_carrier: injectCarrierFromContext(ctx),
-            });
-            handleSendResult(result, 'audio-only');
-          }
+          const result = await wabotOutbound.sendMessage({
+            user_external_id: user.external_id,
+            wamid: payload.message.id,
+            media: [
+              {
+                type: 'video',
+                url: audioOnlyMedia.video.wa_media_url!,
+              },
+            ],
+            otel_carrier: injectCarrierFromContext(ctx),
+          });
+          handleSendResult(result, 'audio-only');
         } catch (err) {
           logger.warn(
             `Failed to send audio-only message: ${(err as Error).message}`,
