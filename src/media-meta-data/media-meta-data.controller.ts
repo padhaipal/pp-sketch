@@ -56,7 +56,7 @@ export class MediaMetaDataController {
     return this.coverageService.getCoverage();
   }
 
-  @Get()
+  @Get('by-state-transition-id')
   async listByStateTransitionId(
     @Query('state_transition_id') stid: string,
   ): Promise<MediaItemResponse[]> {
