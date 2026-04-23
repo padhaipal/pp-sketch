@@ -165,6 +165,47 @@ describe('evaluate-answer.utils', () => {
       );
     });
 
+    /* -- combined transcripts from multiple STT services -- */
+    describe('combined transcripts from multiple STT services', () => {
+      // literacy-lesson.service.ts joins all STT transcripts with a space,
+      // so the full answer contains duplicated text. Hardcoded multi-syllable
+      // checks must use .includes() rather than ===.
+      it('accepts नाशपाती when sarvam+azure both emit "नाश पाती"', () => {
+        const combined = ['नाश पाती', 'नाश पाती।'].join(' ');
+        expect(
+          markWord({ correctAnswer: 'नाशपाती', studentAnswer: combined }),
+        ).toBe(true);
+      });
+
+      it('accepts दालचीनी when sarvam+azure both emit "दाल चीनी"', () => {
+        const combined = ['दाल चीनी', 'दाल चीनी।'].join(' ');
+        expect(
+          markWord({ correctAnswer: 'दालचीनी', studentAnswer: combined }),
+        ).toBe(true);
+      });
+
+      it('accepts तकिया when combined transcript is "तक या तक या"', () => {
+        const combined = ['तक या', 'तक या'].join(' ');
+        expect(
+          markWord({ correctAnswer: 'तकिया', studentAnswer: combined }),
+        ).toBe(true);
+      });
+
+      it('accepts पुलिस when combined transcript is "पुल इस पुल इस"', () => {
+        const combined = ['पुल इस', 'पुल इस'].join(' ');
+        expect(
+          markWord({ correctAnswer: 'पुलिस', studentAnswer: combined }),
+        ).toBe(true);
+      });
+
+      it('accepts अमरस when combined transcript is "अमर रस अमर रस"', () => {
+        const combined = ['अमर रस', 'अमर रस'].join(' ');
+        expect(
+          markWord({ correctAnswer: 'अमरस', studentAnswer: combined }),
+        ).toBe(true);
+      });
+    });
+
     /* -- specific cross-family checks the user might tune later -- */
     it('marks र as same family as न (current FAMILIES table behavior)', () => {
       // Documents the current — likely overly aggressive — behavior:
