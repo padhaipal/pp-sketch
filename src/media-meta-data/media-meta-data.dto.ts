@@ -66,6 +66,8 @@ export interface MediaMetadataCoverageRow {
 export interface MediaMetadataCoverageResponse {
   suffixes: string[];
   rows: MediaMetadataCoverageRow[];
+  letters: string[];
+  words: string[];
 }
 
 export interface MediaItemResponse {

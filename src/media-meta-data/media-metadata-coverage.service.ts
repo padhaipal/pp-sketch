@@ -101,6 +101,11 @@ export class MediaMetadataCoverageService {
       };
     });
 
-    return { suffixes: [...SUFFIXES], rows };
+    return {
+      suffixes: [...SUFFIXES],
+      rows,
+      letters,
+      words: this.wordList,
+    };
   }
 }
