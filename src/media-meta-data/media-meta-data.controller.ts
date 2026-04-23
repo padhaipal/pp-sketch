@@ -21,6 +21,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { MediaMetaDataEntity } from './media-meta-data.entity';
 import { MediaMetaDataService } from './media-meta-data.service';
+import { MediaMetadataCoverageService } from './media-metadata-coverage.service';
 import { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound.service';
 import {
   validateCreateHeygenMediaOptions,
@@ -32,6 +33,7 @@ import {
   assertValidMediaStatus,
   DashboardTranscriptResponse,
   DeleteResponse,
+  MediaMetadataCoverageResponse,
 } from './media-meta-data.dto';
 import { v4 as uuid } from 'uuid';
 import { startRootSpan, injectCarrier } from '../otel/otel';
@@ -41,10 +43,16 @@ import { startRootSpan, injectCarrier } from '../otel/otel';
 export class MediaMetaDataController {
   constructor(
     private readonly mediaMetaDataService: MediaMetaDataService,
+    private readonly coverageService: MediaMetadataCoverageService,
     private readonly mediaBucket: MediaBucketService,
     @InjectRepository(MediaMetaDataEntity)
     private readonly mediaRepo: Repository<MediaMetaDataEntity>,
   ) {}
+
+  @Get('coverage')
+  async getCoverage(): Promise<MediaMetadataCoverageResponse> {
+    return this.coverageService.getCoverage();
+  }
 
   @Get(':id/audio')
   async getAudio(@Param('id') id: string, @Res() res: Response) {

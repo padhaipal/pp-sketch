@@ -58,6 +58,17 @@ export interface DeleteResponse {
   deleted: true;
 }
 
+export interface MediaMetadataCoverageRow {
+  prefix: string;
+  counts: number[];
+  rolled_back_count: number;
+}
+
+export interface MediaMetadataCoverageResponse {
+  suffixes: string[];
+  rows: MediaMetadataCoverageRow[];
+}
+
 // ─── Internal DTOs ────────────────────────────────────────────────────────────
 
 export interface CreateWhatsappAudioMediaOptions {

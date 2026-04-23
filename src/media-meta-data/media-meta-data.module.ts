@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { MediaMetaDataEntity } from './media-meta-data.entity';
 import { MediaMetaDataService } from './media-meta-data.service';
+import { MediaMetadataCoverageService } from './media-metadata-coverage.service';
 import { MediaMetaDataController } from './media-meta-data.controller';
 import { UserModule } from '../users/user.module';
 import { CacheService } from '../interfaces/redis/cache';
@@ -16,6 +17,7 @@ import { ReverieService } from '../interfaces/stt/reverie/reverie.service';
   controllers: [MediaMetaDataController],
   providers: [
     MediaMetaDataService,
+    MediaMetadataCoverageService,
     CacheService,
     WabotOutboundService,
     MediaBucketService,
