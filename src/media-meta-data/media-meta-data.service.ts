@@ -398,38 +398,38 @@ export class MediaMetaDataService {
     const entity = await this.mediaRepo.findOneBy({ id: mediaId });
     const s3Key: string | null = entity?.s3_key ?? null;
 
-    // Raw SQL — PL/pgSQL block (complex query #1)
-    await this.dataSource.query(
-      `DO $$
-      DECLARE
-        rec RECORD;
-      BEGIN
-        UPDATE media_metadata SET rolled_back = true WHERE id = $1;
-        IF NOT FOUND THEN
-          RAISE EXCEPTION 'Media metadata not found';
-        END IF;
+    await this.dataSource.transaction(async (manager) => {
+      // TypeORM's pg manager.query returns [rowsArray, affectedCount] for
+      // UPDATE/INSERT/DELETE — affectedCount is the second element.
+      const [, affected] = (await manager.query(
+        `UPDATE media_metadata SET rolled_back = true WHERE id = $1`,
+        [mediaId],
+      )) as [unknown, number];
+      if (affected === 0) {
+        throw new NotFoundException('Media metadata not found');
+      }
 
-        FOR rec IN
-          SELECT con.conrelid::regclass AS referencing_table,
-                 att.attname            AS referencing_column
-          FROM pg_constraint con
-          JOIN pg_attribute att
-            ON att.attrelid = con.conrelid AND att.attnum = ANY(con.conkey)
-          WHERE con.confrelid = 'media_metadata'::regclass
-            AND con.contype = 'f'
-            AND EXISTS (
-              SELECT 1 FROM pg_attribute pa
-              WHERE pa.attrelid = con.confrelid
-                AND pa.attnum = ANY(con.confkey)
-                AND pa.attname = 'id'
-            )
-        LOOP
-          EXECUTE format('DELETE FROM %I WHERE %I = $1', rec.referencing_table, rec.referencing_column) USING $1;
-        END LOOP;
-      END
-      $$ LANGUAGE plpgsql`,
-      [mediaId],
-    );
+      // Identifier escaping done by PG via format() — %s for regclass keeps
+      // search-path-correct schema qualification; %I quotes the column name.
+      const fkStmts: { sql: string }[] = await manager.query(
+        `SELECT format('DELETE FROM %s WHERE %I = $1', con.conrelid::regclass, att.attname) AS sql
+         FROM pg_constraint con
+         JOIN pg_attribute att
+           ON att.attrelid = con.conrelid AND att.attnum = ANY(con.conkey)
+         WHERE con.confrelid = 'media_metadata'::regclass
+           AND con.contype = 'f'
+           AND EXISTS (
+             SELECT 1 FROM pg_attribute pa
+             WHERE pa.attrelid = con.confrelid
+               AND pa.attnum = ANY(con.confkey)
+               AND pa.attname = 'id'
+           )`,
+      );
+
+      for (const { sql } of fkStmts) {
+        await manager.query(sql, [mediaId]);
+      }
+    });
 
     // Delete S3 object after DB commit (best-effort)
     if (s3Key) {
