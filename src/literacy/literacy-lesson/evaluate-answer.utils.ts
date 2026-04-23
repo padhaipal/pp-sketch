@@ -83,9 +83,60 @@ class EvaluateAnswer {
 
   static markWord({ correctAnswer, studentAnswer }: MarkArgs): boolean {
     const cleanedCorrectAnswer = this.clean(correctAnswer);
+    const cleanedFullStudentAnswer = this.clean(studentAnswer);
     const studentWords = studentAnswer.split(/\s+/);
 
     const isEquivalent = (a: string, b: string) => a === b || sameFamily(a, b);
+
+    // Hard coding: transcription engine splits multi-syllable words into separate words.
+    if (cleanedCorrectAnswer === 'अमरस' && cleanedFullStudentAnswer === 'अमररस')
+      return true;
+    if (cleanedCorrectAnswer === 'कागज' && cleanedFullStudentAnswer === 'कागज')
+      return true;
+    if (cleanedCorrectAnswer === 'खटमल' && cleanedFullStudentAnswer === 'खटमल')
+      return true;
+    if (cleanedCorrectAnswer === 'टमटम' && cleanedFullStudentAnswer === 'टमटम')
+      return true;
+    if (cleanedCorrectAnswer === 'नटखट' && cleanedFullStudentAnswer === 'नटखट')
+      return true;
+    if (cleanedCorrectAnswer === 'बलगम' && cleanedFullStudentAnswer === 'बलगम')
+      return true;
+    if (cleanedCorrectAnswer === 'पीपल' && cleanedFullStudentAnswer === 'पीपल')
+      return true;
+    if (cleanedCorrectAnswer === 'परसो' && cleanedFullStudentAnswer === 'परसो')
+      return true;
+    if (cleanedCorrectAnswer === 'हलचल' && cleanedFullStudentAnswer === 'हलचल')
+      return true;
+    if (cleanedCorrectAnswer === 'हरदम' && cleanedFullStudentAnswer === 'हरदम')
+      return true;
+    if (cleanedCorrectAnswer === 'कलाकार' && cleanedFullStudentAnswer === 'कलाकार')
+      return true;
+    if (cleanedCorrectAnswer === 'दोपहर' && cleanedFullStudentAnswer === 'दोपहर')
+      return true;
+    if (cleanedCorrectAnswer === 'नाखून' && cleanedFullStudentAnswer === 'नाखून')
+      return true;
+    if (cleanedCorrectAnswer === 'भूगोल' && cleanedFullStudentAnswer === 'भूगोल')
+      return true;
+    if (cleanedCorrectAnswer === 'चौकीदार' && cleanedFullStudentAnswer === 'चौकीदार')
+      return true;
+    if (cleanedCorrectAnswer === 'कारखाना' && cleanedFullStudentAnswer === 'कारखाना')
+      return true;
+    if (cleanedCorrectAnswer === 'दालचीनी' && cleanedFullStudentAnswer === 'दालचीनी')
+      return true;
+    if (cleanedCorrectAnswer === 'नाशपाती' && cleanedFullStudentAnswer === 'नाशपाती')
+      return true;
+    if (cleanedCorrectAnswer === 'सोयाबीन' && cleanedFullStudentAnswer === 'सोयाबीन')
+      return true;
+    if (cleanedCorrectAnswer === 'तकिया' && cleanedFullStudentAnswer === 'तकया')
+      return true;
+    if (cleanedCorrectAnswer === 'तौलिया' && cleanedFullStudentAnswer === 'तौलया')
+      return true;
+    if (cleanedCorrectAnswer === 'करेला' && cleanedFullStudentAnswer === 'करेला')
+      return true;
+    if (cleanedCorrectAnswer === 'पुलिस' && cleanedFullStudentAnswer === 'पुलइस')
+      return true;
+    if (cleanedCorrectAnswer === 'अलमारी' && cleanedFullStudentAnswer === 'अलमारी')
+      return true;
 
     return studentWords.some((studentWord) => {
       const cleanedStudentWord = this.clean(studentWord);
@@ -195,6 +246,78 @@ class EvaluateAnswer {
       if (cleanedCorrectAnswer === 'वे' && cleanedStudentWord === 'वह')
         return true;
       if (cleanedCorrectAnswer === 'इडली' && cleanedStudentWord === 'इटली')
+        return true;
+      if (cleanedCorrectAnswer === 'सास' && cleanedStudentWord === 'साँस')
+        return true;
+      if (cleanedCorrectAnswer === 'सास' && cleanedStudentWord === 'सांस')
+        return true;
+      if (cleanedCorrectAnswer === 'ऐनक' && cleanedStudentWord === 'एनक')
+        return true;
+      if (cleanedCorrectAnswer === 'जनम' && cleanedStudentWord === 'जन्म')
+        return true;
+      if (cleanedCorrectAnswer === 'शकल' && cleanedStudentWord === 'शक्ल')
+        return true;
+      if (cleanedCorrectAnswer === 'समझ' && cleanedStudentWord === 'समज')
+        return true;
+      if (cleanedCorrectAnswer === 'ऋषभ' && cleanedStudentWord === 'रिशभ')
+        return true;
+      if (cleanedCorrectAnswer === 'ऋषि' && cleanedStudentWord === 'रिशि')
+        return true;
+      if (cleanedCorrectAnswer === 'वचन' && cleanedStudentWord === 'बचन')
+        return true;
+      if (cleanedCorrectAnswer === 'सिपाही' && cleanedStudentWord === 'सिपाई')
+        return true;
+      if (cleanedCorrectAnswer === 'महीना' && cleanedStudentWord === 'महिना')
+        return true;
+      if (cleanedCorrectAnswer === 'गणित' && cleanedStudentWord === 'गनित')
+        return true;
+      if (cleanedCorrectAnswer === 'औसत' && cleanedStudentWord === 'ओसत')
+        return true;
+      if (cleanedCorrectAnswer === 'औजार' && cleanedStudentWord === 'ओजार')
+        return true;
+      if (cleanedCorrectAnswer === 'औषधि' && cleanedStudentWord === 'ओषधि')
+        return true;
+      if (cleanedCorrectAnswer === 'ऐलान' && cleanedStudentWord === 'एलान')
+        return true;
+      if (cleanedCorrectAnswer === 'कैरम' && cleanedStudentWord === 'केरम')
+        return true;
+      if (cleanedCorrectAnswer === 'कापी' && cleanedStudentWord === 'कॉपी')
+        return true;
+      if (cleanedCorrectAnswer === 'काफी' && cleanedStudentWord === 'कॉफी')
+        return true;
+      if (cleanedCorrectAnswer === 'बहू' && cleanedStudentWord === 'बहु')
+        return true;
+      if (cleanedCorrectAnswer === 'पौधा' && cleanedStudentWord === 'पौदा')
+        return true;
+      if (cleanedCorrectAnswer === 'गोभी' && cleanedStudentWord === 'गोबी')
+        return true;
+      if (cleanedCorrectAnswer === 'कछुआ' && cleanedStudentWord === 'कछुवा')
+        return true;
+      if (cleanedCorrectAnswer === 'अखरोट' && cleanedStudentWord === 'अकरोट')
+        return true;
+      if (cleanedCorrectAnswer === 'मोबाइल' && cleanedStudentWord === 'मोबाईल')
+        return true;
+      if (cleanedCorrectAnswer === 'वीडियो' && cleanedStudentWord === 'विडियो')
+        return true;
+      if (cleanedCorrectAnswer === 'चोटी' && cleanedStudentWord === 'छोटी')
+        return true;
+      if (cleanedCorrectAnswer === 'चीनी' && cleanedStudentWord === 'चिनी')
+        return true;
+      if (cleanedCorrectAnswer === 'अधिकारी' && cleanedStudentWord === 'अधिकरी')
+        return true;
+      if (cleanedCorrectAnswer === 'सिख' && cleanedStudentWord === 'सीख')
+        return true;
+      if (cleanedCorrectAnswer === 'सिखा' && cleanedStudentWord === 'सीखा')
+        return true;
+      if (cleanedCorrectAnswer === 'पोछा' && cleanedStudentWord === 'पोचा')
+        return true;
+      if (cleanedCorrectAnswer === 'मैना' && cleanedStudentWord === 'मेना')
+        return true;
+      if (cleanedCorrectAnswer === 'नारियल' && cleanedStudentWord === 'नरियल')
+        return true;
+      if (cleanedCorrectAnswer === 'सुकून' && cleanedStudentWord === 'सकून')
+        return true;
+      if (cleanedCorrectAnswer === 'मसूर' && cleanedStudentWord === 'मसुर')
         return true;
 
       // Schwa deletion: ignore trailing long ā (ा) in correctAnswer
