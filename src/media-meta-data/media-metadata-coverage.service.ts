@@ -62,43 +62,28 @@ export class MediaMetadataCoverageService {
     const aggregateRows: Array<{
       state_transition_id: string;
       active: string;
-      rolled_back: string;
     }> = await this.dataSource.query(
-      `SELECT
-         state_transition_id,
-         COUNT(*) FILTER (WHERE NOT rolled_back) AS active,
-         COUNT(*) FILTER (WHERE rolled_back) AS rolled_back
+      `SELECT state_transition_id, COUNT(*) AS active
        FROM media_metadata
        WHERE media_type = 'audio'
+         AND NOT rolled_back
          AND state_transition_id IS NOT NULL
          AND position('-' in state_transition_id) > 0
        GROUP BY state_transition_id`,
     );
 
-    const byPrefix = new Map<
-      string,
-      { counts: Map<string, number>; rolledBack: number }
-    >();
-    const ensure = (prefix: string) => {
-      let entry = byPrefix.get(prefix);
-      if (!entry) {
-        entry = { counts: new Map(), rolledBack: 0 };
-        byPrefix.set(prefix, entry);
-      }
-      return entry;
-    };
-
+    const byPrefix = new Map<string, Map<string, number>>();
     for (const row of aggregateRows) {
       const stid = row.state_transition_id;
       const dashIdx = stid.indexOf('-');
       const prefix = stid.substring(0, dashIdx);
       const suffix = stid.substring(dashIdx + 1);
-      const entry = ensure(prefix);
-      entry.counts.set(
-        suffix,
-        (entry.counts.get(suffix) ?? 0) + Number(row.active),
-      );
-      entry.rolledBack += Number(row.rolled_back);
+      let counts = byPrefix.get(prefix);
+      if (!counts) {
+        counts = new Map();
+        byPrefix.set(prefix, counts);
+      }
+      counts.set(suffix, (counts.get(suffix) ?? 0) + Number(row.active));
     }
 
     const letterRows: Array<{ grapheme: string }> = await this.dataSource.query(
@@ -109,12 +94,10 @@ export class MediaMetadataCoverageService {
     const orderedPrefixes: string[] = ['_', ...letters, ...this.wordList];
 
     const rows: MediaMetadataCoverageRow[] = orderedPrefixes.map((prefix) => {
-      const entry = byPrefix.get(prefix);
-      const counts = SUFFIXES.map((s) => entry?.counts.get(s) ?? 0);
+      const counts = byPrefix.get(prefix);
       return {
         prefix,
-        counts,
-        rolled_back_count: entry?.rolledBack ?? 0,
+        counts: SUFFIXES.map((s) => counts?.get(s) ?? 0),
       };
     });
 

@@ -61,12 +61,25 @@ export interface DeleteResponse {
 export interface MediaMetadataCoverageRow {
   prefix: string;
   counts: number[];
-  rolled_back_count: number;
 }
 
 export interface MediaMetadataCoverageResponse {
   suffixes: string[];
   rows: MediaMetadataCoverageRow[];
+}
+
+export interface MediaItemResponse {
+  id: string;
+  media_type: MediaType;
+  source: MediaSource;
+  status: MediaStatus;
+  created_at: Date;
+  state_transition_id: string | null;
+  text: string | null;
+  has_content: boolean;
+  content_mime: string | null;
+  generation_script: string | null;
+  wa_media_url: string | null;
 }
 
 // ─── Internal DTOs ────────────────────────────────────────────────────────────

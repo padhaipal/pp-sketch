@@ -5,6 +5,7 @@ import {
   Patch,
   Delete,
   Param,
+  Query,
   Body,
   Res,
   HttpCode,
@@ -34,6 +35,7 @@ import {
   DashboardTranscriptResponse,
   DeleteResponse,
   MediaMetadataCoverageResponse,
+  MediaItemResponse,
 } from './media-meta-data.dto';
 import { v4 as uuid } from 'uuid';
 import { startRootSpan, injectCarrier } from '../otel/otel';
@@ -52,6 +54,46 @@ export class MediaMetaDataController {
   @Get('coverage')
   async getCoverage(): Promise<MediaMetadataCoverageResponse> {
     return this.coverageService.getCoverage();
+  }
+
+  @Get()
+  async listByStateTransitionId(
+    @Query('state_transition_id') stid: string,
+  ): Promise<MediaItemResponse[]> {
+    if (!stid || typeof stid !== 'string') {
+      throw new BadRequestException(
+        'state_transition_id query param required',
+      );
+    }
+    const rows = await this.mediaRepo.find({
+      where: { state_transition_id: stid, rolled_back: false },
+      order: { created_at: 'ASC' },
+    });
+    return rows.map((row) => {
+      const gen = row.generation_request_json as {
+        script_text?: string;
+      } | null;
+      const details = row.media_details as { mime_type?: string } | null;
+      return {
+        id: row.id,
+        media_type: row.media_type,
+        source: row.source,
+        status: row.status,
+        created_at: row.created_at,
+        state_transition_id: row.state_transition_id,
+        text: row.text ?? null,
+        has_content: !!row.s3_key,
+        content_mime: details?.mime_type ?? null,
+        generation_script: gen?.script_text ?? null,
+        wa_media_url: row.wa_media_url,
+      };
+    });
+  }
+
+  @Delete(':id')
+  async deleteMedia(@Param('id') id: string): Promise<DeleteResponse> {
+    await this.mediaMetaDataService.markRolledBack(id);
+    return { deleted: true };
   }
 
   @Get(':id/audio')
