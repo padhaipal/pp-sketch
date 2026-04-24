@@ -5,7 +5,7 @@ import { User } from '../users/user.dto';
 const VALID_MEDIA_STATUSES = ['created', 'queued', 'ready', 'failed'] as const;
 export type MediaStatus = (typeof VALID_MEDIA_STATUSES)[number];
 
-const VALID_MEDIA_TYPES = [
+export const VALID_MEDIA_TYPES = [
   'audio',
   'text',
   'video',
@@ -58,13 +58,16 @@ export interface DeleteResponse {
   deleted: true;
 }
 
+export type MediaTypeCounts = Record<MediaType, number>;
+
 export interface MediaMetadataCoverageRow {
   prefix: string;
-  counts: number[];
+  counts: MediaTypeCounts[];
 }
 
 export interface MediaMetadataCoverageResponse {
   suffixes: string[];
+  media_types: MediaType[];
   rows: MediaMetadataCoverageRow[];
   letters: string[];
   words: string[];

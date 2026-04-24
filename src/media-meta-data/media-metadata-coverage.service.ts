@@ -5,7 +5,20 @@ import * as fs from 'fs';
 import {
   MediaMetadataCoverageResponse,
   MediaMetadataCoverageRow,
+  MediaType,
+  MediaTypeCounts,
+  VALID_MEDIA_TYPES,
 } from './media-meta-data.dto';
+
+function emptyCounts(): MediaTypeCounts {
+  return {
+    audio: 0,
+    text: 0,
+    video: 0,
+    image: 0,
+    sticker: 0,
+  };
+}
 
 // Derived from state_transition_id templates in literacy-lesson.machine.ts.
 // Ordered alphabetically for stable column layout.
@@ -61,29 +74,37 @@ export class MediaMetadataCoverageService {
   async getCoverage(): Promise<MediaMetadataCoverageResponse> {
     const aggregateRows: Array<{
       state_transition_id: string;
+      media_type: MediaType;
       active: string;
     }> = await this.dataSource.query(
-      `SELECT state_transition_id, COUNT(*) AS active
+      `SELECT state_transition_id, media_type, COUNT(*) AS active
        FROM media_metadata
-       WHERE media_type = 'audio'
-         AND NOT rolled_back
+       WHERE NOT rolled_back
          AND state_transition_id IS NOT NULL
          AND position('-' in state_transition_id) > 0
-       GROUP BY state_transition_id`,
+       GROUP BY state_transition_id, media_type`,
     );
 
-    const byPrefix = new Map<string, Map<string, number>>();
+    const byPrefix = new Map<string, Map<string, MediaTypeCounts>>();
     for (const row of aggregateRows) {
       const stid = row.state_transition_id;
       const dashIdx = stid.indexOf('-');
       const prefix = stid.substring(0, dashIdx);
       const suffix = stid.substring(dashIdx + 1);
-      let counts = byPrefix.get(prefix);
-      if (!counts) {
-        counts = new Map();
-        byPrefix.set(prefix, counts);
+      let bySuffix = byPrefix.get(prefix);
+      if (!bySuffix) {
+        bySuffix = new Map();
+        byPrefix.set(prefix, bySuffix);
       }
-      counts.set(suffix, (counts.get(suffix) ?? 0) + Number(row.active));
+      let counts = bySuffix.get(suffix);
+      if (!counts) {
+        counts = emptyCounts();
+        bySuffix.set(suffix, counts);
+      }
+      // media_type values that aren't in VALID_MEDIA_TYPES are ignored.
+      if (row.media_type in counts) {
+        counts[row.media_type] += Number(row.active);
+      }
     }
 
     const letterRows: Array<{ grapheme: string }> = await this.dataSource.query(
@@ -94,15 +115,16 @@ export class MediaMetadataCoverageService {
     const orderedPrefixes: string[] = ['_', ...letters, ...this.wordList];
 
     const rows: MediaMetadataCoverageRow[] = orderedPrefixes.map((prefix) => {
-      const counts = byPrefix.get(prefix);
+      const bySuffix = byPrefix.get(prefix);
       return {
         prefix,
-        counts: SUFFIXES.map((s) => counts?.get(s) ?? 0),
+        counts: SUFFIXES.map((s) => bySuffix?.get(s) ?? emptyCounts()),
       };
     });
 
     return {
       suffixes: [...SUFFIXES],
+      media_types: [...VALID_MEDIA_TYPES],
       rows,
       letters,
       words: this.wordList,
