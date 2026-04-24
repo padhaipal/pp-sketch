@@ -15,6 +15,7 @@ import {
   injectCarrierFromContext,
 } from '../../../otel/otel';
 import { wabotInboundJobDuration } from '../../../otel/metrics';
+import { toLogId } from '../../../otel/pii';
 import { FindMediaByStateTransitionIdResult } from '../../../media-meta-data/media-meta-data.dto';
 import {
   WELCOME_MESSAGE_STATE_TRANSITION_ID,
@@ -42,7 +43,10 @@ export async function processWabotInboundJob(
   );
 
   span.setAttribute('wabot.wamid', payload.message.id);
-  span.setAttribute('wabot.user.external_id', payload.message.from);
+  span.setAttribute(
+    'wabot.user.external_id_hash',
+    toLogId(payload.message.from),
+  );
   span.setAttribute('wabot.message.type', payload.message.type);
   span.setAttribute('wabot.consecutive', !!payload.consecutive);
 
@@ -65,12 +69,14 @@ export async function processWabotInboundJob(
 
         if (!updated) {
           logger.error(
-            `System message: user not found for old phone ${oldPhone}`,
+            `System message: user not found for old phone ${toLogId(oldPhone)}`,
           );
           throw new Error('User not found for phone number change');
         }
 
-        logger.log(`Updated user phone: ${oldPhone} → ${newPhone}`);
+        logger.log(
+          `Updated user phone: ${toLogId(oldPhone)} → ${toLogId(newPhone)}`,
+        );
         outcome = 'success';
         return;
       }
@@ -78,7 +84,9 @@ export async function processWabotInboundJob(
       // 2. Consecutive message — ignore
       if (payload.consecutive) {
         path = 'consecutive-skip';
-        logger.log(`Ignoring consecutive message from ${payload.message.from}`);
+        logger.log(
+          `Ignoring consecutive message from ${toLogId(payload.message.from)}`,
+        );
         outcome = 'skipped';
         return;
       }
@@ -125,7 +133,7 @@ export async function processWabotInboundJob(
             });
             if (!referrer) {
               logger.log(
-                `Referrer ${referrerExternalId} not found — creating user without referrer`,
+                `Referrer ${toLogId(referrerExternalId)} not found — creating user without referrer`,
               );
               referrerExternalId = undefined;
             }
@@ -137,7 +145,7 @@ export async function processWabotInboundJob(
           });
         } catch (err) {
           logger.error(
-            `Failed to create user ${payload.message.from}: ${(err as Error).message}`,
+            `Failed to create user ${toLogId(payload.message.from)}: ${(err as Error).message}`,
           );
           await sendFallbackAndHandle(wabotOutbound, payload, ctx);
           throw err;
@@ -162,7 +170,7 @@ export async function processWabotInboundJob(
             userMessageId = audioEntity.id;
           } else {
             logger.error(
-              `New user ${user.external_id} sent unsupported type "${payload.message.type}" — sending welcome only`,
+              `New user ${toLogId(user.external_id)} sent unsupported type "${payload.message.type}" — sending welcome only`,
             );
           }
         } catch (err) {
@@ -202,7 +210,7 @@ export async function processWabotInboundJob(
             }
           } catch (err) {
             logger.warn(
-              `Failed to start first lesson for new user ${user.external_id}: ${(err as Error).message}`,
+              `Failed to start first lesson for new user ${toLogId(user.external_id)}: ${(err as Error).message}`,
             );
           }
         } else {
@@ -238,7 +246,7 @@ export async function processWabotInboundJob(
       if (Date.now() - tsMs > 20_000) {
         path = 'stale-skip';
         logger.warn(
-          `Message from ${payload.message.from} is older than 20s — skipping`,
+          `Message from ${toLogId(payload.message.from)} is older than 20s — skipping`,
         );
         outcome = 'skipped';
         return;
@@ -346,27 +354,29 @@ export async function processWabotInboundJob(
 
       if (sendResult.status >= 200 && sendResult.status < 300) {
         if (sendResult.body.delivered) {
-          logger.log(`Message delivered to ${user.external_id}`);
+          logger.log(`Message delivered to ${toLogId(user.external_id)}`);
         } else {
           // Inflight expired — roll back
-          logger.log(`Inflight expired for ${user.external_id} — rolling back`);
+          logger.log(
+            `Inflight expired for ${toLogId(user.external_id)} — rolling back`,
+          );
           await mediaMetaDataService.markRolledBack(userMessageId);
         }
         outcome = 'success';
       } else if (sendResult.status >= 400 && sendResult.status < 500) {
         logger.error(
-          `sendMessage 4XX: ${sendResult.status} for ${user.external_id}`,
+          `sendMessage 4XX: ${sendResult.status} for ${toLogId(user.external_id)}`,
         );
         throw new Error(`sendMessage 4XX: ${sendResult.status}`);
       } else {
         const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
         if (isLastAttempt) {
           logger.error(
-            `sendMessage 5XX (final attempt): ${sendResult.status} for ${user.external_id}`,
+            `sendMessage 5XX (final attempt): ${sendResult.status} for ${toLogId(user.external_id)}`,
           );
         } else {
           logger.warn(
-            `sendMessage 5XX (attempt ${job.attemptsMade + 1}): ${sendResult.status} for ${user.external_id}`,
+            `sendMessage 5XX (attempt ${job.attemptsMade + 1}): ${sendResult.status} for ${toLogId(user.external_id)}`,
           );
         }
         throw new Error(`sendMessage 5XX: ${sendResult.status}`);

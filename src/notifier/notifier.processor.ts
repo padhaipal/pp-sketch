@@ -9,6 +9,7 @@ import type { LiteracyLessonService } from '../literacy/literacy-lesson/literacy
 import type { MediaMetaDataService } from '../media-meta-data/media-meta-data.service';
 import type { FindMediaByStateTransitionIdResult } from '../media-meta-data/media-meta-data.dto';
 import { tracer } from '../otel/otel';
+import { toLogId } from '../otel/pii';
 import type { User } from '../users/user.dto';
 
 const logger = new Logger('NotifierProcessor');
@@ -131,7 +132,10 @@ async function buildUserMedia(
   mediaMetaDataService: MediaMetaDataService,
 ): Promise<OutboundMediaItem[]> {
   return tracer.startActiveSpan('notifier.buildUserMedia', async (span) => {
-    span.setAttribute('notifier.user.external_id', activeUser.external_id);
+    span.setAttribute(
+      'notifier.user.external_id_hash',
+      toLogId(activeUser.external_id),
+    );
     try {
       const media: OutboundMediaItem[] = [];
 
@@ -160,7 +164,7 @@ async function buildUserMedia(
         span.setAttribute('notifier.lesson.status', 'failed');
         span.recordException(err as Error);
         logger.warn(
-          `Failed to create lesson for user ${activeUser.external_id}: ${(err as Error).message} — sending notification video only`,
+          `Failed to create lesson for user ${toLogId(activeUser.external_id)}: ${(err as Error).message} — sending notification video only`,
         );
       }
 
@@ -203,7 +207,10 @@ export async function processNotifierSendJob(
   return tracer.startActiveSpan('notifier.send', async (span) => {
     const { user_external_id, media } = job.data;
     span.setAttribute('bullmq.job.id', String(job.id));
-    span.setAttribute('notifier.user.external_id', user_external_id);
+    span.setAttribute(
+      'notifier.user.external_id_hash',
+      toLogId(user_external_id),
+    );
     span.setAttribute('notifier.media.count', media.length);
     try {
       const result = await wabotOutbound.sendNotification({
@@ -217,25 +224,27 @@ export async function processNotifierSendJob(
 
       if (result.error_code === 130429) {
         throw new Error(
-          `WhatsApp rate-limit (130429) for user ${user_external_id} — will retry`,
+          `WhatsApp rate-limit (130429) for user ${toLogId(user_external_id)} — will retry`,
         );
       }
 
       if (result.error_code === 131047) {
         span.setAttribute('notifier.skip_reason', 'window-expired');
         logger.warn(
-          `Notification undeliverable: 24-hour window expired (131047) for user ${user_external_id}`,
+          `Notification undeliverable: 24-hour window expired (131047) for user ${toLogId(user_external_id)}`,
         );
         return;
       }
 
       if (!result.delivered) {
         throw new Error(
-          `Notification failed for user ${user_external_id}: status=${String(result.status)} error_code=${String(result.error_code)}`,
+          `Notification failed for user ${toLogId(user_external_id)}: status=${String(result.status)} error_code=${String(result.error_code)}`,
         );
       }
 
-      logger.log(`Notification delivered to user ${user_external_id}`);
+      logger.log(
+        `Notification delivered to user ${toLogId(user_external_id)}`,
+      );
     } catch (err) {
       span.setStatus({
         code: SpanStatusCode.ERROR,

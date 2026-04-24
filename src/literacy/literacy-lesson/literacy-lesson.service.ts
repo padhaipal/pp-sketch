@@ -386,6 +386,15 @@ export class LiteracyLessonService {
         const selected = ties[Math.floor(Math.random() * ties.length)].word;
         span.setAttribute('pp.lesson.word.selection', 'min-score-tie-break');
         span.setAttribute('pp.lesson.word.selected', selected);
+
+        const topTen = [...scored]
+          .sort((a, b) => a.wordScore - b.wordScore)
+          .slice(0, 10)
+          .map((s) => `${s.word}=${String(s.wordScore)}`)
+          .join(', ');
+        this.logger.log(
+          `selectNextWord: selected=${selected} max_length=${String(maxLength)} candidates=${String(scored.length)} top10=[${topTen}]`,
+        );
         return selected;
       } catch (err) {
         span.setStatus({

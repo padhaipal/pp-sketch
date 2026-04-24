@@ -169,7 +169,7 @@ function createServiceHarness(row: SelectNextWordRow): {
   ) as LiteracyLessonService;
 
   (service as any).dataSource = { query: queryMock };
-  (service as any).logger = { warn: warnMock };
+  (service as any).logger = { warn: warnMock, log: jest.fn() };
   (service as any).wordList = WORD_LIST;
 
   return { service, queryMock, warnMock };

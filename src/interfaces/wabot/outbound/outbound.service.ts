@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { SpanStatusCode } from '@opentelemetry/api';
 import type { OtelCarrier } from '../../../otel/otel.dto';
 import { tracer } from '../../../otel/otel';
+import { toLogId } from '../../../otel/pii';
 import {
   OutboundMediaItem,
   SendMessageRequest,
@@ -28,7 +29,10 @@ export class WabotOutboundService {
       'wabot.outbound.sendMessage',
       async (span) => {
         span.setAttribute('wabot.endpoint', 'sendMessage');
-        span.setAttribute('wabot.user.external_id', options.user_external_id);
+        span.setAttribute(
+          'wabot.user.external_id_hash',
+          toLogId(options.user_external_id),
+        );
         span.setAttribute('wabot.wamid', options.wamid);
 
         try {
@@ -81,7 +85,10 @@ export class WabotOutboundService {
       'wabot.outbound.sendNotification',
       async (span) => {
         span.setAttribute('wabot.endpoint', 'sendNotification');
-        span.setAttribute('wabot.user.external_id', options.user_external_id);
+        span.setAttribute(
+          'wabot.user.external_id_hash',
+          toLogId(options.user_external_id),
+        );
 
         try {
           const requestBody: SendNotificationRequest = {

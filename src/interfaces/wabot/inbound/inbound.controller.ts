@@ -17,6 +17,7 @@ import {
   startChildSpanWithContext,
   injectCarrierFromContext,
 } from '../../../otel/otel';
+import { toLogId } from '../../../otel/pii';
 
 const wabotInboundQueue = createQueue(QUEUE_NAMES.WABOT_INBOUND);
 
@@ -64,7 +65,7 @@ export class WabotInboundController {
       }
 
       span.setAttribute('wabot.wamid', dto.message.id);
-      span.setAttribute('wabot.user.external_id', dto.message.from);
+      span.setAttribute('wabot.user.external_id_hash', toLogId(dto.message.from));
       span.setAttribute('wabot.message.type', dto.message.type);
       span.setAttribute('pp.queue', QUEUE_NAMES.WABOT_INBOUND);
 

@@ -20,6 +20,7 @@ import { UserEntity } from './user.entity';
 import { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
 import { ScoreEntity } from '../literacy/score/score.entity';
 import { LiteracyLessonStateEntity } from '../literacy/literacy-lesson/literacy-lesson-state.entity';
+import { toLogId } from '../otel/pii';
 import {
   LoginDto,
   PatchUserDto,
@@ -354,18 +355,22 @@ export class UserController {
     const user = await this.userRepo.findOneBy({ external_id: phone });
     if (!user || !user.password_hash || !user.role) {
       this.logger.warn(
-        `Login failed: user not found or missing hash/role phone=${phone}`,
+        `Login failed: user not found or missing hash/role phone=${toLogId(phone)}`,
       );
       throw new UnauthorizedException('Invalid credentials');
     }
 
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
-      this.logger.warn(`Login failed: password mismatch phone=${phone}`);
+      this.logger.warn(
+        `Login failed: password mismatch phone=${toLogId(phone)}`,
+      );
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    this.logger.log(`Login success phone=${phone} id=${user.id}`);
+    this.logger.log(
+      `Login success phone=${toLogId(phone)} id=${user.id}`,
+    );
     return { id: user.id, external_id: user.external_id, role: user.role };
   }
 
