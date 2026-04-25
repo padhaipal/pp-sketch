@@ -4,6 +4,7 @@ import { LetterEntity } from '../../literacy/letters/letter.entity';
 import { MediaMetaDataEntity } from '../../media-meta-data/media-meta-data.entity';
 import { ScoreEntity } from '../../literacy/score/score.entity';
 import { LiteracyLessonStateEntity } from '../../literacy/literacy-lesson/literacy-lesson-state.entity';
+import { QuizResponseEntity } from '../dashboard/quiz-response.entity';
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
@@ -14,6 +15,7 @@ export const AppDataSource = new DataSource({
     MediaMetaDataEntity,
     ScoreEntity,
     LiteracyLessonStateEntity,
+    QuizResponseEntity,
   ],
   migrations: ['dist/interfaces/database/migrations/*.js'],
   synchronize: false,
