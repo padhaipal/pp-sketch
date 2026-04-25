@@ -3,13 +3,16 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Post,
   Query,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { DashboardService } from './dashboard.service';
 import {
+  CreateShareTokenDto,
   NUM_QUIZ_QUESTIONS,
+  ShareData,
   SubmitAnswerDto,
   SubscribeDto,
 } from './quiz.dto';
@@ -58,5 +61,34 @@ export class DashboardController {
   async subscribe(@Body() body: SubscribeDto): Promise<{ ok: true }> {
     await this.dashboardService.subscribeEmail(body);
     return { ok: true };
+  }
+
+  @Post('share-token')
+  async createShareToken(
+    @Body() body: CreateShareTokenDto,
+  ): Promise<{ token: string }> {
+    const token = await this.dashboardService.createOrGetShareToken(
+      body.session_id,
+    );
+    return { token };
+  }
+
+  @Get('share/:token')
+  async getShare(@Param('token') token: string): Promise<ShareData> {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(token)) {
+      throw new BadRequestException('invalid token format');
+    }
+    return this.dashboardService.getShareData(token);
+  }
+
+  // Dev-only: not in the public /api/quiz/ proxy whitelist and not in the admin
+  // proxy whitelist, so reachable only via the authenticated /swagger UI (dev role).
+  @Get('subscribers')
+  async getSubscribers(): Promise<{
+    subscribers: { email: string; name: string | null; created_at: Date }[];
+    count: number;
+  }> {
+    const subscribers = await this.dashboardService.getMailingListSubscribers();
+    return { subscribers, count: subscribers.length };
   }
 }

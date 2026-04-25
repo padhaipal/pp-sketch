@@ -6,6 +6,7 @@ import { ScoreEntity } from '../../literacy/score/score.entity';
 import { LiteracyLessonStateEntity } from '../../literacy/literacy-lesson/literacy-lesson-state.entity';
 import { QuizResponseEntity } from '../dashboard/quiz-response.entity';
 import { MailingListEntryEntity } from '../dashboard/mailing-list-entry.entity';
+import { QuizShareTokenEntity } from '../dashboard/quiz-share-token.entity';
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
@@ -18,6 +19,7 @@ export const AppDataSource = new DataSource({
     LiteracyLessonStateEntity,
     QuizResponseEntity,
     MailingListEntryEntity,
+    QuizShareTokenEntity,
   ],
   migrations: ['dist/interfaces/database/migrations/*.js'],
   synchronize: false,

@@ -35,3 +35,13 @@ export class SubscribeDto {
   @MaxLength(120)
   name?: string;
 }
+
+export class CreateShareTokenDto {
+  @IsUUID()
+  session_id: string;
+}
+
+export interface ShareData {
+  answers: { question_index: number; answer: number }[];
+  completed: number;
+}
