@@ -16,10 +16,19 @@ export class DashboardService {
     );
   }
 
-  async getAnswersForQuestion(questionIndex: number): Promise<number[]> {
+  async getAnswersForQuestion(
+    questionIndex: number,
+    excludeSession?: string,
+  ): Promise<number[]> {
+    const params: unknown[] = [questionIndex];
+    let where = `question_index = $1`;
+    if (excludeSession) {
+      params.push(excludeSession);
+      where += ` AND session_id <> $2`;
+    }
     const rows: { answer: number }[] = await this.dataSource.query(
-      `SELECT answer FROM quiz_responses WHERE question_index = $1`,
-      [questionIndex],
+      `SELECT answer FROM quiz_responses WHERE ${where}`,
+      params,
     );
     return rows.map((r) => Number(r.answer));
   }

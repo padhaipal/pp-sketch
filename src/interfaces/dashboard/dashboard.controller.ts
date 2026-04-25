@@ -24,6 +24,7 @@ export class DashboardController {
   @Get('answers')
   async getAnswers(
     @Query('question') question: string,
+    @Query('exclude_session') excludeSession?: string,
   ): Promise<{ answers: number[] }> {
     const idx = parseInt(question, 10);
     if (Number.isNaN(idx) || idx < 0 || idx >= NUM_QUIZ_QUESTIONS) {
@@ -31,7 +32,15 @@ export class DashboardController {
         `question must be 0..${NUM_QUIZ_QUESTIONS - 1}`,
       );
     }
-    const answers = await this.dashboardService.getAnswersForQuestion(idx);
+    const exclude =
+      excludeSession &&
+      /^[0-9a-f-]{36}$/i.test(excludeSession)
+        ? excludeSession
+        : undefined;
+    const answers = await this.dashboardService.getAnswersForQuestion(
+      idx,
+      exclude,
+    );
     return { answers };
   }
 
