@@ -8,7 +8,11 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { DashboardService } from './dashboard.service';
-import { NUM_QUIZ_QUESTIONS, SubmitAnswerDto } from './quiz.dto';
+import {
+  NUM_QUIZ_QUESTIONS,
+  SubmitAnswerDto,
+  SubscribeDto,
+} from './quiz.dto';
 
 @ApiTags('quiz')
 @Controller('quiz')
@@ -48,5 +52,11 @@ export class DashboardController {
   async getStats(): Promise<{ completed: number }> {
     const completed = await this.dashboardService.getCompletedSessionCount();
     return { completed };
+  }
+
+  @Post('subscribe')
+  async subscribe(@Body() body: SubscribeDto): Promise<{ ok: true }> {
+    await this.dashboardService.subscribeEmail(body);
+    return { ok: true };
   }
 }

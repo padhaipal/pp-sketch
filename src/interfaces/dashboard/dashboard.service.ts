@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { NUM_QUIZ_QUESTIONS, SubmitAnswerDto } from './quiz.dto';
+import { NUM_QUIZ_QUESTIONS, SubmitAnswerDto, SubscribeDto } from './quiz.dto';
 
 @Injectable()
 export class DashboardService {
@@ -31,6 +31,19 @@ export class DashboardService {
       params,
     );
     return rows.map((r) => Number(r.answer));
+  }
+
+  async subscribeEmail(input: SubscribeDto): Promise<void> {
+    const normalizedEmail = input.email.trim().toLowerCase();
+    const trimmedName = input.name?.trim();
+    const name = trimmedName && trimmedName.length > 0 ? trimmedName : null;
+    await this.dataSource.query(
+      `INSERT INTO mailing_list_entries (email, name)
+       VALUES ($1, $2)
+       ON CONFLICT ON CONSTRAINT uq_mailing_list_entries_email
+       DO UPDATE SET name = COALESCE(EXCLUDED.name, mailing_list_entries.name)`,
+      [normalizedEmail, name],
+    );
   }
 
   async getCompletedSessionCount(): Promise<number> {

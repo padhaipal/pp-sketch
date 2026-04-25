@@ -1,4 +1,14 @@
-import { IsInt, IsNumber, IsUUID, Max, Min } from 'class-validator';
+import {
+  IsEmail,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export const NUM_QUIZ_QUESTIONS = 5;
 
@@ -13,4 +23,15 @@ export class SubmitAnswerDto {
 
   @IsNumber()
   answer: number;
+}
+
+export class SubscribeDto {
+  @IsEmail()
+  @MaxLength(254)
+  email: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  name?: string;
 }
