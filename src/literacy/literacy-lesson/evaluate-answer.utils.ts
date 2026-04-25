@@ -401,6 +401,7 @@ class EvaluateAnswer {
       // Hard coding some common transcription engine mistakes.
       if (cleanedCorrectAnswer === 'म' && cleaned === 'माँ') return true;
       if (cleanedCorrectAnswer === 'ह' && cleaned === 'हां') return true;
+      if (cleanedCorrectAnswer === 'ह' && cleaned === 'हाँ') return true;
       if (cleanedCorrectAnswer === 'औ' && cleaned === 'ओह') return true;
       if (cleanedCorrectAnswer === 'ओ' && cleaned === 'ओह') return true;
       if (cleanedCorrectAnswer === 'आ' && cleaned === 'हाँ') return true;
