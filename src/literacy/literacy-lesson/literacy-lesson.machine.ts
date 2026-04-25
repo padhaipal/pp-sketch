@@ -484,7 +484,7 @@ export const machine = setup({
               assign({ answerCorrect: () => true }),
               assign({
                 stateTransitionId: ({ context }) =>
-                  `${context.wrongLetters[0]}-letterImage-word-correct-last`,
+                  `${context.word}-letterImage-word-correct-last`,
               }),
               { type: 'dropFirstWrongLetter' },
             ],
@@ -543,7 +543,7 @@ export const machine = setup({
               assign({ answerCorrect: () => false }),
               assign({
                 stateTransitionId: ({ context }) =>
-                  `${context.wrongLetters[0]}-letterImage-word-maxErrors-last`,
+                  `${context.word}-letterImage-word-maxErrors-last`,
               }),
               { type: 'resetToZero', params: { keys: 'letterErrors' } },
               { type: 'dropFirstWrongLetter' },
@@ -596,7 +596,7 @@ export const machine = setup({
               assign({ answerCorrect: () => true }),
               assign({
                 stateTransitionId: ({ context }) =>
-                  `${context.wrongLetters[0]}-letterNoImage-word-correct-first-last`,
+                  `${context.word}-letterNoImage-word-correct-first-last`,
               }),
               assign({
                 pendingCorrect: ({ context }) => [context.wrongLetters[0]],
@@ -638,7 +638,7 @@ export const machine = setup({
               assign({ answerCorrect: () => true }),
               assign({
                 stateTransitionId: ({ context }) =>
-                  `${context.wrongLetters[0]}-letterNoImage-word-correct-retry-last`,
+                  `${context.word}-letterNoImage-word-correct-retry-last`,
               }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
@@ -692,7 +692,7 @@ export const machine = setup({
               assign({ answerCorrect: () => false }),
               assign({
                 stateTransitionId: ({ context }) =>
-                  `${context.wrongLetters[0]}-letterNoImage-word-wrong-last`,
+                  `${context.word}-letterNoImage-word-wrong-last`,
               }),
               { type: 'dropFirstWrongLetter' },
               { type: 'resetToZero', params: { keys: 'letterNoImageErrors' } },
