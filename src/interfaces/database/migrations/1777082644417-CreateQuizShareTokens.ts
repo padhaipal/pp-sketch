@@ -2,6 +2,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 
 export class CreateQuizShareTokens1777082644417 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
+    // The UNIQUE constraint on session_id implicitly creates a btree index
+    // that serves all WHERE session_id = $1 lookups; no separate index needed.
     await queryRunner.query(
       `CREATE TABLE "quiz_share_tokens" (
          "token" text NOT NULL,
@@ -11,15 +13,9 @@ export class CreateQuizShareTokens1777082644417 implements MigrationInterface {
          CONSTRAINT "uq_quiz_share_tokens_session_id" UNIQUE ("session_id")
        )`,
     );
-    await queryRunner.query(
-      `CREATE INDEX "idx_quiz_share_tokens_session_id" ON "quiz_share_tokens" ("session_id")`,
-    );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(
-      `DROP INDEX "public"."idx_quiz_share_tokens_session_id"`,
-    );
     await queryRunner.query(`DROP TABLE "quiz_share_tokens"`);
   }
 }
