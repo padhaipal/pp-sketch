@@ -4,9 +4,9 @@ import { LiteracyLessonService } from './literacy-lesson.service';
 import { STALE_LESSON_RESTART_STATE_TRANSITION_ID } from './literacy-lesson.machine';
 
 const RECENT_WORDS_TO_EXCLUDE = 5;
-const SNAPSHOT_WORDS_TO_COUNT = 3;
-const SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH = 10;
+const SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH = 8;
 const SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME = 15;
+const MIN_UNIQUE_WORDS_FOR_PROGRESS = 3;
 const MIN_WORD_LENGTH_FLOOR = 2;
 const NEW_USER_THRESHOLD = 3;
 
@@ -18,8 +18,12 @@ interface SelectNextWordRow {
   letterScores?: LetterScoreEntry[] | LetterScores;
   recent_words?: string[];
   recentWords?: string[];
-  top_n_snapshot_count?: number;
-  topNSnapshotCount?: number;
+  unique_in_add_window?: number;
+  uniqueInAddWindow?: number;
+  unique_in_keep_window?: number;
+  uniqueInKeepWindow?: number;
+  recent_row_count?: number;
+  recentRowCount?: number;
   distinct_word_count?: number;
   distinctWordCount?: number;
 }
@@ -55,14 +59,24 @@ function getDistinctWordCount(row: SelectNextWordRow): number {
   return row.distinct_word_count ?? row.distinctWordCount ?? 0;
 }
 
-function getTopNSnapshotCount(row: SelectNextWordRow): number {
-  return row.top_n_snapshot_count ?? row.topNSnapshotCount ?? 0;
+function getUniqueInAddWindow(row: SelectNextWordRow): number {
+  return row.unique_in_add_window ?? row.uniqueInAddWindow ?? 0;
+}
+
+function getUniqueInKeepWindow(row: SelectNextWordRow): number {
+  return row.unique_in_keep_window ?? row.uniqueInKeepWindow ?? 0;
+}
+
+function getRecentRowCount(row: SelectNextWordRow): number {
+  return row.recent_row_count ?? row.recentRowCount ?? 0;
 }
 
 function buildRow(input: {
   letterScores?: LetterScores;
   recentWords?: string[];
-  topNSnapshotCount?: number;
+  uniqueInAddWindow?: number;
+  uniqueInKeepWindow?: number;
+  recentRowCount?: number;
   distinctWordCount?: number;
 }): SelectNextWordRow {
   const letterScoresMap = input.letterScores ?? {};
@@ -73,7 +87,10 @@ function buildRow(input: {
     }),
   );
   const recentWords = input.recentWords ?? [];
-  const topNSnapshotCount = input.topNSnapshotCount ?? 0;
+  const uniqueInAddWindow = input.uniqueInAddWindow ?? 0;
+  const uniqueInKeepWindow = input.uniqueInKeepWindow ?? 0;
+  const recentRowCount =
+    input.recentRowCount ?? SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH;
   const distinctWordCount = input.distinctWordCount ?? 0;
 
   return {
@@ -81,8 +98,12 @@ function buildRow(input: {
     letterScores: letterScoresEntries,
     recent_words: recentWords,
     recentWords,
-    top_n_snapshot_count: topNSnapshotCount,
-    topNSnapshotCount,
+    unique_in_add_window: uniqueInAddWindow,
+    uniqueInAddWindow,
+    unique_in_keep_window: uniqueInKeepWindow,
+    uniqueInKeepWindow,
+    recent_row_count: recentRowCount,
+    recentRowCount,
     distinct_word_count: distinctWordCount,
     distinctWordCount,
   };
@@ -104,17 +125,23 @@ function buildUniformLetterScores(score: number): LetterScores {
 function maxLengthFromPrompt(row: SelectNextWordRow): number {
   const distinctWordCount = getDistinctWordCount(row);
   const recentWords = getRecentWords(row);
-  const topNSnapshotCount = getTopNSnapshotCount(row);
+  const uniqueInAddWindow = getUniqueInAddWindow(row);
+  const uniqueInKeepWindow = getUniqueInKeepWindow(row);
+  const recentRowCount = getRecentRowCount(row);
 
   let maxLength: number;
 
-  if (distinctWordCount < NEW_USER_THRESHOLD) {
+  if (
+    distinctWordCount < NEW_USER_THRESHOLD ||
+    recentRowCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH ||
+    recentWords.length === 0
+  ) {
     maxLength = MIN_WORD_LENGTH_FLOOR;
   } else {
-    const mostRecentWordLen = graphemeLength(recentWords[0] ?? '');
-    if (topNSnapshotCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH) {
+    const mostRecentWordLen = graphemeLength(recentWords[0]);
+    if (uniqueInAddWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
       maxLength = mostRecentWordLen + 1;
-    } else if (topNSnapshotCount < SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME) {
+    } else if (uniqueInKeepWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
       maxLength = mostRecentWordLen;
     } else {
       maxLength = mostRecentWordLen - 1;
@@ -183,7 +210,8 @@ describe('LiteracyLessonService.selectNextWord', () => {
   it('uses a single query and returns a minimum-scored candidate for new users', async () => {
     const row = buildRow({
       distinctWordCount: 0,
-      topNSnapshotCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
       recentWords: [],
       letterScores: buildUniformLetterScores(3),
     });
@@ -196,7 +224,8 @@ describe('LiteracyLessonService.selectNextWord', () => {
     expect(queryMock).toHaveBeenCalledWith(expect.any(String), [
       'user-1',
       RECENT_WORDS_TO_EXCLUDE,
-      SNAPSHOT_WORDS_TO_COUNT,
+      SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME,
+      SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH,
     ]);
     expect(graphemeLength(selectedWord)).toBeLessThanOrEqual(
       maxLengthFromPrompt(row),
@@ -204,10 +233,11 @@ describe('LiteracyLessonService.selectNextWord', () => {
     expect(minima).toContain(selectedWord);
   });
 
-  it('applies the +1 max-length branch when snapshot count is below add threshold', async () => {
+  it('applies the +1 max-length branch when add-window has enough unique words', async () => {
     const row = buildRow({
       distinctWordCount: NEW_USER_THRESHOLD,
-      topNSnapshotCount: SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH - 1,
+      uniqueInAddWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+      uniqueInKeepWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
       recentWords: ['इतिहास', 'खरगोश', 'बरसात'],
       letterScores: buildUniformLetterScores(4),
     });
@@ -215,6 +245,9 @@ describe('LiteracyLessonService.selectNextWord', () => {
 
     const selectedWord = await (service as any).selectNextWord('user-2');
 
+    expect(maxLengthFromPrompt(row)).toBe(
+      graphemeLength('इतिहास') + 1,
+    );
     expect(graphemeLength(selectedWord)).toBeLessThanOrEqual(
       maxLengthFromPrompt(row),
     );
@@ -228,14 +261,16 @@ describe('LiteracyLessonService.selectNextWord', () => {
 
     const rowBelowThreshold = buildRow({
       distinctWordCount: NEW_USER_THRESHOLD - 1,
-      topNSnapshotCount: 0,
+      uniqueInAddWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+      uniqueInKeepWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
       recentWords: sharedRecentWords,
       letterScores: sharedScores,
     });
 
     const rowAtThreshold = buildRow({
       distinctWordCount: NEW_USER_THRESHOLD,
-      topNSnapshotCount: 0,
+      uniqueInAddWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+      uniqueInKeepWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
       recentWords: sharedRecentWords,
       letterScores: sharedScores,
     });
@@ -262,17 +297,20 @@ describe('LiteracyLessonService.selectNextWord', () => {
     );
   });
 
-  it('keeps max length unchanged in the middle snapshot threshold band', async () => {
+  it('keeps max length unchanged when only the keep-window has enough unique words', async () => {
+    const recentWords = ['इतिहास', 'खरगोश', 'बरसात'];
     const row = buildRow({
       distinctWordCount: NEW_USER_THRESHOLD + 2,
-      topNSnapshotCount: SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH,
-      recentWords: ['इतिहास', 'खरगोश', 'बरसात'],
+      uniqueInAddWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS - 1,
+      uniqueInKeepWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+      recentWords,
       letterScores: buildUniformLetterScores(2),
     });
     const { service } = createServiceHarness(row);
 
     const selectedWord = await (service as any).selectNextWord('user-3');
 
+    expect(maxLengthFromPrompt(row)).toBe(graphemeLength(recentWords[0]));
     expect(graphemeLength(selectedWord)).toBeLessThanOrEqual(
       maxLengthFromPrompt(row),
     );
@@ -280,31 +318,11 @@ describe('LiteracyLessonService.selectNextWord', () => {
     expect(minScoredCandidatesFromPrompt(row)).toContain(selectedWord);
   });
 
-  it('keeps the same max length at the upper-middle boundary (snapshot count 14)', async () => {
-    const recentWords = ['इतिहास', 'खरगोश', 'बरसात'];
-    const row = buildRow({
-      distinctWordCount: NEW_USER_THRESHOLD + 1,
-      topNSnapshotCount: SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME - 1,
-      recentWords,
-      letterScores: buildUniformLetterScores(2),
-    });
-    const { service } = createServiceHarness(row);
-
-    const selectedWord = await (service as any).selectNextWord(
-      'user-middle-upper-boundary',
-    );
-
-    expect(maxLengthFromPrompt(row)).toBe(graphemeLength(recentWords[0]));
-    expect(graphemeLength(selectedWord)).toBeLessThanOrEqual(
-      maxLengthFromPrompt(row),
-    );
-    expect(minScoredCandidatesFromPrompt(row)).toContain(selectedWord);
-  });
-
-  it('reduces max length by one above keep-same threshold and still honors floor', async () => {
+  it('reduces max length by one when neither window has enough unique words and still honors floor', async () => {
     const row = buildRow({
       distinctWordCount: NEW_USER_THRESHOLD + 5,
-      topNSnapshotCount: SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME,
+      uniqueInAddWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS - 1,
+      uniqueInKeepWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS - 1,
       recentWords: ['ओम', 'घर', 'अब'],
       letterScores: buildUniformLetterScores(1),
     });
@@ -336,7 +354,8 @@ describe('LiteracyLessonService.selectNextWord', () => {
 
     const row = buildRow({
       distinctWordCount: 0,
-      topNSnapshotCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
       recentWords: [forcedRecentWord],
       letterScores: allHighScores,
     });
@@ -351,7 +370,8 @@ describe('LiteracyLessonService.selectNextWord', () => {
   it('uses -100 default score for unknown letters, favoring longer candidates when max length is 2', async () => {
     const row = buildRow({
       distinctWordCount: 0,
-      topNSnapshotCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
       recentWords: [],
       letterScores: {},
     });
@@ -366,7 +386,8 @@ describe('LiteracyLessonService.selectNextWord', () => {
   it('applies partial unknown-letter fallback when only some graphemes have scores', async () => {
     const row = buildRow({
       distinctWordCount: 0,
-      topNSnapshotCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
       recentWords: [],
       letterScores: {
         क: -150,
@@ -391,7 +412,8 @@ describe('LiteracyLessonService.selectNextWord', () => {
   it('uses -100 for unknown graphemes when ranking words', async () => {
     const row = buildRow({
       distinctWordCount: 0,
-      topNSnapshotCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
       recentWords: [],
       letterScores: {
         क: -1,
@@ -410,7 +432,8 @@ describe('LiteracyLessonService.selectNextWord', () => {
   it('falls back safely when recent words are unexpectedly empty for experienced users', async () => {
     const row = buildRow({
       distinctWordCount: NEW_USER_THRESHOLD + 4,
-      topNSnapshotCount: SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH,
+      uniqueInAddWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+      uniqueInKeepWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
       recentWords: [],
       letterScores: buildUniformLetterScores(1),
     });
@@ -428,7 +451,8 @@ describe('LiteracyLessonService.selectNextWord', () => {
   it('uses randomness to break ties between equally scored words', async () => {
     const row = buildRow({
       distinctWordCount: 0,
-      topNSnapshotCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
       recentWords: [],
       letterScores: buildUniformLetterScores(0),
     });
@@ -450,7 +474,8 @@ describe('LiteracyLessonService.selectNextWord', () => {
   it('selects across a wider tie range under varied random values', async () => {
     const row = buildRow({
       distinctWordCount: 0,
-      topNSnapshotCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
       recentWords: [],
       letterScores: buildUniformLetterScores(0),
     });
@@ -482,7 +507,8 @@ describe('LiteracyLessonService.selectNextWord', () => {
   it('falls back to a random two-letter word and logs a warning when no candidates remain', async () => {
     const row = buildRow({
       distinctWordCount: 0,
-      topNSnapshotCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
       recentWords: WORD_LIST.filter(
         (word) => graphemeLength(word) <= MIN_WORD_LENGTH_FLOOR,
       ),

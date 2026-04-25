@@ -20,9 +20,9 @@ import {
 } from './literacy-lesson.dto';
 
 const RECENT_WORDS_TO_EXCLUDE = 5;
-const SNAPSHOT_WORDS_TO_COUNT = 3;
-const SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH = 6;
+const SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH = 8;
 const SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME = 15;
+const MIN_UNIQUE_WORDS_FOR_PROGRESS = 3;
 const MIN_WORD_LENGTH_FLOOR = 2;
 const NEW_USER_THRESHOLD = 3;
 
@@ -268,15 +268,12 @@ export class LiteracyLessonService {
             ORDER BY latest_at DESC
             LIMIT $2
           ),
-          top_n_words AS (
-            SELECT word FROM recent_distinct_words
-            ORDER BY latest_at DESC
-            LIMIT $3
-          ),
-          top_n_snapshot_count AS (
-            SELECT COUNT(*)::int AS count
+          recent_rows AS (
+            SELECT word, ROW_NUMBER() OVER (ORDER BY created_at DESC) AS rn
             FROM literacy_lesson_states
-            WHERE user_id = $1 AND word IN (SELECT word FROM top_n_words)
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT $3
           ),
           latest_scores AS (
             SELECT DISTINCT ON (s.letter_id) l.grapheme, s.score
@@ -301,16 +298,31 @@ export class LiteracyLessonService {
                FROM recent_distinct_words),
               '[]'::json
             ) AS recent_words,
-            COALESCE((SELECT count FROM top_n_snapshot_count), 0) AS top_n_snapshot_count,
+            COALESCE(
+              (SELECT COUNT(DISTINCT word)::int FROM recent_rows WHERE rn <= $4),
+              0
+            ) AS unique_in_add_window,
+            COALESCE(
+              (SELECT COUNT(DISTINCT word)::int FROM recent_rows),
+              0
+            ) AS unique_in_keep_window,
+            COALESCE((SELECT COUNT(*)::int FROM recent_rows), 0) AS recent_row_count,
             COALESCE((SELECT count FROM distinct_word_count), 0) AS distinct_word_count`,
-          [userId, RECENT_WORDS_TO_EXCLUDE, SNAPSHOT_WORDS_TO_COUNT],
+          [
+            userId,
+            RECENT_WORDS_TO_EXCLUDE,
+            SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME,
+            SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH,
+          ],
         );
 
         const data = rows[0];
         const letterScores: { grapheme: string; score: number }[] =
           data.letter_scores;
         const recentWords: string[] = data.recent_words;
-        const topNSnapshotCount: number = Number(data.top_n_snapshot_count);
+        const uniqueInAddWindow: number = Number(data.unique_in_add_window);
+        const uniqueInKeepWindow: number = Number(data.unique_in_keep_window);
+        const recentRowCount: number = Number(data.recent_row_count);
         const distinctWordCount: number = Number(data.distinct_word_count);
 
         // Build score map
@@ -325,7 +337,10 @@ export class LiteracyLessonService {
 
         // Determine max word length
         let maxLength: number;
-        if (distinctWordCount < NEW_USER_THRESHOLD) {
+        if (
+          distinctWordCount < NEW_USER_THRESHOLD ||
+          recentRowCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH
+        ) {
           maxLength = MIN_WORD_LENGTH_FLOOR;
         } else {
           if (recentWords.length === 0) {
@@ -335,11 +350,9 @@ export class LiteracyLessonService {
             maxLength = MIN_WORD_LENGTH_FLOOR;
           } else {
             const mostRecentWordLen = Array.from(recentWords[0]).length;
-            if (topNSnapshotCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH) {
+            if (uniqueInAddWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
               maxLength = mostRecentWordLen + 1;
-            } else if (
-              topNSnapshotCount < SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME
-            ) {
+            } else if (uniqueInKeepWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
               maxLength = mostRecentWordLen;
             } else {
               maxLength = mostRecentWordLen - 1;
@@ -386,6 +399,14 @@ export class LiteracyLessonService {
         const selected = ties[Math.floor(Math.random() * ties.length)].word;
         span.setAttribute('pp.lesson.word.selection', 'min-score-tie-break');
         span.setAttribute('pp.lesson.word.selected', selected);
+        span.setAttribute(
+          'pp.lesson.word.unique_in_add_window',
+          uniqueInAddWindow,
+        );
+        span.setAttribute(
+          'pp.lesson.word.unique_in_keep_window',
+          uniqueInKeepWindow,
+        );
 
         const topTen = [...scored]
           .sort((a, b) => a.wordScore - b.wordScore)
@@ -393,7 +414,7 @@ export class LiteracyLessonService {
           .map((s) => `${s.word}=${String(s.wordScore)}`)
           .join(', ');
         this.logger.log(
-          `selectNextWord: selected=${selected} max_length=${String(maxLength)} candidates=${String(scored.length)} top10=[${topTen}]`,
+          `selectNextWord: selected=${selected} max_length=${String(maxLength)} unique_in_add_window=${String(uniqueInAddWindow)} unique_in_keep_window=${String(uniqueInKeepWindow)} candidates=${String(scored.length)} top10=[${topTen}]`,
         );
         return selected;
       } catch (err) {
