@@ -27,13 +27,13 @@ import { processWhatsappPreloadJob } from './media-meta-data/whatsapp-preload.pr
 import {
   processNotifierCronJob,
   processNotifierSendJob,
-} from './notifier/notifier.processor';
+} from './notifier/evening-reminder.processor';
 import type { MessageJobDto } from './interfaces/wabot/inbound/wabot-inbound.dto';
 import type { HeygenGenerateJobData } from './interfaces/heygen/outbound/outbound.service';
 import type { ElevenlabsGenerateJobData } from './interfaces/elevenlabs/outbound/outbound.service';
 import type { HeygenInboundJobDto } from './interfaces/heygen/inbound/inbound.dto';
 import type { WhatsappPreloadJobDto } from './media-meta-data/media-meta-data.dto';
-import type { NotifierSendJobData } from './notifier/notifier.processor';
+import type { NotifierSendJobData } from './notifier/evening-reminder.processor';
 import { UserService } from './users/user.service';
 import { MediaMetaDataService } from './media-meta-data/media-meta-data.service';
 import { LiteracyLessonService } from './literacy/literacy-lesson/literacy-lesson.service';

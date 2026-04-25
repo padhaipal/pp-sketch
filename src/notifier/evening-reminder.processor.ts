@@ -36,9 +36,11 @@ export async function processNotifierCronJob(
     span.setAttribute('bullmq.job.id', String(job.id));
     try {
       const windowStart = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const idleSince = new Date(Date.now() - 5 * 60 * 1000);
       span.setAttribute('notifier.window.start', windowStart.toISOString());
+      span.setAttribute('notifier.idle_since', idleSince.toISOString());
       logger.log(
-        `Notifier cron fired. Window: ${windowStart.toISOString()} – now`,
+        `Notifier cron fired. Window: ${windowStart.toISOString()} – ${idleSince.toISOString()}`,
       );
 
       const activeUsers: ActiveUser[] = await dataSource.query(
@@ -52,8 +54,9 @@ export async function processNotifierCronJob(
          WHERE mm.source = 'whatsapp'
            AND mm.user_id IS NOT NULL
            AND mm.created_at >= $1
-         GROUP BY mm.user_id, u.external_id`,
-        [windowStart],
+         GROUP BY mm.user_id, u.external_id
+         HAVING MAX(mm.created_at) < $2`,
+        [windowStart, idleSince],
       );
       span.setAttribute('notifier.active_users.count', activeUsers.length);
 

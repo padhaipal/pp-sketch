@@ -1,4 +1,4 @@
-// pp-sketch/src/notifier/notifier.prompt.md
+// pp-sketch/src/notifier/evening-reminder.prompt.md
 
 Evening notification system. Every day at 7 PM IST a cron job finds users whose most
 recent message was between 19 and 24 hours ago (i.e. between yesterday 7 PM and today
@@ -45,7 +45,7 @@ Add two queue names:
   - Rationale: each send may hit WhatsApp rate-limit error 130429 which is retryable.
     5 attempts with exponential backoff from 3 s gives ~45 s total retry window.
 
-## 2. pp-sketch notifier processor (notifier/notifier.processor.ts)
+## 2. pp-sketch notifier processor (notifier/evening-reminder.processor.ts)
 
 ### processNotifierCronJob(job, dataSource, literacyLessonService, mediaMetaDataService)
 
@@ -135,7 +135,7 @@ New class SendNotificationDto:
 
 ## 4. pp-sketch main.ts wiring
 
-1.) Import processNotifierCronJob and processNotifierSendJob from notifier.processor.
+1.) Import processNotifierCronJob and processNotifierSendJob from evening-reminder.processor.
 2.) Create the NOTIFIER worker: createWorker(QUEUE_NAMES.NOTIFIER, ...) passing dataSource,
     literacyLessonService, and mediaMetaDataService.
 3.) Create the NOTIFIER_SEND worker: createWorker(QUEUE_NAMES.NOTIFIER_SEND, ...) passing
