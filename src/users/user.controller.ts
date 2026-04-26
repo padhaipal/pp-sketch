@@ -317,27 +317,27 @@ export class UserController {
 
   @Get(':id/scores')
   async userScores(@Param('id') id: string): Promise<ScoreRow[]> {
-    const scores = await this.scoreRepo
-      .createQueryBuilder('s')
-      .innerJoinAndSelect('s.letter', 'l')
-      .select([
-        's.id',
-        's.score',
-        's.created_at',
-        's.letter_id',
-        's.user_message_id',
-        'l.grapheme',
-      ])
-      .where('s.user_id = :id', { id })
-      .orderBy('s.created_at', 'ASC')
-      .getMany();
+    const rows: {
+      score: number;
+      created_at: Date;
+      letter_id: string;
+      grapheme: string;
+      user_message_id: string | null;
+    }[] = await this.scoreRepo.manager.query(
+      `SELECT s.score, s.created_at, s.letter_id, s.user_message_id, l.grapheme
+       FROM scores s
+       JOIN letters l ON l.id = s.letter_id
+       WHERE s.user_id = $1
+       ORDER BY s.created_at ASC`,
+      [id],
+    );
 
-    return scores.map((s) => ({
-      score: s.score,
-      created_at: s.created_at,
-      letter_id: s.letter_id,
-      grapheme: s.letter.grapheme,
-      is_seed: s.user_message_id === null,
+    return rows.map((r) => ({
+      score: Number(r.score),
+      created_at: r.created_at,
+      letter_id: r.letter_id,
+      grapheme: r.grapheme,
+      is_seed: r.user_message_id === null,
     }));
   }
 
