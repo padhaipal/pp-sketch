@@ -338,6 +338,7 @@ export class UserController {
       letter_id: r.letter_id,
       grapheme: r.grapheme,
       is_seed: r.user_message_id === null,
+      user_message_id: r.user_message_id,
     }));
   }
 

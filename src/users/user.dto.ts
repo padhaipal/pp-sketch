@@ -100,6 +100,7 @@ export interface ScoreRow {
   letter_id: string;
   grapheme: string;
   is_seed: boolean;
+  user_message_id: string | null;
 }
 
 export interface LoginResponse {
