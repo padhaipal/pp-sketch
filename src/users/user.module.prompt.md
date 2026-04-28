@@ -1,3 +1,5 @@
 Standard NestJS module.
-* Imports `TypeOrmModule.forFeature([UserEntity])` to register the UserEntity repository.
-* Provides and exports UserService so other modules (e.g. InboundModule) can inject it.
+* Imports `TypeOrmModule.forFeature([UserEntity, MediaMetaDataEntity, ScoreEntity, LiteracyLessonStateEntity])`.
+* Provides and exports `UserService` (CRUD + cache) and `UserActivityService`
+  (voice-message activity-time analytics, see `user-activity.service.prompt.md`).
+  Other modules (e.g. InboundModule, ReportCardModule) inject these.

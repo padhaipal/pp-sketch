@@ -11,15 +11,9 @@ import type { FindMediaByStateTransitionIdResult } from '../media-meta-data/medi
 import { tracer } from '../otel/otel';
 import { toLogId } from '../otel/pii';
 import type { User } from '../users/user.dto';
+import { getActiveUsers, type ActiveUser } from './notifier.utils';
 
 const logger = new Logger('NotifierProcessor');
-
-interface ActiveUser {
-  user_id: string;
-  external_id: string;
-  last_message_at: Date;
-  last_message_id: string;
-}
 
 export interface NotifierSendJobData {
   user_external_id: string;
@@ -43,21 +37,10 @@ export async function processNotifierCronJob(
         `Notifier cron fired. Window: ${windowStart.toISOString()} – ${idleSince.toISOString()}`,
       );
 
-      const activeUsers: ActiveUser[] = await dataSource.query(
-        `SELECT mm.user_id, u.external_id,
-                MAX(mm.created_at) AS last_message_at,
-                (SELECT m2.id FROM media_metadata m2
-                 WHERE m2.user_id = mm.user_id AND m2.source = 'whatsapp'
-                 ORDER BY m2.created_at DESC LIMIT 1) AS last_message_id
-         FROM media_metadata mm
-         JOIN users u ON u.id = mm.user_id
-         WHERE mm.source = 'whatsapp'
-           AND mm.user_id IS NOT NULL
-           AND mm.created_at >= $1
-         GROUP BY mm.user_id, u.external_id
-         HAVING MAX(mm.created_at) < $2`,
-        [windowStart, idleSince],
-      );
+      const activeUsers: ActiveUser[] = await getActiveUsers(dataSource, {
+        windowStart,
+        idleSince,
+      });
       span.setAttribute('notifier.active_users.count', activeUsers.length);
 
       if (activeUsers.length === 0) {

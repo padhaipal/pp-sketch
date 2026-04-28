@@ -34,6 +34,8 @@ import {
   UploadStaticMediaResult,
   UploadStaticMediaItemResult,
   WhatsappPreloadJobDto,
+  CreateRenderedImageMediaOptions,
+  validateCreateRenderedImageMediaOptions,
   validateCreateWhatsappAudioMediaOptions,
   validateCreateTextMediaOptions,
   validateCreateHeygenMediaOptions,
@@ -620,6 +622,69 @@ export class MediaMetaDataService {
     await this.mediaRepo.update(ids, { status: 'queued' });
 
     return entities.map((e) => ({ ...e, status: 'queued' as const }));
+  }
+
+  // Persists a rendered image (e.g. report card) as a media_metadata row,
+  // streams the bytes to S3, and enqueues a whatsapp-preload job. Returns the
+  // entity in 'queued' state. The preload worker drives it to 'ready' once the
+  // WhatsApp upload completes.
+  async createRenderedImageMedia(
+    options: CreateRenderedImageMediaOptions,
+  ): Promise<MediaMetaData> {
+    const validated = validateCreateRenderedImageMediaOptions(options);
+
+    const content_hash = crypto
+      .createHash('sha256')
+      .update(validated.buffer)
+      .digest('hex');
+
+    let entity: MediaMetaDataEntity = this.mediaRepo.create({
+      id: uuid(),
+      state_transition_id: validated.state_transition_id ?? null,
+      media_type: 'image',
+      source: validated.source,
+      status: 'created',
+      content_hash,
+      wa_media_url: null,
+      user_id: validated.user_id,
+      rolled_back: false,
+      media_details: {
+        mime_type: validated.mime_type,
+        byte_size: validated.buffer.length,
+        ...validated.media_details,
+      },
+    });
+    entity = await this.mediaRepo.save(entity);
+
+    let s3Key: string;
+    try {
+      s3Key = await this.mediaBucket.stream(
+        Readable.from(validated.buffer),
+        validated.mime_type,
+      );
+    } catch (err) {
+      entity.status = 'failed';
+      await this.mediaRepo.save(entity);
+      throw err;
+    }
+    entity.s3_key = s3Key;
+    entity = await this.mediaRepo.save(entity);
+
+    try {
+      await this.whatsappPreloadQueue.add(`preload-${entity.id}`, {
+        media_metadata_id: entity.id,
+        s3_key: s3Key,
+        reload: false,
+        otel_carrier: validated.otel_carrier,
+      } as WhatsappPreloadJobDto);
+    } catch (err) {
+      entity.status = 'failed';
+      await this.mediaRepo.save(entity);
+      throw err;
+    }
+
+    entity.status = 'queued';
+    return await this.mediaRepo.save(entity);
   }
 
   async uploadStaticMedia(

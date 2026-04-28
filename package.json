@@ -59,8 +59,10 @@
     "ioredis": "^5.10.1",
     "libphonenumber-js": "^1.12.39",
     "pg": "^8.20.0",
+    "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
+    "sharp": "^0.34.5",
     "typeorm": "^0.3.28",
     "uuid": "^13.0.0",
     "xstate": "^5.30.0"
@@ -76,6 +78,7 @@
     "@types/multer": "^2.1.0",
     "@types/node": "^22.10.7",
     "@types/pg": "^8.20.0",
+    "@types/qrcode": "^1.5.5",
     "@types/supertest": "^6.0.2",
     "@types/uuid": "^10.0.0",
     "eslint": "^9.18.0",

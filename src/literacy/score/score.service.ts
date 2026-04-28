@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import {
   Score,
@@ -309,9 +314,16 @@ export class ScoreService {
 
   async getLettersLearnt(
     users: string | string[],
+    options?: { asOf?: Date },
   ): Promise<LettersLearntResult | LettersLearntResult[]> {
     const isSingleInput = typeof users === 'string';
     const normalized = validateLettersLearntInput(users);
+    const asOf = options?.asOf;
+    if (asOf !== undefined && Number.isNaN(asOf.getTime())) {
+      throw new BadRequestException(
+        'getLettersLearnt() options.asOf must be a valid Date',
+      );
+    }
 
     const ids: string[] = [];
     const phones: string[] = [];
@@ -365,7 +377,13 @@ export class ScoreService {
 
     // Fetch all scores for all resolved users with letter graphemes, ordered
     // for grouping: user → letter → chronological
+    const scoreParams: unknown[] = [...userIds];
     const scorePlaceholders = userIds.map((_, i) => `$${i + 1}`).join(',');
+    let asOfClause = '';
+    if (asOf !== undefined) {
+      scoreParams.push(asOf);
+      asOfClause = ` AND s.created_at <= $${scoreParams.length}`;
+    }
     const scoreRows: {
       user_id: string;
       score: number;
@@ -374,9 +392,9 @@ export class ScoreService {
       `SELECT s.user_id, s.score, l.grapheme
        FROM scores s
        JOIN letters l ON l.id = s.letter_id
-       WHERE s.user_id IN (${scorePlaceholders})
+       WHERE s.user_id IN (${scorePlaceholders})${asOfClause}
        ORDER BY s.user_id, l.grapheme, s.created_at ASC`,
-      userIds,
+      scoreParams,
     );
 
     // Group: user_id → grapheme → scores (already chronological from ORDER BY)

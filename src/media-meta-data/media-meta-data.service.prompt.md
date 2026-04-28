@@ -50,6 +50,32 @@ Creates a text media_metadata row. Used by: inbound processor (WhatsApp text mes
 4.) INSERT a new media_metadata row: id = uuid(), text = options.text, status = 'ready', media_type = 'text', source = resolved source, user_id = resolved user_id, input_media_id = options.input_media_id ?? NULL, media_details = options.media_details ?? NULL, rolled_back = false. All other columns NULL.
 5.) Return the created entity.
 
+## createRenderedImageMedia(options: CreateRenderedImageMediaOptions): Promise<MediaMetaData>
+
+Persists a server-rendered image (e.g. the morning-update report card) and
+kicks off the WhatsApp pre-load.
+
+1.) Validate options at runtime with validateCreateRenderedImageMediaOptions().
+    Buffer must be non-empty; mime_type ∈ {image/png, image/jpeg}; user_id and
+    source required. assertValidMediaSource on source.
+2.) Compute SHA-256 content_hash of the buffer.
+3.) INSERT a media_metadata row: id = uuid(), media_type = 'image',
+    source = options.source, status = 'created', user_id = options.user_id,
+    state_transition_id = options.state_transition_id ?? NULL,
+    media_details = { mime_type, byte_size, ...options.media_details },
+    rolled_back = false. wa_media_url stays NULL until WHATSAPP_PRELOAD runs.
+4.) Stream the buffer to S3 via media-bucket/outbound/stream(). On failure:
+    UPDATE the row to status='failed' and rethrow.
+5.) UPDATE the row with the returned s3_key.
+6.) Enqueue a WHATSAPP_PRELOAD job with media_metadata_id, s3_key, reload=false,
+    otel_carrier. On enqueue failure: UPDATE status='failed' and rethrow.
+7.) UPDATE status='queued'. Return the entity.
+
+The WHATSAPP_PRELOAD worker drives status to 'ready' once the WhatsApp upload
+returns a wa_media_url. Per-user image renderers (e.g. report card) typically
+read the entity back later to check for status='ready' before using
+wa_media_url.
+
 ## findTranscripts(options: FindTranscriptsOptions): Promise<MediaMetaData[]>
 
 Single DB round-trip. Returns all text transcript entities that are children of the given media entity.

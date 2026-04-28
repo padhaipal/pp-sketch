@@ -30,7 +30,10 @@ import {
   LoginResponse,
   UserResponse,
   DeleteResponse,
+  ActivityTimeRequestDto,
+  ActivityTimeResponse,
 } from './user.dto';
+import { UserActivityService } from './user-activity.service';
 
 @ApiTags('users')
 @Controller('users')
@@ -46,7 +49,15 @@ export class UserController {
     private readonly scoreRepo: Repository<ScoreEntity>,
     @InjectRepository(LiteracyLessonStateEntity)
     private readonly lessonStateRepo: Repository<LiteracyLessonStateEntity>,
+    private readonly userActivityService: UserActivityService,
   ) {}
+
+  @Post('activity-time')
+  async activityTime(
+    @Body() body: ActivityTimeRequestDto,
+  ): Promise<ActivityTimeResponse> {
+    return this.userActivityService.getActivityTime(body);
+  }
 
   @Get('dashboard')
   async dashboard(

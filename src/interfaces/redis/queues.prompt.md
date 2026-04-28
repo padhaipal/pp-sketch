@@ -8,6 +8,9 @@ Export queue names, Redis connection, and Queue/Worker factories.
 * HEYGEN_INBOUND: 'heygen-inbound'.
 * ELEVENLABS_GENERATE: 'elevenlabs-generate'.
 * WHATSAPP_PRELOAD: 'whatsapp-preload'.
+* NOTIFIER, NOTIFIER_SEND — evening-reminder cron + per-user fanout.
+* MORNING_UPDATE, MORNING_UPDATE_SEND — morning-update cron + per-user fanout
+  for the 7 AM IST report-card delivery.
 
 2.) Redis connection.
 * Create ioredis Connection from BULLMQ_REDIS_URL (.env).
@@ -41,6 +44,26 @@ When a worker's processJob() throws (or the job is explicitly failed), BullMQ re
   - attempts: 5, backoff: { type: 'exponential', delay: 10000 }
   - removeOnComplete: true, removeOnFail: { count: 5000 }
   - Rationale: S3 reads + WhatsApp Cloud API uploads, async preload. WhatsApp rate-limiting can last a while (~150 s total retry window).
+
+* NOTIFIER:
+  - attempts: 1, removeOnComplete: true, removeOnFail: { count: 500 }
+  - Rationale: cron self-retry wastes a day; rely on next daily run.
+
+* NOTIFIER_SEND:
+  - attempts: 5, backoff: { type: 'exponential', delay: 3000 }
+  - removeOnComplete: true, removeOnFail: { count: 5000 }
+  - Rationale: WhatsApp 130429 rate limit is retryable (~45 s window).
+
+* MORNING_UPDATE:
+  - attempts: 1, removeOnComplete: true, removeOnFail: { count: 500 }
+  - Rationale: same as NOTIFIER — cron self-retry wastes a day.
+
+* MORNING_UPDATE_SEND:
+  - attempts: 60, backoff: { type: 'fixed', delay: 1000 }
+  - removeOnComplete: true, removeOnFail: { count: 5000 }
+  - Rationale: the worker requeues itself with the queue's fixed 1-s backoff
+    while the report card image is rendering / pre-loading. 60 attempts × 1 s
+    = 60 s of patience, which comfortably covers the typical preload time.
 
 4.) createQueue(name, defaultJobOptions?).
 * Returns BullMQ Queue instance.

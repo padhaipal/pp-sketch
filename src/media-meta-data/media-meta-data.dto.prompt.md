@@ -12,8 +12,12 @@ export type MediaStatus = (typeof VALID_MEDIA_STATUSES)[number];
 const VALID_MEDIA_TYPES = ['audio', 'text', 'video', 'image', 'sticker'] as const;
 export type MediaType = (typeof VALID_MEDIA_TYPES)[number];
 
-const VALID_MEDIA_SOURCES = ['whatsapp', 'heygen', 'elevenlabs', 'azure', 'sarvam', 'reverie', 'dashboard'] as const;
+const VALID_MEDIA_SOURCES = ['whatsapp', 'heygen', 'elevenlabs', 'azure', 'sarvam', 'reverie', 'dashboard', 'morning-update'] as const;
 export type MediaSource = (typeof VALID_MEDIA_SOURCES)[number];
+
+// 'morning-update' — server-rendered per-user report card images produced by
+// the morning-update notifier. user_id is REQUIRED (it's user-scoped). Set on
+// CreateRenderedImageMediaOptions below.
 
 // --- Source → user rules ---
 // 'whatsapp'    — user is REQUIRED  (user or user_external_id must be provided). Used by both CreateWhatsappAudioMediaOptions and CreateTextMediaOptions.
@@ -232,6 +236,22 @@ export interface WhatsappPreloadJobDto {
   s3_key: string;                          // S3 object key — used to fetch the raw media bytes via media-bucket/outbound/getBuffer()
   reload?: boolean;                        // true when this is a periodic reload (skip status transition); falsy/absent for initial preload
   otel_carrier: Record<string, string>;    // trace context — see src/otel/otel.prompt.md
+}
+
+// --- Rendered image options ---
+// Used by per-user image generators (currently the morning-update report card).
+// source is REQUIRED ('morning-update' or future analogues) and user_id is REQUIRED.
+// MediaMetaDataService.createRenderedImageMedia stores the row, streams the
+// buffer to S3, enqueues WHATSAPP_PRELOAD, and returns the entity in 'queued'.
+
+export interface CreateRenderedImageMediaOptions {
+  buffer: Buffer;                          // PNG (or JPEG) bytes of the rendered image
+  mime_type: 'image/png' | 'image/jpeg';
+  user_id: string;                         // owning user — required (user-scoped row)
+  source: MediaSource;                     // e.g. 'morning-update'
+  state_transition_id?: string;            // optional — for non-user-scoped renderers in the future
+  media_details?: Record<string, unknown>; // merged into the row's media_details
+  otel_carrier: OtelCarrier;
 }
 
 // --- Runtime validation ---

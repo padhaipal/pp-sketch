@@ -67,6 +67,11 @@ Add two queue names:
     The HAVING clause ensures users who messaged more recently than 19 hours ago
     are excluded — their 24-hour window is still wide open.
 
+    The query above is now extracted to `notifier/notifier.utils.ts:getActiveUsers`
+    and shared with the morning-update cron. Both crons pass their own
+    `windowStart` / `idleSince` thresholds — the SQL is identical so the two
+    notifiers can't drift apart.
+
     Compute both cutoffs in code using a shared helper `getISTTimeToday(hour)`
     that builds a UTC Date for a given IST hour on today's date.
 

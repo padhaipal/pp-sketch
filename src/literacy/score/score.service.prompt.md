@@ -54,7 +54,7 @@ function calculateNewScore(
 }
 ```
 
-## getLettersLearnt(users: string | string[]): Promise\<LettersLearntResult | LettersLearntResult[]>
+## getLettersLearnt(users: string | string[], options?: { asOf?: Date }): Promise\<LettersLearntResult | LettersLearntResult[]>
 
 Two database round-trips. Accepts one or more user identifiers (UUIDs or phone numbers, freely mixed) and returns which letters each user has "learnt".
 
@@ -69,7 +69,11 @@ Each identifier is classified as a UUID (regex `^[0-9a-f-]{36}$`) or a phone num
     Throws `NotFoundException` for any identifier that doesn't match a row.
 
 3.) **DB hit 2** — fetch every score for the resolved users with letter graphemes:
-    `SELECT s.user_id, s.score, l.grapheme FROM scores s JOIN letters l ON l.id = s.letter_id WHERE s.user_id IN (...) ORDER BY s.user_id, l.grapheme, s.created_at ASC`
+    `SELECT s.user_id, s.score, l.grapheme FROM scores s JOIN letters l ON l.id = s.letter_id WHERE s.user_id IN (...) [AND s.created_at <= $asOf] ORDER BY s.user_id, l.grapheme, s.created_at ASC`
+    The optional `s.created_at <= $asOf` clause is added when `options.asOf`
+    is supplied — used by the morning-update report card to compute snapshots
+    "as of yesterday IST midnight" vs "as of today IST midnight" for the
+    yesterday-delta highlight.
     The `ORDER BY` groups rows by user → letter → chronological, so no in-memory sort is needed.
 
 4.) Group scores into `Map<user_id, Map<grapheme, number[]>>` (score values only, already in chronological order).

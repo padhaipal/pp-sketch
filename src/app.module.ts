@@ -9,6 +9,7 @@ import { LiteracyLessonModule } from './literacy/literacy-lesson/literacy-lesson
 import { LetterModule } from './literacy/letters/letter.module';
 import { ScoreModule } from './literacy/score/score.module';
 import { DashboardModule } from './interfaces/dashboard/dashboard.module';
+import { ReportCardModule } from './notifier/report-card/report-card.module';
 import { HealthController } from './health/health.controller';
 import { WabotInboundController } from './interfaces/wabot/inbound/inbound.controller';
 import { HeygenInboundController } from './interfaces/heygen/inbound/inbound.controller';
@@ -23,6 +24,7 @@ import { CacheService } from './interfaces/redis/cache';
     LetterModule,
     ScoreModule,
     DashboardModule,
+    ReportCardModule,
   ],
   controllers: [
     AppController,

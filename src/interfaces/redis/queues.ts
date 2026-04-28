@@ -9,6 +9,8 @@ export const QUEUE_NAMES = {
   WHATSAPP_PRELOAD: 'whatsapp-preload',
   NOTIFIER: 'notifier',
   NOTIFIER_SEND: 'notifier-send',
+  MORNING_UPDATE: 'morning-update',
+  MORNING_UPDATE_SEND: 'morning-update-send',
 } as const;
 
 const connection = new Redis(process.env.BULLMQ_REDIS_URL!, {
@@ -56,6 +58,19 @@ export const DEFAULT_JOB_OPTIONS: Record<string, JobsOptions> = {
   [QUEUE_NAMES.NOTIFIER_SEND]: {
     attempts: 5,
     backoff: { type: 'exponential', delay: 3000 },
+    removeOnComplete: true,
+    removeOnFail: { count: 5000 },
+  },
+  [QUEUE_NAMES.MORNING_UPDATE]: {
+    attempts: 1,
+    removeOnComplete: true,
+    removeOnFail: { count: 500 },
+  },
+  // Per-user job. Worker requeues itself with a 1 s delay when the report card
+  // is still rendering — high attempt count tolerates this and WhatsApp 130429.
+  [QUEUE_NAMES.MORNING_UPDATE_SEND]: {
+    attempts: 60,
+    backoff: { type: 'fixed', delay: 1000 },
     removeOnComplete: true,
     removeOnFail: { count: 5000 },
   },

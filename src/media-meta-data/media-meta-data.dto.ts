@@ -22,6 +22,7 @@ const VALID_MEDIA_SOURCES = [
   'sarvam',
   'reverie',
   'dashboard',
+  'morning-update',
 ] as const;
 export type MediaSource = (typeof VALID_MEDIA_SOURCES)[number];
 
@@ -274,6 +275,78 @@ export interface WhatsappPreloadJobDto {
   s3_key: string;
   reload?: boolean;
   otel_carrier: OtelCarrier;
+}
+
+export interface CreateRenderedImageMediaOptions {
+  buffer: Buffer;
+  mime_type: 'image/png' | 'image/jpeg';
+  user_id: string;
+  source: MediaSource;
+  state_transition_id?: string;
+  media_details?: Record<string, unknown>;
+  otel_carrier: OtelCarrier;
+}
+
+export function validateCreateRenderedImageMediaOptions(
+  options: unknown,
+): CreateRenderedImageMediaOptions {
+  if (!options || typeof options !== 'object') {
+    throw new BadRequestException(
+      'createRenderedImageMedia() options must be an object',
+    );
+  }
+  const o = options as Record<string, unknown>;
+  if (!Buffer.isBuffer(o.buffer) || (o.buffer as Buffer).length === 0) {
+    throw new BadRequestException(
+      'createRenderedImageMedia() options.buffer must be a non-empty Buffer',
+    );
+  }
+  if (o.mime_type !== 'image/png' && o.mime_type !== 'image/jpeg') {
+    throw new BadRequestException(
+      "createRenderedImageMedia() options.mime_type must be 'image/png' or 'image/jpeg'",
+    );
+  }
+  if (typeof o.user_id !== 'string' || o.user_id.length === 0) {
+    throw new BadRequestException(
+      'createRenderedImageMedia() options.user_id must be a non-empty string',
+    );
+  }
+  if (typeof o.source !== 'string') {
+    throw new BadRequestException(
+      'createRenderedImageMedia() options.source must be a string',
+    );
+  }
+  assertValidMediaSource(o.source);
+  if (
+    o.state_transition_id !== undefined &&
+    (typeof o.state_transition_id !== 'string' ||
+      o.state_transition_id.length === 0)
+  ) {
+    throw new BadRequestException(
+      'createRenderedImageMedia() options.state_transition_id must be a non-empty string',
+    );
+  }
+  if (
+    o.media_details !== undefined &&
+    (typeof o.media_details !== 'object' || o.media_details === null)
+  ) {
+    throw new BadRequestException(
+      'createRenderedImageMedia() options.media_details must be an object',
+    );
+  }
+  if (
+    o.otel_carrier === null ||
+    typeof o.otel_carrier !== 'object' ||
+    Array.isArray(o.otel_carrier) ||
+    !Object.values(o.otel_carrier as Record<string, unknown>).every(
+      (v) => typeof v === 'string',
+    )
+  ) {
+    throw new BadRequestException(
+      'createRenderedImageMedia() options.otel_carrier must be Record<string, string>',
+    );
+  }
+  return o as unknown as CreateRenderedImageMediaOptions;
 }
 
 // --- Runtime validation ---

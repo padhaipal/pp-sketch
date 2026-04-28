@@ -31,6 +31,32 @@ export class PatchUserDto {
   @IsIn(['admin', 'dev']) @IsOptional() role?: UserRole;
 }
 
+// POST /users/activity-time — for each user × window pair, returns
+// the milliseconds the user was "active": the sum of all gaps between
+// consecutive whatsapp voice messages the user sent inside that window
+// where the gap is < 60 s. Windows may overlap; each is computed
+// independently. `users` accepts UUIDs and E.164 phone numbers (sans +).
+export class TimeWindowDto {
+  @IsISO8601() @IsNotEmpty() start: string;
+  @IsISO8601() @IsNotEmpty() end: string;
+}
+export class ActivityTimeRequestDto {
+  @IsArray() @ArrayMinSize(1) @IsString({ each: true }) users: string[];
+  @IsArray() @ArrayMinSize(1)
+  @ValidateNested({ each: true }) @Type(() => TimeWindowDto)
+  windows: TimeWindowDto[];
+}
+export interface ActivityTimeWindowResult {
+  start: string; end: string; active_ms: number;
+}
+export interface ActivityTimeUserResult {
+  user_id: string; external_id: string;
+  windows: ActivityTimeWindowResult[];
+}
+export interface ActivityTimeResponse {
+  results: ActivityTimeUserResult[];
+}
+
 // --- Options types ---
 
 export interface FindUserOptions {

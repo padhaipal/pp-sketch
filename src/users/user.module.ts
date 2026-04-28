@@ -5,6 +5,7 @@ import { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
 import { ScoreEntity } from '../literacy/score/score.entity';
 import { LiteracyLessonStateEntity } from '../literacy/literacy-lesson/literacy-lesson-state.entity';
 import { UserService } from './user.service';
+import { UserActivityService } from './user-activity.service';
 import { UserController } from './user.controller';
 import { CacheService } from '../interfaces/redis/cache';
 
@@ -18,7 +19,7 @@ import { CacheService } from '../interfaces/redis/cache';
     ]),
   ],
   controllers: [UserController],
-  providers: [UserService, CacheService],
-  exports: [UserService],
+  providers: [UserService, UserActivityService, CacheService],
+  exports: [UserService, UserActivityService],
 })
 export class UserModule {}

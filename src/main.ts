@@ -28,6 +28,12 @@ import {
   processNotifierCronJob,
   processNotifierSendJob,
 } from './notifier/evening-reminder.processor';
+import {
+  processMorningUpdateCronJob,
+  processMorningUpdateSendJob,
+} from './notifier/morning-update.processor';
+import type { MorningUpdateSendJobData } from './notifier/morning-update.processor';
+import { ReportCardService } from './notifier/report-card/report-card.service';
 import type { MessageJobDto } from './interfaces/wabot/inbound/wabot-inbound.dto';
 import type { HeygenGenerateJobData } from './interfaces/heygen/outbound/outbound.service';
 import type { ElevenlabsGenerateJobData } from './interfaces/elevenlabs/outbound/outbound.service';
@@ -186,7 +192,62 @@ async function bootstrap() {
     logger.error(`worker(${QUEUE_NAMES.NOTIFIER_SEND}) ERROR ${err.message}`),
   );
 
-  logger.log('BullMQ workers started for all 7 queues');
+  // Morning-update cron: fires daily at 01:30 UTC = 07:00 IST.
+  const reportCardService = app.get(ReportCardService);
+  const morningUpdateQueue = createQueue(QUEUE_NAMES.MORNING_UPDATE);
+  await morningUpdateQueue.add(
+    'morning-update-cron',
+    {},
+    { repeat: { pattern: '30 1 * * *' } },
+  );
+
+  const morningUpdateWorker = createWorker(
+    QUEUE_NAMES.MORNING_UPDATE,
+    async (job) => {
+      await processMorningUpdateCronJob(
+        job,
+        dataSource,
+        mediaMetaDataService,
+      );
+    },
+  );
+  morningUpdateWorker.on('failed', (job, err) =>
+    logger.error(
+      `worker(${QUEUE_NAMES.MORNING_UPDATE}) FAILED job id=${job?.id} err=${err.message}`,
+    ),
+  );
+  morningUpdateWorker.on('error', (err) =>
+    logger.error(`worker(${QUEUE_NAMES.MORNING_UPDATE}) ERROR ${err.message}`),
+  );
+
+  const morningUpdateSendWorker = new Worker<MorningUpdateSendJobData>(
+    QUEUE_NAMES.MORNING_UPDATE_SEND,
+    async (job) => {
+      await processMorningUpdateSendJob(
+        job,
+        reportCardService,
+        mediaMetaDataService,
+        mediaRepo,
+        wabotOutbound,
+      );
+    },
+    {
+      connection: queueRedisConnection,
+      concurrency: 4,
+    },
+  );
+  morningUpdateSendWorker.on('failed', (job, err) =>
+    logger.error(
+      `worker(${QUEUE_NAMES.MORNING_UPDATE_SEND}) FAILED job id=${job?.id} err=${err.message}`,
+    ),
+  );
+  morningUpdateSendWorker.on('error', (err) =>
+    logger.error(
+      `worker(${QUEUE_NAMES.MORNING_UPDATE_SEND}) ERROR ${err.message}`,
+    ),
+  );
+
+  logger.log('BullMQ workers started for all 9 queues');
 
   await app.listen(process.env.PORT ?? 3000);
   logger.log(`Application listening on port ${process.env.PORT ?? 3000}`);

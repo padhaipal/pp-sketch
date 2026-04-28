@@ -1,6 +1,16 @@
 import { BadRequestException } from '@nestjs/common';
 import { parsePhoneNumberFromString } from 'libphonenumber-js';
-import { IsString, IsNotEmpty, IsIn, IsOptional } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsString,
+  IsNotEmpty,
+  IsIn,
+  IsOptional,
+  IsArray,
+  ArrayMinSize,
+  ValidateNested,
+  IsISO8601,
+} from 'class-validator';
 
 export interface User {
   id: string;
@@ -43,6 +53,50 @@ export class PatchUserDto {
   @IsIn(['admin', 'dev'])
   @IsOptional()
   role?: UserRole;
+}
+
+// ─── Activity-time DTOs ───────────────────────────────────────────────────────
+
+// One time window for activity-time queries. start <= end. Both ISO 8601.
+export class TimeWindowDto {
+  @IsISO8601()
+  @IsNotEmpty()
+  start: string;
+
+  @IsISO8601()
+  @IsNotEmpty()
+  end: string;
+}
+
+// POST /users/activity-time body. users may be uuids or external_ids
+// (E.164 phone numbers). windows may overlap.
+export class ActivityTimeRequestDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  users: string[];
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => TimeWindowDto)
+  windows: TimeWindowDto[];
+}
+
+export interface ActivityTimeWindowResult {
+  start: string;
+  end: string;
+  active_ms: number;
+}
+
+export interface ActivityTimeUserResult {
+  user_id: string;
+  external_id: string;
+  windows: ActivityTimeWindowResult[];
+}
+
+export interface ActivityTimeResponse {
+  results: ActivityTimeUserResult[];
 }
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
