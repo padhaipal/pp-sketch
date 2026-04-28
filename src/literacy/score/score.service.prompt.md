@@ -54,34 +54,67 @@ function calculateNewScore(
 }
 ```
 
-## getLettersLearnt(users: string | string[], options?: { asOf?: Date }): Promise\<LettersLearntResult | LettersLearntResult[]>
+## getLetterBins(users: string | string[], options?: { asOf?: Date }): Promise\<LetterBinsResult | LetterBinsResult[]>
 
-Two database round-trips. Accepts one or more user identifiers (UUIDs or phone numbers, freely mixed) and returns which letters each user has "learnt".
+Two database round-trips. Accepts one or more user identifiers (UUIDs or phone numbers, freely mixed) and returns every letter in the `letters` table bucketed into one of four disjoint, exhaustive bins per user:
 
-Input is `string | string[]`. A single string returns a single `LettersLearntResult`; an array returns `LettersLearntResult[]`. The `users` parameter is required.
+- `untouched` — letter has 0–1 score rows for this user, OR has score rows
+  but no seed (`user_message_id IS NULL`). Catches both "letter never seeded
+  for this user" and "seeded but never practiced".
+- `regressed` — `last_score <= seed_score` (got worse, or back to neutral
+  after a dip).
+- `learnt` — `last_score > seed_score` AND `n_scores >= 4` AND
+  `min_score <= seed_score - 4`. Mirrors the previous `getLettersLearnt`
+  rule (≥ 4 score rows, dipped ≥ 4 below seed, recovered above) — the
+  "magic 4s" come from there as the source of truth.
+- `improved` — `last_score > seed_score` but doesn't qualify for `learnt`
+  (e.g. fewer than 4 score rows, or never dipped 4 below seed).
 
-Each identifier is classified as a UUID (regex `^[0-9a-f-]{36}$`) or a phone number (everything else). Duplicate users (same user referenced by both id and phone) are deduplicated; results preserve input order.
+Input is `string | string[]`. A single string returns a single `LetterBinsResult`; an array returns `LetterBinsResult[]`. The `users` parameter is required. Each identifier is classified as a UUID (regex `^[0-9a-f-]{36}$`) or a phone number (everything else). Duplicate users are deduplicated; results preserve input order.
 
-1.) Validate with `validateLettersLearntInput()` — normalises a bare string into a one-element array, rejects empty strings and non-string array items.
+1.) Validate with `validateLetterBinsInput()` — normalises a bare string into a one-element array, rejects empty strings and non-string array items.
 
 2.) **DB hit 1** — resolve all users in one query:
     `SELECT id, external_id FROM users WHERE id IN (...) OR external_id IN (...)`
     Throws `NotFoundException` for any identifier that doesn't match a row.
 
-3.) **DB hit 2** — fetch every score for the resolved users with letter graphemes:
-    `SELECT s.user_id, s.score, l.grapheme FROM scores s JOIN letters l ON l.id = s.letter_id WHERE s.user_id IN (...) [AND s.created_at <= $asOf] ORDER BY s.user_id, l.grapheme, s.created_at ASC`
-    The optional `s.created_at <= $asOf` clause is added when `options.asOf`
-    is supplied — used by the morning-update report card to compute snapshots
-    "as of yesterday IST midnight" vs "as of today IST midnight" for the
-    yesterday-delta highlight.
-    The `ORDER BY` groups rows by user → letter → chronological, so no in-memory sort is needed.
+3.) **DB hit 2** — single CTE query that, per `(user, letter)`, computes
+    `seed_score` (the row with `user_message_id IS NULL`), `last_score`
+    (chronologically most recent), `min_score`, and `n_scores`. CROSS JOIN
+    against the `letters` table guarantees a row even for letters with no
+    scores for the user (those land in `untouched`).
+    ```sql
+    WITH per_letter AS (
+      SELECT s.user_id, s.letter_id, s.score, s.user_message_id,
+             ROW_NUMBER() OVER (
+               PARTITION BY s.user_id, s.letter_id ORDER BY s.created_at DESC
+             ) AS rn_last
+      FROM scores s
+      WHERE s.user_id = ANY($1::uuid[]) [AND s.created_at <= $asOf]
+    ),
+    agg AS (
+      SELECT user_id, letter_id,
+             COUNT(*) AS n_scores,
+             MAX(score) FILTER (WHERE user_message_id IS NULL) AS seed_score,
+             MAX(score) FILTER (WHERE rn_last = 1) AS last_score,
+             MIN(score) AS min_score
+      FROM per_letter
+      GROUP BY user_id, letter_id
+    )
+    SELECT u.id AS user_id, l.grapheme,
+           a.n_scores, a.seed_score, a.last_score, a.min_score
+    FROM unnest($1::uuid[]) AS u(id)
+    CROSS JOIN letters l
+    LEFT JOIN agg a ON a.user_id = u.id AND a.letter_id = l.id;
+    ```
+    Optional `s.created_at <= $asOf` lets the morning-update report card
+    compute snapshots ("as of yesterday IST midnight" vs "today IST midnight")
+    for the yesterday-delta highlight.
 
-4.) Group scores into `Map<user_id, Map<grapheme, number[]>>` (score values only, already in chronological order).
+4.) Bucket each row in priority order:
+   - `seed_score IS NULL` OR `n_scores ≤ 1` → `untouched`
+   - `last_score ≤ seed_score` → `regressed`
+   - `n_scores ≥ 4 AND min_score ≤ seed_score - 4` → `learnt`
+   - otherwise → `improved`
 
-5.) For each user, iterate over each letter's score series and apply the "learnt" heuristic:
-   - **Skip** if the letter has fewer than 4 scores.
-   - Let `firstScore = scores[0]` and `lastScore = scores[scores.length - 1]`.
-   - **Skip** if `lastScore < firstScore` (overall regression).
-   - Otherwise scan `scores[1..]`: if any value is ≤ `firstScore − 4`, the letter is learnt — add its grapheme to the result and move on.
-
-6.) Return `{ userId, userPhone, lettersLearnt }` (single object) or an array thereof.
+5.) Return `{ userId, userPhone, bins: { untouched, regressed, learnt, improved } }` (single object) or an array thereof.

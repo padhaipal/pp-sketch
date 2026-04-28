@@ -5,7 +5,7 @@ Provides ReportCardService and the swagger preview controller.
 Imports:
 * TypeOrmModule.forFeature([MediaMetaDataEntity]) — for findExistingForUser.
 * UserModule — for UserService and UserActivityService.
-* ScoreModule — for ScoreService.getLettersLearnt({ asOf }).
+* ScoreModule — for ScoreService.getLetterBins({ asOf }).
 * MediaMetaDataModule — for MediaMetaDataService.createRenderedImageMedia.
 
 Exports ReportCardService so the morning-update send worker (resolved in

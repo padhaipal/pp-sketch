@@ -172,19 +172,35 @@ function validateLetterOutcomes(value: unknown, fieldName: string): string[] {
   );
 }
 
-// --- Letters Learnt types ---
+// --- Letter Bins types ---
 
-export interface LettersLearntResult {
-  userId: string;       // users.id
-  userPhone: string;    // users.external_id
-  lettersLearnt: string[];  // array of single-grapheme strings (may be empty)
+// Per-letter bucketing returned by ScoreService.getLetterBins. Disjoint and
+// exhaustive over every letter in the `letters` table for the user.
+//   untouched : letters with 0–1 score rows for the user, OR rows but no
+//               seed (user_message_id IS NULL).
+//   regressed : last_score <= seed_score.
+//   learnt    : last_score > seed_score AND n_scores >= 4 AND
+//               min_score <= seed_score - 4 (matches the magic 4 from the
+//               previous getLettersLearnt rule, the source of truth).
+//   improved  : last_score > seed_score, but doesn't qualify for `learnt`.
+export interface LetterBins {
+  untouched: string[];
+  regressed: string[];
+  learnt: string[];
+  improved: string[];
 }
 
-// Controller query DTO for GET /scores/letters-learnt.
+export interface LetterBinsResult {
+  userId: string;       // users.id
+  userPhone: string;    // users.external_id
+  bins: LetterBins;
+}
+
+// Controller query DTO for GET /scores/letter-bins.
 // Accepts ?users=id1,id2 (comma-separated) or ?users=id1&users=id2 (repeated).
 // @Transform splits comma-separated strings into an array before validation.
 // Validated by the global ValidationPipe (whitelist, forbidNonWhitelisted, transform).
-export class LettersLearntQueryDto {
+export class LetterBinsQueryDto {
   @Transform(/* splits comma-separated string or repeated params into string[] */)
   @IsArray()
   @ArrayMinSize(1)
@@ -195,7 +211,7 @@ export class LettersLearntQueryDto {
 // Internal service-level validation. Accepts string | string[].
 // Each identifier can be a UUID (user id) or a phone number (external_id).
 // An array may freely mix both kinds.
-export function validateLettersLearntInput(users: unknown): string[] {
+export function validateLetterBinsInput(users: unknown): string[] {
   // Normalises a bare string to [string]. Rejects empty strings, empty arrays,
   // and non-string items. Returns the normalised string[].
 }

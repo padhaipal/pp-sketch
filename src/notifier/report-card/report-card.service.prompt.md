@@ -12,13 +12,14 @@ UUID or external_id (E.164 phone w/o +). `options.now` lets tests pin "today".
 ## Data assembled (`buildData`)
 
 * User (resolve via `UserService.find`).
-* Letters learnt as of `today_IST_midnight` — call
-  `ScoreService.getLettersLearnt(userId, { asOf: todayMid })`. This is the
-  set displayed on the card. "Not this morning" → cut-off is *today's* IST
-  midnight, so anything earned during today's IST date is excluded.
-* Letters learnt as of `yesterday_IST_midnight` — same call with
-  `asOf: yesterdayMid`. The delta is `letters_learnt_yesterday`, which the
-  renderer highlights.
+* Letter bins as of `today_IST_midnight` — call
+  `ScoreService.getLetterBins(userId, { asOf: todayMid })`. The `bins.learnt`
+  set is `letters_learnt` on the card. "Not this morning" → cut-off is
+  *today's* IST midnight, so anything earned during today's IST date is
+  excluded.
+* Bins as of `yesterday_IST_midnight` — same call with `asOf: yesterdayMid`.
+  The delta `bins.learnt(today) − bins.learnt(yesterday)` is
+  `letters_learnt_yesterday`, which the renderer highlights.
 * 7-day activity windows. Build `windows[i] = { start: weekAgoMid + i*24h,
   end: + 24h }`. Call `UserActivityService.getActivityTime` once with all
   seven windows. Map to `DailyBar { date_iso, day_index, active_ms }` where

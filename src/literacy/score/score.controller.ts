@@ -1,19 +1,19 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { ScoreService } from './score.service';
-import { LettersLearntResult, LettersLearntQueryDto } from './score.dto';
+import { LetterBinsResult, LetterBinsQueryDto } from './score.dto';
 
 @ApiTags('scores')
 @Controller('scores')
 export class ScoreController {
   constructor(private readonly scoreService: ScoreService) {}
 
-  @Get('letters-learnt')
-  async lettersLearnt(
-    @Query() query: LettersLearntQueryDto,
-  ): Promise<LettersLearntResult[]> {
-    return this.scoreService.getLettersLearnt(query.users) as Promise<
-      LettersLearntResult[]
+  @Get('letter-bins')
+  async letterBins(
+    @Query() query: LetterBinsQueryDto,
+  ): Promise<LetterBinsResult[]> {
+    return this.scoreService.getLetterBins(query.users) as Promise<
+      LetterBinsResult[]
     >;
   }
 }

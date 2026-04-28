@@ -240,13 +240,32 @@ function validateLetterOutcomes(value: unknown, fieldName: string): string[] {
   );
 }
 
-export interface LettersLearntResult {
-  userId: string;
-  userPhone: string;
-  lettersLearnt: string[];
+// Per-letter bucketing returned by ScoreService.getLetterBins.
+//   untouched : letters with 0–1 score rows for the user, OR with rows but no
+//               seed (user_message_id IS NULL) — i.e. nothing meaningful to score.
+//   regressed : last_score <= seed_score (got worse, or back to neutral).
+//   learnt    : last_score > seed_score AND n_scores >= 4 AND
+//               min_score <= seed_score - 4. Mirrors the "≥ 4 scores + dipped
+//               ≥ 4 below seed + recovered above" rule of the previous
+//               getLettersLearnt — that's the source of truth for the magic 4s.
+//   improved  : last_score > seed_score, but doesn't qualify for `learnt`
+//               (never dipped 4 below seed, or didn't accumulate ≥ 4 scores).
+// Bins are disjoint and exhaustive over letters in the `letters` table for
+// the given user.
+export interface LetterBins {
+  untouched: string[];
+  regressed: string[];
+  learnt: string[];
+  improved: string[];
 }
 
-export class LettersLearntQueryDto {
+export interface LetterBinsResult {
+  userId: string;
+  userPhone: string;
+  bins: LetterBins;
+}
+
+export class LetterBinsQueryDto {
   @Transform(({ value }) => {
     if (typeof value === 'string') {
       return value
@@ -272,11 +291,11 @@ export class LettersLearntQueryDto {
   users: string[];
 }
 
-export function validateLettersLearntInput(users: unknown): string[] {
+export function validateLetterBinsInput(users: unknown): string[] {
   if (typeof users === 'string') {
     if (users.length === 0) {
       throw new BadRequestException(
-        'getLettersLearnt() users must be a non-empty string',
+        'getLetterBins() users must be a non-empty string',
       );
     }
     return [users];
@@ -284,20 +303,20 @@ export function validateLettersLearntInput(users: unknown): string[] {
   if (Array.isArray(users)) {
     if (users.length === 0) {
       throw new BadRequestException(
-        'getLettersLearnt() users array must not be empty',
+        'getLetterBins() users array must not be empty',
       );
     }
     for (const item of users) {
       if (typeof item !== 'string' || item.length === 0) {
         throw new BadRequestException(
-          'getLettersLearnt() users array items must be non-empty strings',
+          'getLetterBins() users array items must be non-empty strings',
         );
       }
     }
     return users;
   }
   throw new BadRequestException(
-    'getLettersLearnt() users must be a string or array of strings',
+    'getLetterBins() users must be a string or array of strings',
   );
 }
 

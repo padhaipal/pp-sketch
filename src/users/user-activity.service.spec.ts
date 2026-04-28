@@ -299,17 +299,16 @@ describeIfDb('UserActivityService.getActivityTime (integration)', () => {
     }
 
     const windows = Array.from({ length: 10 }, (_, i) => ({
-      start: `2026-04-27T10:0${i}:00Z`,
-      end: `2026-04-27T10:0${i + 1}:00Z`,
+      start: `2026-04-27T10:${String(i).padStart(2, '0')}:00Z`,
+      end: `2026-04-27T10:${String(i + 1).padStart(2, '0')}:00Z`,
     }));
     const res = await service.getActivityTime({ users: [id], windows });
 
-    // Each 1-min window contains messages at :00 and :30 → 1 gap of 30 s,
-    // plus the gap from :30 of the previous window (msg at xx:30 is in window i-1
-    // ends xx+1:00, NOT in window i which starts xx+1:00). So just the within-window
-    // gap counts: 30 s per window.
+    // Each 1-min window [xx:00, xx+1:00] inclusively contains 3 messages
+    // (xx:00, xx:30, xx+1:00 — both boundaries are inclusive). That's two
+    // 30 s gaps → 60 000 ms per window.
     for (const w of res.results[0].windows) {
-      expect(w.active_ms).toBe(30_000);
+      expect(w.active_ms).toBe(60_000);
     }
   });
 });

@@ -6,7 +6,11 @@
 // Plus the SVG renderer itself: shape, brand colour, dotted line, QR, logo.
 
 import { ReportCardService } from './report-card.service';
-import { buildReportCardSvg } from './report-card.svg';
+import {
+  LANDSCAPE_REPORT_CARD_WIDTH,
+  buildLandscapeReportCardSvg,
+  buildReportCardSvg,
+} from './report-card.svg';
 import { BRAND_BLUE_HEX, FIVE_MINUTES_MS } from './report-card.dto';
 import { addDays, istMidnightUtc } from './report-card.utils';
 
@@ -44,21 +48,31 @@ function makeService(opts: {
     })),
   };
   const scoreService = {
-    getLettersLearnt: jest.fn().mockImplementation(
+    getLetterBins: jest.fn().mockImplementation(
       (
         _users: string,
         options?: { asOf?: Date },
       ): Promise<{
         userId: string;
         userPhone: string;
-        lettersLearnt: string[];
+        bins: {
+          untouched: string[];
+          regressed: string[];
+          learnt: string[];
+          improved: string[];
+        };
       }> => {
         const key = options?.asOf?.toISOString() ?? 'now';
-        const lettersLearnt = opts.lettersByAsOf.get(key) ?? [];
+        const learnt = opts.lettersByAsOf.get(key) ?? [];
         return Promise.resolve({
           userId: opts.user?.id ?? '',
           userPhone: opts.user?.external_id ?? '',
-          lettersLearnt,
+          bins: {
+            untouched: [],
+            regressed: [],
+            learnt,
+            improved: [],
+          },
         });
       },
     ),
@@ -196,6 +210,8 @@ describe('buildReportCardSvg (renderer output)', () => {
       user_external_id: '918888888001',
       letters_learnt: ['क', 'ख', 'ग'],
       letters_learnt_yesterday: ['ग'],
+      letters_currently_learning: [],
+      letters_already_known: [],
       daily_bars: [
         { date_iso: '2026-04-21', day_index: 2, active_ms: 0 },
         { date_iso: '2026-04-22', day_index: 3, active_ms: 0 },
@@ -217,6 +233,8 @@ describe('buildReportCardSvg (renderer output)', () => {
       user_external_id: '918888888001',
       letters_learnt: [],
       letters_learnt_yesterday: [],
+      letters_currently_learning: [],
+      letters_already_known: [],
       daily_bars: Array.from({ length: 7 }, (_, i) => ({
         date_iso: `2026-04-${21 + i}`,
         day_index: (2 + i) % 7,
@@ -228,24 +246,70 @@ describe('buildReportCardSvg (renderer output)', () => {
     expect(svg).toContain('wa.me/918528097842');
   });
 
-  it('renders normally when there are 0 letters learnt yesterday (no highlight circles)', async () => {
+  it('renders normally when there are 0 letters learnt yesterday (no highlight stars)', async () => {
     const svg = await buildReportCardSvg({
       user_external_id: '918888888001',
       letters_learnt: ['क', 'ख'],
       letters_learnt_yesterday: [],
+      letters_currently_learning: [],
+      letters_already_known: [],
       daily_bars: Array.from({ length: 7 }, (_, i) => ({
         date_iso: `2026-04-${21 + i}`,
         day_index: (2 + i) % 7,
         active_ms: 100_000,
       })),
     });
-    // Highlight pill is a <circle> in the brand blue. None should appear in
-    // the letter grid when nothing is highlighted (logo SVG has its own paths
-    // but no <circle> with the brand-blue fill in the inner content).
-    const highlightCircles = svg.match(
-      new RegExp(`<circle[^>]*fill="${BRAND_BLUE_HEX}"`, 'g'),
+    // Highlight is a brand-blue <polygon> star. None should appear when
+    // nothing is highlighted. The logo SVG uses class-based fills, so its
+    // brand-blue paths don't carry an inline fill="#1D9EDF" attribute.
+    const highlightStars = svg.match(
+      new RegExp(`<polygon[^>]*fill="${BRAND_BLUE_HEX}"`, 'g'),
     );
-    expect(highlightCircles).toBeNull();
+    expect(highlightStars).toBeNull();
+  });
+
+  it('renders highlighted (today) letters before the rest in the grid', async () => {
+    const svg = await buildReportCardSvg({
+      user_external_id: '918888888001',
+      letters_learnt: ['क', 'ख', 'ग', 'घ', 'च', 'छ'],
+      letters_learnt_yesterday: ['च', 'छ'],
+      letters_currently_learning: [],
+      letters_already_known: [],
+      daily_bars: Array.from({ length: 7 }, (_, i) => ({
+        date_iso: `2026-04-${21 + i}`,
+        day_index: (2 + i) % 7,
+        active_ms: 0,
+      })),
+    });
+    // Pick out all letter <text> nodes (font-family Noto Sans Devanagari) in
+    // document order. Star polygons contain no text, so we get one entry per
+    // grid cell. Headings/CTA also use this font but render BEFORE the grid;
+    // we filter to single-character bodies (the grid letters).
+    const letterRe =
+      /<text[^>]*>(क|ख|ग|घ|च|छ)<\/text>/g;
+    const ordered = Array.from(svg.matchAll(letterRe)).map((m) => m[1]);
+    expect(ordered.slice(0, 2).sort()).toEqual(['च', 'छ'].sort());
+    expect(ordered.slice(2).sort()).toEqual(['क', 'ख', 'ग', 'घ'].sort());
+  });
+
+  it('renders a brand-blue <polygon> star per highlighted letter', async () => {
+    const svg = await buildReportCardSvg({
+      user_external_id: '918888888001',
+      letters_learnt: ['क', 'ख', 'ग'],
+      letters_learnt_yesterday: ['क', 'ग'],
+      letters_currently_learning: [],
+      letters_already_known: [],
+      daily_bars: Array.from({ length: 7 }, (_, i) => ({
+        date_iso: `2026-04-${21 + i}`,
+        day_index: (2 + i) % 7,
+        active_ms: 0,
+      })),
+    });
+    const stars = svg.match(
+      new RegExp(`<polygon[^>]*fill="${BRAND_BLUE_HEX}"`, 'g'),
+    );
+    expect(stars).not.toBeNull();
+    expect(stars).toHaveLength(2);
   });
 
   it('renders 7 day labels (Hindi) in the activity chart', async () => {
@@ -253,6 +317,8 @@ describe('buildReportCardSvg (renderer output)', () => {
       user_external_id: '918888888001',
       letters_learnt: [],
       letters_learnt_yesterday: [],
+      letters_currently_learning: [],
+      letters_already_known: [],
       daily_bars: [
         { date_iso: '2026-04-21', day_index: 2, active_ms: 0 },
         { date_iso: '2026-04-22', day_index: 3, active_ms: 0 },
@@ -277,6 +343,8 @@ describe('buildReportCardSvg (renderer output)', () => {
       user_external_id: '918888888001',
       letters_learnt: [],
       letters_learnt_yesterday: [],
+      letters_currently_learning: [],
+      letters_already_known: [],
       daily_bars: Array.from({ length: 7 }, (_, i) => ({
         date_iso: `2026-04-${21 + i}`,
         day_index: (2 + i) % 7,
@@ -293,6 +361,8 @@ describe('buildReportCardSvg (renderer output)', () => {
       user_external_id: '918888888001',
       letters_learnt: [],
       letters_learnt_yesterday: [],
+      letters_currently_learning: [],
+      letters_already_known: [],
       daily_bars: Array.from({ length: 7 }, (_, i) => ({
         date_iso: `2026-04-${21 + i}`,
         day_index: (2 + i) % 7,
@@ -307,6 +377,8 @@ describe('buildReportCardSvg (renderer output)', () => {
       user_external_id: '918888888001',
       letters_learnt: [],
       letters_learnt_yesterday: [],
+      letters_currently_learning: [],
+      letters_already_known: [],
       daily_bars: Array.from({ length: 7 }, (_, i) => ({
         date_iso: `2026-04-${21 + i}`,
         day_index: (2 + i) % 7,
@@ -322,6 +394,8 @@ describe('buildReportCardSvg (renderer output)', () => {
       user_external_id: '918888888001',
       letters_learnt: ['<', '&'],
       letters_learnt_yesterday: [],
+      letters_currently_learning: [],
+      letters_already_known: [],
       daily_bars: Array.from({ length: 7 }, (_, i) => ({
         date_iso: `2026-04-${21 + i}`,
         day_index: (2 + i) % 7,
@@ -331,5 +405,75 @@ describe('buildReportCardSvg (renderer output)', () => {
     // The grid renders < and & — they must be xml-escaped.
     expect(svg).toContain('&lt;');
     expect(svg).toContain('&amp;');
+  });
+});
+
+describe('buildLandscapeReportCardSvg (renderer output)', () => {
+  const baseData = {
+    user_external_id: '918888888001',
+    letters_learnt: ['क', 'ख', 'ग', 'घ'],
+    letters_learnt_yesterday: ['ग', 'घ'],
+    letters_currently_learning: ['च', 'छ'],
+    letters_already_known: ['ज', 'झ'],
+    daily_bars: Array.from({ length: 7 }, (_, i) => ({
+      date_iso: `2026-04-${21 + i}`,
+      day_index: (2 + i) % 7,
+      active_ms: 100_000,
+    })),
+  };
+
+  it('renders the wider canvas via the LANDSCAPE_REPORT_CARD_WIDTH constant', async () => {
+    const svg = await buildLandscapeReportCardSvg(baseData);
+    expect(svg).toMatch(/^<\?xml/);
+    expect(svg).toContain(`width="${LANDSCAPE_REPORT_CARD_WIDTH}"`);
+    expect(svg).toContain(`viewBox="0 0 ${LANDSCAPE_REPORT_CARD_WIDTH} `);
+  });
+
+  it('contains all three letter-section headings', async () => {
+    const svg = await buildLandscapeReportCardSvg(baseData);
+    expect(svg).toContain('सीखे हुए अक्षर');
+    expect(svg).toContain('अभी सीख रहा है');
+    expect(svg).toContain('पहले से आते अक्षर');
+  });
+
+  it('still highlights yesterday\'s wins with brand-blue stars', async () => {
+    const svg = await buildLandscapeReportCardSvg(baseData);
+    const stars = svg.match(
+      new RegExp(`<polygon[^>]*fill="${BRAND_BLUE_HEX}"`, 'g'),
+    );
+    expect(stars).not.toBeNull();
+    expect(stars).toHaveLength(2); // ['ग','घ']
+  });
+
+  it('handles all-empty bins gracefully (renders em-dash placeholders)', async () => {
+    const svg = await buildLandscapeReportCardSvg({
+      ...baseData,
+      letters_learnt: [],
+      letters_learnt_yesterday: [],
+      letters_currently_learning: [],
+      letters_already_known: [],
+    });
+    expect(svg).toMatch(/^<\?xml/);
+    // 3 subsections × 1 em-dash placeholder each.
+    const dashes = svg.match(/—/g);
+    expect(dashes).not.toBeNull();
+    expect(dashes!.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('still embeds the QR target URL with the user\'s external_id', async () => {
+    const svg = await buildLandscapeReportCardSvg({
+      ...baseData,
+      user_external_id: '918888888777',
+    });
+    expect(svg).toContain('918888888777');
+    expect(svg).toContain('wa.me/918528097842');
+  });
+
+  it('still draws the dotted 5-min line on the activity chart', async () => {
+    const svg = await buildLandscapeReportCardSvg({
+      ...baseData,
+      daily_bars: baseData.daily_bars.map((b) => ({ ...b, active_ms: 0 })),
+    });
+    expect(svg).toContain('stroke-dasharray');
   });
 });

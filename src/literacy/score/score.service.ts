@@ -10,12 +10,13 @@ import {
   CreateScoreOptions,
   FindScoreOptions,
   GradeAndRecordOptions,
-  LettersLearntResult,
+  LetterBins,
+  LetterBinsResult,
   DEFAULT_FIND_SCORE_LIMIT,
   validateCreateScoreOptions,
   validateFindScoreOptions,
   validateGradeAndRecordOptions,
-  validateLettersLearntInput,
+  validateLetterBinsInput,
 } from './score.dto';
 import { User } from '../../users/user.dto';
 import { Letter } from '../letters/letter.dto';
@@ -312,16 +313,16 @@ export class ScoreService {
     return rows;
   }
 
-  async getLettersLearnt(
+  async getLetterBins(
     users: string | string[],
     options?: { asOf?: Date },
-  ): Promise<LettersLearntResult | LettersLearntResult[]> {
+  ): Promise<LetterBinsResult | LetterBinsResult[]> {
     const isSingleInput = typeof users === 'string';
-    const normalized = validateLettersLearntInput(users);
+    const normalized = validateLetterBinsInput(users);
     const asOf = options?.asOf;
     if (asOf !== undefined && Number.isNaN(asOf.getTime())) {
       throw new BadRequestException(
-        'getLettersLearnt() options.asOf must be a valid Date',
+        'getLetterBins() options.asOf must be a valid Date',
       );
     }
 
@@ -335,7 +336,7 @@ export class ScoreService {
       }
     }
 
-    // Resolve all users in a single round-trip
+    // Resolve all users in a single round-trip.
     const userParams: unknown[] = [];
     const userConditions: string[] = [];
     let idx = 1;
@@ -375,79 +376,114 @@ export class ScoreService {
 
     const userIds = userRows.map((u) => u.id);
 
-    // Fetch all scores for all resolved users with letter graphemes, ordered
-    // for grouping: user → letter → chronological
-    const scoreParams: unknown[] = [...userIds];
-    const scorePlaceholders = userIds.map((_, i) => `$${i + 1}`).join(',');
+    // Per-(user, letter) aggregates over the score history. CROSS JOIN against
+    // letters guarantees a row for every letter in the table even when the
+    // user has no scores for it (those rows fall into the "untouched" bin).
+    // seed_score is the score from the row with user_message_id IS NULL — set
+    // by user.service.ts/createSeedScores at user creation. last_score uses
+    // the chronologically most recent row. min_score detects the dip needed
+    // for the "learnt" bin (mirrors the magic 4 from the previous
+    // getLettersLearnt rule, which is now the source of truth for that
+    // threshold).
+    const scoreParams: unknown[] = [userIds];
     let asOfClause = '';
     if (asOf !== undefined) {
       scoreParams.push(asOf);
-      asOfClause = ` AND s.created_at <= $${scoreParams.length}`;
+      asOfClause = ' AND s.created_at <= $2';
     }
-    const scoreRows: {
+    const aggRows: {
       user_id: string;
-      score: number;
       grapheme: string;
+      n_scores: string | number | null;
+      seed_score: number | null;
+      last_score: number | null;
+      min_score: number | null;
     }[] = await this.dataSource.query(
-      `SELECT s.user_id, s.score, l.grapheme
-       FROM scores s
-       JOIN letters l ON l.id = s.letter_id
-       WHERE s.user_id IN (${scorePlaceholders})${asOfClause}
-       ORDER BY s.user_id, l.grapheme, s.created_at ASC`,
+      `WITH per_letter AS (
+         SELECT s.user_id, s.letter_id, s.score, s.user_message_id,
+                ROW_NUMBER() OVER (
+                  PARTITION BY s.user_id, s.letter_id
+                  ORDER BY s.created_at DESC
+                ) AS rn_last
+         FROM scores s
+         WHERE s.user_id = ANY($1::uuid[])${asOfClause}
+       ),
+       agg AS (
+         SELECT user_id, letter_id,
+                COUNT(*) AS n_scores,
+                MAX(score) FILTER (WHERE user_message_id IS NULL) AS seed_score,
+                MAX(score) FILTER (WHERE rn_last = 1) AS last_score,
+                MIN(score) AS min_score
+         FROM per_letter
+         GROUP BY user_id, letter_id
+       )
+       SELECT u.id AS user_id, l.grapheme,
+              a.n_scores, a.seed_score, a.last_score, a.min_score
+       FROM unnest($1::uuid[]) AS u(id)
+       CROSS JOIN letters l
+       LEFT JOIN agg a ON a.user_id = u.id AND a.letter_id = l.id`,
       scoreParams,
     );
 
-    // Group: user_id → grapheme → scores (already chronological from ORDER BY)
-    const userScores = new Map<string, Map<string, number[]>>();
-    for (const row of scoreRows) {
-      if (!userScores.has(row.user_id)) {
-        userScores.set(row.user_id, new Map());
+    // Bucket rows into per-user bins. Priority order matches DTO comment:
+    //   untouched → regressed → learnt → improved.
+    const perUserBins = new Map<string, LetterBins>();
+    for (const userId of userIds) {
+      perUserBins.set(userId, {
+        untouched: [],
+        regressed: [],
+        learnt: [],
+        improved: [],
+      });
+    }
+    for (const row of aggRows) {
+      const bins = perUserBins.get(row.user_id)!;
+      const n = row.n_scores === null ? 0 : Number(row.n_scores);
+      const seed = row.seed_score;
+      const last = row.last_score;
+      const min = row.min_score;
+
+      // Bin 1 — never seeded, no scores at all, or only the seed row
+      // (n_scores ≤ 1). "Has scores but no seed" also lands here per spec.
+      if (seed === null || n <= 1) {
+        bins.untouched.push(row.grapheme);
+        continue;
       }
-      const letterMap = userScores.get(row.user_id)!;
-      if (!letterMap.has(row.grapheme)) {
-        letterMap.set(row.grapheme, []);
+      // last/min are guaranteed non-null when n ≥ 1 — narrow for TS.
+      if (last === null || min === null) {
+        bins.untouched.push(row.grapheme);
+        continue;
       }
-      letterMap.get(row.grapheme)!.push(row.score);
+      // Bin 2 — final ≤ seed (regression or back to neutral).
+      if (last <= seed) {
+        bins.regressed.push(row.grapheme);
+        continue;
+      }
+      // Bin 3 — final > seed AND ≥ 4 score rows AND dipped ≥ 4 below seed.
+      if (n >= 4 && min <= seed - 4) {
+        bins.learnt.push(row.grapheme);
+        continue;
+      }
+      // Bin 4 — final > seed but didn't qualify for "learnt".
+      bins.improved.push(row.grapheme);
     }
 
-    // Build a lookup from any input identifier to the resolved user
+    // Assemble per-input results, preserving caller order, deduping by user id.
     const inputToUser = new Map<string, { id: string; external_id: string }>();
     for (const u of userRows) {
       inputToUser.set(u.id, u);
       inputToUser.set(u.external_id, u);
     }
-
-    // Process each user in input order, deduplicating by user id
-    const results: LettersLearntResult[] = [];
+    const results: LetterBinsResult[] = [];
     const seen = new Set<string>();
-
     for (const input of normalized) {
       const user = inputToUser.get(input)!;
       if (seen.has(user.id)) continue;
       seen.add(user.id);
-
-      const letterMap = userScores.get(user.id) ?? new Map<string, number[]>();
-      const lettersLearnt: string[] = [];
-
-      for (const [grapheme, scores] of letterMap) {
-        if (scores.length < 4) continue;
-
-        const firstScore = scores[0];
-        const lastScore = scores[scores.length - 1];
-        if (lastScore < firstScore) continue;
-
-        for (let i = 1; i < scores.length; i++) {
-          if (scores[i] <= firstScore - 4) {
-            lettersLearnt.push(grapheme);
-            break;
-          }
-        }
-      }
-
       results.push({
         userId: user.id,
         userPhone: user.external_id,
-        lettersLearnt,
+        bins: perUserBins.get(user.id)!,
       });
     }
 

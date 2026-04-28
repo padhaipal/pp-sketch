@@ -5,7 +5,7 @@ import sharp from 'sharp';
 import { UserService } from '../../users/user.service';
 import { UserActivityService } from '../../users/user-activity.service';
 import { ScoreService } from '../../literacy/score/score.service';
-import type { LettersLearntResult } from '../../literacy/score/score.dto';
+import type { LetterBinsResult } from '../../literacy/score/score.dto';
 import { MediaMetaDataEntity } from '../../media-meta-data/media-meta-data.entity';
 import type { MediaMetaData } from '../../media-meta-data/media-meta-data.dto';
 import {
@@ -18,12 +18,21 @@ import {
   DailyBar,
   ReportCardData,
 } from './report-card.dto';
-import { buildReportCardSvg } from './report-card.svg';
+import {
+  buildLandscapeReportCardSvg,
+  buildReportCardSvg,
+} from './report-card.svg';
+
+// `variant` picks the SVG layout — defaults to 'landscape' (the
+// production morning-update card). 'portrait' is the alternative narrower
+// layout (kept in the codebase but no longer the production default).
+export type ReportCardVariant = 'portrait' | 'landscape';
 
 interface BuildOptions {
   // Override for testing — defaults to "now". The cron at 7 AM IST runs with
   // now ≈ 01:30 UTC (= 07:00 IST), so istMidnightUtc(now) is today's IST midnight.
   now?: Date;
+  variant?: ReportCardVariant;
 }
 
 @Injectable()
@@ -36,14 +45,18 @@ export class ReportCardService {
     private readonly mediaRepo: Repository<MediaMetaDataEntity>,
   ) {}
 
-  // Pure: gather DB data → build a PNG buffer. Used both by the dashboard
+  // Pure: gather DB data → build a PNG buffer. Used by both the dashboard
   // preview controller and the morning-update worker.
   async generatePng(
     userIdOrExternal: string,
     options: BuildOptions = {},
   ): Promise<{ buffer: Buffer; data: ReportCardData }> {
     const data = await this.buildData(userIdOrExternal, options);
-    const svg = await buildReportCardSvg(data);
+    const variant: ReportCardVariant = options.variant ?? 'landscape';
+    const svg =
+      variant === 'portrait'
+        ? await buildReportCardSvg(data)
+        : await buildLandscapeReportCardSvg(data);
     const buffer = await sharp(Buffer.from(svg, 'utf8')).png().toBuffer();
     return { buffer, data };
   }
@@ -61,21 +74,24 @@ export class ReportCardService {
     const yesterdayMid = addDays(todayMid, -1); // 00:00 IST yesterday
     const weekAgoMid = addDays(todayMid, -7); // 00:00 IST 7 days ago
 
-    // Letters learnt as of end-of-yesterday (= today IST midnight) — "not this morning".
-    const learntEndOfYesterday = (await this.scoreService.getLettersLearnt(
+    // Letter bins as of end-of-yesterday (= today IST midnight) — "not this morning".
+    const binsEndOfYesterday = (await this.scoreService.getLetterBins(
       user.id,
       { asOf: todayMid },
-    )) as LettersLearntResult;
-    // Baseline: letters learnt as of start-of-yesterday.
-    const learntStartOfYesterday = (await this.scoreService.getLettersLearnt(
+    )) as LetterBinsResult;
+    // Baseline: bins as of start-of-yesterday — used to compute today's deltas.
+    const binsStartOfYesterday = (await this.scoreService.getLetterBins(
       user.id,
       { asOf: yesterdayMid },
-    )) as LettersLearntResult;
+    )) as LetterBinsResult;
 
-    const previous = new Set(learntStartOfYesterday.lettersLearnt);
-    const yesterdayDelta = learntEndOfYesterday.lettersLearnt.filter(
+    const learntEndOfYesterday = binsEndOfYesterday.bins.learnt;
+    const previous = new Set(binsStartOfYesterday.bins.learnt);
+    const yesterdayDelta = learntEndOfYesterday.filter(
       (g) => !previous.has(g),
     );
+    const currentlyLearning = binsEndOfYesterday.bins.regressed;
+    const alreadyKnown = binsEndOfYesterday.bins.improved;
 
     // Activity time per IST day for the last 7 IST days, ending yesterday.
     // Day i (0..6) covers [weekAgoMid + i*24h, weekAgoMid + (i+1)*24h).
@@ -102,8 +118,10 @@ export class ReportCardService {
 
     return {
       user_external_id: user.external_id,
-      letters_learnt: learntEndOfYesterday.lettersLearnt,
+      letters_learnt: learntEndOfYesterday,
       letters_learnt_yesterday: yesterdayDelta,
+      letters_currently_learning: currentlyLearning,
+      letters_already_known: alreadyKnown,
       daily_bars: daily,
     };
   }
