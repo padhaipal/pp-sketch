@@ -342,6 +342,24 @@ export async function processWabotInboundJob(
         stateTransitionIds.push(...result2.stateTransitionIds);
       }
 
+      // Daily activity quota check — disabled until 'daily-activity-quota-reached'
+      // media is seeded. Uncomment along with injecting UserActivityService.
+      // const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+      // const now = new Date();
+      // const istNow = new Date(now.getTime() + IST_OFFSET_MS);
+      // const istMidnight = new Date(
+      //   Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate()),
+      // );
+      // const midnight = new Date(istMidnight.getTime() - IST_OFFSET_MS);
+      // const activity = await userActivityService.getActivityTime({
+      //   users: [user.id],
+      //   windows: [{ start: midnight.toISOString(), end: now.toISOString() }],
+      // });
+      // const activeMs = activity.results[0]?.windows[0]?.active_ms ?? 0;
+      // if (activeMs > 5 * 60 * 1000) {
+      //   stateTransitionIds.unshift('daily-activity-quota-reached');
+      // }
+
       // 9. Build outbound media
       const outboundMedia: OutboundMediaItem[] = [];
 
