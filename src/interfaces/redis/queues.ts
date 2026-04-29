@@ -11,6 +11,7 @@ export const QUEUE_NAMES = {
   NOTIFIER_SEND: 'notifier-send',
   MORNING_UPDATE: 'morning-update',
   MORNING_UPDATE_SEND: 'morning-update-send',
+  HAIL_MARY: 'hail-mary',
 } as const;
 
 const connection = new Redis(process.env.BULLMQ_REDIS_URL!, {
@@ -73,6 +74,11 @@ export const DEFAULT_JOB_OPTIONS: Record<string, JobsOptions> = {
     backoff: { type: 'fixed', delay: 1000 },
     removeOnComplete: true,
     removeOnFail: { count: 5000 },
+  },
+  [QUEUE_NAMES.HAIL_MARY]: {
+    attempts: 1,
+    removeOnComplete: true,
+    removeOnFail: { count: 500 },
   },
 };
 

@@ -21,6 +21,7 @@ import {
   WELCOME_MESSAGE_STATE_TRANSITION_ID,
   AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID,
 } from '../../../literacy/literacy-lesson/literacy-lesson.machine';
+import { rearmHailMary } from '../../../notifier/hail-mary.processor';
 
 const logger = new Logger('WabotInboundProcessor');
 
@@ -168,6 +169,18 @@ export async function processWabotInboundJob(
                 otel_carrier: injectCarrier(span),
               });
             userMessageId = audioEntity.id;
+            try {
+              await rearmHailMary({
+                user_id: user.id,
+                user_external_id: user.external_id,
+                user_message_id: audioEntity.id,
+                otel_carrier: injectCarrier(span),
+              });
+            } catch (err) {
+              logger.warn(
+                `rearmHailMary failed for new user ${toLogId(user.external_id)}: ${(err as Error).message}`,
+              );
+            }
           } else {
             logger.error(
               `New user ${toLogId(user.external_id)} sent unsupported type "${payload.message.type}" — sending welcome only`,
@@ -308,6 +321,19 @@ export async function processWabotInboundJob(
         otel_carrier: injectCarrier(span),
       });
       const userMessageId = audioEntity.id;
+
+      try {
+        await rearmHailMary({
+          user_id: user.id,
+          user_external_id: user.external_id,
+          user_message_id: audioEntity.id,
+          otel_carrier: injectCarrier(span),
+        });
+      } catch (err) {
+        logger.warn(
+          `rearmHailMary failed for user ${toLogId(user.external_id)}: ${(err as Error).message}`,
+        );
+      }
 
       // On retry, wipe any partial DB writes from prior attempts so
       // processAnswer runs against a clean slate for this user_message_id.

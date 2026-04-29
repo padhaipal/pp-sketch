@@ -33,6 +33,8 @@ import {
   processMorningUpdateSendJob,
 } from './notifier/morning-update.processor';
 import type { MorningUpdateSendJobData } from './notifier/morning-update.processor';
+import { processHailMaryJob } from './notifier/hail-mary.processor';
+import type { HailMaryJobData } from './notifier/hail-mary.processor';
 import { ReportCardService } from './notifier/report-card/report-card.service';
 import type { MessageJobDto } from './interfaces/wabot/inbound/wabot-inbound.dto';
 import type { HeygenGenerateJobData } from './interfaces/heygen/outbound/outbound.service';
@@ -247,7 +249,29 @@ async function bootstrap() {
     ),
   );
 
-  logger.log('BullMQ workers started for all 9 queues');
+  const hailMaryWorker = createWorker<HailMaryJobData>(
+    QUEUE_NAMES.HAIL_MARY,
+    async (job) => {
+      await processHailMaryJob(
+        job,
+        dataSource,
+        userService,
+        mediaMetaDataService,
+        literacyLessonService,
+        wabotOutbound,
+      );
+    },
+  );
+  hailMaryWorker.on('failed', (job, err) =>
+    logger.error(
+      `worker(${QUEUE_NAMES.HAIL_MARY}) FAILED job id=${job?.id} err=${err.message}`,
+    ),
+  );
+  hailMaryWorker.on('error', (err) =>
+    logger.error(`worker(${QUEUE_NAMES.HAIL_MARY}) ERROR ${err.message}`),
+  );
+
+  logger.log('BullMQ workers started for all 10 queues');
 
   await app.listen(process.env.PORT ?? 3000);
   logger.log(`Application listening on port ${process.env.PORT ?? 3000}`);
