@@ -27,7 +27,7 @@ export const HINDI_CURRENTLY_LEARNING_HEADING =
   'तुम्हारा बच्चा जो अक्षर अभी सीख रहा है';
 export const HINDI_ALREADY_KNOWN_HEADING = 'तुम्हारे बच्चे को पहले से आते अक्षर';
 export const HINDI_ACTIVITY_HEADING = 'पिछले 7 दिन';
-export const HINDI_TRY_NOW = 'पढ़ाईपाल अभी आज़माएं!';
+export const HINDI_TRY_NOW = 'पढ़ाईपाल अभी शेयर करें।';
 
 export const FIVE_MINUTES_MS = 5 * 60 * 1000;
 
