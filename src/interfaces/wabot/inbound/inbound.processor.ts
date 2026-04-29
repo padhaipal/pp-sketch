@@ -196,6 +196,13 @@ export async function processWabotInboundJob(
           );
         }
 
+        // Tappable wa.me sharing link, sent between the welcome bundle and
+        // the first lesson. Same URL the morning-update notifier uses.
+        const referralUrl = await userService.buildReferralUrl(
+          user.external_id,
+        );
+        onboardingMedia.push({ type: 'text', body: referralUrl });
+
         if (userMessageId) {
           try {
             const lessonResult = await literacyLessonService.processAnswer({

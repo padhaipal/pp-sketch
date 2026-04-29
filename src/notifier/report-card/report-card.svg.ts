@@ -53,13 +53,6 @@ function escapeXml(s: string): string {
     .replace(/'/g, '&apos;');
 }
 
-function buildReferralUrl(userExternalId: string): string {
-  // The Hindi text payload is fixed (per spec, with {phonenumber} substituted).
-  const template =
-    'मुझे {phonenumber} ने रेफर किया है। पढ़ना सीखने में रुचि है';
-  const text = template.replace('{phonenumber}', userExternalId);
-  return `https://wa.me/918528097842?text=${encodeURIComponent(text)}`;
-}
 
 interface LayoutBox {
   x: number;
@@ -363,7 +356,7 @@ function renderLetterSubsection(opts: {
 export async function buildReportCardSvg(
   data: ReportCardData,
 ): Promise<string> {
-  const referralUrl = buildReferralUrl(data.user_external_id);
+  const referralUrl = data.referral_url;
   const qrSvg = await QRCode.toString(referralUrl, {
     type: 'svg',
     margin: 1,
@@ -502,7 +495,7 @@ export const LANDSCAPE_REPORT_CARD_WIDTH = 2400;
 export async function buildLandscapeReportCardSvg(
   data: ReportCardData,
 ): Promise<string> {
-  const referralUrl = buildReferralUrl(data.user_external_id);
+  const referralUrl = data.referral_url;
   const qrSvg = await QRCode.toString(referralUrl, {
     type: 'svg',
     margin: 1,

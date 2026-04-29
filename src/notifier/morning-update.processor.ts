@@ -10,6 +10,7 @@ import { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
 import type { ReportCardService } from './report-card/report-card.service';
 import { tracer, injectCarrier, startChildSpan } from '../otel/otel';
 import { toLogId } from '../otel/pii';
+import type { UserService } from '../users/user.service';
 import { getActiveUsers } from './notifier.utils';
 import { istMidnightUtc } from './report-card/report-card.utils';
 
@@ -125,6 +126,7 @@ export async function processMorningUpdateSendJob(
   mediaMetaDataService: MediaMetaDataService,
   mediaRepo: Repository<MediaMetaDataEntity>,
   wabotOutbound: WabotOutboundService,
+  userService: UserService,
 ): Promise<void> {
   const span = startChildSpan('morning-update.send', job.data.otel_carrier);
   span.setAttribute('bullmq.job.id', String(job.id));
@@ -180,6 +182,9 @@ export async function processMorningUpdateSendJob(
       );
     }
 
+    const referralUrl = await userService.buildReferralUrl(
+      job.data.user_external_id,
+    );
     const fullMedia: OutboundMediaItem[] = [
       ...job.data.media,
       {
@@ -187,6 +192,9 @@ export async function processMorningUpdateSendJob(
         url: imageEntity.wa_media_url,
         mime_type: 'image/png',
       },
+      // Tappable wa.me sharing link as a follow-up text — same URL the QR
+      // code on the report card image encodes.
+      { type: 'text', body: referralUrl },
     ];
 
     const result = await wabotOutbound.sendNotification({

@@ -42,6 +42,9 @@ export interface DailyBar {
 
 export interface ReportCardData {
   user_external_id: string;
+  // wa.me URL the QR code on the card encodes — built once in the service
+  // via UserService.buildReferralUrl(user_external_id).
+  referral_url: string;
   // Bin 3 (mastered) — displayed in the "सीखे हुए अक्षर" subsection.
   letters_learnt: string[];
   // Subset of letters_learnt earned during yesterday's IST date — these are

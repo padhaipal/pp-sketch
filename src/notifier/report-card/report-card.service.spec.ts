@@ -27,6 +27,9 @@ function makeService(opts: {
 }): ReportCardService {
   const userService = {
     find: jest.fn().mockResolvedValue(opts.user),
+    buildReferralUrl: jest.fn((externalId: string) =>
+      Promise.resolve(`https://wa.me/918528097842?text=test-${externalId}`),
+    ),
   };
   const userActivityService = {
     getActivityTime: jest.fn().mockImplementation(({ windows }) => ({
@@ -208,6 +211,7 @@ describe('buildReportCardSvg (renderer output)', () => {
   it('renders an SVG that contains the brand blue when there is activity above 5 min', async () => {
     const svg = await buildReportCardSvg({
       user_external_id: '918888888001',
+      referral_url: 'https://wa.me/918528097842?text=test-918888888001',
       letters_learnt: ['क', 'ख', 'ग'],
       letters_learnt_yesterday: ['ग'],
       letters_currently_learning: [],
@@ -231,6 +235,7 @@ describe('buildReportCardSvg (renderer output)', () => {
   it('embeds the QR code with the user-specific wa.me URL (encoded)', async () => {
     const svg = await buildReportCardSvg({
       user_external_id: '918888888001',
+      referral_url: 'https://wa.me/918528097842?text=test-918888888001',
       letters_learnt: [],
       letters_learnt_yesterday: [],
       letters_currently_learning: [],
@@ -249,6 +254,7 @@ describe('buildReportCardSvg (renderer output)', () => {
   it('renders normally when there are 0 letters learnt yesterday (no highlight stars)', async () => {
     const svg = await buildReportCardSvg({
       user_external_id: '918888888001',
+      referral_url: 'https://wa.me/918528097842?text=test-918888888001',
       letters_learnt: ['क', 'ख'],
       letters_learnt_yesterday: [],
       letters_currently_learning: [],
@@ -271,6 +277,7 @@ describe('buildReportCardSvg (renderer output)', () => {
   it('renders highlighted (today) letters before the rest in the grid', async () => {
     const svg = await buildReportCardSvg({
       user_external_id: '918888888001',
+      referral_url: 'https://wa.me/918528097842?text=test-918888888001',
       letters_learnt: ['क', 'ख', 'ग', 'घ', 'च', 'छ'],
       letters_learnt_yesterday: ['च', 'छ'],
       letters_currently_learning: [],
@@ -295,6 +302,7 @@ describe('buildReportCardSvg (renderer output)', () => {
   it('renders a brand-blue <polygon> star per highlighted letter', async () => {
     const svg = await buildReportCardSvg({
       user_external_id: '918888888001',
+      referral_url: 'https://wa.me/918528097842?text=test-918888888001',
       letters_learnt: ['क', 'ख', 'ग'],
       letters_learnt_yesterday: ['क', 'ग'],
       letters_currently_learning: [],
@@ -315,6 +323,7 @@ describe('buildReportCardSvg (renderer output)', () => {
   it('renders 7 day labels (Hindi) in the activity chart', async () => {
     const svg = await buildReportCardSvg({
       user_external_id: '918888888001',
+      referral_url: 'https://wa.me/918528097842?text=test-918888888001',
       letters_learnt: [],
       letters_learnt_yesterday: [],
       letters_currently_learning: [],
@@ -341,6 +350,7 @@ describe('buildReportCardSvg (renderer output)', () => {
   it('handles 0 activity all 7 days without crashing (renders thin baseline ticks)', async () => {
     const svg = await buildReportCardSvg({
       user_external_id: '918888888001',
+      referral_url: 'https://wa.me/918528097842?text=test-918888888001',
       letters_learnt: [],
       letters_learnt_yesterday: [],
       letters_currently_learning: [],
@@ -359,6 +369,7 @@ describe('buildReportCardSvg (renderer output)', () => {
   it('handles a user with 0 letters learnt entirely (em-dash placeholder)', async () => {
     const svg = await buildReportCardSvg({
       user_external_id: '918888888001',
+      referral_url: 'https://wa.me/918528097842?text=test-918888888001',
       letters_learnt: [],
       letters_learnt_yesterday: [],
       letters_currently_learning: [],
@@ -375,6 +386,7 @@ describe('buildReportCardSvg (renderer output)', () => {
   it('embeds the PadhaiPal logo (inner SVG content)', async () => {
     const svg = await buildReportCardSvg({
       user_external_id: '918888888001',
+      referral_url: 'https://wa.me/918528097842?text=test-918888888001',
       letters_learnt: [],
       letters_learnt_yesterday: [],
       letters_currently_learning: [],
@@ -392,6 +404,7 @@ describe('buildReportCardSvg (renderer output)', () => {
   it('escapes external_id correctly into the QR payload (no <script>-style chars leak)', async () => {
     const svg = await buildReportCardSvg({
       user_external_id: '918888888001',
+      referral_url: 'https://wa.me/918528097842?text=test-918888888001',
       letters_learnt: ['<', '&'],
       letters_learnt_yesterday: [],
       letters_currently_learning: [],
@@ -411,6 +424,7 @@ describe('buildReportCardSvg (renderer output)', () => {
 describe('buildLandscapeReportCardSvg (renderer output)', () => {
   const baseData = {
     user_external_id: '918888888001',
+      referral_url: 'https://wa.me/918528097842?text=test-918888888001',
     letters_learnt: ['क', 'ख', 'ग', 'घ'],
     letters_learnt_yesterday: ['ग', 'घ'],
     letters_currently_learning: ['च', 'छ'],
@@ -464,6 +478,7 @@ describe('buildLandscapeReportCardSvg (renderer output)', () => {
     const svg = await buildLandscapeReportCardSvg({
       ...baseData,
       user_external_id: '918888888777',
+      referral_url: 'https://wa.me/918528097842?text=test-918888888777',
     });
     expect(svg).toContain('918888888777');
     expect(svg).toContain('wa.me/918528097842');
