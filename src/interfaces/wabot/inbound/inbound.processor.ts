@@ -201,7 +201,7 @@ export async function processWabotInboundJob(
         const referralUrl = await userService.buildReferralUrl(
           user.external_id,
         );
-        onboardingMedia.push({ type: 'text', body: referralUrl });
+        onboardingMedia.push({ type: 'text', body: `To send PadhaiPal to your friends send them this link: ${referralUrl}` });
 
         if (userMessageId) {
           try {
