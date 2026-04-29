@@ -103,7 +103,7 @@ export interface ActivityTimeResponse {
 
 export interface ActivityDay {
   date: string;
-  count: number;
+  active_ms: number;
 }
 
 export interface DashboardUserRow {

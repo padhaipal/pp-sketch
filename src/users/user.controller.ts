@@ -34,6 +34,11 @@ import {
   ActivityTimeResponse,
 } from './user.dto';
 import { UserActivityService } from './user-activity.service';
+import {
+  addDays,
+  istDateIso,
+  istMidnightUtc,
+} from '../notifier/report-card/report-card.utils';
 
 @ApiTags('users')
 @Controller('users')
@@ -91,50 +96,39 @@ export class UserController {
 
     const userMap = new Map(users.map((u) => [u.id, u]));
 
-    // Fetch 7-day activity counts per user per day
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-    sevenDaysAgo.setHours(0, 0, 0, 0);
+    // 7 IST-day windows ending today (inclusive). Day i covers
+    // [todayMid - (6-i)*24h, todayMid - (6-i)*24h + 24h). Today's window
+    // extends past "now" — getActivityTime only counts events that have
+    // happened, so today reads as partial.
+    const todayMidIst = istMidnightUtc(new Date());
+    const startMidIst = addDays(todayMidIst, -6);
+    const windows = Array.from({ length: 7 }, (_, i) => {
+      const start = addDays(startMidIst, i);
+      const end = addDays(start, 1);
+      return { start: start.toISOString(), end: end.toISOString() };
+    });
 
-    const activityRows = await this.mediaRepo
-      .createQueryBuilder('mm')
-      .select('mm.user_id', 'user_id')
-      .addSelect('DATE(mm.created_at)', 'date')
-      .addSelect('COUNT(*)::int', 'count')
-      .where('mm.user_id IN (:...userIds)', { userIds })
-      .andWhere('mm.created_at >= :since', { since: sevenDaysAgo })
-      .groupBy('mm.user_id')
-      .addGroupBy('DATE(mm.created_at)')
-      .getRawMany<{ user_id: string; date: string; count: number }>();
+    const activity = await this.userActivityService.getActivityTime({
+      users: userIds,
+      windows,
+    });
 
-    // Build activity map: userId -> { date -> count }
-    const activityMap = new Map<string, Map<string, number>>();
-    for (const row of activityRows) {
-      if (!activityMap.has(row.user_id))
-        activityMap.set(row.user_id, new Map());
-      const dateStr = new Date(row.date).toISOString().slice(0, 10);
-      activityMap.get(row.user_id)!.set(dateStr, Number(row.count));
-    }
+    const activityByUser = new Map<string, number[]>(
+      activity.results.map((r) => [r.user_id, r.windows.map((w) => w.active_ms)]),
+    );
 
-    // Generate 7-day date range
-    const dates: string[] = [];
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(sevenDaysAgo);
-      d.setDate(d.getDate() + i);
-      dates.push(d.toISOString().slice(0, 10));
-    }
+    const dates = windows.map((_, i) => istDateIso(addDays(startMidIst, i)));
 
-    // Assemble response in last_active order
     return activeUsers.map((r) => {
       const user = userMap.get(r.user_id);
-      const userActivity = activityMap.get(r.user_id);
+      const userActivity = activityByUser.get(r.user_id);
       return {
         id: r.user_id,
         name: user?.name ?? null,
         external_id: user?.external_id ?? '',
-        activity: dates.map((date) => ({
+        activity: dates.map((date, i) => ({
           date,
-          count: userActivity?.get(date) ?? 0,
+          active_ms: userActivity?.[i] ?? 0,
         })),
       };
     });
