@@ -1,9 +1,6 @@
 import dns from 'node:dns';
 dns.setDefaultResultOrder('verbatim');
 
-// Must run BEFORE sharp loads (sharp caches fontconfig paths on first init).
-import './fontconfig-setup';
-
 import { initOtel } from './otel/otel';
 initOtel();
 

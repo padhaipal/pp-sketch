@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.gitignore
+.env
+.env.*
+*.log
+coverage
+.nyc_output
+.DS_Store
+Dockerfile
+.dockerignore
