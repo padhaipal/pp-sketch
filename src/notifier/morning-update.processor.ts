@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import { SpanStatusCode } from '@opentelemetry/api';
 import type { Job } from 'bullmq';
 import type { DataSource, Repository } from 'typeorm';
@@ -26,6 +26,122 @@ export interface MorningUpdateSendJobData {
   otel_carrier: Record<string, string>;
 }
 
+// Resolves the intro OutboundMediaItem[] that prefixes every morning-update
+// send. Prefers video over image. Returns null if neither is ready (caller
+// decides whether to abort or surface as an error).
+export async function resolveMorningUpdateIntroMedia(
+  mediaMetaDataService: MediaMetaDataService,
+): Promise<OutboundMediaItem[] | null> {
+  const introMedia = await mediaMetaDataService.findMediaByStateTransitionId(
+    'morning_notification_message',
+  );
+  const introVideo = introMedia.video;
+  const introImage = introMedia.image;
+  if (introVideo) {
+    return [
+      {
+        type: 'video',
+        url: introVideo.wa_media_url!,
+        mime_type: (introVideo.media_details as { mime_type?: string } | null)
+          ?.mime_type,
+      },
+    ];
+  }
+  if (introImage) {
+    return [
+      {
+        type: 'image',
+        url: introImage.wa_media_url!,
+        mime_type: (introImage.media_details as { mime_type?: string } | null)
+          ?.mime_type,
+      },
+    ];
+  }
+  return null;
+}
+
+// Push a single user's morning-update onto MORNING_UPDATE_SEND. Used by both
+// the cron loop and the test/trigger endpoint.
+export async function enqueueMorningUpdateSend(args: {
+  user_id: string;
+  user_external_id: string;
+  intro_media: OutboundMediaItem[];
+  otel_carrier: Record<string, string>;
+}): Promise<string> {
+  const sendQueue = createQueue(QUEUE_NAMES.MORNING_UPDATE_SEND);
+  const data: MorningUpdateSendJobData = {
+    user_id: args.user_id,
+    user_external_id: args.user_external_id,
+    media: args.intro_media,
+    otel_carrier: args.otel_carrier,
+  };
+  const job = await sendQueue.add('morning-update-send', data);
+  return String(job.id);
+}
+
+// Resolve a user (uuid or E.164 external_id) and enqueue a single
+// morning-update send for them. Used by the trigger controller.
+export async function triggerMorningUpdateForUser(
+  userIdOrExternal: string,
+  userService: UserService,
+  mediaMetaDataService: MediaMetaDataService,
+): Promise<{ job_id: string; user_id: string; user_external_id: string }> {
+  return tracer.startActiveSpan('morning-update.trigger', async (span) => {
+    try {
+      const isUuid =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          userIdOrExternal,
+        );
+      const user = await userService.find(
+        isUuid
+          ? { id: userIdOrExternal }
+          : { external_id: userIdOrExternal },
+      );
+      if (!user) {
+        throw new NotFoundException(
+          `User not found for ${toLogId(userIdOrExternal)}`,
+        );
+      }
+      const introItems = await resolveMorningUpdateIntroMedia(
+        mediaMetaDataService,
+      );
+      if (!introItems) {
+        throw new Error(
+          'No morning_notification_message media (image or video) found with status=ready',
+        );
+      }
+      const job_id = await enqueueMorningUpdateSend({
+        user_id: user.id,
+        user_external_id: user.external_id,
+        intro_media: introItems,
+        otel_carrier: injectCarrier(span),
+      });
+      span.setAttribute(
+        'morning_update.user.external_id_hash',
+        toLogId(user.external_id),
+      );
+      span.setAttribute('bullmq.job.id', job_id);
+      logger.log(
+        `Triggered morning-update for user ${toLogId(user.external_id)} job=${job_id}`,
+      );
+      return {
+        job_id,
+        user_id: user.id,
+        user_external_id: user.external_id,
+      };
+    } catch (err) {
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: (err as Error).message,
+      });
+      span.recordException(err as Error);
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
+}
+
 export async function processMorningUpdateCronJob(
   job: Job,
   dataSource: DataSource,
@@ -50,31 +166,10 @@ export async function processMorningUpdateCronJob(
         return;
       }
 
-      // Pick the morning-notification-message preloaded media. We send it as
-      // the first item, followed by the per-user report card image (resolved
-      // in the worker once it's 'ready').
-      const introMedia =
-        await mediaMetaDataService.findMediaByStateTransitionId(
-          'morning_notification_message',
-        );
-      const introItems: OutboundMediaItem[] = [];
-      const introImage = introMedia.image;
-      const introVideo = introMedia.video;
-      if (introVideo) {
-        introItems.push({
-          type: 'video',
-          url: introVideo.wa_media_url!,
-          mime_type: (introVideo.media_details as { mime_type?: string } | null)
-            ?.mime_type,
-        });
-      } else if (introImage) {
-        introItems.push({
-          type: 'image',
-          url: introImage.wa_media_url!,
-          mime_type: (introImage.media_details as { mime_type?: string } | null)
-            ?.mime_type,
-        });
-      } else {
+      const introItems = await resolveMorningUpdateIntroMedia(
+        mediaMetaDataService,
+      );
+      if (!introItems) {
         logger.error(
           'No morning_notification_message media (image or video) found with status=ready — aborting.',
         );
@@ -82,17 +177,14 @@ export async function processMorningUpdateCronJob(
         return;
       }
 
-      const sendQueue = createQueue(QUEUE_NAMES.MORNING_UPDATE_SEND);
       const otel_carrier = injectCarrier(span);
-
       for (const u of activeUsers) {
-        const data: MorningUpdateSendJobData = {
+        await enqueueMorningUpdateSend({
           user_id: u.user_id,
           user_external_id: u.external_id,
-          media: introItems,
+          intro_media: introItems,
           otel_carrier,
-        };
-        await sendQueue.add('morning-update-send', data);
+        });
       }
       span.setAttribute('morning_update.enqueued.count', activeUsers.length);
       logger.log(
