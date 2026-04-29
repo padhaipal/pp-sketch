@@ -206,12 +206,24 @@ describe('evaluate-answer.utils', () => {
       });
     });
 
-    /* -- specific cross-family checks the user might tune later -- */
-    it('marks र as same family as न (current FAMILIES table behavior)', () => {
-      // Documents the current — likely overly aggressive — behavior:
-      // the family ['ण','न','र'] makes 'रन' equivalent to 'नर'.
-      expect(markWord({ correctAnswer: 'नर', studentAnswer: 'रन' })).toBe(
+    /* -- ण / न / र families: ण equates to both न and र, but न and र do
+       not transitively equate (FAMILIES has ['ण','न'] and ['ण','र'] as
+       separate rows). -- */
+    it('treats ण and न as the same family', () => {
+      expect(markWord({ correctAnswer: 'णन', studentAnswer: 'नण' })).toBe(
         true,
+      );
+    });
+
+    it('treats ण and र as the same family', () => {
+      expect(markWord({ correctAnswer: 'णर', studentAnswer: 'रण' })).toBe(
+        true,
+      );
+    });
+
+    it('does NOT treat न and र as the same family', () => {
+      expect(markWord({ correctAnswer: 'नर', studentAnswer: 'रन' })).toBe(
+        false,
       );
     });
   });

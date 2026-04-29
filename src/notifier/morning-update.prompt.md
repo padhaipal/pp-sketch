@@ -64,12 +64,12 @@ WhatsApp pre-load, then sends.
     throw a `RequeueRequestedError` to trigger the 1-s requeue.
 
 5.) If row exists with `status === 'ready'` and `wa_media_url` is set →
-    build `fullMedia` as `[...job.data.media, { type: 'image', url, mime_type: 'image/png' }, { type: 'text', body: buildReferralUrl(user_external_id) }]`
+    build `fullMedia` as `[...job.data.media, { type: 'image', url, mime_type: 'image/png' }, { type: 'text', body: \`https://dashboard.padhaipal.com/r/${user_external_id}\` }]`
     and call `wabotOutbound.sendNotification({ user_external_id, media: fullMedia })`.
-    The trailing text item is the same `https://wa.me/918528097842?text=…`
-    URL the QR code on the report card encodes — sent as a follow-up so the
-    user can tap it directly to share, without needing a second device to
-    scan the QR.
+    The trailing text item is the same public referral URL the QR code on the
+    report card encodes — pp-dashboard's `/r/:id` route 302-redirects to the
+    wa.me link, sent as a follow-up so the user can tap it directly to share
+    without needing a second device to scan the QR.
     Error-code handling matches evening-reminder send:
       - 130429 (rate limit): throw to retry.
       - 131047 (24h window expired): WARN and return (permanent for this cycle).

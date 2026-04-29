@@ -27,9 +27,6 @@ function makeService(opts: {
 }): ReportCardService {
   const userService = {
     find: jest.fn().mockResolvedValue(opts.user),
-    buildReferralUrl: jest.fn((externalId: string) =>
-      Promise.resolve(`https://wa.me/918528097842?text=test-${externalId}`),
-    ),
   };
   const userActivityService = {
     getActivityTime: jest.fn().mockImplementation(({ windows }) => ({
@@ -193,6 +190,18 @@ describe('ReportCardService.buildData', () => {
     expect(data.daily_bars.map((b) => b.day_index)).toEqual([
       2, 3, 4, 5, 6, 0, 1,
     ]);
+  });
+
+  it('builds referral_url as dashboard.padhaipal.com/r/{external_id}', async () => {
+    const svc = makeService({
+      user: { id: 'u1', external_id: '918888888001' },
+      lettersByAsOf: new Map(),
+      activityWindows: Array(7).fill(0),
+    });
+    const data = await svc.buildData('u1', { now: NOW });
+    expect(data.referral_url).toBe(
+      'https://dashboard.padhaipal.com/r/918888888001',
+    );
   });
 
   it('throws NotFound when user does not resolve', async () => {

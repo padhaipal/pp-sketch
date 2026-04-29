@@ -218,7 +218,6 @@ export async function processMorningUpdateSendJob(
   mediaMetaDataService: MediaMetaDataService,
   mediaRepo: Repository<MediaMetaDataEntity>,
   wabotOutbound: WabotOutboundService,
-  userService: UserService,
 ): Promise<void> {
   const span = startChildSpan('morning-update.send', job.data.otel_carrier);
   span.setAttribute('bullmq.job.id', String(job.id));
@@ -274,9 +273,7 @@ export async function processMorningUpdateSendJob(
       );
     }
 
-    const referralUrl = await userService.buildReferralUrl(
-      job.data.user_external_id,
-    );
+    const referralUrl = `https://dashboard.padhaipal.com/r/${job.data.user_external_id}`;
     const fullMedia: OutboundMediaItem[] = [
       ...job.data.media,
       {
@@ -284,8 +281,8 @@ export async function processMorningUpdateSendJob(
         url: imageEntity.wa_media_url,
         mime_type: 'image/png',
       },
-      // Tappable wa.me sharing link as a follow-up text — same URL the QR
-      // code on the report card image encodes.
+      // Tappable referral link as a follow-up text. pp-dashboard's /r/:id
+      // route 302-redirects to the same wa.me URL the QR code encodes.
       { type: 'text', body: referralUrl },
     ];
 

@@ -196,12 +196,13 @@ export async function processWabotInboundJob(
           );
         }
 
-        // Tappable wa.me sharing link, sent between the welcome bundle and
-        // the first lesson. Same URL the morning-update notifier uses.
-        // const referralUrl = await userService.buildReferralUrl(
-        //   user.external_id,
-        // );
-        // onboardingMedia.push({ type: 'text', body: `To send PadhaiPal to your friends send them this link: ${referralUrl}` });
+        // Tappable referral link, sent between the welcome bundle and the
+        // first lesson. Same URL the morning-update notifier uses.
+        const referralUrl = `https://dashboard.padhaipal.com/r/${user.external_id}`;
+        onboardingMedia.push({
+          type: 'text',
+          body: `To send PadhaiPal to your friends send them this link: ${referralUrl}`,
+        });
 
         if (userMessageId) {
           try {

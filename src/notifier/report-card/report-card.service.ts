@@ -118,7 +118,7 @@ export class ReportCardService {
 
     return {
       user_external_id: user.external_id,
-      referral_url: await this.userService.buildReferralUrl(user.external_id),
+      referral_url: `https://dashboard.padhaipal.com/r/${user.external_id}`,
       letters_learnt: learntEndOfYesterday,
       letters_learnt_yesterday: yesterdayDelta,
       letters_currently_learning: currentlyLearning,

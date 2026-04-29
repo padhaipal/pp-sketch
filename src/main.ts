@@ -229,7 +229,6 @@ async function bootstrap() {
         mediaMetaDataService,
         mediaRepo,
         wabotOutbound,
-        userService,
       );
     },
     {

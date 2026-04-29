@@ -82,53 +82,6 @@ export class UserService {
     private readonly cacheService: CacheService,
   ) {}
 
-  // Single source of truth for the wa.me URL embedded in the report-card QR
-  // code AND the text follow-ups sent on onboarding + the morning update.
-  // The destination phone (PadhaiPal's WhatsApp number) is hardcoded; the
-  // user's own external_id is the referrer baked into the pre-filled message
-  // body, so when a friend taps the link their WhatsApp opens addressed to
-  // PadhaiPal with "I was referred by <user>" pre-filled.
-  //
-  // Returns a TinyURL-shortened version, cached in Redis (7-day TTL) so the
-  // public TinyURL API is hit at most once per week per user. On any
-  // shortener error we silently fall back to the unshortened wa.me URL —
-  // the link still works, just longer.
-  async buildReferralUrl(userExternalId: string): Promise<string> {
-    const template =
-      'पढ़ना सीखना शुरू करने के लिए कृपया एक टेक्स्ट मैसेज भेजें। {phonenumber} ने आपको रेफर किया है। अगर आप चाहते हैं कि हमें इस बात का पता चले, तो अपने टेक्स्ट मैसेज में उनका नंबर ज़रूर शामिल करें।';
-    const text = template.replace('{phonenumber}', userExternalId);
-    const longUrl = `https://wa.me/918528097842?text=${encodeURIComponent(text)}`;
-
-    const cacheKey = CACHE_KEYS.referralShortUrl(userExternalId);
-    const cached = await this.cacheService.get<string>(cacheKey);
-    if (cached) return cached;
-
-    try {
-      // 1-second budget — if TinyURL is slow, fall back to the long URL
-      // rather than blocking the morning-update worker / onboarding reply.
-      const res = await fetch(
-        `https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`,
-        { signal: AbortSignal.timeout(1000) },
-      );
-      if (!res.ok) throw new Error(`TinyURL HTTP ${res.status}`);
-      const shortUrl = (await res.text()).trim();
-      if (!/^https:\/\/(?:www\.)?tinyurl\.com\//.test(shortUrl)) {
-        throw new Error(`TinyURL bad response: ${shortUrl.slice(0, 80)}`);
-      }
-      await this.cacheService.set(
-        cacheKey,
-        shortUrl,
-        CACHE_TTL.REFERRAL_SHORT_URL,
-      );
-      return shortUrl;
-    } catch (err) {
-      this.logger.warn(
-        `TinyURL shorten failed — falling back to long URL: ${(err as Error).message}`,
-      );
-      return longUrl;
-    }
-  }
-
   async find(options: FindUserOptions): Promise<User | null> {
     const validated = validateFindUserOptions(options);
 
