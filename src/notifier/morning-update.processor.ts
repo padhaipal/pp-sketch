@@ -147,6 +147,12 @@ export async function processMorningUpdateCronJob(
   dataSource: DataSource,
   mediaMetaDataService: MediaMetaDataService,
 ): Promise<void> {
+  // TEMP: disabled while debugging Hindi-script tofu in report cards on Railway.
+  // Test endpoint /morning-update/send still works (separate code path via
+  // triggerMorningUpdateForUser). Re-enable by deleting this block.
+  logger.log('morning-update cron disabled — skipping (debugging Hindi tofu)');
+  return;
+
   return tracer.startActiveSpan('morning-update.cron', async (span) => {
     span.setAttribute('bullmq.job.id', String(job.id));
     try {
