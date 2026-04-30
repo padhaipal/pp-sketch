@@ -90,11 +90,29 @@ export class UserController {
     // Fetch user details
     const users = await this.userRepo
       .createQueryBuilder('u')
-      .select(['u.id', 'u.name', 'u.external_id'])
+      .select(['u.id', 'u.name', 'u.external_id', 'u.referrer_user_id'])
       .whereInIds(userIds)
       .getMany();
 
     const userMap = new Map(users.map((u) => [u.id, u]));
+
+    // Fetch referrer details for users that have a referrer
+    const referrerIds = Array.from(
+      new Set(
+        users
+          .map((u) => u.referrer_user_id)
+          .filter((id): id is string => !!id),
+      ),
+    );
+    const referrers =
+      referrerIds.length > 0
+        ? await this.userRepo
+            .createQueryBuilder('u')
+            .select(['u.id', 'u.name', 'u.external_id'])
+            .whereInIds(referrerIds)
+            .getMany()
+        : [];
+    const referrerMap = new Map(referrers.map((r) => [r.id, r]));
 
     // 7 IST-day windows ending today (inclusive). Day i covers
     // [todayMid - (6-i)*24h, todayMid - (6-i)*24h + 24h). Today's window
@@ -122,10 +140,15 @@ export class UserController {
     return activeUsers.map((r) => {
       const user = userMap.get(r.user_id);
       const userActivity = activityByUser.get(r.user_id);
+      const refId = user?.referrer_user_id ?? null;
+      const refUser = refId ? referrerMap.get(refId) : undefined;
       return {
         id: r.user_id,
         name: user?.name ?? null,
         external_id: user?.external_id ?? '',
+        referrer: refUser
+          ? { name: refUser.name, external_id: refUser.external_id }
+          : null,
         activity: dates.map((date, i) => ({
           date,
           active_ms: userActivity?.[i] ?? 0,

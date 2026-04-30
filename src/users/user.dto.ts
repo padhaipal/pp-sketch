@@ -106,10 +106,16 @@ export interface ActivityDay {
   active_ms: number;
 }
 
+export interface DashboardReferrer {
+  name: string | null;
+  external_id: string;
+}
+
 export interface DashboardUserRow {
   id: string;
   name: string | null;
   external_id: string;
+  referrer: DashboardReferrer | null;
   activity: ActivityDay[];
 }
 
