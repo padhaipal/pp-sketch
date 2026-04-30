@@ -156,16 +156,28 @@ function candidateWordsFromPrompt(row: SelectNextWordRow): string[] {
   const recentWords = getRecentWords(row).slice(0, RECENT_WORDS_TO_EXCLUDE);
 
   return WORD_LIST.filter(
-    (word) =>
-      graphemeLength(word) <= maxLength && !recentWords.includes(word),
+    (word) => graphemeLength(word) <= maxLength && !recentWords.includes(word),
   );
 }
 
+function isReviewedScore(score: number): boolean {
+  return !Number.isInteger(score * 2);
+}
+
+function computeBaseline(letterScores: LetterScores): number {
+  const reviewed = Object.values(letterScores).filter(isReviewedScore);
+  if (reviewed.length === 0) return 0;
+  return reviewed.reduce((sum, v) => sum + v, 0) / reviewed.length;
+}
+
 function scoreWord(word: string, letterScores: LetterScores): number {
-  return Array.from(word).reduce(
-    (sum, letter) => sum + (letterScores[letter] ?? -100),
-    0,
-  );
+  const baseline = computeBaseline(letterScores);
+  return Array.from(word).reduce((sum, letter) => {
+    const score = letterScores[letter];
+    if (score === undefined) return sum;
+    if (isReviewedScore(score)) return sum + (score - baseline);
+    return sum + score;
+  }, 0);
 }
 
 function minScoredCandidatesFromPrompt(row: SelectNextWordRow): string[] {
@@ -176,11 +188,19 @@ function minScoredCandidatesFromPrompt(row: SelectNextWordRow): string[] {
     return [];
   }
 
-  const minScore = Math.min(
-    ...candidates.map((word) => scoreWord(word, letterScores)),
+  const SCORE_EPS = 1e-9;
+  const scored = candidates.map((word) => ({
+    word,
+    score: scoreWord(word, letterScores),
+  }));
+  const minScore = Math.min(...scored.map((s) => s.score));
+  const minTies = scored.filter(
+    (s) => Math.abs(s.score - minScore) < SCORE_EPS,
   );
-
-  return candidates.filter((word) => scoreWord(word, letterScores) === minScore);
+  const maxLen = Math.max(...minTies.map((s) => graphemeLength(s.word)));
+  return minTies
+    .filter((s) => graphemeLength(s.word) === maxLen)
+    .map((s) => s.word);
 }
 
 function createServiceHarness(row: SelectNextWordRow): {
@@ -245,9 +265,7 @@ describe('LiteracyLessonService.selectNextWord', () => {
 
     const selectedWord = await (service as any).selectNextWord('user-2');
 
-    expect(maxLengthFromPrompt(row)).toBe(
-      graphemeLength('इतिहास') + 1,
-    );
+    expect(maxLengthFromPrompt(row)).toBe(graphemeLength('इतिहास') + 1);
     expect(graphemeLength(selectedWord)).toBeLessThanOrEqual(
       maxLengthFromPrompt(row),
     );
@@ -367,7 +385,7 @@ describe('LiteracyLessonService.selectNextWord', () => {
     expect(getRecentWords(row)).not.toContain(selectedWord);
   });
 
-  it('uses -100 default score for unknown letters, favoring longer candidates when max length is 2', async () => {
+  it('uses 0 default score for unknown letters and logs one WARN', async () => {
     const row = buildRow({
       distinctWordCount: 0,
       uniqueInAddWindow: 0,
@@ -375,12 +393,14 @@ describe('LiteracyLessonService.selectNextWord', () => {
       recentWords: [],
       letterScores: {},
     });
-    const { service } = createServiceHarness(row);
+    const { service, warnMock } = createServiceHarness(row);
 
     const selectedWord = await (service as any).selectNextWord('user-6');
 
     expect(graphemeLength(selectedWord)).toBe(MIN_WORD_LENGTH_FLOOR);
     expect(minScoredCandidatesFromPrompt(row)).toContain(selectedWord);
+    expect(warnMock).toHaveBeenCalledTimes(1);
+    expect(String(warnMock.mock.calls[0][0])).toContain('unknown grapheme');
   });
 
   it('applies partial unknown-letter fallback when only some graphemes have scores', async () => {
@@ -393,9 +413,11 @@ describe('LiteracyLessonService.selectNextWord', () => {
         क: -150,
       },
     });
-    const { service } = createServiceHarness(row);
+    const { service, warnMock } = createServiceHarness(row);
 
-    const selectedWord = await (service as any).selectNextWord('user-mixed-fallback');
+    const selectedWord = await (service as any).selectNextWord(
+      'user-mixed-fallback',
+    );
     const minima = minScoredCandidatesFromPrompt(row);
 
     expect(minima).toContain(selectedWord);
@@ -407,9 +429,10 @@ describe('LiteracyLessonService.selectNextWord', () => {
         return hasKnown && hasUnknown;
       }),
     ).toBe(true);
+    expect(warnMock).toHaveBeenCalledTimes(1);
   });
 
-  it('uses -100 for unknown graphemes when ranking words', async () => {
+  it('uses 0 for unknown graphemes when ranking words', async () => {
     const row = buildRow({
       distinctWordCount: 0,
       uniqueInAddWindow: 0,
@@ -419,14 +442,15 @@ describe('LiteracyLessonService.selectNextWord', () => {
         क: -1,
       },
     });
-    const { service } = createServiceHarness(row);
+    const { service, warnMock } = createServiceHarness(row);
 
     const selectedWord = await (service as any).selectNextWord(
-      'user-unknown-minus-100',
+      'user-unknown-zero',
     );
     const minima = minScoredCandidatesFromPrompt(row);
 
     expect(minima).toContain(selectedWord);
+    expect(warnMock).toHaveBeenCalledTimes(1);
   });
 
   it('falls back safely when recent words are unexpectedly empty for experienced users', async () => {
@@ -439,13 +463,17 @@ describe('LiteracyLessonService.selectNextWord', () => {
     });
     const { service, warnMock } = createServiceHarness(row);
 
-    const selectedWord = await (service as any).selectNextWord('user-empty-recent');
+    const selectedWord = await (service as any).selectNextWord(
+      'user-empty-recent',
+    );
 
     expect(graphemeLength(selectedWord)).toBeLessThanOrEqual(
       MIN_WORD_LENGTH_FLOOR,
     );
     expect(warnMock).toHaveBeenCalledTimes(1);
-    expect(String(warnMock.mock.calls[0][0])).toContain('recent_words is empty');
+    expect(String(warnMock.mock.calls[0][0])).toContain(
+      'recent_words is empty',
+    );
   });
 
   it('uses randomness to break ties between equally scored words', async () => {
@@ -530,7 +558,9 @@ describe('LiteracyLessonService.selectNextWord', () => {
     const { service } = createServiceHarness(buildRow({}));
     (service as any).dataSource.query = jest.fn().mockResolvedValue([]);
 
-    await expect((service as any).selectNextWord('user-empty-db')).rejects.toThrow();
+    await expect(
+      (service as any).selectNextWord('user-empty-db'),
+    ).rejects.toThrow();
   });
 
   it('throws when the DB row omits expected aggregate fields', async () => {
@@ -540,6 +570,370 @@ describe('LiteracyLessonService.selectNextWord', () => {
     await expect(
       (service as any).selectNextWord('user-missing-fields'),
     ).rejects.toThrow();
+  });
+});
+
+describe('LiteracyLessonService.selectNextWord — boundary & invariant cases', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('forces MIN floor when recentRowCount=7 even for users with many distinct words', async () => {
+    const row = buildRow({
+      distinctWordCount: NEW_USER_THRESHOLD + 10,
+      uniqueInAddWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+      uniqueInKeepWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+      recentWords: ['इतिहास'],
+      recentRowCount: SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH - 1,
+      letterScores: buildUniformLetterScores(1),
+    });
+    const { service } = createServiceHarness(row);
+
+    const selected = await (service as any).selectNextWord('user-rrc-7');
+
+    expect(maxLengthFromPrompt(row)).toBe(MIN_WORD_LENGTH_FLOOR);
+    expect(graphemeLength(selected)).toBeLessThanOrEqual(MIN_WORD_LENGTH_FLOOR);
+  });
+
+  it('unlocks dynamic max-length the moment recentRowCount reaches threshold (=8)', async () => {
+    const row = buildRow({
+      distinctWordCount: NEW_USER_THRESHOLD,
+      uniqueInAddWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+      uniqueInKeepWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+      recentWords: ['ओम'],
+      recentRowCount: SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH,
+      letterScores: buildUniformLetterScores(1),
+    });
+    const { service } = createServiceHarness(row);
+
+    const selected = await (service as any).selectNextWord('user-rrc-8');
+
+    expect(maxLengthFromPrompt(row)).toBe(graphemeLength('ओम') + 1);
+    expect(graphemeLength(selected)).toBeLessThanOrEqual(
+      maxLengthFromPrompt(row),
+    );
+  });
+
+  it('switches keep→grow exactly at uniqueInAddWindow=3 boundary', () => {
+    const recentWords = ['इतिहास'];
+    const make = (addWindow: number) =>
+      buildRow({
+        distinctWordCount: NEW_USER_THRESHOLD + 5,
+        uniqueInAddWindow: addWindow,
+        uniqueInKeepWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+        recentWords,
+        letterScores: buildUniformLetterScores(0),
+      });
+
+    expect(maxLengthFromPrompt(make(MIN_UNIQUE_WORDS_FOR_PROGRESS - 1))).toBe(
+      graphemeLength('इतिहास'),
+    );
+    expect(maxLengthFromPrompt(make(MIN_UNIQUE_WORDS_FOR_PROGRESS))).toBe(
+      graphemeLength('इतिहास') + 1,
+    );
+  });
+
+  it('switches shrink→keep exactly at uniqueInKeepWindow=3 boundary', () => {
+    const recentWords = ['इतिहास'];
+    const make = (keepWindow: number) =>
+      buildRow({
+        distinctWordCount: NEW_USER_THRESHOLD + 5,
+        uniqueInAddWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS - 1,
+        uniqueInKeepWindow: keepWindow,
+        recentWords,
+        letterScores: buildUniformLetterScores(0),
+      });
+
+    expect(maxLengthFromPrompt(make(MIN_UNIQUE_WORDS_FOR_PROGRESS - 1))).toBe(
+      graphemeLength('इतिहास') - 1,
+    );
+    expect(maxLengthFromPrompt(make(MIN_UNIQUE_WORDS_FOR_PROGRESS))).toBe(
+      graphemeLength('इतिहास'),
+    );
+  });
+
+  it('selected word always satisfies length ≤ maxLength across mixed scenarios', async () => {
+    const scenarios = [
+      buildRow({
+        distinctWordCount: 0,
+        uniqueInAddWindow: 0,
+        uniqueInKeepWindow: 0,
+        recentWords: [],
+        letterScores: buildUniformLetterScores(2),
+      }),
+      buildRow({
+        distinctWordCount: 10,
+        uniqueInAddWindow: 5,
+        uniqueInKeepWindow: 8,
+        recentWords: ['नटखट'],
+        letterScores: buildUniformLetterScores(2),
+      }),
+      buildRow({
+        distinctWordCount: 10,
+        uniqueInAddWindow: 1,
+        uniqueInKeepWindow: 2,
+        recentWords: ['कसरत'],
+        letterScores: buildUniformLetterScores(2),
+      }),
+    ];
+
+    for (const row of scenarios) {
+      const { service } = createServiceHarness(row);
+      const selected = await (service as any).selectNextWord('user-prop');
+      expect(graphemeLength(selected)).toBeLessThanOrEqual(
+        maxLengthFromPrompt(row),
+      );
+    }
+  });
+
+  it('uses sum (not avg) of letter scores: under uniform negative scores, longest allowed word wins', async () => {
+    const row = buildRow({
+      distinctWordCount: NEW_USER_THRESHOLD,
+      uniqueInAddWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+      uniqueInKeepWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+      recentWords: ['ओम'],
+      letterScores: buildUniformLetterScores(-1),
+    });
+    const { service } = createServiceHarness(row);
+
+    const selected = await (service as any).selectNextWord('user-sum');
+
+    expect(maxLengthFromPrompt(row)).toBe(3);
+    expect(graphemeLength(selected)).toBe(maxLengthFromPrompt(row));
+  });
+
+  it('does not mutate wordList across multiple invocations', async () => {
+    const row = buildRow({
+      distinctWordCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
+      recentWords: [],
+      letterScores: buildUniformLetterScores(1),
+    });
+    const { service } = createServiceHarness(row);
+    const original = [...WORD_LIST];
+
+    await (service as any).selectNextWord('user-immut-1');
+    await (service as any).selectNextWord('user-immut-2');
+    await (service as any).selectNextWord('user-immut-3');
+
+    expect((service as any).wordList).toEqual(original);
+  });
+
+  it('excludes every word in recentWords even when list exceeds RECENT_WORDS_TO_EXCLUDE', async () => {
+    const longExclusion = WORD_LIST.filter(
+      (word) => graphemeLength(word) === MIN_WORD_LENGTH_FLOOR,
+    ).slice(0, RECENT_WORDS_TO_EXCLUDE + 3);
+    const row = buildRow({
+      distinctWordCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
+      recentWords: longExclusion,
+      letterScores: buildUniformLetterScores(1),
+    });
+    const { service } = createServiceHarness(row);
+
+    const selected = await (service as any).selectNextWord('user-many-recent');
+
+    expect(longExclusion).not.toContain(selected);
+  });
+
+  it('runs the SQL summary query exactly once per call, with userId in slot $1', async () => {
+    const row = buildRow({
+      distinctWordCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
+      recentWords: [],
+      letterScores: buildUniformLetterScores(1),
+    });
+    const { service, queryMock } = createServiceHarness(row);
+
+    await (service as any).selectNextWord('user-query-once');
+
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    const [, params] = queryMock.mock.calls[0];
+    expect(params[0]).toBe('user-query-once');
+    expect(params[1]).toBe(RECENT_WORDS_TO_EXCLUDE);
+    expect(params[2]).toBe(SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME);
+    expect(params[3]).toBe(SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH);
+  });
+
+  it('parallel invocations return independent valid candidates', async () => {
+    const row = buildRow({
+      distinctWordCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
+      recentWords: [],
+      letterScores: buildUniformLetterScores(0),
+    });
+    const { service, queryMock } = createServiceHarness(row);
+    const minima = minScoredCandidatesFromPrompt(row);
+
+    const results = await Promise.all([
+      (service as any).selectNextWord('user-c1'),
+      (service as any).selectNextWord('user-c2'),
+      (service as any).selectNextWord('user-c3'),
+    ]);
+
+    expect(queryMock).toHaveBeenCalledTimes(3);
+    for (const word of results) {
+      expect(minima).toContain(word);
+    }
+  });
+
+  it('handles a recentWords entry that is not in wordList without skipping a real candidate', async () => {
+    const ghostWord = 'नहीं-इस-सूची-में';
+    const row = buildRow({
+      distinctWordCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
+      recentWords: [ghostWord],
+      letterScores: buildUniformLetterScores(1),
+    });
+    const { service } = createServiceHarness(row);
+
+    const selected = await (service as any).selectNextWord('user-ghost');
+
+    expect(WORD_LIST).toContain(selected);
+    expect(graphemeLength(selected)).toBeLessThanOrEqual(MIN_WORD_LENGTH_FLOOR);
+  });
+});
+
+describe('LiteracyLessonService.selectNextWord — baseline & tie-break', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('isReviewedScore: integers and half-integers are seeds; everything else reviewed', () => {
+    expect(isReviewedScore(0)).toBe(false);
+    expect(isReviewedScore(-100)).toBe(false);
+    expect(isReviewedScore(7)).toBe(false);
+    expect(isReviewedScore(0.5)).toBe(false);
+    expect(isReviewedScore(-2.5)).toBe(false);
+    expect(isReviewedScore(1.01)).toBe(true);
+    expect(isReviewedScore(-3.001)).toBe(true);
+    expect(isReviewedScore(2.02)).toBe(true);
+  });
+
+  it('computeBaseline: ignores seed/half scores; averages reviewed scores; 0 when none', () => {
+    expect(computeBaseline({})).toBe(0);
+    expect(computeBaseline({ क: 0, अ: 2, ब: -1.5 })).toBe(0);
+    expect(computeBaseline({ क: 1.01, अ: 5.01 })).toBeCloseTo(3.01, 9);
+    expect(computeBaseline({ क: 0, अ: 2, ब: 1.01, न: 5.01 })).toBeCloseTo(
+      3.01,
+      9,
+    );
+  });
+
+  it('scoreWord: subtracts baseline only from reviewed letters; seeds use raw; unknown contribute 0', () => {
+    const ls: LetterScores = { क: 0, अ: 2, ब: 1.01, न: 5.01 };
+    expect(scoreWord('क', ls)).toBe(0);
+    expect(scoreWord('अ', ls)).toBe(2);
+    expect(scoreWord('ब', ls)).toBeCloseTo(-2, 9);
+    expect(scoreWord('न', ls)).toBeCloseTo(2, 9);
+    expect(scoreWord('कब', ls)).toBeCloseTo(-2, 9);
+    expect(scoreWord('?', ls)).toBe(0);
+  });
+
+  it('breaks score ties by selecting the longest word', async () => {
+    const recentWords = ['ओम'];
+    const row = buildRow({
+      distinctWordCount: NEW_USER_THRESHOLD,
+      uniqueInAddWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+      uniqueInKeepWindow: MIN_UNIQUE_WORDS_FOR_PROGRESS,
+      recentWords,
+      letterScores: buildUniformLetterScores(0),
+    });
+    const { service } = createServiceHarness(row);
+
+    const selected = await (service as any).selectNextWord('user-tie-longest');
+
+    expect(maxLengthFromPrompt(row)).toBe(3);
+    expect(graphemeLength(selected)).toBe(3);
+  });
+
+  it('still picks at random when ties remain after the longest filter', async () => {
+    const row = buildRow({
+      distinctWordCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
+      recentWords: [],
+      letterScores: buildUniformLetterScores(0),
+    });
+    const { service } = createServiceHarness(row);
+
+    const randomSpy = jest.spyOn(Math, 'random');
+    randomSpy.mockReturnValueOnce(0).mockReturnValueOnce(0.999999);
+
+    const first = await (service as any).selectNextWord('user-tie-rand-1');
+    const second = await (service as any).selectNextWord('user-tie-rand-2');
+
+    expect(graphemeLength(first)).toBe(MIN_WORD_LENGTH_FLOOR);
+    expect(graphemeLength(second)).toBe(MIN_WORD_LENGTH_FLOOR);
+    expect(first).not.toBe(second);
+  });
+
+  it('logs baseline and top5 in the selectNextWord log line', async () => {
+    const row = buildRow({
+      distinctWordCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
+      recentWords: [],
+      letterScores: { क: 1.01, अ: 5.01 },
+    });
+    const { service } = createServiceHarness(row);
+    const logSpy = jest.fn();
+    (service as any).logger.log = logSpy;
+
+    await (service as any).selectNextWord('user-baseline-log');
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const message = String(logSpy.mock.calls[0][0]);
+    expect(message).toMatch(/baseline=3\.010/);
+    expect(message).toMatch(/reviewed=2/);
+    expect(message).toMatch(/top5=\[/);
+  });
+
+  it('baseline=0 logged when no reviewed letters present', async () => {
+    const row = buildRow({
+      distinctWordCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
+      recentWords: [],
+      letterScores: buildUniformLetterScores(0),
+    });
+    const { service } = createServiceHarness(row);
+    const logSpy = jest.fn();
+    (service as any).logger.log = logSpy;
+
+    await (service as any).selectNextWord('user-no-reviewed');
+
+    const message = String(logSpy.mock.calls[0][0]);
+    expect(message).toMatch(/baseline=0\.000/);
+    expect(message).toMatch(/reviewed=0/);
+  });
+
+  it('reviewed letter shifted below seeds outranks a same-raw seed', async () => {
+    // 'क' seed at 0; 'त' reviewed at 1.01; 'न' reviewed at 7.01.
+    // baseline = (1.01 + 7.01) / 2 = 4.01
+    // adjusted: क=0 (seed), त=1.01−4.01=−3, न=7.01−4.01=3
+    // → 'त' should outrank 'क' as the lowest-scoring single grapheme.
+    const row = buildRow({
+      distinctWordCount: 0,
+      uniqueInAddWindow: 0,
+      uniqueInKeepWindow: 0,
+      recentWords: [],
+      letterScores: { क: 0, त: 1.01, न: 7.01 },
+    });
+
+    expect(scoreWord('क', { क: 0, त: 1.01, न: 7.01 })).toBe(0);
+    expect(scoreWord('त', { क: 0, त: 1.01, न: 7.01 })).toBeCloseTo(-3, 9);
+
+    const { service } = createServiceHarness(row);
+    const minima = minScoredCandidatesFromPrompt(row);
+    const selected = await (service as any).selectNextWord('user-baseline-pick');
+
+    expect(minima).toContain(selected);
   });
 });
 

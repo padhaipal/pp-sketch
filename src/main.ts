@@ -206,11 +206,7 @@ async function bootstrap() {
   const morningUpdateWorker = createWorker(
     QUEUE_NAMES.MORNING_UPDATE,
     async (job) => {
-      await processMorningUpdateCronJob(
-        job,
-        dataSource,
-        mediaMetaDataService,
-      );
+      await processMorningUpdateCronJob(job, dataSource, mediaMetaDataService);
     },
   );
   morningUpdateWorker.on('failed', (job, err) =>

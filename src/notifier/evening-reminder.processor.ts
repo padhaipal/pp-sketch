@@ -228,9 +228,7 @@ export async function processNotifierSendJob(
         );
       }
 
-      logger.log(
-        `Notification delivered to user ${toLogId(user_external_id)}`,
-      );
+      logger.log(`Notification delivered to user ${toLogId(user_external_id)}`);
     } catch (err) {
       span.setStatus({
         code: SpanStatusCode.ERROR,

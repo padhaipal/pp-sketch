@@ -4,6 +4,7 @@ import { Repository, DataSource } from 'typeorm';
 import { UserEntity } from './user.entity';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
+import { ScoreService } from '../literacy/score/score.service';
 import {
   User,
   FindUserOptions,
@@ -14,63 +15,6 @@ import {
   validateCreateUserOptions,
 } from './user.dto';
 
-const SEED_SCORES: { grapheme: string; score: number }[] = [
-  { grapheme: 'ऋ', score: -99 },
-  { grapheme: 'ा', score: -98.5 },
-  { grapheme: 'ी', score: -98 },
-  { grapheme: 'ु', score: -97.5 },
-  { grapheme: 'े', score: -97 },
-  { grapheme: 'ो', score: -96.5 },
-  { grapheme: 'ै', score: -96 },
-  { grapheme: 'ू', score: -95.5 },
-  { grapheme: 'ौ', score: -95 },
-  { grapheme: 'ि', score: -94.5 },
-  { grapheme: 'ं', score: -94 },
-  { grapheme: 'ृ', score: -93.5 },
-  { grapheme: 'ञ', score: -93 },
-  { grapheme: 'ण', score: -93 },
-  { grapheme: 'अ', score: -100 },
-  { grapheme: 'आ', score: -100 },
-  { grapheme: 'इ', score: -100 },
-  { grapheme: 'ई', score: -100 },
-  { grapheme: 'उ', score: -100 },
-  { grapheme: 'ऊ', score: -100 },
-  { grapheme: 'ए', score: -100 },
-  { grapheme: 'ऐ', score: -100 },
-  { grapheme: 'ओ', score: -100 },
-  { grapheme: 'औ', score: -100 },
-  { grapheme: 'क', score: -100 },
-  { grapheme: 'ख', score: -100 },
-  { grapheme: 'ग', score: -100 },
-  { grapheme: 'घ', score: -100 },
-  { grapheme: 'च', score: -100 },
-  { grapheme: 'छ', score: -100 },
-  { grapheme: 'ज', score: -100 },
-  { grapheme: 'झ', score: -100 },
-  { grapheme: 'ट', score: -100 },
-  { grapheme: 'ठ', score: -100 },
-  { grapheme: 'ड', score: -100 },
-  { grapheme: 'ढ', score: -100 },
-  { grapheme: 'त', score: -100 },
-  { grapheme: 'थ', score: -100 },
-  { grapheme: 'द', score: -100 },
-  { grapheme: 'ध', score: -100 },
-  { grapheme: 'न', score: -100 },
-  { grapheme: 'प', score: -100 },
-  { grapheme: 'फ', score: -100 },
-  { grapheme: 'ब', score: -100 },
-  { grapheme: 'भ', score: -100 },
-  { grapheme: 'म', score: -100 },
-  { grapheme: 'य', score: -100 },
-  { grapheme: 'र', score: -100 },
-  { grapheme: 'ल', score: -100 },
-  { grapheme: 'व', score: -100 },
-  { grapheme: 'श', score: -100 },
-  { grapheme: 'ष', score: -100 },
-  { grapheme: 'स', score: -100 },
-  { grapheme: 'ह', score: -100 },
-];
-
 @Injectable()
 export class UserService {
   private readonly logger = new Logger(UserService.name);
@@ -80,6 +24,7 @@ export class UserService {
     private readonly userRepo: Repository<UserEntity>,
     private readonly dataSource: DataSource,
     private readonly cacheService: CacheService,
+    private readonly scoreService: ScoreService,
   ) {}
 
   async find(options: FindUserOptions): Promise<User | null> {
@@ -239,7 +184,7 @@ export class UserService {
         }
       }
 
-      await this.createSeedScores(user.id);
+      await this.scoreService.createSeedScores(user.id);
       await this.populateUserCache(user);
       return user;
     } else if (validated.referrer_external_id) {
@@ -262,7 +207,7 @@ export class UserService {
           name: validated.name ?? null,
         });
         user = await this.userRepo.save(user);
-        await this.createSeedScores(user.id);
+        await this.scoreService.createSeedScores(user.id);
         await this.populateUserCache(user);
         return user;
       }
@@ -292,7 +237,7 @@ export class UserService {
         }
       }
 
-      await this.createSeedScores(user.id);
+      await this.scoreService.createSeedScores(user.id);
       await this.populateUserCache(user);
       return user;
     } else {
@@ -303,32 +248,9 @@ export class UserService {
     }
 
     user = await this.userRepo.save(user);
-    await this.createSeedScores(user.id);
+    await this.scoreService.createSeedScores(user.id);
     await this.populateUserCache(user);
     return user;
-  }
-
-  private async createSeedScores(userId: string): Promise<void> {
-    if (SEED_SCORES.length === 0) return;
-
-    const params: unknown[] = [userId];
-    const selects: string[] = [];
-
-    for (const { grapheme, score } of SEED_SCORES) {
-      const gIdx = params.push(grapheme);
-      const sIdx = params.push(score);
-      selects.push(
-        `SELECT $1::uuid, l.id, $${sIdx}::double precision FROM letters l WHERE l.grapheme = $${gIdx}`,
-      );
-    }
-
-    const rows = await this.dataSource.query(
-      `INSERT INTO scores (user_id, letter_id, score)
-       ${selects.join('\n       UNION ALL\n       ')}`,
-      params,
-    );
-
-    this.logger.log(`Seed scores: inserted ${rows.length} for user ${userId}`);
   }
 
   private async populateUserCache(user: User): Promise<void> {

@@ -22,7 +22,7 @@ const FAMILIES: string[][] = [
   ['ब', 'भ'],
   ['श', 'ष', 'स'],
   ['र'],
-  ['य', 'ए', 'ऐ', 'े', ' ै'], 
+  ['य', 'ए', 'ऐ', 'े', ' ै'],
   ['ओ', 'औ', ' ो', 'ौ'],
   ['अ', 'आ', 'ा'],
   ['इ', 'ई', 'ि', ' ी'],
@@ -32,8 +32,8 @@ const FAMILIES: string[][] = [
   ['ड'],
   ['ङ'],
   ['ञ'],
-  ['ण', 'न' ],
-  ['ण', 'र' ],
+  ['ण', 'न'],
+  ['ण', 'र'],
   ['म'],
   ['ल'],
   ['व'],
@@ -91,53 +91,125 @@ class EvaluateAnswer {
 
     // Hard coding: transcription engine splits multi-syllable words into separate words.
     // Using .includes() because combinedTranscript concatenates sarvam+azure transcripts.
-    if (cleanedCorrectAnswer === 'अमरस' && cleanedFullStudentAnswer.includes('अमररस'))
+    if (
+      cleanedCorrectAnswer === 'अमरस' &&
+      cleanedFullStudentAnswer.includes('अमररस')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'कागज' && cleanedFullStudentAnswer.includes('कागज'))
+    if (
+      cleanedCorrectAnswer === 'कागज' &&
+      cleanedFullStudentAnswer.includes('कागज')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'खटमल' && cleanedFullStudentAnswer.includes('खटमल'))
+    if (
+      cleanedCorrectAnswer === 'खटमल' &&
+      cleanedFullStudentAnswer.includes('खटमल')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'टमटम' && cleanedFullStudentAnswer.includes('टमटम'))
+    if (
+      cleanedCorrectAnswer === 'टमटम' &&
+      cleanedFullStudentAnswer.includes('टमटम')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'नटखट' && cleanedFullStudentAnswer.includes('नटखट'))
+    if (
+      cleanedCorrectAnswer === 'नटखट' &&
+      cleanedFullStudentAnswer.includes('नटखट')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'बलगम' && cleanedFullStudentAnswer.includes('बलगम'))
+    if (
+      cleanedCorrectAnswer === 'बलगम' &&
+      cleanedFullStudentAnswer.includes('बलगम')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'पीपल' && cleanedFullStudentAnswer.includes('पीपल'))
+    if (
+      cleanedCorrectAnswer === 'पीपल' &&
+      cleanedFullStudentAnswer.includes('पीपल')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'परसो' && cleanedFullStudentAnswer.includes('परसो'))
+    if (
+      cleanedCorrectAnswer === 'परसो' &&
+      cleanedFullStudentAnswer.includes('परसो')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'हलचल' && cleanedFullStudentAnswer.includes('हलचल'))
+    if (
+      cleanedCorrectAnswer === 'हलचल' &&
+      cleanedFullStudentAnswer.includes('हलचल')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'हरदम' && cleanedFullStudentAnswer.includes('हरदम'))
+    if (
+      cleanedCorrectAnswer === 'हरदम' &&
+      cleanedFullStudentAnswer.includes('हरदम')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'कलाकार' && cleanedFullStudentAnswer.includes('कलाकार'))
+    if (
+      cleanedCorrectAnswer === 'कलाकार' &&
+      cleanedFullStudentAnswer.includes('कलाकार')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'दोपहर' && cleanedFullStudentAnswer.includes('दोपहर'))
+    if (
+      cleanedCorrectAnswer === 'दोपहर' &&
+      cleanedFullStudentAnswer.includes('दोपहर')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'नाखून' && cleanedFullStudentAnswer.includes('नाखून'))
+    if (
+      cleanedCorrectAnswer === 'नाखून' &&
+      cleanedFullStudentAnswer.includes('नाखून')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'भूगोल' && cleanedFullStudentAnswer.includes('भूगोल'))
+    if (
+      cleanedCorrectAnswer === 'भूगोल' &&
+      cleanedFullStudentAnswer.includes('भूगोल')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'चौकीदार' && cleanedFullStudentAnswer.includes('चौकीदार'))
+    if (
+      cleanedCorrectAnswer === 'चौकीदार' &&
+      cleanedFullStudentAnswer.includes('चौकीदार')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'कारखाना' && cleanedFullStudentAnswer.includes('कारखाना'))
+    if (
+      cleanedCorrectAnswer === 'कारखाना' &&
+      cleanedFullStudentAnswer.includes('कारखाना')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'दालचीनी' && cleanedFullStudentAnswer.includes('दालचीनी'))
+    if (
+      cleanedCorrectAnswer === 'दालचीनी' &&
+      cleanedFullStudentAnswer.includes('दालचीनी')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'नाशपाती' && cleanedFullStudentAnswer.includes('नाशपाती'))
+    if (
+      cleanedCorrectAnswer === 'नाशपाती' &&
+      cleanedFullStudentAnswer.includes('नाशपाती')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'सोयाबीन' && cleanedFullStudentAnswer.includes('सोयाबीन'))
+    if (
+      cleanedCorrectAnswer === 'सोयाबीन' &&
+      cleanedFullStudentAnswer.includes('सोयाबीन')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'तकिया' && cleanedFullStudentAnswer.includes('तकया'))
+    if (
+      cleanedCorrectAnswer === 'तकिया' &&
+      cleanedFullStudentAnswer.includes('तकया')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'तौलिया' && cleanedFullStudentAnswer.includes('तौलया'))
+    if (
+      cleanedCorrectAnswer === 'तौलिया' &&
+      cleanedFullStudentAnswer.includes('तौलया')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'करेला' && cleanedFullStudentAnswer.includes('करेला'))
+    if (
+      cleanedCorrectAnswer === 'करेला' &&
+      cleanedFullStudentAnswer.includes('करेला')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'पुलिस' && cleanedFullStudentAnswer.includes('पुलइस'))
+    if (
+      cleanedCorrectAnswer === 'पुलिस' &&
+      cleanedFullStudentAnswer.includes('पुलइस')
+    )
       return true;
-    if (cleanedCorrectAnswer === 'अलमारी' && cleanedFullStudentAnswer.includes('अलमारी'))
+    if (
+      cleanedCorrectAnswer === 'अलमारी' &&
+      cleanedFullStudentAnswer.includes('अलमारी')
+    )
       return true;
 
     return studentWords.some((studentWord) => {

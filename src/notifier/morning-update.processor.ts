@@ -93,18 +93,15 @@ export async function triggerMorningUpdateForUser(
           userIdOrExternal,
         );
       const user = await userService.find(
-        isUuid
-          ? { id: userIdOrExternal }
-          : { external_id: userIdOrExternal },
+        isUuid ? { id: userIdOrExternal } : { external_id: userIdOrExternal },
       );
       if (!user) {
         throw new NotFoundException(
           `User not found for ${toLogId(userIdOrExternal)}`,
         );
       }
-      const introItems = await resolveMorningUpdateIntroMedia(
-        mediaMetaDataService,
-      );
+      const introItems =
+        await resolveMorningUpdateIntroMedia(mediaMetaDataService);
       if (!introItems) {
         throw new Error(
           'No morning_notification_message media (image or video) found with status=ready',
@@ -153,22 +150,27 @@ export async function processMorningUpdateCronJob(
       const now = new Date();
       const windowStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
       const idleSince = new Date(now.getTime() - 5 * 60 * 1000);
-      span.setAttribute('morning_update.window.start', windowStart.toISOString());
+      span.setAttribute(
+        'morning_update.window.start',
+        windowStart.toISOString(),
+      );
       span.setAttribute('morning_update.idle_since', idleSince.toISOString());
 
       const activeUsers = await getActiveUsers(dataSource, {
         windowStart,
         idleSince,
       });
-      span.setAttribute('morning_update.active_users.count', activeUsers.length);
+      span.setAttribute(
+        'morning_update.active_users.count',
+        activeUsers.length,
+      );
       if (activeUsers.length === 0) {
         logger.log('No active users — skipping morning update.');
         return;
       }
 
-      const introItems = await resolveMorningUpdateIntroMedia(
-        mediaMetaDataService,
-      );
+      const introItems =
+        await resolveMorningUpdateIntroMedia(mediaMetaDataService);
       if (!introItems) {
         logger.error(
           'No morning_notification_message media (image or video) found with status=ready — aborting.',
@@ -187,9 +189,7 @@ export async function processMorningUpdateCronJob(
         });
       }
       span.setAttribute('morning_update.enqueued.count', activeUsers.length);
-      logger.log(
-        `Enqueued ${String(activeUsers.length)} morning-update jobs.`,
-      );
+      logger.log(`Enqueued ${String(activeUsers.length)} morning-update jobs.`);
     } catch (err) {
       span.setStatus({
         code: SpanStatusCode.ERROR,

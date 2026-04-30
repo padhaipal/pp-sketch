@@ -143,7 +143,7 @@ export async function processHailMaryJob(
 
       try {
         const lessonResult = await literacyLessonService.processAnswer({
-          user: user as User,
+          user: user,
           user_message_id: latest.id,
         });
         for (const stid of lessonResult.stateTransitionIds) {
@@ -210,4 +210,3 @@ function appendMediaItems(
     }
   }
 }
-

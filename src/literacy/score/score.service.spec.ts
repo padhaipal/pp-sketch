@@ -126,7 +126,7 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
   it('bin 1: letter seeded but never practiced → untouched', async () => {
     const u = await makeUser('918888887002');
     const k = await makeLetter('क');
-    await seed(u, k, -100);
+    await seed(u, k, 0);
 
     const res = (await service.getLetterBins(u)) as LetterBinsResult;
     expect(res.bins.untouched).toContain('क');
@@ -135,8 +135,8 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
   it('bin 1: letter has scores but no seed row → still untouched', async () => {
     const u = await makeUser('918888887003');
     const k = await makeLetter('क');
-    await practice(u, k, -98, '2026-01-02T00:00:00Z');
-    await practice(u, k, -97, '2026-01-03T00:00:00Z');
+    await practice(u, k, 2, '2026-01-02T00:00:00Z');
+    await practice(u, k, 3, '2026-01-03T00:00:00Z');
 
     const res = (await service.getLetterBins(u)) as LetterBinsResult;
     expect(res.bins.untouched).toContain('क');
@@ -145,8 +145,8 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
   it('bin 2 (regressed): final < seed', async () => {
     const u = await makeUser('918888887004');
     const k = await makeLetter('क');
-    await seed(u, k, -100);
-    await practice(u, k, -103, '2026-01-02T00:00:00Z');
+    await seed(u, k, 0);
+    await practice(u, k, -3, '2026-01-02T00:00:00Z');
 
     const res = (await service.getLetterBins(u)) as LetterBinsResult;
     expect(res.bins.regressed).toContain('क');
@@ -156,9 +156,9 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
   it('bin 2: final == seed (back to neutral after a dip) is regressed', async () => {
     const u = await makeUser('918888887005');
     const k = await makeLetter('क');
-    await seed(u, k, -100);
-    await practice(u, k, -103, '2026-01-02T00:00:00Z');
-    await practice(u, k, -100, '2026-01-03T00:00:00Z');
+    await seed(u, k, 0);
+    await practice(u, k, -3, '2026-01-02T00:00:00Z');
+    await practice(u, k, 0, '2026-01-03T00:00:00Z');
 
     const res = (await service.getLetterBins(u)) as LetterBinsResult;
     expect(res.bins.regressed).toContain('क');
@@ -168,10 +168,10 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
   it('bin 3 (learnt): final > seed AND >= 4 rows AND min <= seed - 4', async () => {
     const u = await makeUser('918888887006');
     const k = await makeLetter('क');
-    await seed(u, k, -100);
-    await practice(u, k, -98, '2026-01-02T00:00:00Z');
-    await practice(u, k, -104, '2026-01-03T00:00:00Z'); // dip ≥ 4 below seed
-    await practice(u, k, -97, '2026-01-04T00:00:00Z'); // final > seed
+    await seed(u, k, 0);
+    await practice(u, k, 2, '2026-01-02T00:00:00Z');
+    await practice(u, k, -4, '2026-01-03T00:00:00Z'); // dip ≥ 4 below seed
+    await practice(u, k, 3, '2026-01-04T00:00:00Z'); // final > seed
 
     const res = (await service.getLetterBins(u)) as LetterBinsResult;
     expect(res.bins.learnt).toContain('क');
@@ -181,10 +181,10 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
   it('bin 4 (improved): final > seed but no dip ≥ 4 below seed', async () => {
     const u = await makeUser('918888887007');
     const k = await makeLetter('क');
-    await seed(u, k, -100);
-    await practice(u, k, -98, '2026-01-02T00:00:00Z');
-    await practice(u, k, -97, '2026-01-03T00:00:00Z');
-    await practice(u, k, -95, '2026-01-04T00:00:00Z');
+    await seed(u, k, 0);
+    await practice(u, k, 2, '2026-01-02T00:00:00Z');
+    await practice(u, k, 3, '2026-01-03T00:00:00Z');
+    await practice(u, k, 5, '2026-01-04T00:00:00Z');
 
     const res = (await service.getLetterBins(u)) as LetterBinsResult;
     expect(res.bins.improved).toContain('क');
@@ -194,9 +194,9 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
   it('bin 4: final > seed with dip but fewer than 4 score rows → improved (not learnt)', async () => {
     const u = await makeUser('918888887008');
     const k = await makeLetter('क');
-    await seed(u, k, -100);
-    await practice(u, k, -104, '2026-01-02T00:00:00Z'); // dip
-    await practice(u, k, -95, '2026-01-03T00:00:00Z'); // recover above
+    await seed(u, k, 0);
+    await practice(u, k, -4, '2026-01-02T00:00:00Z'); // dip
+    await practice(u, k, 5, '2026-01-03T00:00:00Z'); // recover above
 
     // n_scores = 3 → fails the >=4 minimum → bin 4
     const res = (await service.getLetterBins(u)) as LetterBinsResult;
@@ -207,10 +207,10 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
   it('bin 3 boundary: min == seed - 4 exactly counts as a qualifying dip (≤)', async () => {
     const u = await makeUser('918888887009');
     const k = await makeLetter('क');
-    await seed(u, k, -100);
-    await practice(u, k, -99, '2026-01-02T00:00:00Z');
-    await practice(u, k, -104, '2026-01-03T00:00:00Z'); // exactly seed - 4
-    await practice(u, k, -95, '2026-01-04T00:00:00Z');
+    await seed(u, k, 0);
+    await practice(u, k, 1, '2026-01-02T00:00:00Z');
+    await practice(u, k, -4, '2026-01-03T00:00:00Z'); // exactly seed - 4
+    await practice(u, k, 5, '2026-01-04T00:00:00Z');
 
     const res = (await service.getLetterBins(u)) as LetterBinsResult;
     expect(res.bins.learnt).toContain('क');
@@ -219,10 +219,10 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
   it('bin 4 boundary: min == seed - 3.99 (just above threshold) is improved', async () => {
     const u = await makeUser('918888887010');
     const k = await makeLetter('क');
-    await seed(u, k, -100);
-    await practice(u, k, -99, '2026-01-02T00:00:00Z');
-    await practice(u, k, -103.99, '2026-01-03T00:00:00Z'); // doesn't dip far enough
-    await practice(u, k, -95, '2026-01-04T00:00:00Z');
+    await seed(u, k, 0);
+    await practice(u, k, 1, '2026-01-02T00:00:00Z');
+    await practice(u, k, -3.99, '2026-01-03T00:00:00Z'); // doesn't dip far enough
+    await practice(u, k, 5, '2026-01-04T00:00:00Z');
 
     const res = (await service.getLetterBins(u)) as LetterBinsResult;
     expect(res.bins.improved).toContain('क');
@@ -239,18 +239,18 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
     void e;
 
     // a: untouched (seed only)
-    await seed(u, a, -100);
+    await seed(u, a, 0);
     // b: regressed
-    await seed(u, b, -100);
-    await practice(u, b, -103, '2026-01-02T00:00:00Z');
+    await seed(u, b, 0);
+    await practice(u, b, -3, '2026-01-02T00:00:00Z');
     // c: learnt
-    await seed(u, c, -100);
-    await practice(u, c, -98, '2026-01-02T00:00:00Z');
-    await practice(u, c, -104, '2026-01-03T00:00:00Z');
-    await practice(u, c, -95, '2026-01-04T00:00:00Z');
+    await seed(u, c, 0);
+    await practice(u, c, 2, '2026-01-02T00:00:00Z');
+    await practice(u, c, -4, '2026-01-03T00:00:00Z');
+    await practice(u, c, 5, '2026-01-04T00:00:00Z');
     // d: improved
-    await seed(u, d, -100);
-    await practice(u, d, -98, '2026-01-02T00:00:00Z');
+    await seed(u, d, 0);
+    await practice(u, d, 2, '2026-01-02T00:00:00Z');
     // e: untouched (no scores at all)
 
     const res = (await service.getLetterBins(u)) as LetterBinsResult;
@@ -264,9 +264,7 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
     // No grapheme appears twice.
     expect(new Set(all).size).toBe(all.length);
 
-    expect(res.bins.untouched).toEqual(
-      expect.arrayContaining(['क', 'ङ']),
-    );
+    expect(res.bins.untouched).toEqual(expect.arrayContaining(['क', 'ङ']));
     expect(res.bins.regressed).toContain('ख');
     expect(res.bins.learnt).toContain('ग');
     expect(res.bins.improved).toContain('घ');
@@ -275,17 +273,17 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
   it('asOf cutoff: scores after asOf are excluded from bucketing', async () => {
     const u = await makeUser('918888887012');
     const k = await makeLetter('क');
-    await seed(u, k, -100);
-    await practice(u, k, -98, '2026-01-02T00:00:00Z');
+    await seed(u, k, 0);
+    await practice(u, k, 2, '2026-01-02T00:00:00Z');
     // After cutoff — must be ignored.
-    await practice(u, k, -104, '2026-02-01T00:00:00Z');
-    await practice(u, k, -95, '2026-02-02T00:00:00Z');
+    await practice(u, k, -4, '2026-02-01T00:00:00Z');
+    await practice(u, k, 5, '2026-02-02T00:00:00Z');
 
     const cutoff = new Date('2026-01-15T00:00:00Z');
     const res = (await service.getLetterBins(u, {
       asOf: cutoff,
     })) as LetterBinsResult;
-    // At cutoff: seed=-100, only one practice at -98 → final > seed,
+    // At cutoff: seed=0, only one practice at 2 → final > seed,
     // n_scores = 2 (< 4) → bin 4 (improved), NOT learnt.
     expect(res.bins.improved).toContain('क');
     expect(res.bins.learnt).not.toContain('क');
@@ -295,8 +293,8 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
     const a = await makeUser('918888887013');
     const b = await makeUser('918888887014');
     const k = await makeLetter('क');
-    await seed(a, k, -100);
-    await seed(b, k, -100);
+    await seed(a, k, 0);
+    await seed(b, k, 0);
 
     const res = (await service.getLetterBins([
       b,
@@ -309,7 +307,7 @@ describeIfDb('ScoreService.getLetterBins (integration)', () => {
   it('returns single shape when given a single string', async () => {
     const u = await makeUser('918888887015');
     const k = await makeLetter('क');
-    await seed(u, k, -100);
+    await seed(u, k, 0);
 
     const res = await service.getLetterBins(u);
     // Single result has bins.untouched, etc.

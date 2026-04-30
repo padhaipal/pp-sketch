@@ -65,7 +65,10 @@ export class WabotInboundController {
       }
 
       span.setAttribute('wabot.wamid', dto.message.id);
-      span.setAttribute('wabot.user.external_id_hash', toLogId(dto.message.from));
+      span.setAttribute(
+        'wabot.user.external_id_hash',
+        toLogId(dto.message.from),
+      );
       span.setAttribute('wabot.message.type', dto.message.type);
       span.setAttribute('pp.queue', QUEUE_NAMES.WABOT_INBOUND);
 

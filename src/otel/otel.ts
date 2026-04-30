@@ -27,10 +27,7 @@ const diagLevelMap: Record<string, DiagLogLevel> = {
 
 export function initOtel(): NodeSDK {
   const configuredDiagLevel = process.env.OTEL_DIAG_LOG_LEVEL?.toUpperCase();
-  if (
-    configuredDiagLevel &&
-    diagLevelMap[configuredDiagLevel] !== undefined
-  ) {
+  if (configuredDiagLevel && diagLevelMap[configuredDiagLevel] !== undefined) {
     diag.setLogger(new DiagConsoleLogger(), diagLevelMap[configuredDiagLevel]);
   } else if (process.env.NODE_ENV !== 'production') {
     diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.WARN);

@@ -367,14 +367,52 @@ export class LiteracyLessonService {
           (w) => Array.from(w).length <= maxLength,
         );
 
-        // Score each word
+        // Baseline = mean of "reviewed" letter scores. Seed values arrive in
+        // 0.5 increments; live grading uses non-half deltas (e.g. ±1.01,
+        // ±3.001), so a score that is NOT a multiple of 0.5 indicates the
+        // letter has actually been graded. Baseline shifts difficulty to be
+        // measured relative to the user's current ability.
+        const reviewedScores: number[] = [];
+        for (const score of scoreMap.values()) {
+          if (!Number.isInteger(score * 2)) {
+            reviewedScores.push(score);
+          }
+        }
+        const baseline =
+          reviewedScores.length === 0
+            ? 0
+            : reviewedScores.reduce((sum, v) => sum + v, 0) /
+              reviewedScores.length;
+        span.setAttribute('pp.lesson.word.baseline', baseline);
+        span.setAttribute(
+          'pp.lesson.word.reviewed_count',
+          reviewedScores.length,
+        );
+
+        // Score each word: reviewed letters use (raw − baseline); seed letters
+        // keep their raw score; unknown letters contribute 0 (and trigger a
+        // single WARN below).
+        const unknownGraphemes = new Set<string>();
         const scored = candidates.map((word) => {
-          const wordScore = Array.from(word).reduce(
-            (sum, char) => sum + (scoreMap.get(char) ?? -100),
-            0,
-          );
+          const wordScore = Array.from(word).reduce((sum, char) => {
+            const score = scoreMap.get(char);
+            if (score === undefined) {
+              unknownGraphemes.add(char);
+              return sum;
+            }
+            if (Number.isInteger(score * 2)) {
+              return sum + score;
+            }
+            return sum + (score - baseline);
+          }, 0);
           return { word, wordScore };
         });
+
+        if (unknownGraphemes.size > 0) {
+          this.logger.warn(
+            `selectNextWord: ${unknownGraphemes.size} unknown grapheme(s) for user ${userId}: [${Array.from(unknownGraphemes).join(', ')}]`,
+          );
+        }
 
         // Safety fallback
         if (scored.length === 0) {
@@ -386,18 +424,39 @@ export class LiteracyLessonService {
           );
           const fallbackWord =
             twoLetterWords[Math.floor(Math.random() * twoLetterWords.length)];
-          span.setAttribute('pp.lesson.word.selection', 'fallback-random-two-letter');
+          span.setAttribute(
+            'pp.lesson.word.selection',
+            'fallback-random-two-letter',
+          );
           span.setAttribute('pp.lesson.word.selected', fallbackWord);
           return fallbackWord;
         }
 
-        // Find minimum score
+        // Tie-break: minimum score → longest grapheme count → random.
+        const SCORE_EPS = 1e-9;
         const minScore = Math.min(...scored.map((s) => s.wordScore));
-        const ties = scored.filter((s) => s.wordScore === minScore);
+        const minTies = scored.filter(
+          (s) => Math.abs(s.wordScore - minScore) < SCORE_EPS,
+        );
+        const maxLen = Math.max(
+          ...minTies.map((s) => Array.from(s.word).length),
+        );
+        const longestTies = minTies.filter(
+          (s) => Array.from(s.word).length === maxLen,
+        );
+        const selected =
+          longestTies[Math.floor(Math.random() * longestTies.length)].word;
 
-        // Pick random from ties
-        const selected = ties[Math.floor(Math.random() * ties.length)].word;
-        span.setAttribute('pp.lesson.word.selection', 'min-score-tie-break');
+        const topFive = [...scored]
+          .sort((a, b) => a.wordScore - b.wordScore)
+          .slice(0, 5)
+          .map((s) => `${s.word}=${s.wordScore.toFixed(3)}`)
+          .join(', ');
+
+        span.setAttribute(
+          'pp.lesson.word.selection',
+          'min-score-longest-tie-break',
+        );
         span.setAttribute('pp.lesson.word.selected', selected);
         span.setAttribute(
           'pp.lesson.word.unique_in_add_window',
@@ -407,14 +466,10 @@ export class LiteracyLessonService {
           'pp.lesson.word.unique_in_keep_window',
           uniqueInKeepWindow,
         );
+        span.setAttribute('pp.lesson.word.top_5', topFive);
 
-        const topTen = [...scored]
-          .sort((a, b) => a.wordScore - b.wordScore)
-          .slice(0, 10)
-          .map((s) => `${s.word}=${String(s.wordScore)}`)
-          .join(', ');
         this.logger.log(
-          `selectNextWord: selected=${selected} max_length=${String(maxLength)} unique_in_add_window=${String(uniqueInAddWindow)} unique_in_keep_window=${String(uniqueInKeepWindow)} candidates=${String(scored.length)} top10=[${topTen}]`,
+          `selectNextWord: selected=${selected} max_length=${String(maxLength)} baseline=${baseline.toFixed(3)} reviewed=${String(reviewedScores.length)} unique_in_add_window=${String(uniqueInAddWindow)} unique_in_keep_window=${String(uniqueInKeepWindow)} candidates=${String(scored.length)} top5=[${topFive}]`,
         );
         return selected;
       } catch (err) {

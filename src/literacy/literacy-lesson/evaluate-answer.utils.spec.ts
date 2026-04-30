@@ -39,9 +39,9 @@ describe('evaluate-answer.utils', () => {
     });
 
     it('strips punctuation before comparing', () => {
-      expect(
-        markWord({ correctAnswer: 'राम!', studentAnswer: 'राम.' }),
-      ).toBe(true);
+      expect(markWord({ correctAnswer: 'राम!', studentAnswer: 'राम.' })).toBe(
+        true,
+      );
     });
 
     it('normalizes NFC so decomposed equals composed', () => {
@@ -210,15 +210,11 @@ describe('evaluate-answer.utils', () => {
        not transitively equate (FAMILIES has ['ण','न'] and ['ण','र'] as
        separate rows). -- */
     it('treats ण and न as the same family', () => {
-      expect(markWord({ correctAnswer: 'णन', studentAnswer: 'नण' })).toBe(
-        true,
-      );
+      expect(markWord({ correctAnswer: 'णन', studentAnswer: 'नण' })).toBe(true);
     });
 
     it('treats ण and र as the same family', () => {
-      expect(markWord({ correctAnswer: 'णर', studentAnswer: 'रण' })).toBe(
-        true,
-      );
+      expect(markWord({ correctAnswer: 'णर', studentAnswer: 'रण' })).toBe(true);
     });
 
     it('does NOT treat न and र as the same family', () => {
@@ -231,16 +227,16 @@ describe('evaluate-answer.utils', () => {
   /* ───────── markImage ───────── */
   describe('markImage', () => {
     it('returns true when first char of any student word matches first char of correct', () => {
-      expect(
-        markImage({ correctAnswer: 'सेब', studentAnswer: 'सेब' }),
-      ).toBe(true);
+      expect(markImage({ correctAnswer: 'सेब', studentAnswer: 'सेब' })).toBe(
+        true,
+      );
     });
 
     it('returns true when first chars are in the same family', () => {
       // ट and त same family.
-      expect(markImage({ correctAnswer: 'टमाटर', studentAnswer: 'तमाटर' })).toBe(
-        true,
-      );
+      expect(
+        markImage({ correctAnswer: 'टमाटर', studentAnswer: 'तमाटर' }),
+      ).toBe(true);
     });
 
     it('returns false when first char differs and is not in same family', () => {
@@ -468,17 +464,17 @@ describe('evaluate-answer.utils', () => {
 
     it('returns false (and logs) for empty correctAnswer', () => {
       const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      expect(
-        detectInsertion({ correctAnswer: '', studentAnswer: 'राम' }),
-      ).toBe(false);
+      expect(detectInsertion({ correctAnswer: '', studentAnswer: 'राम' })).toBe(
+        false,
+      );
       expect(spy).toHaveBeenCalled();
       spy.mockRestore();
     });
 
     it('returns false for empty studentAnswer', () => {
-      expect(
-        detectInsertion({ correctAnswer: 'राम', studentAnswer: '' }),
-      ).toBe(false);
+      expect(detectInsertion({ correctAnswer: 'राम', studentAnswer: '' })).toBe(
+        false,
+      );
     });
 
     it('checks each space-split student word independently', () => {

@@ -53,7 +53,6 @@ function escapeXml(s: string): string {
     .replace(/'/g, '&apos;');
 }
 
-
 interface LayoutBox {
   x: number;
   y: number;
@@ -255,7 +254,10 @@ function splitHeading(text: string, maxCharsSingleLine: number): string[] {
   const mid = Math.floor(text.length / 2);
   let best = -1;
   for (let i = 0; i < text.length; i++) {
-    if (text[i] === ' ' && (best < 0 || Math.abs(i - mid) < Math.abs(best - mid))) {
+    if (
+      text[i] === ' ' &&
+      (best < 0 || Math.abs(i - mid) < Math.abs(best - mid))
+    ) {
       best = i;
     }
   }
@@ -573,8 +575,7 @@ export async function buildLandscapeReportCardSvg(
   const bottomRowTop = lettersRowBottom + SECTION_PADDING_Y;
   const qrSize = 600;
   const qrAreaWidth = qrSize + 100; // 50 px breathing room each side
-  const activityAreaWidth =
-    W - 2 * ROW_PAD_X - qrAreaWidth - COLUMN_GAP;
+  const activityAreaWidth = W - 2 * ROW_PAD_X - qrAreaWidth - COLUMN_GAP;
   const activityAreaX = ROW_PAD_X;
   const qrAreaX = activityAreaX + activityAreaWidth + COLUMN_GAP;
   const activityCx = activityAreaX + activityAreaWidth / 2;

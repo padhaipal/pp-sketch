@@ -403,10 +403,10 @@ export class MediaMetaDataService {
     await this.dataSource.transaction(async (manager) => {
       // TypeORM's pg manager.query returns [rowsArray, affectedCount] for
       // UPDATE/INSERT/DELETE — affectedCount is the second element.
-      const [, affected] = (await manager.query(
+      const [, affected] = await manager.query(
         `UPDATE media_metadata SET rolled_back = true WHERE id = $1`,
         [mediaId],
-      )) as [unknown, number];
+      );
       if (affected === 0) {
         throw new NotFoundException('Media metadata not found');
       }

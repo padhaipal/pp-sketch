@@ -61,9 +61,7 @@ export class MediaMetaDataController {
     @Query('state_transition_id') stid: string,
   ): Promise<MediaItemResponse[]> {
     if (!stid || typeof stid !== 'string') {
-      throw new BadRequestException(
-        'state_transition_id query param required',
-      );
+      throw new BadRequestException('state_transition_id query param required');
     }
     const rows = await this.mediaRepo.find({
       where: { state_transition_id: stid, rolled_back: false },

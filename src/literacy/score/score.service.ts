@@ -87,6 +87,63 @@ function calculateNewScore(
   return correct ? base + 1.01 : base - 3.001;
 }
 
+const SEED_SCORES: { grapheme: string; score: number }[] = [
+  { grapheme: 'ऋ', score: 1 },
+  { grapheme: 'ा', score: 1.5 },
+  { grapheme: 'ी', score: 2 },
+  { grapheme: 'ु', score: 2.5 },
+  { grapheme: 'े', score: 3 },
+  { grapheme: 'ो', score: 3.5 },
+  { grapheme: 'ै', score: 4 },
+  { grapheme: 'ू', score: 4.5 },
+  { grapheme: 'ौ', score: 5 },
+  { grapheme: 'ि', score: 5.5 },
+  { grapheme: 'ं', score: 6 },
+  { grapheme: 'ृ', score: 6.5 },
+  { grapheme: 'ञ', score: 7 },
+  { grapheme: 'ण', score: 7 },
+  { grapheme: 'अ', score: 0 },
+  { grapheme: 'आ', score: 0 },
+  { grapheme: 'इ', score: 0 },
+  { grapheme: 'ई', score: 0 },
+  { grapheme: 'उ', score: 0 },
+  { grapheme: 'ऊ', score: 0 },
+  { grapheme: 'ए', score: 0 },
+  { grapheme: 'ऐ', score: 0 },
+  { grapheme: 'ओ', score: 0 },
+  { grapheme: 'औ', score: 0 },
+  { grapheme: 'क', score: 0 },
+  { grapheme: 'ख', score: 0 },
+  { grapheme: 'ग', score: 0 },
+  { grapheme: 'घ', score: 0 },
+  { grapheme: 'च', score: 0 },
+  { grapheme: 'छ', score: 0 },
+  { grapheme: 'ज', score: 0 },
+  { grapheme: 'झ', score: 0 },
+  { grapheme: 'ट', score: 0 },
+  { grapheme: 'ठ', score: 0 },
+  { grapheme: 'ड', score: 0 },
+  { grapheme: 'ढ', score: 0 },
+  { grapheme: 'त', score: 0 },
+  { grapheme: 'थ', score: 0 },
+  { grapheme: 'द', score: 0 },
+  { grapheme: 'ध', score: 0 },
+  { grapheme: 'न', score: 0 },
+  { grapheme: 'प', score: 0 },
+  { grapheme: 'फ', score: 0 },
+  { grapheme: 'ब', score: 0 },
+  { grapheme: 'भ', score: 0 },
+  { grapheme: 'म', score: 0 },
+  { grapheme: 'य', score: 0 },
+  { grapheme: 'र', score: 0 },
+  { grapheme: 'ल', score: 0 },
+  { grapheme: 'व', score: 0 },
+  { grapheme: 'श', score: 0 },
+  { grapheme: 'ष', score: 0 },
+  { grapheme: 'स', score: 0 },
+  { grapheme: 'ह', score: 0 },
+];
+
 @Injectable()
 export class ScoreService {
   private readonly logger = new Logger(ScoreService.name);
@@ -488,5 +545,28 @@ export class ScoreService {
     }
 
     return isSingleInput ? results[0] : results;
+  }
+
+  async createSeedScores(userId: string): Promise<void> {
+    if (SEED_SCORES.length === 0) return;
+
+    const params: unknown[] = [userId];
+    const selects: string[] = [];
+
+    for (const { grapheme, score } of SEED_SCORES) {
+      const gIdx = params.push(grapheme);
+      const sIdx = params.push(score);
+      selects.push(
+        `SELECT $1::uuid, l.id, $${sIdx}::double precision FROM letters l WHERE l.grapheme = $${gIdx}`,
+      );
+    }
+
+    const rows = await this.dataSource.query(
+      `INSERT INTO scores (user_id, letter_id, score)
+       ${selects.join('\n       UNION ALL\n       ')}`,
+      params,
+    );
+
+    this.logger.log(`Seed scores: inserted ${rows.length} for user ${userId}`);
   }
 }

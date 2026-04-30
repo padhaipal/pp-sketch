@@ -85,9 +85,10 @@ export class UserActivityService {
 
     const messagesByUser = new Map<string, Date[]>();
     for (const row of rows) {
-      const ts = row.created_at instanceof Date
-        ? row.created_at
-        : new Date(row.created_at);
+      const ts =
+        row.created_at instanceof Date
+          ? row.created_at
+          : new Date(row.created_at);
       if (!messagesByUser.has(row.user_id)) {
         messagesByUser.set(row.user_id, []);
       }
@@ -147,9 +148,7 @@ export class UserActivityService {
         );
       }
       if (start > end) {
-        throw new BadRequestException(
-          `windows[${idx}]: start must be <= end`,
-        );
+        throw new BadRequestException(`windows[${idx}]: start must be <= end`);
       }
       return { start, end };
     });

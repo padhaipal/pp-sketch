@@ -301,8 +301,7 @@ describe('buildReportCardSvg (renderer output)', () => {
     // document order. Star polygons contain no text, so we get one entry per
     // grid cell. Headings/CTA also use this font but render BEFORE the grid;
     // we filter to single-character bodies (the grid letters).
-    const letterRe =
-      /<text[^>]*>(क|ख|ग|घ|च|छ)<\/text>/g;
+    const letterRe = /<text[^>]*>(क|ख|ग|घ|च|छ)<\/text>/g;
     const ordered = Array.from(svg.matchAll(letterRe)).map((m) => m[1]);
     expect(ordered.slice(0, 2).sort()).toEqual(['च', 'छ'].sort());
     expect(ordered.slice(2).sort()).toEqual(['क', 'ख', 'ग', 'घ'].sort());
@@ -433,7 +432,7 @@ describe('buildReportCardSvg (renderer output)', () => {
 describe('buildLandscapeReportCardSvg (renderer output)', () => {
   const baseData = {
     user_external_id: '918888888001',
-      referral_url: 'https://wa.me/918528097842?text=test-918888888001',
+    referral_url: 'https://wa.me/918528097842?text=test-918888888001',
     letters_learnt: ['क', 'ख', 'ग', 'घ'],
     letters_learnt_yesterday: ['ग', 'घ'],
     letters_currently_learning: ['च', 'छ'],
@@ -459,7 +458,7 @@ describe('buildLandscapeReportCardSvg (renderer output)', () => {
     expect(svg).toContain('पहले से आते अक्षर');
   });
 
-  it('still highlights yesterday\'s wins with brand-blue stars', async () => {
+  it("still highlights yesterday's wins with brand-blue stars", async () => {
     const svg = await buildLandscapeReportCardSvg(baseData);
     const stars = svg.match(
       new RegExp(`<polygon[^>]*fill="${BRAND_BLUE_HEX}"`, 'g'),
@@ -483,7 +482,7 @@ describe('buildLandscapeReportCardSvg (renderer output)', () => {
     expect(dashes!.length).toBeGreaterThanOrEqual(3);
   });
 
-  it('still embeds the QR target URL with the user\'s external_id', async () => {
+  it("still embeds the QR target URL with the user's external_id", async () => {
     const svg = await buildLandscapeReportCardSvg({
       ...baseData,
       user_external_id: '918888888777',

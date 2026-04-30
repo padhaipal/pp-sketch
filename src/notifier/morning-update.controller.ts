@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Post,
-} from '@nestjs/common';
+import { BadRequestException, Body, Controller, Post } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsOptional, IsString } from 'class-validator';
 import { MediaMetaDataService } from '../media-meta-data/media-meta-data.service';

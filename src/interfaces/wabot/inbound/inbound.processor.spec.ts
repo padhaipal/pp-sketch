@@ -20,9 +20,9 @@ jest.mock('../../../otel/metrics', () => ({
   wabotInboundJobDuration: { record: jest.fn() },
 }));
 
-function createAudioJob(overrides: { attemptsMade?: number } = {}): Job<
-  MessageJobDto
-> {
+function createAudioJob(
+  overrides: { attemptsMade?: number } = {},
+): Job<MessageJobDto> {
   return {
     data: {
       message: {
@@ -120,12 +120,11 @@ describe('processWabotInboundJob — cleanupPartialState on retry', () => {
     const mocks = makeMocks();
     await runJob(createAudioJob({ attemptsMade: 1 }), mocks);
 
-    const cleanupOrder = (
-      mocks.literacyLessonService.cleanupPartialState as jest.Mock
-    ).mock.invocationCallOrder[0];
-    const processOrder = (
-      mocks.literacyLessonService.processAnswer as jest.Mock
-    ).mock.invocationCallOrder[0];
+    const cleanupOrder =
+      mocks.literacyLessonService.cleanupPartialState.mock
+        .invocationCallOrder[0];
+    const processOrder =
+      mocks.literacyLessonService.processAnswer.mock.invocationCallOrder[0];
 
     expect(cleanupOrder).toBeDefined();
     expect(processOrder).toBeDefined();

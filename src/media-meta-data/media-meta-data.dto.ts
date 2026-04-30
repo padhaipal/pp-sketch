@@ -296,7 +296,7 @@ export function validateCreateRenderedImageMediaOptions(
     );
   }
   const o = options as Record<string, unknown>;
-  if (!Buffer.isBuffer(o.buffer) || (o.buffer as Buffer).length === 0) {
+  if (!Buffer.isBuffer(o.buffer) || o.buffer.length === 0) {
     throw new BadRequestException(
       'createRenderedImageMedia() options.buffer must be a non-empty Buffer',
     );

@@ -29,7 +29,9 @@ describeIfDb('MediaMetaDataService.markRolledBack (integration)', () => {
     await dataSource.initialize();
 
     await dataSource.query(`DROP TABLE IF EXISTS test_transcripts CASCADE`);
-    await dataSource.query(`DROP TABLE IF EXISTS test_state_transitions CASCADE`);
+    await dataSource.query(
+      `DROP TABLE IF EXISTS test_state_transitions CASCADE`,
+    );
     await dataSource.query(`DROP TABLE IF EXISTS media_metadata CASCADE`);
     await dataSource.query(`
       CREATE TABLE media_metadata (
@@ -66,7 +68,9 @@ describeIfDb('MediaMetaDataService.markRolledBack (integration)', () => {
   afterAll(async () => {
     if (dataSource?.isInitialized) {
       await dataSource.query(`DROP TABLE IF EXISTS test_transcripts CASCADE`);
-      await dataSource.query(`DROP TABLE IF EXISTS test_state_transitions CASCADE`);
+      await dataSource.query(
+        `DROP TABLE IF EXISTS test_state_transitions CASCADE`,
+      );
       await dataSource.query(`DROP TABLE IF EXISTS media_metadata CASCADE`);
       await dataSource.destroy();
     }
@@ -76,15 +80,26 @@ describeIfDb('MediaMetaDataService.markRolledBack (integration)', () => {
     mockBucketDelete = jest.fn().mockResolvedValue(undefined);
     // Bypass NestJS constructor — it calls createQueue() which requires Redis.
     // markRolledBack only uses dataSource, mediaRepo, mediaBucket, logger.
-    service = Object.create(MediaMetaDataService.prototype) as MediaMetaDataService;
+    service = Object.create(
+      MediaMetaDataService.prototype,
+    ) as MediaMetaDataService;
     (service as unknown as Record<string, unknown>).dataSource = dataSource;
-    (service as unknown as Record<string, unknown>).mediaRepo = dataSource.getRepository(MediaMetaDataEntity);
-    (service as unknown as Record<string, unknown>).mediaBucket = { delete: mockBucketDelete };
-    (service as unknown as Record<string, unknown>).logger = { warn: jest.fn(), log: jest.fn(), error: jest.fn() };
+    (service as unknown as Record<string, unknown>).mediaRepo =
+      dataSource.getRepository(MediaMetaDataEntity);
+    (service as unknown as Record<string, unknown>).mediaBucket = {
+      delete: mockBucketDelete,
+    };
+    (service as unknown as Record<string, unknown>).logger = {
+      warn: jest.fn(),
+      log: jest.fn(),
+      error: jest.fn(),
+    };
   });
 
   afterEach(async () => {
-    await dataSource.query(`TRUNCATE test_transcripts, test_state_transitions, media_metadata CASCADE`);
+    await dataSource.query(
+      `TRUNCATE test_transcripts, test_state_transitions, media_metadata CASCADE`,
+    );
   });
 
   it('marks rolled_back=true, deletes FK-referencing rows, and best-effort-deletes from S3', async () => {
@@ -155,7 +170,9 @@ describeIfDb('MediaMetaDataService.markRolledBack (integration)', () => {
       [otherId],
     );
 
-    await expect(service.markRolledBack(ghostId)).rejects.toThrow(NotFoundException);
+    await expect(service.markRolledBack(ghostId)).rejects.toThrow(
+      NotFoundException,
+    );
 
     // Other rows must be untouched.
     const [{ c }] = await dataSource.query(
@@ -166,7 +183,9 @@ describeIfDb('MediaMetaDataService.markRolledBack (integration)', () => {
   });
 
   it('throws BadRequestException for empty id', async () => {
-    await expect(service.markRolledBack('')).rejects.toThrow(BadRequestException);
+    await expect(service.markRolledBack('')).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it('still resolves when S3 cleanup fails (best-effort)', async () => {

@@ -19,7 +19,9 @@ export class CreateQuizResponses1777078302565 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP INDEX "public"."idx_quiz_responses_session_id"`);
+    await queryRunner.query(
+      `DROP INDEX "public"."idx_quiz_responses_session_id"`,
+    );
     await queryRunner.query(`DROP TABLE "quiz_responses"`);
   }
 }

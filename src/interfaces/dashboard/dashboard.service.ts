@@ -111,7 +111,7 @@ export class DashboardService {
       this.dataSource.query(
         `SELECT question_index, answer FROM quiz_responses WHERE session_id = $1 ORDER BY question_index`,
         [sessionId],
-      ) as Promise<{ question_index: number; answer: number }[]>,
+      ),
       this.getCompletedSessionCount(),
     ]);
 

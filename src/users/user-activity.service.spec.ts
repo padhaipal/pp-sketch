@@ -114,9 +114,7 @@ describeIfDb('UserActivityService.getActivityTime (integration)', () => {
 
     const res = await service.getActivityTime({
       users: [id],
-      windows: [
-        { start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' },
-      ],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
     });
 
     expect(res.results).toHaveLength(1);
@@ -135,9 +133,7 @@ describeIfDb('UserActivityService.getActivityTime (integration)', () => {
 
     const res = await service.getActivityTime({
       users: [id],
-      windows: [
-        { start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' },
-      ],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
     });
     expect(res.results[0].windows[0].active_ms).toBe(0);
   });
@@ -175,9 +171,7 @@ describeIfDb('UserActivityService.getActivityTime (integration)', () => {
 
     const res = await service.getActivityTime({
       users: [id],
-      windows: [
-        { start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' },
-      ],
+      windows: [{ start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' }],
     });
     expect(res.results[0].windows[0].active_ms).toBe(25_000);
   });
@@ -213,9 +207,7 @@ describeIfDb('UserActivityService.getActivityTime (integration)', () => {
 
     const res = await service.getActivityTime({
       users: [id],
-      windows: [
-        { start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' },
-      ],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
     });
     // Only the two real whatsapp/audio rows count (10:00:00 and 10:01:30) →
     // gap 90 s, > 60 s → 0.
@@ -232,9 +224,7 @@ describeIfDb('UserActivityService.getActivityTime (integration)', () => {
 
     const res = await service.getActivityTime({
       users: [b, a],
-      windows: [
-        { start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' },
-      ],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
     });
     expect(res.results.map((r) => r.user_id)).toEqual([b, a]);
     expect(res.results[0].windows[0].active_ms).toBe(45_000);
@@ -248,9 +238,7 @@ describeIfDb('UserActivityService.getActivityTime (integration)', () => {
 
     const res = await service.getActivityTime({
       users: [id, '918888888009'],
-      windows: [
-        { start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' },
-      ],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
     });
     expect(res.results).toHaveLength(1);
     expect(res.results[0].external_id).toBe('918888888009');
@@ -261,9 +249,7 @@ describeIfDb('UserActivityService.getActivityTime (integration)', () => {
     const id = await makeUser('918888888010');
     const res = await service.getActivityTime({
       users: [id],
-      windows: [
-        { start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' },
-      ],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
     });
     expect(res.results[0].windows[0].active_ms).toBe(0);
   });
@@ -283,9 +269,7 @@ describeIfDb('UserActivityService.getActivityTime (integration)', () => {
   it('returns empty results when no users resolve', async () => {
     const res = await service.getActivityTime({
       users: ['nonexistent-phone-919999999999'],
-      windows: [
-        { start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' },
-      ],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
     });
     expect(res.results).toHaveLength(0);
   });

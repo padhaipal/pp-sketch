@@ -8,6 +8,7 @@ import { UserService } from './user.service';
 import { UserActivityService } from './user-activity.service';
 import { UserController } from './user.controller';
 import { CacheService } from '../interfaces/redis/cache';
+import { ScoreModule } from '../literacy/score/score.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { CacheService } from '../interfaces/redis/cache';
       ScoreEntity,
       LiteracyLessonStateEntity,
     ]),
+    ScoreModule,
   ],
   controllers: [UserController],
   providers: [UserService, UserActivityService, CacheService],

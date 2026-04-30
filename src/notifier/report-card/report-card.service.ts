@@ -14,10 +14,7 @@ import {
   istMidnightUtc,
   istWeekday,
 } from './report-card.utils';
-import {
-  DailyBar,
-  ReportCardData,
-} from './report-card.dto';
+import { DailyBar, ReportCardData } from './report-card.dto';
 import {
   buildLandscapeReportCardSvg,
   buildReportCardSvg,
@@ -75,10 +72,9 @@ export class ReportCardService {
     const weekAgoMid = addDays(todayMid, -7); // 00:00 IST 7 days ago
 
     // Letter bins as of end-of-yesterday (= today IST midnight) — "not this morning".
-    const binsEndOfYesterday = (await this.scoreService.getLetterBins(
-      user.id,
-      { asOf: todayMid },
-    )) as LetterBinsResult;
+    const binsEndOfYesterday = (await this.scoreService.getLetterBins(user.id, {
+      asOf: todayMid,
+    })) as LetterBinsResult;
     // Baseline: bins as of start-of-yesterday — used to compute today's deltas.
     const binsStartOfYesterday = (await this.scoreService.getLetterBins(
       user.id,
@@ -87,9 +83,7 @@ export class ReportCardService {
 
     const learntEndOfYesterday = binsEndOfYesterday.bins.learnt;
     const previous = new Set(binsStartOfYesterday.bins.learnt);
-    const yesterdayDelta = learntEndOfYesterday.filter(
-      (g) => !previous.has(g),
-    );
+    const yesterdayDelta = learntEndOfYesterday.filter((g) => !previous.has(g));
     const currentlyLearning = binsEndOfYesterday.bins.regressed;
     const alreadyKnown = binsEndOfYesterday.bins.improved;
 

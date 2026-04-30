@@ -99,9 +99,7 @@ export class UserController {
     // Fetch referrer details for users that have a referrer
     const referrerIds = Array.from(
       new Set(
-        users
-          .map((u) => u.referrer_user_id)
-          .filter((id): id is string => !!id),
+        users.map((u) => u.referrer_user_id).filter((id): id is string => !!id),
       ),
     );
     const referrers =
@@ -132,7 +130,10 @@ export class UserController {
     });
 
     const activityByUser = new Map<string, number[]>(
-      activity.results.map((r) => [r.user_id, r.windows.map((w) => w.active_ms)]),
+      activity.results.map((r) => [
+        r.user_id,
+        r.windows.map((w) => w.active_ms),
+      ]),
     );
 
     const dates = windows.map((_, i) => istDateIso(addDays(startMidIst, i)));
@@ -397,9 +398,7 @@ export class UserController {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    this.logger.log(
-      `Login success phone=${toLogId(phone)} id=${user.id}`,
-    );
+    this.logger.log(`Login success phone=${toLogId(phone)} id=${user.id}`);
     return { id: user.id, external_id: user.external_id, role: user.role };
   }
 

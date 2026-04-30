@@ -40,8 +40,7 @@ export class DashboardController {
       );
     }
     const exclude =
-      excludeSession &&
-      /^[0-9a-f-]{36}$/i.test(excludeSession)
+      excludeSession && /^[0-9a-f-]{36}$/i.test(excludeSession)
         ? excludeSession
         : undefined;
     const answers = await this.dashboardService.getAnswersForQuestion(
