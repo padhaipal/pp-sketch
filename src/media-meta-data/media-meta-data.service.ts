@@ -344,6 +344,7 @@ export class MediaMetaDataService {
       `SELECT * FROM media_metadata
        WHERE state_transition_id = ANY($1::text[])
          AND status = 'ready'
+         AND rolled_back = false
          AND (wa_media_url IS NOT NULL OR media_type = 'text')`,
       [keys],
     );
@@ -396,9 +397,10 @@ export class MediaMetaDataService {
       throw new BadRequestException('mediaId must be a non-empty string');
     }
 
-    // Fetch s3_key before DB transaction
+    // Fetch s3_key + state_transition_id before DB transaction
     const entity = await this.mediaRepo.findOneBy({ id: mediaId });
     const s3Key: string | null = entity?.s3_key ?? null;
+    const stid: string | null = entity?.state_transition_id ?? null;
 
     await this.dataSource.transaction(async (manager) => {
       // TypeORM's pg manager.query returns [rowsArray, affectedCount] for
@@ -432,6 +434,11 @@ export class MediaMetaDataService {
         await manager.query(sql, [mediaId]);
       }
     });
+
+    // Invalidate STID cache so readers don't keep serving the rolled-back row.
+    if (stid) {
+      await this.cacheService.del(CACHE_KEYS.mediaByStateTransitionId(stid));
+    }
 
     // Delete S3 object after DB commit (best-effort)
     if (s3Key) {
