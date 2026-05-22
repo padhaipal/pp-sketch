@@ -22,10 +22,10 @@ const FAMILIES: string[][] = [
   ['ब', 'भ'],
   ['श', 'ष', 'स'],
   ['र'],
-  ['य', 'ए', 'ऐ', 'े', ' ै'],
-  ['ओ', 'औ', ' ो', 'ौ'],
+  ['य', 'ए', 'ऐ', 'े', 'ै'],
+  ['ओ', 'औ', 'ो', 'ौ'],
   ['अ', 'आ', 'ा'],
-  ['इ', 'ई', 'ि', ' ी'],
+  ['इ', 'ई', 'ि', 'ी'],
   ['उ', 'ऊ', 'ु', 'ू'],
   ['ऋ', 'ॠ', 'ृ'],
   ['ऌ', 'ॡ'],
@@ -211,6 +211,66 @@ class EvaluateAnswer {
       cleanedFullStudentAnswer.includes('अलमारी')
     )
       return true;
+    if (
+      cleanedCorrectAnswer === 'नाना' &&
+      cleanedFullStudentAnswer.includes('नाना')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'मामा' &&
+      cleanedFullStudentAnswer.includes('मामा')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'माता' &&
+      cleanedFullStudentAnswer.includes('माता')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'दादा' &&
+      cleanedFullStudentAnswer.includes('दादा')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'चाचा' &&
+      cleanedFullStudentAnswer.includes('चाचा')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'केला' &&
+      cleanedFullStudentAnswer.includes('केला')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'हलवा' &&
+      cleanedFullStudentAnswer.includes('हलवा')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'हलवा' &&
+      cleanedFullStudentAnswer.includes('हलवह')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'राजमा' &&
+      cleanedFullStudentAnswer.includes('राजमा')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'बुलबुल' &&
+      cleanedFullStudentAnswer.includes('बुलबुल')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'हाथी' &&
+      cleanedFullStudentAnswer.includes('हाथही')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'अचकन' &&
+      cleanedFullStudentAnswer.includes('अचिकन')
+    )
+      return true;
 
     return studentWords.some((studentWord) => {
       const cleanedStudentWord = this.clean(studentWord);
@@ -393,6 +453,18 @@ class EvaluateAnswer {
         return true;
       if (cleanedCorrectAnswer === 'मसूर' && cleanedStudentWord === 'मसुर')
         return true;
+      if (cleanedCorrectAnswer === 'सुबह' && cleanedStudentWord === 'सुबा')
+        return true;
+      if (cleanedCorrectAnswer === 'गई' && cleanedStudentWord === 'गाय')
+        return true;
+      if (cleanedCorrectAnswer === 'गई' && cleanedStudentWord === 'गाई')
+        return true;
+      if (cleanedCorrectAnswer === 'ऋषभ' && cleanedStudentWord === 'रिसब')
+        return true;
+      if (cleanedCorrectAnswer === 'ऋषभ' && cleanedStudentWord === 'रिसभ')
+        return true;
+      if (cleanedCorrectAnswer === 'बैठ' && cleanedStudentWord === 'बेट')
+        return true;
 
       // Schwa deletion: ignore trailing long ā (ा) in correctAnswer
       if (
@@ -510,6 +582,12 @@ class EvaluateAnswer {
       if (cleanedCorrectAnswer === 'ी' && cleaned === 'इ') return true;
       if (cleanedCorrectAnswer === 'ु' && cleaned === 'ऊ') return true;
       if (cleanedCorrectAnswer === 'ू' && cleaned === 'उ') return true;
+      if (cleanedCorrectAnswer === 'ै' && cleaned === 'आए') return true;
+      if (cleanedCorrectAnswer === 'ऐ' && cleaned === 'आए') return true;
+      if (cleanedCorrectAnswer === 'औ' && cleaned === 'आओ') return true;
+      if (cleanedCorrectAnswer === 'ौ' && cleaned === 'आओ') return true;
+      if (cleanedCorrectAnswer === 'व' && cleaned === 'वाह') return true;
+      if (cleanedCorrectAnswer === 'भ' && cleaned === 'भाव') return true;
 
       if (cCount === 1) {
         return this.markPhoneme(cleanedCorrectAnswer, cleaned);
