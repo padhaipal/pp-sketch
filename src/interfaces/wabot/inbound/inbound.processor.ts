@@ -216,7 +216,7 @@ export async function processWabotInboundJob(
         const referralUrl = `https://dashboard.padhaipal.com/r/${user.external_id}`;
         onboardingMedia.push({
           type: 'text',
-          body: `To send PadhaiPal to your friends send them this link: ${referralUrl}`,
+          body: `PadhaiPal अपने दोस्तों के साथ शेयर करें बस उन्हें यह लिंक भेजें। ${referralUrl}`,
         });
 
         if (userMessageId) {
