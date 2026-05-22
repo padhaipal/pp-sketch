@@ -64,6 +64,36 @@ export class UserActivityService {
       parsedWindows[0].end,
     );
 
+    const messagesByUser = await this.fetchVoiceMessages(
+      userIds,
+      earliestStart,
+      latestEnd,
+    );
+
+    const results: ActivityTimeUserResult[] = users.map((user) => {
+      const msgs = messagesByUser.get(user.id) ?? [];
+      const windowResults: ActivityTimeWindowResult[] = parsedWindows.map(
+        (w) => ({
+          start: w.start.toISOString(),
+          end: w.end.toISOString(),
+          active_ms: this.computeActiveMs(msgs, w),
+        }),
+      );
+      return {
+        user_id: user.id,
+        external_id: user.external_id,
+        windows: windowResults,
+      };
+    });
+
+    return { results };
+  }
+
+  private async fetchVoiceMessages(
+    userIds: string[],
+    earliestStart: Date,
+    latestEnd: Date,
+  ): Promise<Map<string, Date[]>> {
     const rows = await this.mediaRepo
       .createQueryBuilder('mm')
       .select('mm.user_id', 'user_id')
@@ -94,24 +124,41 @@ export class UserActivityService {
       }
       messagesByUser.get(row.user_id)!.push(ts);
     }
+    return messagesByUser;
+  }
 
-    const results: ActivityTimeUserResult[] = users.map((user) => {
-      const msgs = messagesByUser.get(user.id) ?? [];
-      const windowResults: ActivityTimeWindowResult[] = parsedWindows.map(
-        (w) => ({
-          start: w.start.toISOString(),
-          end: w.end.toISOString(),
-          active_ms: this.computeActiveMs(msgs, w),
-        }),
-      );
-      return {
-        user_id: user.id,
-        external_id: user.external_id,
-        windows: windowResults,
-      };
-    });
+  // Returns true iff the most recent whatsapp voice message just pushed the
+  // user's active_ms (since today's IST midnight) over `threshold_ms`. False
+  // if the threshold had already been crossed by an earlier message today, or
+  // not yet crossed. Self-deduplicating: fires exactly once per day per user.
+  async didJustCrossDailyActivityThreshold(args: {
+    user_id: string;
+    threshold_ms: number;
+  }): Promise<boolean> {
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const now = new Date();
+    const istNow = new Date(now.getTime() + IST_OFFSET_MS);
+    const istMidnight = new Date(
+      Date.UTC(
+        istNow.getUTCFullYear(),
+        istNow.getUTCMonth(),
+        istNow.getUTCDate(),
+      ),
+    );
+    const midnight = new Date(istMidnight.getTime() - IST_OFFSET_MS);
 
-    return { results };
+    const byUser = await this.fetchVoiceMessages(
+      [args.user_id],
+      midnight,
+      now,
+    );
+    const msgs = byUser.get(args.user_id) ?? [];
+    if (msgs.length < 2) return false;
+
+    const window: ParsedWindow = { start: midnight, end: now };
+    const after = this.computeActiveMs(msgs, window);
+    const before = this.computeActiveMs(msgs.slice(0, -1), window);
+    return before <= args.threshold_ms && after > args.threshold_ms;
   }
 
   private computeActiveMs(sortedMsgs: Date[], window: ParsedWindow): number {

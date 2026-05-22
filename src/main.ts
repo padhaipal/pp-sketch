@@ -43,6 +43,7 @@ import type { HeygenInboundJobDto } from './interfaces/heygen/inbound/inbound.dt
 import type { WhatsappPreloadJobDto } from './media-meta-data/media-meta-data.dto';
 import type { NotifierSendJobData } from './notifier/evening-reminder.processor';
 import { UserService } from './users/user.service';
+import { UserActivityService } from './users/user-activity.service';
 import { MediaMetaDataService } from './media-meta-data/media-meta-data.service';
 import { LiteracyLessonService } from './literacy/literacy-lesson/literacy-lesson.service';
 import { WabotOutboundService } from './interfaces/wabot/outbound/outbound.service';
@@ -88,6 +89,7 @@ async function bootstrap() {
   const dataSource = app.get(DataSource);
   const mediaRepo = dataSource.getRepository(MediaMetaDataEntity);
   const userService = app.get(UserService);
+  const userActivityService = app.get(UserActivityService);
   const mediaMetaDataService = app.get(MediaMetaDataService);
   const literacyLessonService = app.get(LiteracyLessonService);
   const wabotOutbound = app.get(WabotOutboundService);
@@ -104,6 +106,7 @@ async function bootstrap() {
         mediaMetaDataService,
         literacyLessonService,
         wabotOutbound,
+        userActivityService,
       );
     },
   );

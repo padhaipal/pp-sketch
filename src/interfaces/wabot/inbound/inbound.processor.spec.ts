@@ -1,6 +1,12 @@
+process.env.LOG_PII_HMAC_KEY = process.env.LOG_PII_HMAC_KEY ?? 'a'.repeat(64);
+
 import { Job } from 'bullmq';
 import { processWabotInboundJob } from './inbound.processor';
 import { MessageJobDto } from './wabot-inbound.dto';
+
+jest.mock('../../../notifier/hail-mary.processor', () => ({
+  rearmHailMary: jest.fn().mockResolvedValue(undefined),
+}));
 
 jest.mock('../../../otel/otel', () => ({
   startChildSpanWithContext: jest.fn(() => ({
@@ -39,7 +45,9 @@ function createAudioJob(
   } as any;
 }
 
-function makeMocks(opts: { isComplete?: boolean } = {}) {
+function makeMocks(
+  opts: { isComplete?: boolean; crossedQuota?: boolean } = {},
+) {
   const user = { id: 'user-1', external_id: '+910000000001' };
   const audioEntity = { id: 'audio-entity-1' };
 
@@ -67,12 +75,18 @@ function makeMocks(opts: { isComplete?: boolean } = {}) {
       .fn()
       .mockResolvedValue({ status: 200, body: { delivered: true } }),
   };
+  const userActivityService = {
+    didJustCrossDailyActivityThreshold: jest
+      .fn()
+      .mockResolvedValue(opts.crossedQuota ?? false),
+  };
 
   return {
     userService,
     mediaMetaDataService,
     literacyLessonService,
     wabotOutbound,
+    userActivityService,
   };
 }
 
@@ -86,6 +100,7 @@ async function runJob(
     mocks.mediaMetaDataService as any,
     mocks.literacyLessonService as any,
     mocks.wabotOutbound as any,
+    mocks.userActivityService as any,
   );
 }
 
@@ -139,5 +154,47 @@ describe('processWabotInboundJob — cleanupPartialState on retry', () => {
       mocks.literacyLessonService.cleanupPartialState,
     ).toHaveBeenCalledTimes(1);
     expect(mocks.literacyLessonService.processAnswer).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('processWabotInboundJob — daily activity quota', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('does not prepend quota stid when crossedQuota is false', async () => {
+    const mocks = makeMocks({ crossedQuota: false });
+    await runJob(createAudioJob(), mocks);
+
+    const stids =
+      mocks.mediaMetaDataService.findMediaByStateTransitionId.mock.calls.map(
+        (c: any[]) => c[0],
+      );
+    expect(stids).not.toContain('daily-activity-quota-reached');
+    expect(stids[0]).toBe('sid-1');
+  });
+
+  it('prepends quota stid when crossedQuota is true', async () => {
+    const mocks = makeMocks({ crossedQuota: true });
+    await runJob(createAudioJob(), mocks);
+
+    const stids =
+      mocks.mediaMetaDataService.findMediaByStateTransitionId.mock.calls.map(
+        (c: any[]) => c[0],
+      );
+    expect(stids[0]).toBe('daily-activity-quota-reached');
+    expect(stids).toContain('sid-1');
+  });
+
+  it('calls didJustCrossDailyActivityThreshold with user id and 5min threshold', async () => {
+    const mocks = makeMocks({ crossedQuota: false });
+    await runJob(createAudioJob(), mocks);
+
+    expect(
+      mocks.userActivityService.didJustCrossDailyActivityThreshold,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.userActivityService.didJustCrossDailyActivityThreshold,
+    ).toHaveBeenCalledWith({ user_id: 'user-1', threshold_ms: 5 * 60 * 1000 });
   });
 });

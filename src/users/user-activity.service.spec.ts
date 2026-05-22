@@ -274,6 +274,135 @@ describeIfDb('UserActivityService.getActivityTime (integration)', () => {
     expect(res.results).toHaveLength(0);
   });
 
+  // ---- didJustCrossDailyActivityThreshold ----
+
+  // Today's IST midnight (00:00 IST = 18:30 UTC prev day) as a UTC Date.
+  function todayIstMidnight(): Date {
+    const IST = 5.5 * 60 * 60 * 1000;
+    const istNow = new Date(Date.now() + IST);
+    return new Date(
+      Date.UTC(
+        istNow.getUTCFullYear(),
+        istNow.getUTCMonth(),
+        istNow.getUTCDate(),
+      ) - IST,
+    );
+  }
+
+  const THRESHOLD = 5 * 60 * 1000;
+
+  it('didJustCross: returns false when user has no voice messages', async () => {
+    const id = await makeUser('919999999001');
+    const res = await service.didJustCrossDailyActivityThreshold({
+      user_id: id,
+      threshold_ms: THRESHOLD,
+    });
+    expect(res).toBe(false);
+  });
+
+  it('didJustCross: returns false when user has only 1 voice message today', async () => {
+    const id = await makeUser('919999999002');
+    const midnight = todayIstMidnight();
+    await insertVoice(id, new Date(midnight.getTime() + 60_000).toISOString());
+    const res = await service.didJustCrossDailyActivityThreshold({
+      user_id: id,
+      threshold_ms: THRESHOLD,
+    });
+    expect(res).toBe(false);
+  });
+
+  it('didJustCross: returns false when active_ms is below threshold', async () => {
+    const id = await makeUser('919999999003');
+    const m = todayIstMidnight().getTime();
+    // 2 msgs, gap 30s → active_ms = 30s, well below 5min
+    await insertVoice(id, new Date(m + 60_000).toISOString());
+    await insertVoice(id, new Date(m + 90_000).toISOString());
+    const res = await service.didJustCrossDailyActivityThreshold({
+      user_id: id,
+      threshold_ms: THRESHOLD,
+    });
+    expect(res).toBe(false);
+  });
+
+  it('didJustCross: returns true when the latest msg pushes total over threshold', async () => {
+    const id = await makeUser('919999999004');
+    const m = todayIstMidnight().getTime();
+    // 7 msgs spaced 51s apart → 6 gaps × 51s = 306s after, 5 gaps × 51s = 255s before.
+    // before (255s) <= 300s, after (306s) > 300s → crossed.
+    for (let i = 0; i < 7; i++) {
+      await insertVoice(id, new Date(m + 60_000 + i * 51_000).toISOString());
+    }
+    const res = await service.didJustCrossDailyActivityThreshold({
+      user_id: id,
+      threshold_ms: THRESHOLD,
+    });
+    expect(res).toBe(true);
+  });
+
+  it('didJustCross: returns false when threshold was already crossed by an earlier msg (dedup)', async () => {
+    const id = await makeUser('919999999005');
+    const m = todayIstMidnight().getTime();
+    // 8 msgs spaced 51s → after=7×51s=357s, before(drop last)=6×51s=306s.
+    // both > 300s → didn't just cross.
+    for (let i = 0; i < 8; i++) {
+      await insertVoice(id, new Date(m + 60_000 + i * 51_000).toISOString());
+    }
+    const res = await service.didJustCrossDailyActivityThreshold({
+      user_id: id,
+      threshold_ms: THRESHOLD,
+    });
+    expect(res).toBe(false);
+  });
+
+  it('didJustCross: returns false when latest gap > 60s and earlier msgs already crossed', async () => {
+    const id = await makeUser('919999999006');
+    const m = todayIstMidnight().getTime();
+    // 7 msgs 51s apart (already > threshold), then 8th msg 90s after the 7th.
+    // 90s gap excluded → after = before = 306s. Already crossed → false.
+    for (let i = 0; i < 7; i++) {
+      await insertVoice(id, new Date(m + 60_000 + i * 51_000).toISOString());
+    }
+    await insertVoice(id, new Date(m + 60_000 + 6 * 51_000 + 90_000).toISOString());
+    const res = await service.didJustCrossDailyActivityThreshold({
+      user_id: id,
+      threshold_ms: THRESHOLD,
+    });
+    expect(res).toBe(false);
+  });
+
+  it('didJustCross: excludes msgs from yesterday (before IST midnight)', async () => {
+    const id = await makeUser('919999999007');
+    const m = todayIstMidnight().getTime();
+    // 7 msgs spaced 51s, all just BEFORE IST midnight → all excluded from today's window.
+    for (let i = 0; i < 7; i++) {
+      await insertVoice(id, new Date(m - 60_000 - i * 51_000).toISOString());
+    }
+    const res = await service.didJustCrossDailyActivityThreshold({
+      user_id: id,
+      threshold_ms: THRESHOLD,
+    });
+    expect(res).toBe(false);
+  });
+
+  it('didJustCross: ignores rolled-back msgs and non-whatsapp/non-audio rows', async () => {
+    const id = await makeUser('919999999008');
+    const m = todayIstMidnight().getTime();
+    // Sprinkle excluded rows that would otherwise cross threshold if counted.
+    for (let i = 0; i < 10; i++) {
+      await insertVoice(id, new Date(m + 60_000 + i * 20_000).toISOString(), {
+        rolled_back: true,
+      });
+    }
+    // Only 2 valid msgs, 30s gap → 30s active. Below threshold.
+    await insertVoice(id, new Date(m + 60_000).toISOString());
+    await insertVoice(id, new Date(m + 90_000).toISOString());
+    const res = await service.didJustCrossDailyActivityThreshold({
+      user_id: id,
+      threshold_ms: THRESHOLD,
+    });
+    expect(res).toBe(false);
+  });
+
   it('handles many overlapping windows in a single round trip', async () => {
     const id = await makeUser('918888888012');
     // Steady stream every 30 s for 10 minutes — every gap = 30 s.

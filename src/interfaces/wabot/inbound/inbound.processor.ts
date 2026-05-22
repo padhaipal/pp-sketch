@@ -5,6 +5,7 @@ import { parsePhoneNumberFromString } from 'libphonenumber-js';
 import { context, SpanStatusCode, type Context } from '@opentelemetry/api';
 import { MessageJobDto } from './wabot-inbound.dto';
 import { UserService } from '../../../users/user.service';
+import { UserActivityService } from '../../../users/user-activity.service';
 import { MediaMetaDataService } from '../../../media-meta-data/media-meta-data.service';
 import { LiteracyLessonService } from '../../../literacy/literacy-lesson/literacy-lesson.service';
 import { WabotOutboundService } from '../outbound/outbound.service';
@@ -33,6 +34,7 @@ export async function processWabotInboundJob(
   mediaMetaDataService: MediaMetaDataService,
   literacyLessonService: LiteracyLessonService,
   wabotOutbound: WabotOutboundService,
+  userActivityService: UserActivityService,
 ): Promise<void> {
   const payload = job.data;
 
@@ -368,23 +370,14 @@ export async function processWabotInboundJob(
         stateTransitionIds.push(...result2.stateTransitionIds);
       }
 
-      // Daily activity quota check — disabled until 'daily-activity-quota-reached'
-      // media is seeded. Uncomment along with injecting UserActivityService.
-      // const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-      // const now = new Date();
-      // const istNow = new Date(now.getTime() + IST_OFFSET_MS);
-      // const istMidnight = new Date(
-      //   Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate()),
-      // );
-      // const midnight = new Date(istMidnight.getTime() - IST_OFFSET_MS);
-      // const activity = await userActivityService.getActivityTime({
-      //   users: [user.id],
-      //   windows: [{ start: midnight.toISOString(), end: now.toISOString() }],
-      // });
-      // const activeMs = activity.results[0]?.windows[0]?.active_ms ?? 0;
-      // if (activeMs > 5 * 60 * 1000) {
-      //   stateTransitionIds.unshift('daily-activity-quota-reached');
-      // }
+      const crossedQuota =
+        await userActivityService.didJustCrossDailyActivityThreshold({
+          user_id: user.id,
+          threshold_ms: 5 * 60 * 1000,
+        });
+      if (crossedQuota) {
+        stateTransitionIds.unshift('daily-activity-quota-reached');
+      }
 
       // 9. Build outbound media
       const outboundMedia: OutboundMediaItem[] = [];
