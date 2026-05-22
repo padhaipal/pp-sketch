@@ -19,7 +19,7 @@ import {
   validateProcessAnswerOptions,
 } from './literacy-lesson.dto';
 
-const RECENT_WORDS_TO_EXCLUDE = 5;
+const RECENT_WORDS_TO_EXCLUDE = 10;
 const SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH = 8;
 const SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME = 15;
 const MIN_UNIQUE_WORDS_FOR_PROGRESS = 3;

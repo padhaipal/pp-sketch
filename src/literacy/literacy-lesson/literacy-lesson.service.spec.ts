@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { LiteracyLessonService } from './literacy-lesson.service';
 import { STALE_LESSON_RESTART_STATE_TRANSITION_ID } from './literacy-lesson.machine';
 
-const RECENT_WORDS_TO_EXCLUDE = 5;
+const RECENT_WORDS_TO_EXCLUDE = 10;
 const SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH = 8;
 const SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME = 15;
 const MIN_UNIQUE_WORDS_FOR_PROGRESS = 3;
