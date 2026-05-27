@@ -114,9 +114,11 @@
       "\\.dto\\.ts$",
       "\\.module\\.ts$",
       "\\.enum\\.ts$",
+      "\\.entity\\.ts$",
       "/main\\.ts$",
       "/seed\\.ts$",
-      "/migrations/"
+      "/migrations/",
+      "/interfaces/database/"
     ],
     "coverageThreshold": {
       "global": {
