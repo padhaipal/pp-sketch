@@ -8,8 +8,21 @@ permissions:
   contents: read
 
 jobs:
+  # Keep the job ID `gate` so the existing branch-protection required check
+  # of the same name continues to receive a status report.
   gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Dummy gate
-        run: echo "ok"
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+
+      # Enforces the 80% global threshold (statements / branches / functions
+      # / lines) declared in package.json#jest.coverageThreshold.
+      - run: npm run test:cov

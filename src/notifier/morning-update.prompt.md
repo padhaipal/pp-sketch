@@ -92,5 +92,5 @@ WhatsApp pre-load, then sends.
 * User joined < 7 days ago → missing days have 0 activity by construction.
 
 These are unit-tested in `report-card/report-card.service.spec.ts` and the
-underlying activity SQL is integration-tested in
-`users/user-activity.service.spec.ts` (DB-gated by `TEST_DATABASE_URL`).
+underlying activity logic is unit-tested in
+`users/user-activity.service.spec.ts` (TypeORM repos mocked — no DB).
