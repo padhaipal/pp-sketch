@@ -110,6 +110,22 @@
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],
+    "coveragePathIgnorePatterns": [
+      "\\.dto\\.ts$",
+      "\\.module\\.ts$",
+      "\\.enum\\.ts$",
+      "/main\\.ts$",
+      "/seed\\.ts$",
+      "/migrations/"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "statements": 70,
+        "branches": 70,
+        "functions": 70,
+        "lines": 70
+      }
+    },
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
   }
