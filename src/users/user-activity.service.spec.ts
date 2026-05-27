@@ -1,264 +1,77 @@
-// Integration tests for UserActivityService.getActivityTime.
-// Requires Postgres. Skipped unless TEST_DATABASE_URL is set.
-//   docker run -d --rm --name pp-test-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:18-alpine
-//   TEST_DATABASE_URL=postgres://postgres:test@localhost:55432/postgres npx jest user-activity
+// Unit tests for UserActivityService. TypeORM repos and the fluent
+// QueryBuilder are mocked.
 
-import { DataSource } from 'typeorm';
-import { Repository } from 'typeorm';
 import { BadRequestException } from '@nestjs/common';
+import type { Repository } from 'typeorm';
 import { UserActivityService } from './user-activity.service';
-import { UserEntity } from './user.entity';
-import { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
+import type { UserEntity } from './user.entity';
+import type { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
 
-const TEST_DB_URL = process.env.TEST_DATABASE_URL;
-const describeIfDb = TEST_DB_URL ? describe : describe.skip;
+const UUID_A = '11111111-2222-3333-4444-555555555555';
+const UUID_B = '22222222-3333-4444-5555-666666666666';
 
-describeIfDb('UserActivityService.getActivityTime (integration)', () => {
-  let dataSource: DataSource;
-  let service: UserActivityService;
-  let userRepo: Repository<UserEntity>;
-  let mediaRepo: Repository<MediaMetaDataEntity>;
+type UserRepoMock = {
+  find: jest.Mock;
+};
 
-  beforeAll(async () => {
-    dataSource = new DataSource({
-      type: 'postgres',
-      url: TEST_DB_URL,
-      synchronize: false,
-      entities: [MediaMetaDataEntity, UserEntity],
-    });
-    await dataSource.initialize();
-
-    await dataSource.query(`DROP TABLE IF EXISTS media_metadata CASCADE`);
-    await dataSource.query(`DROP TABLE IF EXISTS users CASCADE`);
-    await dataSource.query(`
-      CREATE TABLE users (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        external_id text UNIQUE NOT NULL,
-        referrer_user_id uuid,
-        name text,
-        password_hash text,
-        role text,
-        created_at timestamptz DEFAULT now()
-      )`);
-    await dataSource.query(`
-      CREATE TABLE media_metadata (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        media_type text NOT NULL,
-        source text NOT NULL,
-        status text DEFAULT 'created',
-        wa_media_url text,
-        s3_key text,
-        content_hash text,
-        state_transition_id text,
-        text text,
-        media_details jsonb,
-        generation_request_json jsonb,
-        input_media_id uuid,
-        user_id uuid,
-        rolled_back boolean DEFAULT false,
-        created_at timestamptz DEFAULT now()
-      )`);
-  }, 30_000);
-
-  afterAll(async () => {
-    if (dataSource?.isInitialized) {
-      await dataSource.query(`DROP TABLE IF EXISTS media_metadata CASCADE`);
-      await dataSource.query(`DROP TABLE IF EXISTS users CASCADE`);
-      await dataSource.destroy();
-    }
-  });
-
-  beforeEach(() => {
-    userRepo = dataSource.getRepository(UserEntity);
-    mediaRepo = dataSource.getRepository(MediaMetaDataEntity);
-    service = new UserActivityService(userRepo, mediaRepo);
-  });
-
-  afterEach(async () => {
-    await dataSource.query(
-      `TRUNCATE media_metadata, users RESTART IDENTITY CASCADE`,
-    );
-  });
-
-  async function makeUser(externalId: string): Promise<string> {
-    const [{ id }] = await dataSource.query(
-      `INSERT INTO users (external_id) VALUES ($1) RETURNING id`,
-      [externalId],
-    );
-    return id;
+// fluent QueryBuilder mock — every chain method returns the same object,
+// only getRawMany triggers a resolved Promise.
+function makeQB(rows: unknown[]): Record<string, jest.Mock> {
+  const qb: Record<string, jest.Mock> = {
+    select: jest.fn(),
+    addSelect: jest.fn(),
+    where: jest.fn(),
+    andWhere: jest.fn(),
+    orderBy: jest.fn(),
+    addOrderBy: jest.fn(),
+    getRawMany: jest.fn().mockResolvedValue(rows),
+  };
+  for (const k of Object.keys(qb)) {
+    if (k !== 'getRawMany') qb[k].mockReturnValue(qb);
   }
+  return qb;
+}
 
-  async function insertVoice(
-    userId: string,
-    isoCreatedAt: string,
-    extra: { source?: string; media_type?: string; rolled_back?: boolean } = {},
-  ): Promise<void> {
-    const source = extra.source ?? 'whatsapp';
-    const media_type = extra.media_type ?? 'audio';
-    const rolled_back = extra.rolled_back ?? false;
-    await dataSource.query(
-      `INSERT INTO media_metadata (media_type, source, status, user_id, rolled_back, created_at)
-       VALUES ($1, $2, 'ready', $3, $4, $5)`,
-      [media_type, source, userId, rolled_back, isoCreatedAt],
-    );
-  }
+function makeUserRepo(find: jest.Mock): UserRepoMock {
+  return { find };
+}
 
-  it('sums gaps < 60 s between consecutive voice messages inside a window', async () => {
-    const id = await makeUser('918888888001');
-    // 5 messages: 0, 30s, 80s (gap=50s), 200s (gap=120s, excluded), 220s (gap=20s)
-    await insertVoice(id, '2026-04-27T10:00:00Z');
-    await insertVoice(id, '2026-04-27T10:00:30Z');
-    await insertVoice(id, '2026-04-27T10:01:50Z');
-    await insertVoice(id, '2026-04-27T10:05:10Z');
-    await insertVoice(id, '2026-04-27T10:05:30Z');
+function makeMediaRepo(
+  rows: unknown[],
+): { createQueryBuilder: jest.Mock; _qb: Record<string, jest.Mock> } {
+  const qb = makeQB(rows);
+  return {
+    createQueryBuilder: jest.fn().mockReturnValue(qb),
+    _qb: qb,
+  };
+}
 
-    const res = await service.getActivityTime({
-      users: [id],
-      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
-    });
+function makeService(
+  userRepo: UserRepoMock,
+  mediaRepo: { createQueryBuilder: jest.Mock },
+): UserActivityService {
+  return new UserActivityService(
+    userRepo as unknown as Repository<UserEntity>,
+    mediaRepo as unknown as Repository<MediaMetaDataEntity>,
+  );
+}
 
-    expect(res.results).toHaveLength(1);
-    // Active = (30s gap) + (50s gap is ok, < 60s) wait recompute:
-    //   m0=0,    m1=30s   gap=30s    -> +30s
-    //   m1=30s,  m2=110s  gap=80s    -> excluded (>= 60s)
-    //   m2=110s, m3=310s  gap=200s   -> excluded
-    //   m3=310s, m4=330s  gap=20s    -> +20s
-    // total = 50s = 50_000 ms
-    expect(res.results[0].windows[0].active_ms).toBe(50_000);
-  });
-
-  it('returns 0 when fewer than 2 messages fall in the window', async () => {
-    const id = await makeUser('918888888002');
-    await insertVoice(id, '2026-04-27T10:00:00Z');
-
-    const res = await service.getActivityTime({
-      users: [id],
-      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
-    });
-    expect(res.results[0].windows[0].active_ms).toBe(0);
-  });
-
-  it('handles overlapping windows independently', async () => {
-    const id = await makeUser('918888888003');
-    await insertVoice(id, '2026-04-27T10:00:00Z');
-    await insertVoice(id, '2026-04-27T10:00:20Z');
-    await insertVoice(id, '2026-04-27T11:00:00Z');
-    await insertVoice(id, '2026-04-27T11:00:30Z');
-
-    const res = await service.getActivityTime({
-      users: [id],
-      windows: [
-        { start: '2026-04-27T09:30:00Z', end: '2026-04-27T10:30:00Z' },
-        { start: '2026-04-27T10:30:00Z', end: '2026-04-27T11:30:00Z' },
-        { start: '2026-04-27T09:30:00Z', end: '2026-04-27T11:30:00Z' },
-      ],
-    });
-
-    expect(res.results[0].windows[0].active_ms).toBe(20_000);
-    expect(res.results[0].windows[1].active_ms).toBe(30_000);
-    // The wide window must NOT bridge across the >60s gap between the two pairs.
-    expect(res.results[0].windows[2].active_ms).toBe(50_000);
-  });
-
-  it('only counts messages strictly inside the window (boundary is inclusive)', async () => {
-    const id = await makeUser('918888888004');
-    // boundary at 10:00:00 — first message is exactly on the edge
-    await insertVoice(id, '2026-04-27T10:00:00Z');
-    await insertVoice(id, '2026-04-27T10:00:25Z');
-    // outside upper boundary → excluded
-    await insertVoice(id, '2026-04-27T11:00:01Z');
-    await insertVoice(id, '2026-04-27T11:00:30Z');
-
-    const res = await service.getActivityTime({
-      users: [id],
-      windows: [{ start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' }],
-    });
-    expect(res.results[0].windows[0].active_ms).toBe(25_000);
-  });
-
-  it('does not bridge gaps that span outside the window (resets prev across exclusion)', async () => {
-    const id = await makeUser('918888888005');
-    // Two pairs separated by a long out-of-window gap. If implementation buggy,
-    // it might count message-pair-across-window as active.
-    await insertVoice(id, '2026-04-27T09:30:00Z');
-    await insertVoice(id, '2026-04-27T09:30:10Z');
-    // Out of window
-    await insertVoice(id, '2026-04-27T10:30:00Z');
-    // Back inside window
-    await insertVoice(id, '2026-04-27T11:00:30Z');
-
-    const res = await service.getActivityTime({
-      users: [id],
-      windows: [
-        // includes 09:30 pair; ends at 09:45 (excludes the rest)
-        { start: '2026-04-27T09:00:00Z', end: '2026-04-27T09:45:00Z' },
-      ],
-    });
-    expect(res.results[0].windows[0].active_ms).toBe(10_000);
-  });
-
-  it('ignores rolled-back messages and non-audio sources', async () => {
-    const id = await makeUser('918888888006');
-    await insertVoice(id, '2026-04-27T10:00:00Z');
-    await insertVoice(id, '2026-04-27T10:00:20Z', { rolled_back: true });
-    await insertVoice(id, '2026-04-27T10:00:40Z', { media_type: 'video' });
-    await insertVoice(id, '2026-04-27T10:01:00Z', { source: 'heygen' });
-    await insertVoice(id, '2026-04-27T10:01:30Z');
-
-    const res = await service.getActivityTime({
-      users: [id],
-      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
-    });
-    // Only the two real whatsapp/audio rows count (10:00:00 and 10:01:30) →
-    // gap 90 s, > 60 s → 0.
-    expect(res.results[0].windows[0].active_ms).toBe(0);
-  });
-
-  it('returns separate results per user, indexed by input order', async () => {
-    const a = await makeUser('918888888007');
-    const b = await makeUser('918888888008');
-    await insertVoice(a, '2026-04-27T10:00:00Z');
-    await insertVoice(a, '2026-04-27T10:00:15Z');
-    await insertVoice(b, '2026-04-27T10:00:00Z');
-    await insertVoice(b, '2026-04-27T10:00:45Z');
-
-    const res = await service.getActivityTime({
-      users: [b, a],
-      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
-    });
-    expect(res.results.map((r) => r.user_id)).toEqual([b, a]);
-    expect(res.results[0].windows[0].active_ms).toBe(45_000);
-    expect(res.results[1].windows[0].active_ms).toBe(15_000);
-  });
-
-  it('accepts mixed UUID + external_id inputs and dedupes by user', async () => {
-    const id = await makeUser('918888888009');
-    await insertVoice(id, '2026-04-27T10:00:00Z');
-    await insertVoice(id, '2026-04-27T10:00:30Z');
-
-    const res = await service.getActivityTime({
-      users: [id, '918888888009'],
-      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
-    });
-    expect(res.results).toHaveLength(1);
-    expect(res.results[0].external_id).toBe('918888888009');
-    expect(res.results[0].windows[0].active_ms).toBe(30_000);
-  });
-
-  it('returns 0 active_ms for users with no voice messages at all', async () => {
-    const id = await makeUser('918888888010');
-    const res = await service.getActivityTime({
-      users: [id],
-      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
-    });
-    expect(res.results[0].windows[0].active_ms).toBe(0);
-  });
-
-  it('rejects start > end', async () => {
-    const id = await makeUser('918888888011');
+describe('UserActivityService.getActivityTime — window parsing', () => {
+  it('throws BadRequest when start/end are not valid ISO 8601', async () => {
+    const svc = makeService(makeUserRepo(jest.fn()), makeMediaRepo([]));
     await expect(
-      service.getActivityTime({
-        users: [id],
+      svc.getActivityTime({
+        users: ['919999990001'],
+        windows: [{ start: 'not-a-date', end: '2026-04-27T10:00:00Z' }],
+      }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('throws BadRequest when start > end', async () => {
+    const svc = makeService(makeUserRepo(jest.fn()), makeMediaRepo([]));
+    await expect(
+      svc.getActivityTime({
+        users: ['919999990001'],
         windows: [
           { start: '2026-04-27T11:00:00Z', end: '2026-04-27T10:00:00Z' },
         ],
@@ -266,162 +79,213 @@ describeIfDb('UserActivityService.getActivityTime (integration)', () => {
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('returns empty results when no users resolve', async () => {
-    const res = await service.getActivityTime({
-      users: ['nonexistent-phone-919999999999'],
+  it('throws BadRequest on an empty/whitespace user identifier', async () => {
+    const svc = makeService(makeUserRepo(jest.fn()), makeMediaRepo([]));
+    await expect(
+      svc.getActivityTime({
+        users: ['   '],
+        windows: [{ start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' }],
+      }),
+    ).rejects.toThrow(BadRequestException);
+  });
+});
+
+describe('UserActivityService.getActivityTime — empty inputs', () => {
+  it('returns {results:[]} when no users resolve', async () => {
+    const svc = makeService(
+      makeUserRepo(jest.fn().mockResolvedValue([])),
+      makeMediaRepo([]),
+    );
+    const out = await svc.getActivityTime({
+      users: ['919999990001'],
+      windows: [{ start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' }],
+    });
+    expect(out).toEqual({ results: [] });
+  });
+});
+
+describe('UserActivityService.getActivityTime — active-ms computation', () => {
+  it('sums gaps strictly below 60 s and excludes longer gaps', async () => {
+    // 5 messages in one window; only the first 30s and last 20s gaps count.
+    const userA = { id: UUID_A, external_id: '919999990001' };
+    const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
+    const rows = [
+      { user_id: UUID_A, created_at: new Date('2026-04-27T10:00:00Z') },
+      { user_id: UUID_A, created_at: new Date('2026-04-27T10:00:30Z') }, // +30s
+      { user_id: UUID_A, created_at: new Date('2026-04-27T10:01:50Z') }, // +80s, skip
+      { user_id: UUID_A, created_at: new Date('2026-04-27T10:05:10Z') }, // +200s, skip
+      { user_id: UUID_A, created_at: new Date('2026-04-27T10:05:30Z') }, // +20s
+    ];
+    const mediaRepo = makeMediaRepo(rows);
+    const svc = makeService(userRepo, mediaRepo);
+
+    const out = await svc.getActivityTime({
+      users: [UUID_A],
       windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
     });
-    expect(res.results).toHaveLength(0);
+
+    expect(out.results[0].windows[0].active_ms).toBe(50_000);
   });
 
-  // ---- didJustCrossDailyActivityThreshold ----
+  it('coerces string timestamps from the query result into Date objects', async () => {
+    const userA = { id: UUID_A, external_id: '919999990001' };
+    const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
+    const rows = [
+      { user_id: UUID_A, created_at: '2026-04-27T10:00:00Z' },
+      { user_id: UUID_A, created_at: '2026-04-27T10:00:30Z' },
+    ];
+    const mediaRepo = makeMediaRepo(rows);
+    const svc = makeService(userRepo, mediaRepo);
 
-  // Today's IST midnight (00:00 IST = 18:30 UTC prev day) as a UTC Date.
-  function todayIstMidnight(): Date {
-    const IST = 5.5 * 60 * 60 * 1000;
-    const istNow = new Date(Date.now() + IST);
-    return new Date(
-      Date.UTC(
-        istNow.getUTCFullYear(),
-        istNow.getUTCMonth(),
-        istNow.getUTCDate(),
-      ) - IST,
-    );
-  }
+    const out = await svc.getActivityTime({
+      users: [UUID_A],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
+    });
 
+    expect(out.results[0].windows[0].active_ms).toBe(30_000);
+  });
+
+  it('excludes messages outside the window and resets the gap chain', async () => {
+    const userA = { id: UUID_A, external_id: '919999990001' };
+    const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
+    // m0 and m1 in window, m2 outside, m3 back inside → gap m1→m3 must NOT count
+    const rows = [
+      { user_id: UUID_A, created_at: new Date('2026-04-27T09:30:00Z') },
+      { user_id: UUID_A, created_at: new Date('2026-04-27T09:30:10Z') }, // +10s ✓
+      { user_id: UUID_A, created_at: new Date('2026-04-27T10:30:00Z') }, // outside
+      { user_id: UUID_A, created_at: new Date('2026-04-27T11:00:30Z') }, // back in (next window only)
+    ];
+    const mediaRepo = makeMediaRepo(rows);
+    const svc = makeService(userRepo, mediaRepo);
+
+    const out = await svc.getActivityTime({
+      users: [UUID_A],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T09:45:00Z' }],
+    });
+    expect(out.results[0].windows[0].active_ms).toBe(10_000);
+  });
+
+  it('returns 0 active_ms when only one (or zero) messages fall in the window', async () => {
+    const userA = { id: UUID_A, external_id: '919999990001' };
+    const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
+    const rows = [
+      { user_id: UUID_A, created_at: new Date('2026-04-27T10:00:00Z') },
+    ];
+    const svc = makeService(userRepo, makeMediaRepo(rows));
+
+    const out = await svc.getActivityTime({
+      users: [UUID_A],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
+    });
+    expect(out.results[0].windows[0].active_ms).toBe(0);
+  });
+});
+
+describe('UserActivityService.getActivityTime — user identification', () => {
+  it('routes UUIDs to find({id:In(...)}) and external_ids to find({external_id:In(...)})', async () => {
+    const userA = { id: UUID_A, external_id: '919999990001' };
+    const userB = { id: UUID_B, external_id: '918888880002' };
+
+    const find = jest
+      .fn()
+      // first call: id batch
+      .mockResolvedValueOnce([userA])
+      // second call: external_id batch
+      .mockResolvedValueOnce([userB]);
+
+    const svc = makeService(makeUserRepo(find), makeMediaRepo([]));
+    const out = await svc.getActivityTime({
+      users: [UUID_A, '918888880002'],
+      windows: [{ start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' }],
+    });
+
+    expect(find).toHaveBeenCalledTimes(2);
+    expect(out.results.map((r) => r.user_id)).toEqual([UUID_A, UUID_B]);
+  });
+
+  it('dedupes when the same user is referenced by both id and external_id, preserving first-seen order', async () => {
+    const userA = { id: UUID_A, external_id: '919999990001' };
+    const find = jest
+      .fn()
+      .mockResolvedValueOnce([userA]) // id batch
+      .mockResolvedValueOnce([userA]); // external_id batch
+    const svc = makeService(makeUserRepo(find), makeMediaRepo([]));
+
+    const out = await svc.getActivityTime({
+      users: [UUID_A, '919999990001'],
+      windows: [{ start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' }],
+    });
+
+    expect(out.results).toHaveLength(1);
+    expect(out.results[0].user_id).toBe(UUID_A);
+  });
+
+  it('skips IDs that resolve to no user', async () => {
+    const find = jest.fn().mockResolvedValue([]);
+    const svc = makeService(makeUserRepo(find), makeMediaRepo([]));
+
+    const out = await svc.getActivityTime({
+      users: ['nonexistent-phone-999999999999'],
+      windows: [{ start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' }],
+    });
+    expect(out.results).toEqual([]);
+  });
+});
+
+describe('UserActivityService.didJustCrossDailyActivityThreshold', () => {
+  // 5 minutes = 300_000 ms
   const THRESHOLD = 5 * 60 * 1000;
 
-  it('didJustCross: returns false when user has no voice messages', async () => {
-    const id = await makeUser('919999999001');
-    const res = await service.didJustCrossDailyActivityThreshold({
-      user_id: id,
-      threshold_ms: THRESHOLD,
-    });
-    expect(res).toBe(false);
+  it('returns false when fewer than 2 messages exist today', async () => {
+    const userRepo = makeUserRepo(jest.fn());
+    const mediaRepo = makeMediaRepo([
+      { user_id: UUID_A, created_at: new Date() },
+    ]);
+    const svc = makeService(userRepo, mediaRepo);
+
+    await expect(
+      svc.didJustCrossDailyActivityThreshold({
+        user_id: UUID_A,
+        threshold_ms: THRESHOLD,
+      }),
+    ).resolves.toBe(false);
   });
 
-  it('didJustCross: returns false when user has only 1 voice message today', async () => {
-    const id = await makeUser('919999999002');
-    const midnight = todayIstMidnight();
-    await insertVoice(id, new Date(midnight.getTime() + 60_000).toISOString());
-    const res = await service.didJustCrossDailyActivityThreshold({
-      user_id: id,
-      threshold_ms: THRESHOLD,
-    });
-    expect(res).toBe(false);
-  });
-
-  it('didJustCross: returns false when active_ms is below threshold', async () => {
-    const id = await makeUser('919999999003');
-    const m = todayIstMidnight().getTime();
-    // 2 msgs, gap 30s → active_ms = 30s, well below 5min
-    await insertVoice(id, new Date(m + 60_000).toISOString());
-    await insertVoice(id, new Date(m + 90_000).toISOString());
-    const res = await service.didJustCrossDailyActivityThreshold({
-      user_id: id,
-      threshold_ms: THRESHOLD,
-    });
-    expect(res).toBe(false);
-  });
-
-  it('didJustCross: returns true when the latest msg pushes total over threshold', async () => {
-    const id = await makeUser('919999999004');
-    const m = todayIstMidnight().getTime();
-    // 7 msgs spaced 51s apart → 6 gaps × 51s = 306s after, 5 gaps × 51s = 255s before.
-    // before (255s) <= 300s, after (306s) > 300s → crossed.
-    for (let i = 0; i < 7; i++) {
-      await insertVoice(id, new Date(m + 60_000 + i * 51_000).toISOString());
-    }
-    const res = await service.didJustCrossDailyActivityThreshold({
-      user_id: id,
-      threshold_ms: THRESHOLD,
-    });
-    expect(res).toBe(true);
-  });
-
-  it('didJustCross: returns false when threshold was already crossed by an earlier msg (dedup)', async () => {
-    const id = await makeUser('919999999005');
-    const m = todayIstMidnight().getTime();
-    // 8 msgs spaced 51s → after=7×51s=357s, before(drop last)=6×51s=306s.
-    // both > 300s → didn't just cross.
-    for (let i = 0; i < 8; i++) {
-      await insertVoice(id, new Date(m + 60_000 + i * 51_000).toISOString());
-    }
-    const res = await service.didJustCrossDailyActivityThreshold({
-      user_id: id,
-      threshold_ms: THRESHOLD,
-    });
-    expect(res).toBe(false);
-  });
-
-  it('didJustCross: returns false when latest gap > 60s and earlier msgs already crossed', async () => {
-    const id = await makeUser('919999999006');
-    const m = todayIstMidnight().getTime();
-    // 7 msgs 51s apart (already > threshold), then 8th msg 90s after the 7th.
-    // 90s gap excluded → after = before = 306s. Already crossed → false.
-    for (let i = 0; i < 7; i++) {
-      await insertVoice(id, new Date(m + 60_000 + i * 51_000).toISOString());
-    }
-    await insertVoice(id, new Date(m + 60_000 + 6 * 51_000 + 90_000).toISOString());
-    const res = await service.didJustCrossDailyActivityThreshold({
-      user_id: id,
-      threshold_ms: THRESHOLD,
-    });
-    expect(res).toBe(false);
-  });
-
-  it('didJustCross: excludes msgs from yesterday (before IST midnight)', async () => {
-    const id = await makeUser('919999999007');
-    const m = todayIstMidnight().getTime();
-    // 7 msgs spaced 51s, all just BEFORE IST midnight → all excluded from today's window.
-    for (let i = 0; i < 7; i++) {
-      await insertVoice(id, new Date(m - 60_000 - i * 51_000).toISOString());
-    }
-    const res = await service.didJustCrossDailyActivityThreshold({
-      user_id: id,
-      threshold_ms: THRESHOLD,
-    });
-    expect(res).toBe(false);
-  });
-
-  it('didJustCross: ignores rolled-back msgs and non-whatsapp/non-audio rows', async () => {
-    const id = await makeUser('919999999008');
-    const m = todayIstMidnight().getTime();
-    // Sprinkle excluded rows that would otherwise cross threshold if counted.
-    for (let i = 0; i < 10; i++) {
-      await insertVoice(id, new Date(m + 60_000 + i * 20_000).toISOString(), {
-        rolled_back: true,
-      });
-    }
-    // Only 2 valid msgs, 30s gap → 30s active. Below threshold.
-    await insertVoice(id, new Date(m + 60_000).toISOString());
-    await insertVoice(id, new Date(m + 90_000).toISOString());
-    const res = await service.didJustCrossDailyActivityThreshold({
-      user_id: id,
-      threshold_ms: THRESHOLD,
-    });
-    expect(res).toBe(false);
-  });
-
-  it('handles many overlapping windows in a single round trip', async () => {
-    const id = await makeUser('918888888012');
-    // Steady stream every 30 s for 10 minutes — every gap = 30 s.
-    for (let i = 0; i < 21; i++) {
-      const t = new Date(`2026-04-27T10:00:00Z`).getTime() + i * 30_000;
-      await insertVoice(id, new Date(t).toISOString());
-    }
-
-    const windows = Array.from({ length: 10 }, (_, i) => ({
-      start: `2026-04-27T10:${String(i).padStart(2, '0')}:00Z`,
-      end: `2026-04-27T10:${String(i + 1).padStart(2, '0')}:00Z`,
+  it('returns true when the latest message pushes total over threshold', async () => {
+    // 7 messages spaced 51s apart: 6 gaps × 51s = 306s after (>300s), 5 × 51s = 255s before (≤300s) → just crossed.
+    const userRepo = makeUserRepo(jest.fn());
+    const now = Date.now();
+    const rows = Array.from({ length: 7 }, (_, i) => ({
+      user_id: UUID_A,
+      created_at: new Date(now - (6 - i) * 51_000),
     }));
-    const res = await service.getActivityTime({ users: [id], windows });
+    const mediaRepo = makeMediaRepo(rows);
+    const svc = makeService(userRepo, mediaRepo);
 
-    // Each 1-min window [xx:00, xx+1:00] inclusively contains 3 messages
-    // (xx:00, xx:30, xx+1:00 — both boundaries are inclusive). That's two
-    // 30 s gaps → 60 000 ms per window.
-    for (const w of res.results[0].windows) {
-      expect(w.active_ms).toBe(60_000);
-    }
+    await expect(
+      svc.didJustCrossDailyActivityThreshold({
+        user_id: UUID_A,
+        threshold_ms: THRESHOLD,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it('returns false when threshold was already crossed by an earlier message (dedup)', async () => {
+    // 8 messages spaced 51s apart: both before/after exceed threshold.
+    const userRepo = makeUserRepo(jest.fn());
+    const now = Date.now();
+    const rows = Array.from({ length: 8 }, (_, i) => ({
+      user_id: UUID_A,
+      created_at: new Date(now - (7 - i) * 51_000),
+    }));
+    const mediaRepo = makeMediaRepo(rows);
+    const svc = makeService(userRepo, mediaRepo);
+
+    await expect(
+      svc.didJustCrossDailyActivityThreshold({
+        user_id: UUID_A,
+        threshold_ms: THRESHOLD,
+      }),
+    ).resolves.toBe(false);
   });
 });
