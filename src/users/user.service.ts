@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { UserEntity } from './user.entity';
@@ -115,7 +115,6 @@ export class UserService {
         // Roll back by removing the referrer
         updatedUser.referrer_user_id = null;
         await this.userRepo.save(updatedUser);
-        const { BadRequestException } = await import('@nestjs/common');
         throw new BadRequestException('update() would create a referral cycle');
       }
     }
@@ -177,7 +176,6 @@ export class UserService {
         );
         if (cycleRows.length > 0) {
           await this.userRepo.remove(user);
-          const { BadRequestException } = await import('@nestjs/common');
           throw new BadRequestException(
             'create() would create a referral cycle',
           );
@@ -230,7 +228,6 @@ export class UserService {
           await this.dataSource.query('DELETE FROM users WHERE id = $1', [
             user.id,
           ]);
-          const { BadRequestException } = await import('@nestjs/common');
           throw new BadRequestException(
             'create() would create a referral cycle',
           );
