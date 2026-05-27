@@ -8,8 +8,9 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Unit tests + coverage gate
+  # Keep the job ID `gate` so the existing branch-protection required check
+  # of the same name continues to receive a status report.
+  gate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
