@@ -8,8 +8,20 @@ permissions:
   contents: read
 
 jobs:
-  gate:
+  test:
+    name: Unit tests + coverage gate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Dummy gate
-        run: echo "ok"
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+
+      # Enforces the 80% global threshold (statements / branches / functions
+      # / lines) declared in package.json#jest.coverageThreshold.
+      - run: npm run test:cov
