@@ -214,6 +214,172 @@ describe('ReportCardService.buildData', () => {
       /User not found/,
     );
   });
+
+  it('defaults `now` to current time when options.now is omitted', async () => {
+    const svc = makeService({
+      user: { id: 'u1', external_id: '918888888001' },
+      lettersByAsOf: new Map(),
+      activityWindows: Array(7).fill(0),
+    });
+    // No `now` override — must not throw, and the returned dates must be
+    // monotonically increasing.
+    const data = await svc.buildData('u1');
+    expect(data.daily_bars).toHaveLength(7);
+    const dates = data.daily_bars.map((b) => b.date_iso);
+    for (let i = 1; i < dates.length; i++) {
+      expect(dates[i] > dates[i - 1]).toBe(true);
+    }
+  });
+
+  it('defaults missing activity rows to 0-active-ms (defensive null-safety on userActivity)', async () => {
+    // userActivityService returns results=[] when no user — the service
+    // falls back to active_ms=0 per window via ?.windows[i]?.active_ms ?? 0.
+    const svc = makeService({
+      // Note: pass user so resolveUser succeeds, but the activity service
+      // returns no rows for them (e.g. they have no whatsapp messages).
+      user: { id: 'u1', external_id: '918888888001' },
+      lettersByAsOf: new Map(),
+      // empty windows array forces activity results to map to []
+      activityWindows: [],
+    });
+    const data = await svc.buildData('u1', { now: NOW });
+    expect(data.daily_bars.every((b) => b.active_ms === 0)).toBe(true);
+  });
+
+  it('resolves a UUID-shaped input via {id} lookup; non-UUID via {external_id}', async () => {
+    const findSpy = jest.fn().mockResolvedValue({
+      id: '11111111-2222-3333-4444-555555555555',
+      external_id: '918888888001',
+    });
+    const userActivityService = {
+      getActivityTime: jest.fn().mockResolvedValue({ results: [] }),
+    };
+    const scoreService = {
+      getLetterBins: jest.fn().mockResolvedValue({
+        userId: 'u1',
+        userPhone: '918888888001',
+        bins: { untouched: [], regressed: [], learnt: [], improved: [] },
+      }),
+    };
+    const mediaRepo = { createQueryBuilder: jest.fn() };
+    const svc = new ReportCardService(
+      { find: findSpy } as never,
+      userActivityService as never,
+      scoreService as never,
+      mediaRepo as never,
+    );
+
+    await svc.buildData('11111111-2222-3333-4444-555555555555', { now: NOW });
+    expect(findSpy).toHaveBeenLastCalledWith({
+      id: '11111111-2222-3333-4444-555555555555',
+    });
+
+    await svc.buildData('918888888001', { now: NOW });
+    expect(findSpy).toHaveBeenLastCalledWith({ external_id: '918888888001' });
+  });
+});
+
+// ─── findExistingForUser ────────────────────────────────────────────────
+
+describe('ReportCardService.findExistingForUser', () => {
+  it('returns the matched media row when one exists', async () => {
+    const row = { id: 'mm-1', status: 'ready' };
+    const svc = makeService({
+      user: { id: 'u1', external_id: '918888888001' },
+      lettersByAsOf: new Map(),
+      activityWindows: [],
+      existingMedia: row,
+    });
+    const out = await svc.findExistingForUser('u1', new Date());
+    expect(out).toEqual(row);
+  });
+
+  it('returns null when no row matches', async () => {
+    const svc = makeService({
+      user: { id: 'u1', external_id: '918888888001' },
+      lettersByAsOf: new Map(),
+      activityWindows: [],
+      // existingMedia omitted → mock returns null
+    });
+    const out = await svc.findExistingForUser('u1', new Date());
+    expect(out).toBeNull();
+  });
+});
+
+// ─── generatePng ────────────────────────────────────────────────────────
+
+// Mock sharp so we don't run the native PNG rasterizer in these tests.
+// Track the SVG string passed to sharp() so we can verify the variant chose
+// the right renderer (portrait vs landscape).
+jest.mock('sharp', () => {
+  const calls: Buffer[] = [];
+  const sharpMock = jest.fn((input: Buffer) => {
+    calls.push(input);
+    return {
+      png: () => ({ toBuffer: () => Promise.resolve(Buffer.from('fake-png')) }),
+    };
+  });
+  (sharpMock as unknown as { __calls: Buffer[] }).__calls = calls;
+  return sharpMock;
+});
+
+import sharp from 'sharp';
+
+describe('ReportCardService.generatePng', () => {
+  beforeEach(() => {
+    (sharp as unknown as { __calls: Buffer[] }).__calls.length = 0;
+  });
+
+  function makeWithUser(): ReportCardService {
+    return makeService({
+      user: { id: 'u1', external_id: '918888888001' },
+      lettersByAsOf: new Map(),
+      activityWindows: Array(7).fill(0),
+    });
+  }
+
+  it('returns a buffer + data tuple via the sharp PNG pipeline', async () => {
+    const svc = makeWithUser();
+    const { buffer, data } = await svc.generatePng('u1', {
+      now: new Date('2026-04-28T01:30:00Z'),
+    });
+    expect(buffer).toEqual(Buffer.from('fake-png'));
+    expect(data.user_external_id).toBe('918888888001');
+    expect(sharp).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the landscape renderer by default', async () => {
+    const svc = makeWithUser();
+    await svc.generatePng('u1', { now: new Date('2026-04-28T01:30:00Z') });
+    const svgStr = (sharp as unknown as { __calls: Buffer[] }).__calls[0]
+      .toString('utf-8');
+    // The landscape canvas is wider than the portrait one. Check the width
+    // attribute matches LANDSCAPE_REPORT_CARD_WIDTH.
+    expect(svgStr).toContain(`width="${LANDSCAPE_REPORT_CARD_WIDTH}"`);
+  });
+
+  it('uses the portrait renderer when variant="portrait"', async () => {
+    const svc = makeWithUser();
+    await svc.generatePng('u1', {
+      now: new Date('2026-04-28T01:30:00Z'),
+      variant: 'portrait',
+    });
+    const svgStr = (sharp as unknown as { __calls: Buffer[] }).__calls[0]
+      .toString('utf-8');
+    // Portrait canvas is narrower; assert it is NOT the landscape width.
+    expect(svgStr).not.toContain(`width="${LANDSCAPE_REPORT_CARD_WIDTH}"`);
+  });
+
+  it('uses the landscape renderer when variant="landscape" is explicit', async () => {
+    const svc = makeWithUser();
+    await svc.generatePng('u1', {
+      now: new Date('2026-04-28T01:30:00Z'),
+      variant: 'landscape',
+    });
+    const svgStr = (sharp as unknown as { __calls: Buffer[] }).__calls[0]
+      .toString('utf-8');
+    expect(svgStr).toContain(`width="${LANDSCAPE_REPORT_CARD_WIDTH}"`);
+  });
 });
 
 describe('buildReportCardSvg (renderer output)', () => {
