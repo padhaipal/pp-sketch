@@ -460,3 +460,227 @@ describe('MediaMetaDataController.deleteDashboardTranscript', () => {
     expect(repo.remove).toHaveBeenCalledWith(transcript);
   });
 });
+
+// ─── mutation hardening ────────────────────────────────────────────────────
+
+describe('MediaMetaDataController — exact error messages + find shapes', () => {
+  it('listByStateTransitionId BadRequest message is exact', async () => {
+    const { ctrl } = makeController({});
+    await expect(ctrl.listByStateTransitionId('')).rejects.toThrow(
+      'state_transition_id query param required',
+    );
+  });
+
+  it('listByStateTransitionId find() is { where: { state_transition_id, rolled_back: false }, order: { created_at: "ASC" } }', async () => {
+    const repo = makeRepo();
+    repo.find.mockResolvedValue([]);
+    const { ctrl } = makeController({ repo });
+    await ctrl.listByStateTransitionId('stid-1');
+    expect(repo.find).toHaveBeenCalledWith({
+      where: { state_transition_id: 'stid-1', rolled_back: false },
+      order: { created_at: 'ASC' },
+    });
+  });
+
+  it('getAudio NotFound message is exact when row is missing', async () => {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue(null);
+    const { ctrl } = makeController({ repo });
+    await expect(
+      ctrl.getAudio('mm-1', { set: jest.fn(), send: jest.fn() } as never),
+    ).rejects.toThrow('Media not found or no audio available');
+  });
+
+  it('uploadStaticMedia: malformed JSON throws "items must be valid JSON" exactly', async () => {
+    const { ctrl } = makeController({});
+    await expect(
+      ctrl.uploadStaticMedia([], { items: '{bad' } as never),
+    ).rejects.toThrow('items must be valid JSON');
+  });
+
+  it('uploadStaticMedia: file/non-text-count mismatch error format includes both counts', async () => {
+    const { ctrl } = makeController({});
+    await expect(
+      ctrl.uploadStaticMedia(
+        [], // 0 files
+        {
+          items: JSON.stringify([{ state_transition_id: 's', media_type: 'image' }]),
+        } as never,
+      ),
+    ).rejects.toThrow('files length (0) must equal number of non-text items (1)');
+  });
+
+  it('starts a root span named "heygen-generate-controller" and ends it', async () => {
+    const mediaSvc = {
+      createHeygenMedia: jest.fn().mockResolvedValue([{ id: 'm1' }]),
+    } as Partial<MediaMetaDataService>;
+    const { ctrl } = makeController({ mediaSvc });
+    await ctrl.generateHeygenMedia({
+      items: [
+        {
+          state_transition_id: 's',
+          media_type: 'video',
+          script_text: 'x',
+          avatar_id: 'av',
+          voice_id: 'vc',
+        },
+      ],
+    } as never);
+    expect(mockStartRootSpan).toHaveBeenCalledWith('heygen-generate-controller');
+    expect(mockSpanEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts a root span named "elevenlabs-generate-controller" and ends it', async () => {
+    const mediaSvc = {
+      createElevenlabsMedia: jest.fn().mockResolvedValue([{ id: 'm1' }]),
+    } as Partial<MediaMetaDataService>;
+    const { ctrl } = makeController({ mediaSvc });
+    await ctrl.generateElevenlabsMedia({
+      items: [
+        {
+          state_transition_id: 's',
+          script_text: 'x',
+          voice_id: 'vc',
+        },
+      ],
+    } as never);
+    expect(mockStartRootSpan).toHaveBeenCalledWith(
+      'elevenlabs-generate-controller',
+    );
+    expect(mockSpanEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts a root span named "upload-static-controller" and ends it', async () => {
+    const mediaSvc = {
+      uploadStaticMedia: jest
+        .fn()
+        .mockResolvedValue({ results: [], summary: {} }),
+    } as Partial<MediaMetaDataService>;
+    const { ctrl } = makeController({ mediaSvc });
+    await ctrl.uploadStaticMedia(
+      [],
+      {
+        items: JSON.stringify([
+          {
+            state_transition_id: 's',
+            media_type: 'text',
+            text: 'hi',
+          },
+        ]),
+      } as never,
+    );
+    expect(mockStartRootSpan).toHaveBeenCalledWith('upload-static-controller');
+    expect(mockSpanEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('createDashboardTranscript: rejects missing text with exact "text required"', async () => {
+    const { ctrl } = makeController({});
+    await expect(
+      ctrl.createDashboardTranscript('mm-1', { text: '   ' } as never),
+    ).rejects.toThrow('text required');
+  });
+
+  it('createDashboardTranscript: rejects when parent media row is missing with exact "Media not found"', async () => {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue(null);
+    const { ctrl } = makeController({ repo });
+    await expect(
+      ctrl.createDashboardTranscript('mm-1', { text: 'hi' } as never),
+    ).rejects.toThrow('Media not found');
+  });
+
+  it('createDashboardTranscript: duplicate-check findOneBy({ input_media_id, source: "dashboard", media_type: "text" })', async () => {
+    const repo = makeRepo();
+    repo.findOneBy
+      .mockResolvedValueOnce({ id: 'mm-1', user_id: 'u1' }) // parent
+      .mockResolvedValueOnce(null); // no dup
+    repo.save.mockImplementation(async (e) => ({ ...e, created_at: new Date() }));
+    const { ctrl } = makeController({ repo });
+    await ctrl.createDashboardTranscript('mm-1', { text: '  hello  ' } as never);
+    expect(repo.findOneBy.mock.calls[1][0]).toEqual({
+      input_media_id: 'mm-1',
+      source: 'dashboard',
+      media_type: 'text',
+    });
+    // Saved row uses TRIMMED text + media_type=text + source=dashboard + status=ready + rolled_back=false
+    const created = repo.create.mock.calls[0][0] as {
+      text: string;
+      media_type: string;
+      source: string;
+      status: string;
+      rolled_back: boolean;
+      input_media_id: string;
+      user_id: string;
+    };
+    expect(created.text).toBe('hello');
+    expect(created.media_type).toBe('text');
+    expect(created.source).toBe('dashboard');
+    expect(created.status).toBe('ready');
+    expect(created.rolled_back).toBe(false);
+    expect(created.input_media_id).toBe('mm-1');
+    expect(created.user_id).toBe('u1');
+  });
+
+  it('createDashboardTranscript: duplicate-found message is "Dashboard transcript already exists"', async () => {
+    const repo = makeRepo();
+    repo.findOneBy
+      .mockResolvedValueOnce({ id: 'mm-1', user_id: 'u1' })
+      .mockResolvedValueOnce({ id: 'existing-1' });
+    const { ctrl } = makeController({ repo });
+    await expect(
+      ctrl.createDashboardTranscript('mm-1', { text: 'x' } as never),
+    ).rejects.toThrow('Dashboard transcript already exists');
+  });
+
+  it('updateDashboardTranscript: missing-text and missing-transcript messages are exact + lookup shape', async () => {
+    const { ctrl: c1 } = makeController({});
+    await expect(
+      c1.updateDashboardTranscript('mm-1', { text: '\t\n' } as never),
+    ).rejects.toThrow('text required');
+
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue(null);
+    const { ctrl: c2 } = makeController({ repo });
+    await expect(
+      c2.updateDashboardTranscript('mm-1', { text: 'hi' } as never),
+    ).rejects.toThrow('Dashboard transcript not found');
+    expect(repo.findOneBy).toHaveBeenCalledWith({
+      input_media_id: 'mm-1',
+      source: 'dashboard',
+      media_type: 'text',
+    });
+  });
+
+  it('updateDashboardTranscript: trims the new text before save', async () => {
+    const transcript = {
+      id: 'mm-t',
+      text: 'old',
+      source: 'dashboard',
+      input_media_id: 'mm-1',
+      user_id: 'u1',
+      created_at: new Date(),
+    };
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue(transcript);
+    repo.save.mockImplementation(async (e) => e);
+    const { ctrl } = makeController({ repo });
+    await ctrl.updateDashboardTranscript('mm-1', {
+      text: '   new value   ',
+    } as never);
+    expect(transcript.text).toBe('new value');
+  });
+
+  it('deleteDashboardTranscript: lookup uses the same { input_media_id, source: "dashboard", media_type: "text" } shape; missing throws exact message', async () => {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue(null);
+    const { ctrl } = makeController({ repo });
+    await expect(ctrl.deleteDashboardTranscript('mm-1')).rejects.toThrow(
+      'Dashboard transcript not found',
+    );
+    expect(repo.findOneBy).toHaveBeenCalledWith({
+      input_media_id: 'mm-1',
+      source: 'dashboard',
+      media_type: 'text',
+    });
+  });
+});
