@@ -180,3 +180,74 @@ describe('CacheService.onModuleDestroy', () => {
     await expect(svc.onModuleDestroy()).resolves.toBeUndefined();
   });
 });
+
+// ─── mutation hardening ────────────────────────────────────────────────────
+
+import { Logger as NestLogger } from '@nestjs/common';
+
+function spyCacheLog() {
+  return jest
+    .spyOn(NestLogger.prototype, 'warn')
+    .mockImplementation(() => undefined);
+}
+
+describe('CacheService — exact warn messages', () => {
+  it('error event logs "Cache Redis error: <msg>"', () => {
+    const warn = spyCacheLog();
+    new CacheService();
+    // Trigger the error handler registered in the constructor.
+    const handler = (mockRedisInstance.on as jest.Mock).mock.calls.find(
+      (c) => c[0] === 'error',
+    )?.[1];
+    handler?.(new Error('econn'));
+    expect(warn).toHaveBeenCalledWith('Cache Redis error: econn');
+    warn.mockRestore();
+  });
+
+  it('get on corrupt JSON warns "Corrupt cache value for key <k>, deleting" and deletes the key', async () => {
+    const warn = spyCacheLog();
+    (mockRedisInstance.get as jest.Mock).mockResolvedValue('not-json');
+    const del = jest.fn().mockResolvedValue(undefined);
+    (mockRedisInstance as unknown as { del: jest.Mock }).del = del;
+    const svc = new CacheService();
+    await svc.get('mykey');
+    expect(warn).toHaveBeenCalledWith(
+      'Corrupt cache value for key mykey, deleting',
+    );
+    expect(del).toHaveBeenCalledWith('mykey');
+    warn.mockRestore();
+  });
+
+  it('get failure warns "Cache get failed for key <k>: <msg>"', async () => {
+    const warn = spyCacheLog();
+    (mockRedisInstance.get as jest.Mock).mockRejectedValue(new Error('boom'));
+    const svc = new CacheService();
+    await svc.get('mykey');
+    expect(warn).toHaveBeenCalledWith(
+      'Cache get failed for key mykey: boom',
+    );
+    warn.mockRestore();
+  });
+
+  it('set failure warns "Cache set failed for key <k>: <msg>"', async () => {
+    const warn = spyCacheLog();
+    (mockRedisInstance.set as jest.Mock).mockRejectedValue(new Error('boom'));
+    const svc = new CacheService();
+    await svc.set('k', { foo: 1 }, 60);
+    expect(warn).toHaveBeenCalledWith(
+      'Cache set failed for key k: boom',
+    );
+    warn.mockRestore();
+  });
+
+  it('del failure warns "Cache del failed: <msg>"', async () => {
+    const warn = spyCacheLog();
+    (mockRedisInstance as unknown as { del: jest.Mock }).del = jest
+      .fn()
+      .mockRejectedValue(new Error('boom'));
+    const svc = new CacheService();
+    await svc.del('k');
+    expect(warn).toHaveBeenCalledWith('Cache del failed: boom');
+    warn.mockRestore();
+  });
+});
