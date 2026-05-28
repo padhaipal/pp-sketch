@@ -291,3 +291,295 @@ describe('processNotifierSendJob', () => {
     expect(mockSpanRecordException).toHaveBeenCalled();
   });
 });
+
+// ─── mutation hardening ────────────────────────────────────────────────────
+
+import { Logger as NestLogger } from '@nestjs/common';
+
+function spyLog() {
+  return {
+    log: jest.spyOn(NestLogger.prototype, 'log').mockImplementation(() => undefined),
+    warn: jest.spyOn(NestLogger.prototype, 'warn').mockImplementation(() => undefined),
+    error: jest.spyOn(NestLogger.prototype, 'error').mockImplementation(() => undefined),
+  };
+}
+
+// Pull the mocked tracer so we can inspect its calls
+const tracerMock = jest.requireMock('../otel/otel') as {
+  tracer: { startActiveSpan: jest.Mock };
+};
+
+describe('processNotifierCronJob — span names + span attributes + log messages', () => {
+  it('starts the cron span with name "notifier.cron" and sets bullmq.job.id', async () => {
+    const ds = { query: makeQuery([], []) } as unknown as DataSource;
+    await processNotifierCronJob(
+      makeJob(),
+      ds,
+      makeLesson(jest.fn()),
+      makeMedia(jest.fn()),
+    );
+    expect(tracerMock.tracer.startActiveSpan).toHaveBeenCalledWith(
+      'notifier.cron',
+      expect.any(Function),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('bullmq.job.id', 'cron-1');
+  });
+
+  it('logs the cron-fired banner with 24h-back window and 5min-back idleSince ISO strings', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-05-15T18:00:00Z'));
+    const { log } = spyLog();
+    const ds = { query: makeQuery([], []) } as unknown as DataSource;
+    await processNotifierCronJob(
+      makeJob(),
+      ds,
+      makeLesson(jest.fn()),
+      makeMedia(jest.fn()),
+    );
+    const expectedWindowStart = new Date(
+      '2026-05-14T18:00:00Z',
+    ).toISOString();
+    const expectedIdleSince = new Date(
+      '2026-05-15T17:55:00Z',
+    ).toISOString();
+    expect(log).toHaveBeenCalledWith(
+      `Notifier cron fired. Window: ${expectedWindowStart} – ${expectedIdleSince}`,
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'notifier.window.start',
+      expectedWindowStart,
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'notifier.idle_since',
+      expectedIdleSince,
+    );
+    jest.useRealTimers();
+    log.mockRestore();
+  });
+
+  it('tags notifier.skip_reason="no-active-users" and logs the empty-skip message', async () => {
+    const { log } = spyLog();
+    const ds = { query: makeQuery([]) } as unknown as DataSource;
+    await processNotifierCronJob(
+      makeJob(),
+      ds,
+      makeLesson(jest.fn()),
+      makeMedia(jest.fn()),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'notifier.skip_reason',
+      'no-active-users',
+    );
+    expect(log).toHaveBeenCalledWith(
+      'No active users found in notification window — skipping.',
+    );
+    log.mockRestore();
+  });
+
+  it('tags notifier.skip_reason="no-videos" and logs the abort error when the video query returns nothing', async () => {
+    const { error } = spyLog();
+    const ds = {
+      query: makeQuery(
+        [{ user_id: 'u1', external_id: '919999990001', last_message_at: new Date(), last_message_id: 'mm-1' }],
+        [], // videos
+      ),
+    } as unknown as DataSource;
+    await processNotifierCronJob(
+      makeJob(),
+      ds,
+      makeLesson(jest.fn()),
+      makeMedia(jest.fn()),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'notifier.skip_reason',
+      'no-videos',
+    );
+    expect(error).toHaveBeenCalledWith(
+      'No evening_notification_message videos found with status=ready — aborting notification run.',
+    );
+    error.mockRestore();
+  });
+
+  it('issues the video-lookup SELECT with all four WHERE clauses verbatim', async () => {
+    const query = makeQuery(
+      [{ user_id: 'u1', external_id: '919999990001', last_message_at: new Date(), last_message_id: 'mm-1' }],
+      [{ wa_media_url: 'wa://v1' }],
+    );
+    const ds = { query } as unknown as DataSource;
+    await processNotifierCronJob(
+      makeJob(),
+      ds,
+      makeLesson(jest.fn().mockResolvedValue({ stateTransitionIds: [] })),
+      makeMedia(jest.fn()),
+    );
+    // Second call is the video lookup
+    const sql = query.mock.calls[1][0] as string;
+    expect(sql).toContain('SELECT wa_media_url');
+    expect(sql).toContain('FROM media_metadata');
+    expect(sql).toContain(
+      "state_transition_id = 'evening_notification_message'",
+    );
+    expect(sql).toContain("media_type = 'video'");
+    expect(sql).toContain("status = 'ready'");
+    expect(sql).toContain('wa_media_url IS NOT NULL');
+  });
+
+  it('enqueues each send job with the literal name "send-notification" and tags enqueued.count', async () => {
+    const { log } = spyLog();
+    const ds = {
+      query: makeQuery(
+        [
+          { user_id: 'u1', external_id: '919999990001', last_message_at: new Date(), last_message_id: 'mm-1' },
+          { user_id: 'u2', external_id: '918888880002', last_message_at: new Date(), last_message_id: 'mm-2' },
+        ],
+        [{ wa_media_url: 'wa://v1' }],
+      ),
+    } as unknown as DataSource;
+    await processNotifierCronJob(
+      makeJob(),
+      ds,
+      makeLesson(jest.fn().mockResolvedValue({ stateTransitionIds: [] })),
+      makeMedia(jest.fn()),
+    );
+    expect(mockQueueAdd).toHaveBeenCalledTimes(2);
+    expect(mockQueueAdd.mock.calls[0][0]).toBe('send-notification');
+    expect(mockQueueAdd.mock.calls[1][0]).toBe('send-notification');
+    expect(mockCreateQueue).toHaveBeenCalledWith('notifier-send');
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'notifier.enqueued.count',
+      2,
+    );
+    expect(log).toHaveBeenCalledWith(
+      'Enqueued 2 notification-send jobs from 1 video(s).',
+    );
+    log.mockRestore();
+  });
+});
+
+describe('processNotifierCronJob.buildUserMedia — span name + lesson.status attribute', () => {
+  it('opens "notifier.buildUserMedia" span and tags notifier.lesson.status="ok" on success', async () => {
+    const ds = {
+      query: makeQuery(
+        [{ user_id: 'u1', external_id: '919999990001', last_message_at: new Date(), last_message_id: 'mm-1' }],
+        [{ wa_media_url: 'wa://v1' }],
+      ),
+    } as unknown as DataSource;
+    const lesson = makeLesson(
+      jest
+        .fn()
+        .mockResolvedValue({ stateTransitionIds: ['stid-1'] }),
+    );
+    const findMedia = jest.fn().mockResolvedValue({ text: undefined });
+    await processNotifierCronJob(makeJob(), ds, lesson, makeMedia(findMedia));
+    expect(tracerMock.tracer.startActiveSpan).toHaveBeenCalledWith(
+      'notifier.buildUserMedia',
+      expect.any(Function),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'notifier.lesson.status',
+      'ok',
+    );
+  });
+
+  it('tags notifier.lesson.status="failed" and warns when processAnswer rejects', async () => {
+    const { warn } = spyLog();
+    const ds = {
+      query: makeQuery(
+        [{ user_id: 'u1', external_id: '919999990001', last_message_at: new Date(), last_message_id: 'mm-1' }],
+        [{ wa_media_url: 'wa://v1' }],
+      ),
+    } as unknown as DataSource;
+    const lesson = makeLesson(jest.fn().mockRejectedValue(new Error('lesson boom')));
+    await processNotifierCronJob(makeJob(), ds, lesson, makeMedia(jest.fn()));
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'notifier.lesson.status',
+      'failed',
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /Failed to create lesson for user .* lesson boom — sending notification video only/,
+      ),
+    );
+    warn.mockRestore();
+  });
+});
+
+describe('processNotifierSendJob — error_code branches + attributes', () => {
+  const baseMedia: NotifierSendJobData = {
+    user_external_id: '919999990001',
+    media: [{ type: 'video', url: 'wa://v1' }],
+  };
+
+  it('opens "notifier.send" span and tags media.count + delivered=true on success', async () => {
+    const { log } = spyLog();
+    const wabot = makeWabot(
+      jest.fn().mockResolvedValue({ delivered: true }),
+    );
+    await processNotifierSendJob(makeSendJob(baseMedia), wabot);
+    expect(tracerMock.tracer.startActiveSpan).toHaveBeenCalledWith(
+      'notifier.send',
+      expect.any(Function),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('notifier.media.count', 1);
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('notifier.delivered', true);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringMatching(/Notification delivered to user /),
+    );
+    log.mockRestore();
+  });
+
+  it('on 130429: tags wabot.error_code and throws the rate-limit message', async () => {
+    const wabot = makeWabot(
+      jest.fn().mockResolvedValue({ delivered: false, error_code: 130429 }),
+    );
+    await expect(
+      processNotifierSendJob(makeSendJob(baseMedia), wabot),
+    ).rejects.toThrow(/WhatsApp rate-limit \(130429\)/);
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('wabot.error_code', 130429);
+  });
+
+  it('on 131047: tags notifier.skip_reason="window-expired" and returns silently', async () => {
+    const { warn } = spyLog();
+    const wabot = makeWabot(
+      jest.fn().mockResolvedValue({ delivered: false, error_code: 131047 }),
+    );
+    await expect(
+      processNotifierSendJob(makeSendJob(baseMedia), wabot),
+    ).resolves.toBeUndefined();
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'notifier.skip_reason',
+      'window-expired',
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /Notification undeliverable: 24-hour window expired \(131047\)/,
+      ),
+    );
+    warn.mockRestore();
+  });
+
+  it('tags notifier.delivered=false when result.delivered is missing/falsy', async () => {
+    const wabot = makeWabot(
+      jest.fn().mockResolvedValue({ delivered: undefined }),
+    );
+    await expect(
+      processNotifierSendJob(makeSendJob(baseMedia), wabot),
+    ).rejects.toThrow(/Notification failed for user /);
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'notifier.delivered',
+      false,
+    );
+  });
+
+  it('error message on generic failure includes both status and error_code', async () => {
+    const wabot = makeWabot(
+      jest.fn().mockResolvedValue({
+        delivered: false,
+        status: 'rejected',
+        error_code: 999,
+      }),
+    );
+    await expect(
+      processNotifierSendJob(makeSendJob(baseMedia), wabot),
+    ).rejects.toThrow(/status=rejected error_code=999/);
+  });
+});
