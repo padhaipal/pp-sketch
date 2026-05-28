@@ -1723,3 +1723,278 @@ describe('uploadStaticMedia — log messages + dedup-failed reuse paths', () => 
     );
   });
 });
+
+// ─── more hardening: log messages + createElevenlabsMedia conditional spreads ─
+
+describe('createWhatsappAudioMedia — exact warn/error messages', () => {
+  function setup() {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue(null);
+    repo.save.mockImplementation(async (e) => e);
+    const wabot = {
+      downloadMedia: jest.fn().mockResolvedValue({
+        stream: makeAsyncStream(Buffer.from('audio')),
+        content_type: 'audio/mpeg',
+      }),
+    };
+    const bucket = {
+      stream: jest.fn().mockResolvedValue('s3/k'),
+      delete: jest.fn(),
+    };
+    return { repo, wabot, bucket };
+  }
+
+  it('errors with "createWhatsappAudioMedia: user not found for external_id <id>"', async () => {
+    const { error } = spyLogger();
+    const userSvc = { find: jest.fn().mockResolvedValue(null) };
+    const { service } = makeService({ userSvc });
+    await expect(
+      service.createWhatsappAudioMedia({
+        wa_media_url: 'https://wa/m/1',
+        user_external_id: '919999990001',
+        otel_carrier: carrier,
+      }),
+    ).rejects.toThrow(NotFoundException);
+    expect(error).toHaveBeenCalledWith(
+      'createWhatsappAudioMedia: user not found for external_id 919999990001',
+    );
+    error.mockRestore();
+  });
+
+  it('warns "duplicate wa_media_url <url> with status <status>" when an existing non-failed row is found', async () => {
+    const { warn } = spyLogger();
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue({
+      id: 'mm-e',
+      wa_media_url: 'https://wa/m/1',
+      status: 'ready',
+    });
+    const { service } = makeService({ repo });
+    await service.createWhatsappAudioMedia({
+      wa_media_url: 'https://wa/m/1',
+      user: { id: 'u1' } as never,
+      otel_carrier: carrier,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'createWhatsappAudioMedia: duplicate wa_media_url https://wa/m/1 with status ready',
+    );
+    warn.mockRestore();
+  });
+
+  it('warns "S3 upload failed for <id>" when bucket.stream rejects', async () => {
+    const { warn } = spyLogger();
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue(null);
+    repo.save.mockImplementation(async (e) => ({ ...e, id: 'mm-1' }));
+    const wabot = {
+      downloadMedia: jest.fn().mockResolvedValue({
+        stream: makeAsyncStream(Buffer.from('a')),
+        content_type: 'audio/mpeg',
+      }),
+    };
+    const bucket = {
+      stream: jest.fn().mockRejectedValue(new Error('s3 down')),
+      delete: jest.fn(),
+    };
+    const { service } = makeService({ repo, wabot, bucket });
+    await expect(
+      service.createWhatsappAudioMedia({
+        wa_media_url: 'https://wa/m/1',
+        user: { id: 'u1' } as never,
+        otel_carrier: carrier,
+      }),
+    ).rejects.toThrow('s3 down');
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/createWhatsappAudioMedia: S3 upload failed for/),
+    );
+    warn.mockRestore();
+  });
+
+  it('warns "<Provider> STT failed for <id>: <msg>" when a provider rejects', async () => {
+    const { warn } = spyLogger();
+    const { repo, wabot, bucket } = setup();
+    const sarvam = {
+      run: jest.fn().mockRejectedValue(new Error('sarvam down')),
+    };
+    // azure is default-enabled but resolves to satisfy the "all failed" guard
+    const azure = { run: jest.fn().mockResolvedValue({ id: 'stt' }) };
+    const reverie = { run: jest.fn().mockResolvedValue({ id: 'stt' }) };
+    const { service } = makeService({ repo, wabot, bucket, sarvam, azure, reverie });
+    await service.createWhatsappAudioMedia({
+      wa_media_url: 'https://wa/m/1',
+      user: { id: 'u1' } as never,
+      otel_carrier: carrier,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/Sarvam STT failed for .*sarvam down/),
+    );
+    warn.mockRestore();
+  });
+
+  it('warns "all STT providers failed for <id>" and throws when every enabled provider rejected', async () => {
+    const { warn } = spyLogger();
+    const { repo, wabot, bucket } = setup();
+    const sarvam = { run: jest.fn().mockRejectedValue(new Error('s1')) };
+    const azure = { run: jest.fn().mockRejectedValue(new Error('s2')) };
+    const reverie = { run: jest.fn().mockRejectedValue(new Error('s3')) };
+    const { service } = makeService({ repo, wabot, bucket, sarvam, azure, reverie });
+    await expect(
+      service.createWhatsappAudioMedia({
+        wa_media_url: 'https://wa/m/1',
+        user: { id: 'u1' } as never,
+        otel_carrier: carrier,
+      }),
+    ).rejects.toThrow('All STT providers failed');
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/createWhatsappAudioMedia: all STT providers failed for/),
+    );
+    warn.mockRestore();
+  });
+});
+
+describe('createElevenlabsMedia — conditional spreads + queue payload', () => {
+  beforeEach(() => {
+    process.env.ELEVENLABS_VOICE_ID = 'vc-env';
+  });
+
+  it('queue name = `elevenlabs-generate-<id>` and elevenlabs_params is flat with all fields', async () => {
+    const repo = makeRepo();
+    let i = 0;
+    repo.save.mockImplementation(async (e) => ({ ...e, id: `mm-${++i}` }));
+    const { service } = makeService({ repo });
+    await service.createElevenlabsMedia(
+      {
+        items: [
+          {
+            state_transition_id: 's',
+            script_text: 'hello',
+            voice_id: 'vc-custom',
+            model_id: 'm1',
+            language_code: 'en',
+            voice_settings: { stability: 0.5 },
+          },
+        ],
+      } as never,
+      carrier,
+    );
+    const jobs = mockQueueAddBulk.mock.calls[0][0] as {
+      name: string;
+      data: {
+        media_metadata_id: string;
+        elevenlabs_params: Record<string, unknown>;
+        otel_carrier: unknown;
+      };
+    }[];
+    expect(jobs[0].name).toBe('elevenlabs-generate-mm-1');
+    expect(jobs[0].data.media_metadata_id).toBe('mm-1');
+    expect(jobs[0].data.otel_carrier).toBe(carrier);
+    expect(jobs[0].data.elevenlabs_params).toEqual({
+      script_text: 'hello',
+      voice_id: 'vc-custom',
+      model_id: 'm1',
+      language_code: 'en',
+      voice_settings: { stability: 0.5 },
+    });
+  });
+
+  it('drops voice_id from generation_request_json when it matches the env default', async () => {
+    const repo = makeRepo();
+    repo.save.mockImplementation(async (e) => ({ ...e, id: 'mm-1' }));
+    const { service } = makeService({ repo });
+    await service.createElevenlabsMedia(
+      {
+        items: [
+          {
+            state_transition_id: 's',
+            script_text: 'hi',
+            voice_id: 'vc-env', // == env → dropped
+          },
+        ],
+      } as never,
+      carrier,
+    );
+    const saved = repo.save.mock.calls[0][0] as {
+      generation_request_json: Record<string, unknown>;
+    };
+    expect(saved.generation_request_json).not.toHaveProperty('voice_id');
+  });
+
+  it('omits model_id / language_code / voice_settings when undefined', async () => {
+    const repo = makeRepo();
+    repo.save.mockImplementation(async (e) => ({ ...e, id: 'mm-1' }));
+    const { service } = makeService({ repo });
+    await service.createElevenlabsMedia(
+      {
+        items: [
+          {
+            state_transition_id: 's',
+            script_text: 'hi',
+            voice_id: 'vc-custom',
+          },
+        ],
+      } as never,
+      carrier,
+    );
+    const saved = repo.save.mock.calls[0][0] as {
+      generation_request_json: Record<string, unknown>;
+    };
+    expect(saved.generation_request_json).not.toHaveProperty('model_id');
+    expect(saved.generation_request_json).not.toHaveProperty('language_code');
+    expect(saved.generation_request_json).not.toHaveProperty('voice_settings');
+  });
+
+  it('creates the row with media_type=audio, source=elevenlabs, status=created, rolled_back=false', async () => {
+    const repo = makeRepo();
+    repo.save.mockImplementation(async (e) => ({ ...e, id: 'mm-1' }));
+    const { service } = makeService({ repo });
+    await service.createElevenlabsMedia(
+      {
+        items: [
+          {
+            state_transition_id: 's',
+            script_text: 'hi',
+            voice_id: 'vc-custom',
+          },
+        ],
+      } as never,
+      carrier,
+    );
+    const created = repo.create.mock.calls[0][0] as {
+      media_type: string;
+      source: string;
+      status: string;
+      rolled_back: boolean;
+    };
+    expect(created.media_type).toBe('audio');
+    expect(created.source).toBe('elevenlabs');
+    expect(created.status).toBe('created');
+    expect(created.rolled_back).toBe(false);
+  });
+
+  it('marks rows queued AFTER the bulk add succeeds (repo.update with the saved ids)', async () => {
+    const repo = makeRepo();
+    let i = 0;
+    repo.save.mockImplementation(async (e) => ({ ...e, id: `mm-${++i}` }));
+    const { service } = makeService({ repo });
+    await service.createElevenlabsMedia(
+      {
+        items: [
+          {
+            state_transition_id: 's1',
+            script_text: 'a',
+            voice_id: 'vc',
+          },
+          {
+            state_transition_id: 's2',
+            script_text: 'b',
+            voice_id: 'vc',
+          },
+        ],
+      } as never,
+      carrier,
+    );
+    expect(repo.update).toHaveBeenCalledWith(['mm-1', 'mm-2'], {
+      status: 'queued',
+    });
+  });
+});
