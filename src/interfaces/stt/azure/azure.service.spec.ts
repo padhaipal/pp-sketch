@@ -221,3 +221,186 @@ describe('AzureService.run', () => {
     expect(headers['Ocp-Apim-Subscription-Key']).toBe('key');
   });
 });
+
+// ─── mutation hardening ────────────────────────────────────────────────────
+
+import { Logger as NestLogger } from '@nestjs/common';
+
+function spyWarn() {
+  return jest
+    .spyOn(NestLogger.prototype, 'warn')
+    .mockImplementation(() => undefined);
+}
+
+describe('AzureService.run — exact request payload + endpoint', () => {
+  it('POSTs to {AZURE_SPEECH_ENDPOINT}/speechtotext/transcriptions:transcribe?api-version=2024-11-15', async () => {
+    const fetchSpy = jest
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(200, {
+          durationMilliseconds: 100,
+          combinedPhrases: [{ text: 't' }],
+          phrases: [{ text: 't', locale: 'hi-IN', confidence: 1 }],
+        }),
+      );
+    global.fetch = fetchSpy;
+    process.env.AZURE_SPEECH_ENDPOINT = 'https://azure.test';
+    const svc = makeService(makeRepo());
+    await svc.run(Buffer.from('a'), parentMedia);
+    expect(fetchSpy.mock.calls[0][0]).toBe(
+      'https://azure.test/speechtotext/transcriptions:transcribe?api-version=2024-11-15',
+    );
+  });
+
+  it('multipart body uses field name "audio" + filename "<parentId>.ogg" + definition locales hi-IN', async () => {
+    const fetchSpy = jest
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(200, {
+          durationMilliseconds: 100,
+          combinedPhrases: [{ text: 't' }],
+          phrases: [{ text: 't', locale: 'hi-IN', confidence: 1 }],
+        }),
+      );
+    global.fetch = fetchSpy;
+    const svc = makeService(makeRepo());
+    await svc.run(Buffer.from('a'), parentMedia);
+    const body = fetchSpy.mock.calls[0][1].body as FormData;
+    const file = body.get('audio') as File | null;
+    expect(file).toBeDefined();
+    expect((file as unknown as { name: string }).name).toBe('parent-1.ogg');
+    expect(body.get('definition')).toBe(
+      JSON.stringify({ locales: ['hi-IN'] }),
+    );
+  });
+});
+
+describe('AzureService.run — exact warn messages', () => {
+  it('"Azure: empty audio buffer for <id>" on empty buffer', async () => {
+    const warn = spyWarn();
+    const svc = makeService(makeRepo());
+    await expect(svc.run(Buffer.alloc(0), parentMedia)).rejects.toThrow();
+    expect(warn).toHaveBeenCalledWith('Azure: empty audio buffer for parent-1');
+    warn.mockRestore();
+  });
+
+  it('"Azure: network/timeout error for <id>: <msg>" on fetch reject', async () => {
+    const warn = spyWarn();
+    global.fetch = jest.fn().mockRejectedValue(new Error('econn'));
+    const svc = makeService(makeRepo());
+    await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow('econn');
+    expect(warn).toHaveBeenCalledWith(
+      'Azure: network/timeout error for parent-1: econn',
+    );
+    warn.mockRestore();
+  });
+
+  it('"Azure <status> for <id>: <error.code> <error.message>" on non-200', async () => {
+    const warn = spyWarn();
+    global.fetch = jest.fn().mockResolvedValue(
+      jsonResponse(401, {
+        error: { code: 'AuthFailed', message: 'bad key' },
+      }),
+    );
+    const svc = makeService(makeRepo());
+    await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow(
+      'Azure STT failed: 401',
+    );
+    expect(warn).toHaveBeenCalledWith(
+      'Azure 401 for parent-1: AuthFailed bad key',
+    );
+    warn.mockRestore();
+  });
+
+  it('non-200 with response.json() failure still logs the warn with undefined error fields', async () => {
+    const warn = spyWarn();
+    global.fetch = jest.fn().mockResolvedValue({
+      status: 500,
+      json: jest.fn().mockRejectedValue(new Error('parse err')),
+    });
+    const svc = makeService(makeRepo());
+    await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow(
+      'Azure STT failed: 500',
+    );
+    expect(warn).toHaveBeenCalledWith(
+      'Azure 500 for parent-1: undefined undefined',
+    );
+    warn.mockRestore();
+  });
+});
+
+describe('AzureService.run — HINDI_DIGITS transliteration table', () => {
+  function runWith(text: string) {
+    global.fetch = jest.fn().mockResolvedValue(
+      jsonResponse(200, {
+        durationMilliseconds: 0,
+        combinedPhrases: [{ text }],
+        phrases: [{ text, locale: 'hi-IN', confidence: 1 }],
+      }),
+    );
+    const repo = makeRepo();
+    const svc = makeService(repo);
+    return svc.run(Buffer.from('a'), parentMedia).then(() => {
+      return (repo.create.mock.calls[0][0] as { text: string }).text;
+    });
+  }
+
+  it.each<[string, string]>([
+    ['0', 'शून्य'],
+    ['1', 'एक'],
+    ['2', 'दो'],
+    ['3', 'तीन'],
+    ['4', 'चार'],
+    ['5', 'पाँच'],
+    ['6', 'छह'],
+    ['7', 'सात'],
+    ['8', 'आठ'],
+    ['9', 'नौ'],
+  ])('"%s" → "%s"', async (digit, hindi) => {
+    expect(await runWith(`hello ${digit} test`)).toBe(`hello ${hindi} test`);
+  });
+
+  it('multi-digit numbers transliterate digit-by-digit, space-separated', async () => {
+    expect(await runWith('count 123')).toBe('count एक दो तीन');
+  });
+});
+
+describe('AzureService.run — saved row + media_details', () => {
+  it('persists media_type=text, source=azure, status=ready, rolled_back=false, and full media_details (duration_ms, locale, avg confidence)', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      jsonResponse(200, {
+        durationMilliseconds: 5000,
+        combinedPhrases: [{ text: 'hello' }],
+        phrases: [
+          { text: 'hello', locale: 'hi-IN', confidence: 0.8 },
+          { text: 'world', locale: 'en-US', confidence: 0.6 },
+        ],
+      }),
+    );
+    const repo = makeRepo();
+    const svc = makeService(repo);
+    await svc.run(Buffer.from('a'), parentMedia);
+    const created = repo.create.mock.calls[0][0] as {
+      media_type: string;
+      source: string;
+      status: string;
+      rolled_back: boolean;
+      input_media_id: string;
+      text: string;
+      media_details: {
+        duration_ms: number;
+        locale: string;
+        confidence: number;
+      };
+    };
+    expect(created.media_type).toBe('text');
+    expect(created.source).toBe('azure');
+    expect(created.status).toBe('ready');
+    expect(created.rolled_back).toBe(false);
+    expect(created.input_media_id).toBe('parent-1');
+    expect(created.text).toBe('hello');
+    expect(created.media_details.duration_ms).toBe(5000);
+    expect(created.media_details.locale).toBe('hi-IN'); // first phrase's locale
+    expect(created.media_details.confidence).toBeCloseTo(0.7); // (0.8 + 0.6) / 2
+  });
+});
