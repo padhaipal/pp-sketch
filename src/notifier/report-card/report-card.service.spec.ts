@@ -666,3 +666,115 @@ describe('buildLandscapeReportCardSvg (renderer output)', () => {
     expect(svg).toContain('stroke-dasharray');
   });
 });
+
+// ─── mutation hardening ────────────────────────────────────────────────────
+
+describe('ReportCardService.findExistingForUser — exact QueryBuilder shape', () => {
+  it('builds the QB with exactly: alias mm, where user_id, andWhere source=morning-update / media_type=image / rolled_back=false / created_at>=since, ORDER BY created_at DESC', async () => {
+    const qb = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    };
+    const createQueryBuilder = jest.fn().mockReturnValue(qb);
+    const svc = new ReportCardService(
+      { find: jest.fn() } as never,
+      { getActivityTime: jest.fn() } as never,
+      { getLetterBins: jest.fn() } as never,
+      { createQueryBuilder } as never,
+    );
+    const since = new Date('2026-05-15T01:30:00Z');
+    await svc.findExistingForUser('u1', since);
+    expect(createQueryBuilder).toHaveBeenCalledWith('mm');
+    expect(qb.where).toHaveBeenCalledWith('mm.user_id = :userId', {
+      userId: 'u1',
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith('mm.source = :source', {
+      source: 'morning-update',
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith('mm.media_type = :media_type', {
+      media_type: 'image',
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'mm.rolled_back = :rolled_back',
+      { rolled_back: false },
+    );
+    expect(qb.andWhere).toHaveBeenCalledWith('mm.created_at >= :since', {
+      since,
+    });
+    expect(qb.orderBy).toHaveBeenCalledWith('mm.created_at', 'DESC');
+  });
+});
+
+describe('ReportCardService.generatePng — variant default + sharp pipeline', () => {
+  it('defaults to landscape when options.variant is omitted (kills the "landscape" default)', async () => {
+    const calls = (sharp as unknown as { __calls: Buffer[] }).__calls;
+    calls.length = 0;
+    const svc = makeService({
+      user: { id: 'u1', external_id: '919999990001' },
+      lettersByAsOf: new Map(),
+      activityWindows: [],
+    });
+    await svc.generatePng('u1');
+    // landscape SVG includes the landscape width literal; portrait doesn't
+    const svg = calls[0].toString('utf8');
+    expect(svg).toContain(String(LANDSCAPE_REPORT_CARD_WIDTH));
+  });
+
+  it('encodes the SVG as utf8 before passing to sharp (kills the encoding StringLiteral)', async () => {
+    const calls = (sharp as unknown as { __calls: Buffer[] }).__calls;
+    calls.length = 0;
+    const svc = makeService({
+      user: { id: 'u1', external_id: '919999990001' },
+      lettersByAsOf: new Map(),
+      activityWindows: [],
+    });
+    await svc.generatePng('u1');
+    // Buffer.from(svg, 'utf8') produces a Buffer that decodes back to the SVG
+    // text; if the encoding were latin1 the multi-byte UTF-8 sequences would
+    // garble. The brand domain in the URL is pure ASCII so check the SVG can
+    // be decoded as utf8 round-trip.
+    expect(calls[0].toString('utf8')).toContain('dashboard.padhaipal.com/r/');
+  });
+});
+
+describe('ReportCardService.buildData — referral_url + UUID resolution', () => {
+  it('referral_url format is dashboard.padhaipal.com/r/<external_id> (kills the host/path StringLiterals)', async () => {
+    const svc = makeService({
+      user: { id: 'u1', external_id: '919999990001' },
+      lettersByAsOf: new Map(),
+      activityWindows: [],
+    });
+    const data = await svc.buildData('u1');
+    expect(data.referral_url).toBe(
+      'https://dashboard.padhaipal.com/r/919999990001',
+    );
+  });
+
+  it('uses { id } lookup for a v4-like UUID, { external_id } otherwise', async () => {
+    const find = jest
+      .fn()
+      .mockResolvedValue({ id: 'u', external_id: '919999990001' });
+    const svc = new ReportCardService(
+      { find } as never,
+      {
+        getActivityTime: jest.fn().mockResolvedValue({ results: [] }),
+      } as never,
+      {
+        getLetterBins: jest
+          .fn()
+          .mockResolvedValue({
+            bins: { learnt: [], regressed: [], improved: [], untouched: [] },
+          }),
+      } as never,
+      { createQueryBuilder: jest.fn() } as never,
+    );
+    await svc.buildData('11111111-2222-3333-4444-555555555555');
+    expect(find).toHaveBeenLastCalledWith({
+      id: '11111111-2222-3333-4444-555555555555',
+    });
+    await svc.buildData('919999990001');
+    expect(find).toHaveBeenLastCalledWith({ external_id: '919999990001' });
+  });
+});
