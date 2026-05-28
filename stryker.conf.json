@@ -13,7 +13,7 @@
     "!src/seed.ts",
     "!src/**/migrations/**"
   ],
-  "thresholds": { "high": 80, "low": 60, "break": 70 },
+  "thresholds": { "high": 80, "low": 60, "break": 75 },
   "concurrency": 4,
   "incremental": true,
   "incrementalFile": ".stryker-tmp/incremental.json",
