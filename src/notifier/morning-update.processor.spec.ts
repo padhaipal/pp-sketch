@@ -588,3 +588,396 @@ describe('processMorningUpdateSendJob', () => {
     ).rejects.toThrow('Morning-update failed');
   });
 });
+
+// ─── mutation hardening ────────────────────────────────────────────────────
+
+import { Logger as NestLogger } from '@nestjs/common';
+
+function spyLog() {
+  return {
+    log: jest.spyOn(NestLogger.prototype, 'log').mockImplementation(() => undefined),
+    warn: jest.spyOn(NestLogger.prototype, 'warn').mockImplementation(() => undefined),
+    error: jest.spyOn(NestLogger.prototype, 'error').mockImplementation(() => undefined),
+  };
+}
+
+const tracerMock = jest.requireMock('../otel/otel') as {
+  tracer: { startActiveSpan: jest.Mock };
+};
+
+describe('resolveMorningUpdateIntroMedia — exact stid lookup', () => {
+  it('queries the "morning_notification_message" stid', async () => {
+    const findMediaByStateTransitionId = jest.fn().mockResolvedValue({});
+    await resolveMorningUpdateIntroMedia({
+      findMediaByStateTransitionId,
+    } as unknown as MediaMetaDataService);
+    expect(findMediaByStateTransitionId).toHaveBeenCalledWith(
+      'morning_notification_message',
+    );
+  });
+});
+
+describe('triggerMorningUpdateForUser — span + log + error path', () => {
+  function userSvc(user: { id: string; external_id: string } | null) {
+    return { find: jest.fn().mockResolvedValue(user) } as unknown as UserService;
+  }
+  function mediaSvc(introResult: unknown) {
+    return {
+      findMediaByStateTransitionId: jest.fn().mockResolvedValue(introResult),
+    } as unknown as MediaMetaDataService;
+  }
+
+  it('opens "morning-update.trigger" span and tags both bullmq.job.id and the external_id hash', async () => {
+    await triggerMorningUpdateForUser(
+      '919999990001',
+      userSvc({ id: 'u1', external_id: '919999990001' }),
+      mediaSvc({
+        video: {
+          wa_media_url: 'wa://v1',
+          media_details: { mime_type: 'video/mp4' },
+        },
+      }),
+    );
+    expect(tracerMock.tracer.startActiveSpan).toHaveBeenCalledWith(
+      'morning-update.trigger',
+      expect.any(Function),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'bullmq.job.id',
+      expect.any(String),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'morning_update.user.external_id_hash',
+      expect.any(String),
+    );
+  });
+
+  it('NotFoundException message format includes the hashed external_id', async () => {
+    const svc = userSvc(null);
+    await expect(
+      triggerMorningUpdateForUser('919999990001', svc, mediaSvc({})),
+    ).rejects.toThrow(/User not found for /);
+  });
+
+  it('aborts with the exact "No morning_notification_message media ..." error when intro lookup returns nothing', async () => {
+    await expect(
+      triggerMorningUpdateForUser(
+        '919999990001',
+        userSvc({ id: 'u1', external_id: '919999990001' }),
+        mediaSvc({}),
+      ),
+    ).rejects.toThrow(
+      'No morning_notification_message media (image or video) found with status=ready',
+    );
+  });
+
+  it('prefers video over image in the intro media', async () => {
+    await triggerMorningUpdateForUser(
+      '919999990001',
+      userSvc({ id: 'u1', external_id: '919999990001' }),
+      mediaSvc({
+        video: {
+          wa_media_url: 'wa://v1',
+          media_details: { mime_type: 'video/mp4' },
+        },
+        image: {
+          wa_media_url: 'wa://i1',
+          media_details: { mime_type: 'image/png' },
+        },
+      }),
+    );
+    const enqueued = mockQueueAdd.mock.calls[0][1] as MorningUpdateSendJobData;
+    expect(enqueued.media).toEqual([
+      { type: 'video', url: 'wa://v1', mime_type: 'video/mp4' },
+    ]);
+  });
+
+  it('falls back to image when no video is available', async () => {
+    await triggerMorningUpdateForUser(
+      '919999990001',
+      userSvc({ id: 'u1', external_id: '919999990001' }),
+      mediaSvc({
+        image: {
+          wa_media_url: 'wa://i1',
+          media_details: { mime_type: 'image/png' },
+        },
+      }),
+    );
+    const enqueued = mockQueueAdd.mock.calls[0][1] as MorningUpdateSendJobData;
+    expect(enqueued.media).toEqual([
+      { type: 'image', url: 'wa://i1', mime_type: 'image/png' },
+    ]);
+  });
+});
+
+describe('processMorningUpdateCronJob — span + skip-reasons + log messages', () => {
+  function dsWith(activeUsers: unknown[]) {
+    return {
+      query: jest.fn().mockResolvedValue(activeUsers),
+    } as unknown as DataSource;
+  }
+
+  it('opens the "morning-update.cron" span and tags bullmq.job.id, window.start, idle_since', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-05-15T01:30:00Z'));
+    await processMorningUpdateCronJob(
+      { id: 'cron-1' } as unknown as Job,
+      dsWith([]),
+      {
+        findMediaByStateTransitionId: jest.fn().mockResolvedValue({}),
+      } as unknown as MediaMetaDataService,
+    );
+    expect(tracerMock.tracer.startActiveSpan).toHaveBeenCalledWith(
+      'morning-update.cron',
+      expect.any(Function),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('bullmq.job.id', 'cron-1');
+    // 24h back and 5min back from system time
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'morning_update.window.start',
+      new Date('2026-05-14T01:30:00Z').toISOString(),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'morning_update.idle_since',
+      new Date('2026-05-15T01:25:00Z').toISOString(),
+    );
+    jest.useRealTimers();
+  });
+
+  it('logs "No active users — skipping morning update." when active-users list is empty', async () => {
+    const { log } = spyLog();
+    await processMorningUpdateCronJob(
+      { id: 'cron-1' } as unknown as Job,
+      dsWith([]),
+      {
+        findMediaByStateTransitionId: jest.fn().mockResolvedValue({}),
+      } as unknown as MediaMetaDataService,
+    );
+    expect(log).toHaveBeenCalledWith(
+      'No active users — skipping morning update.',
+    );
+    log.mockRestore();
+  });
+
+  it('tags morning_update.skip_reason="no-intro-media" + logs the aborting error when intro media is missing', async () => {
+    const { error } = spyLog();
+    await processMorningUpdateCronJob(
+      { id: 'cron-1' } as unknown as Job,
+      dsWith([
+        { user_id: 'u1', external_id: '919999990001', last_message_id: 'mm-1' },
+      ]),
+      {
+        findMediaByStateTransitionId: jest.fn().mockResolvedValue({}),
+      } as unknown as MediaMetaDataService,
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'morning_update.skip_reason',
+      'no-intro-media',
+    );
+    expect(error).toHaveBeenCalledWith(
+      'No morning_notification_message media (image or video) found with status=ready — aborting.',
+    );
+    error.mockRestore();
+  });
+
+  it('enqueues "morning-update-send" jobs and tags enqueued.count + logs total enqueued', async () => {
+    const { log } = spyLog();
+    await processMorningUpdateCronJob(
+      { id: 'cron-1' } as unknown as Job,
+      dsWith([
+        { user_id: 'u1', external_id: '919999990001', last_message_id: 'mm-1' },
+        { user_id: 'u2', external_id: '918888880002', last_message_id: 'mm-2' },
+      ]),
+      {
+        findMediaByStateTransitionId: jest.fn().mockResolvedValue({
+          video: {
+            wa_media_url: 'wa://v1',
+            media_details: { mime_type: 'video/mp4' },
+          },
+        }),
+      } as unknown as MediaMetaDataService,
+    );
+    expect(mockCreateQueue).toHaveBeenCalledWith('morning-update-send');
+    expect(mockQueueAdd).toHaveBeenCalledTimes(2);
+    expect(mockQueueAdd.mock.calls[0][0]).toBe('morning-update-send');
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'morning_update.enqueued.count',
+      2,
+    );
+    expect(log).toHaveBeenCalledWith('Enqueued 2 morning-update jobs.');
+    log.mockRestore();
+  });
+});
+
+describe('processMorningUpdateSendJob — child span + error_code branches + skip-reason', () => {
+  function baseJob(): Job<MorningUpdateSendJobData> {
+    return {
+      id: 'send-1',
+      data: {
+        user_id: 'u1',
+        user_external_id: '919999990001',
+        media: [{ type: 'video', url: 'wa://v1', mime_type: 'video/mp4' }],
+        otel_carrier: { traceparent: 'tp' },
+      },
+    } as unknown as Job<MorningUpdateSendJobData>;
+  }
+
+  it('opens "morning-update.send" CHILD span with the job otel_carrier (kills span name + carrier propagation)', async () => {
+    const reportSvc = {
+      findExistingForUser: jest.fn().mockResolvedValue({ id: 'mm-img' }),
+      generatePng: jest.fn(),
+    } as unknown as ReportCardService;
+    const mediaRepo = {
+      findOneBy: jest.fn().mockResolvedValue({
+        id: 'mm-img',
+        status: 'ready',
+        wa_media_url: 'wa://img1',
+      }),
+    } as unknown as Repository<MediaMetaDataEntity>;
+    const wabot = {
+      sendNotification: jest.fn().mockResolvedValue({ delivered: true }),
+    } as unknown as WabotOutboundService;
+    await processMorningUpdateSendJob(
+      baseJob(),
+      reportSvc,
+      {} as unknown as MediaMetaDataService,
+      mediaRepo,
+      wabot,
+    );
+    expect(mockStartChildSpan).toHaveBeenCalledWith(
+      'morning-update.send',
+      { traceparent: 'tp' },
+    );
+  });
+
+  it('on 130429 throws the rate-limit error and tags wabot.error_code', async () => {
+    const reportSvc = {
+      findExistingForUser: jest.fn().mockResolvedValue({ id: 'mm-img' }),
+    } as unknown as ReportCardService;
+    const mediaRepo = {
+      findOneBy: jest.fn().mockResolvedValue({
+        id: 'mm-img',
+        status: 'ready',
+        wa_media_url: 'wa://img1',
+      }),
+    } as unknown as Repository<MediaMetaDataEntity>;
+    const wabot = {
+      sendNotification: jest
+        .fn()
+        .mockResolvedValue({ delivered: false, error_code: 130429 }),
+    } as unknown as WabotOutboundService;
+    await expect(
+      processMorningUpdateSendJob(
+        baseJob(),
+        reportSvc,
+        {} as unknown as MediaMetaDataService,
+        mediaRepo,
+        wabot,
+      ),
+    ).rejects.toThrow(/WhatsApp rate-limit \(130429\)/);
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('wabot.error_code', 130429);
+  });
+
+  it('on 131047 silently returns + tags morning_update.skip_reason="window-expired" + warns', async () => {
+    const { warn } = spyLog();
+    const reportSvc = {
+      findExistingForUser: jest.fn().mockResolvedValue({ id: 'mm-img' }),
+    } as unknown as ReportCardService;
+    const mediaRepo = {
+      findOneBy: jest.fn().mockResolvedValue({
+        id: 'mm-img',
+        status: 'ready',
+        wa_media_url: 'wa://img1',
+      }),
+    } as unknown as Repository<MediaMetaDataEntity>;
+    const wabot = {
+      sendNotification: jest
+        .fn()
+        .mockResolvedValue({ delivered: false, error_code: 131047 }),
+    } as unknown as WabotOutboundService;
+    await expect(
+      processMorningUpdateSendJob(
+        baseJob(),
+        reportSvc,
+        {} as unknown as MediaMetaDataService,
+        mediaRepo,
+        wabot,
+      ),
+    ).resolves.toBeUndefined();
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'morning_update.skip_reason',
+      'window-expired',
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/24h window expired \(131047\)/),
+    );
+    warn.mockRestore();
+  });
+
+  it('full media payload = job.data.media + report-card image + referral text', async () => {
+    const reportSvc = {
+      findExistingForUser: jest.fn().mockResolvedValue({ id: 'mm-img' }),
+    } as unknown as ReportCardService;
+    const mediaRepo = {
+      findOneBy: jest.fn().mockResolvedValue({
+        id: 'mm-img',
+        status: 'ready',
+        wa_media_url: 'wa://img1',
+      }),
+    } as unknown as Repository<MediaMetaDataEntity>;
+    const sendNotification = jest
+      .fn()
+      .mockResolvedValue({ delivered: true });
+    const wabot = { sendNotification } as unknown as WabotOutboundService;
+    await processMorningUpdateSendJob(
+      baseJob(),
+      reportSvc,
+      {} as unknown as MediaMetaDataService,
+      mediaRepo,
+      wabot,
+    );
+    const payload = sendNotification.mock.calls[0][0] as {
+      user_external_id: string;
+      media: OutboundMediaItem[];
+    };
+    expect(payload.user_external_id).toBe('919999990001');
+    expect(payload.media).toEqual([
+      { type: 'video', url: 'wa://v1', mime_type: 'video/mp4' }, // intro
+      { type: 'image', url: 'wa://img1', mime_type: 'image/png' }, // report card
+      {
+        type: 'text',
+        body: 'https://dashboard.padhaipal.com/r/919999990001',
+      },
+    ]);
+  });
+
+  it('on imageEntity.status==="failed" skips the send + tags morning_update.skip_reason="image-failed" + logs error', async () => {
+    const { error } = spyLog();
+    const reportSvc = {
+      findExistingForUser: jest.fn().mockResolvedValue({ id: 'mm-img' }),
+    } as unknown as ReportCardService;
+    const mediaRepo = {
+      findOneBy: jest
+        .fn()
+        .mockResolvedValue({ id: 'mm-img', status: 'failed' }),
+    } as unknown as Repository<MediaMetaDataEntity>;
+    const wabot = {
+      sendNotification: jest.fn(),
+    } as unknown as WabotOutboundService;
+    await processMorningUpdateSendJob(
+      baseJob(),
+      reportSvc,
+      {} as unknown as MediaMetaDataService,
+      mediaRepo,
+      wabot,
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'morning_update.skip_reason',
+      'image-failed',
+    );
+    expect(error).toHaveBeenCalledWith(
+      expect.stringMatching(/Morning-update report card media mm-img.*status=failed — skipping/),
+    );
+    expect(wabot.sendNotification).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+});
