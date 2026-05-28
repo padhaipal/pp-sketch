@@ -305,3 +305,131 @@ describe('processElevenlabsGenerateJob — outer error handling', () => {
     );
   });
 });
+
+// ─── mutation hardening ────────────────────────────────────────────────────
+
+import { Logger as NestLogger } from '@nestjs/common';
+
+function spyELabsLog() {
+  return {
+    warn: jest.spyOn(NestLogger.prototype, 'warn').mockImplementation(() => undefined),
+    error: jest.spyOn(NestLogger.prototype, 'error').mockImplementation(() => undefined),
+  };
+}
+
+describe('processElevenlabsGenerateJob — exact request shape + log messages', () => {
+  it('POST uses Content-Type application/json header', async () => {
+    const fetchSpy = jest.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream(),
+      headers: { get: () => '1024' },
+    });
+    global.fetch = fetchSpy as never;
+    const mediaBucket = { stream: jest.fn().mockResolvedValue('s3/k') } as never;
+    const mediaRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) } as never;
+    await processElevenlabsGenerateJob(
+      makeJob({ script_text: 'hi' }),
+      mediaBucket,
+      mediaRepo,
+    );
+    const headers = (fetchSpy.mock.calls[0][1] as RequestInit).headers as Record<
+      string,
+      string
+    >;
+    expect(headers['Content-Type']).toBe('application/json');
+  });
+
+  it('omits model_id / language_code / voice_settings from the body when they are undefined', async () => {
+    const fetchSpy = jest.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream(),
+      headers: { get: () => null },
+    });
+    global.fetch = fetchSpy as never;
+    const mediaBucket = { stream: jest.fn().mockResolvedValue('s3/k') } as never;
+    const mediaRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) } as never;
+    await processElevenlabsGenerateJob(
+      makeJob({ script_text: 'hi' }),
+      mediaBucket,
+      mediaRepo,
+    );
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).toEqual({ text: 'hi' });
+    expect(body).not.toHaveProperty('model_id');
+    expect(body).not.toHaveProperty('language_code');
+    expect(body).not.toHaveProperty('voice_settings');
+  });
+
+  it('on 4XX error: log "ElevenLabs TTS <status>: <body-json>"', async () => {
+    const { error } = spyELabsLog();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({ message: 'bad input' }),
+    }) as never;
+    const mediaRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) } as never;
+    await expect(
+      processElevenlabsGenerateJob(
+        makeJob({ script_text: 'hi' }),
+        { stream: jest.fn() } as never,
+        mediaRepo,
+      ),
+    ).rejects.toThrow('ElevenLabs TTS 422');
+    expect(error).toHaveBeenCalledWith(
+      'ElevenLabs TTS 422: {"message":"bad input"}',
+    );
+    error.mockRestore();
+  });
+
+  it('on 5XX final attempt: error "ElevenLabs TTS 5XX (final attempt): <body>"', async () => {
+    const { error } = spyELabsLog();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      text: async () => 'upstream down',
+    }) as never;
+    const mediaRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) } as never;
+    const job = makeJob({ script_text: 'hi' }, { attemptsMade: 2, attempts: 3 });
+    await expect(
+      processElevenlabsGenerateJob(job, { stream: jest.fn() } as never, mediaRepo),
+    ).rejects.toThrow(/ElevenLabs TTS 5XX: 502/);
+    expect(error).toHaveBeenCalledWith(
+      'ElevenLabs TTS 5XX (final attempt): upstream down',
+    );
+    error.mockRestore();
+  });
+
+  it('on 5XX non-final attempt: warn "ElevenLabs TTS 5XX (attempt <1-based>): <body>"', async () => {
+    const { warn } = spyELabsLog();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      text: async () => 'upstream down',
+    }) as never;
+    const mediaRepo = { update: jest.fn() } as never;
+    const job = makeJob({ script_text: 'hi' }, { attemptsMade: 0, attempts: 3 });
+    await expect(
+      processElevenlabsGenerateJob(job, { stream: jest.fn() } as never, mediaRepo),
+    ).rejects.toThrow(/ElevenLabs TTS 5XX: 502/);
+    expect(warn).toHaveBeenCalledWith(
+      'ElevenLabs TTS 5XX (attempt 1): upstream down',
+    );
+    warn.mockRestore();
+  });
+
+  it('status 399 (boundary) goes to 5XX branch (kills <500 → <=)', async () => {
+    const { warn } = spyELabsLog();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 399,
+      text: async () => 'odd',
+    }) as never;
+    const mediaRepo = { update: jest.fn() } as never;
+    const job = makeJob({ script_text: 'hi' }, { attemptsMade: 0, attempts: 3 });
+    await expect(
+      processElevenlabsGenerateJob(job, { stream: jest.fn() } as never, mediaRepo),
+    ).rejects.toThrow();
+    expect(warn).toHaveBeenCalledWith('ElevenLabs TTS 5XX (attempt 1): odd');
+    warn.mockRestore();
+  });
+});
