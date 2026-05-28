@@ -153,3 +153,114 @@ describe('identifyCharacterStatus — output set invariants', () => {
     expect(out.correctChars).toEqual(['a']); // not ['a','a','a']
   });
 });
+
+// ─── Mutation hardening: exact char-set assertions per edit-op path ────────
+// The existing tests above cover the canonical paths. These pin down the
+// EXACT correctChars / incorrectChars produced by each Levenshtein traceback
+// branch (replace, insert, delete, equal) so individual mutants in the DP +
+// traceback have an observable signal.
+
+describe('identifyCharacterStatus — exact char-set per edit-op path', () => {
+  it('single replace tags only the replaced correct char as incorrect', () => {
+    // source=गम, target=कम → equal(म), replace(ग→क). mismatched={क}.
+    const out = identifyCharacterStatus({
+      correctAnswer: 'कम',
+      studentAnswer: 'गम',
+    });
+    expect(out.correctChars).toEqual(['म']);
+    expect(out.incorrectChars).toEqual(['क']);
+  });
+
+  it('two replaces tag both correct chars as incorrect', () => {
+    const out = identifyCharacterStatus({
+      correctAnswer: 'कम',
+      studentAnswer: 'गन',
+    });
+    expect(out.correctChars).toEqual([]);
+    expect(out.incorrectChars).toEqual(['क', 'म']);
+  });
+
+  it('three-char deletion: only the matched leading char stays correct (kills the traceback `||` → `&&`)', () => {
+    // source=क, target=कमल → equal(क), then i must keep decrementing while
+    // j is already 0 — only possible with the while-loop disjunction.
+    const out = identifyCharacterStatus({
+      correctAnswer: 'कमल',
+      studentAnswer: 'क',
+    });
+    expect(out.correctChars).toEqual(['क']);
+    expect(out.incorrectChars).toEqual(['म', 'ल']);
+  });
+
+  it('insertion of an extra char into the student answer keeps every correct char correct', () => {
+    const out = identifyCharacterStatus({
+      correctAnswer: 'कम',
+      studentAnswer: 'कटम',
+    });
+    expect(out.correctChars).toEqual(['क', 'म']);
+    expect(out.incorrectChars).toEqual([]);
+  });
+
+  it('character swap is two replaces (kills the equality check in charsEqual / matrix match)', () => {
+    // अब vs बअ: same chars different order. Best alignment has 1 equal
+    // (whichever of अ/ब tracks) and 1 replace.
+    const out = identifyCharacterStatus({
+      correctAnswer: 'अब',
+      studentAnswer: 'बअ',
+    });
+    // The DP currently picks ब as the equal; अ is the replace.
+    expect(out.correctChars).toEqual(['ब']);
+    expect(out.incorrectChars).toEqual(['अ']);
+  });
+
+  it('a trailing-deletion (student missing the last char) tags only that char incorrect', () => {
+    const out = identifyCharacterStatus({
+      correctAnswer: 'कमल',
+      studentAnswer: 'कम',
+    });
+    expect(out.correctChars).toEqual(['क', 'म']);
+    expect(out.incorrectChars).toEqual(['ल']);
+  });
+
+  it('multi-word: a shorter-distance second word overrides the first (kills `distance < bestDist`)', () => {
+    // 'xyz' has distance 3 to 'कमल'; 'कमल' has distance 0 → second wins.
+    const out = identifyCharacterStatus({
+      correctAnswer: 'कमल',
+      studentAnswer: 'xyz कमल',
+    });
+    expect(out.correctChars).toEqual(['क', 'म', 'l'.length === 1 ? 'ल' : 'ल']);
+    expect(out.incorrectChars).toEqual([]);
+  });
+
+  it('multi-word: an equal-distance second word with FEWER matches does NOT override the first (kills `matches > bestMatches` → `>=`)', () => {
+    // Both 'गम' and 'कन' have distance 1 to 'कम' AND matchCount 1.
+    // The first-seen ('गम') wins on the strict `>` tie-break.
+    const out = identifyCharacterStatus({
+      correctAnswer: 'कम',
+      studentAnswer: 'गम कन',
+    });
+    expect(out.correctChars).toEqual(['म']);
+    expect(out.incorrectChars).toEqual(['क']);
+  });
+
+  it('multi-word: an equal-distance second word with MORE matches overrides the first', () => {
+    // 'कन' has distance 1 (replace न→म), matchCount 1.
+    // 'कम' has distance 0, matchCount 2 → distance<bestDist wins.
+    const out = identifyCharacterStatus({
+      correctAnswer: 'कम',
+      studentAnswer: 'कन कम',
+    });
+    expect(out.correctChars).toEqual(['क', 'म']);
+    expect(out.incorrectChars).toEqual([]);
+  });
+
+  it('cleaning strips non-letter/non-mark chars and lowercases (kills the clean() regex + toLocaleLowerCase)', () => {
+    // Punctuation, digits, whitespace inside the token are stripped; ASCII
+    // casing is folded so "ABC" matches "abc".
+    const out = identifyCharacterStatus({
+      correctAnswer: 'abc',
+      studentAnswer: '  A!B@C#  ',
+    });
+    expect(out.correctChars).toEqual(['a', 'b', 'c']);
+    expect(out.incorrectChars).toEqual([]);
+  });
+});
