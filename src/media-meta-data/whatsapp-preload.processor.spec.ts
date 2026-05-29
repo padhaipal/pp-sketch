@@ -361,3 +361,318 @@ describe('processWhatsappPreloadJob — happy path', () => {
     dateSpy.mockRestore();
   });
 });
+
+// ─── mutation hardening ────────────────────────────────────────────────────
+
+import { Logger as NestLogger } from '@nestjs/common';
+
+function spyWarnError() {
+  return {
+    warn: jest.spyOn(NestLogger.prototype, 'warn').mockImplementation(() => undefined),
+    error: jest.spyOn(NestLogger.prototype, 'error').mockImplementation(() => undefined),
+  };
+}
+
+describe('processWhatsappPreloadJob — span name + log messages', () => {
+  it('starts a child span named "whatsapp-preload-processor" with the job otel_carrier', async () => {
+    const repo = makeRepo({ findOneBy: jest.fn().mockResolvedValue(null) });
+    const job = makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-1' });
+    await processWhatsappPreloadJob(
+      job,
+      makeBucket(jest.fn()),
+      makeWabot(jest.fn()),
+      makeCache(jest.fn()),
+      repo,
+    );
+    expect(mockStartChildSpan).toHaveBeenCalledWith(
+      'whatsapp-preload-processor',
+      job.data.otel_carrier,
+    );
+  });
+
+  it('warns "Entity <id> not found — skipping" when the row is missing', async () => {
+    const { warn } = spyWarnError();
+    const repo = makeRepo({ findOneBy: jest.fn().mockResolvedValue(null) });
+    await processWhatsappPreloadJob(
+      makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-1' }),
+      makeBucket(jest.fn()),
+      makeWabot(jest.fn()),
+      makeCache(jest.fn()),
+      repo,
+    );
+    expect(warn).toHaveBeenCalledWith('Entity mm-1 not found — skipping');
+    warn.mockRestore();
+  });
+
+  it('warns "Entity <id> rolled back — skipping" when entity.rolled_back is true', async () => {
+    const { warn } = spyWarnError();
+    const repo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue({
+        id: 'mm-1',
+        rolled_back: true,
+        media_type: 'audio',
+        status: 'ready',
+      }),
+    });
+    await processWhatsappPreloadJob(
+      makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-1' }),
+      makeBucket(jest.fn()),
+      makeWabot(jest.fn()),
+      makeCache(jest.fn()),
+      repo,
+    );
+    expect(warn).toHaveBeenCalledWith('Entity mm-1 rolled back — skipping');
+    warn.mockRestore();
+  });
+
+  it('warns "Entity <id> has failed status — skipping" when entity.status is "failed"', async () => {
+    const { warn } = spyWarnError();
+    const repo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue({
+        id: 'mm-1',
+        rolled_back: false,
+        media_type: 'audio',
+        status: 'failed',
+      }),
+    });
+    await processWhatsappPreloadJob(
+      makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-1' }),
+      makeBucket(jest.fn()),
+      makeWabot(jest.fn()),
+      makeCache(jest.fn()),
+      repo,
+    );
+    expect(warn).toHaveBeenCalledWith(
+      'Entity mm-1 has failed status — skipping',
+    );
+    warn.mockRestore();
+  });
+});
+
+describe('processWhatsappPreloadJob — boundaries', () => {
+  const baseEntity = {
+    id: 'mm-1',
+    rolled_back: false,
+    media_type: 'audio' as const,
+    status: 'created' as const,
+    state_transition_id: 'stid-1',
+  };
+
+  it('S3 getBuffer final-attempt boundary: attemptsMade + 1 === attempts logs ERROR (not warn)', async () => {
+    const { warn, error } = spyWarnError();
+    const repo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue({ ...baseEntity }),
+    });
+    const bucket = makeBucket(
+      jest.fn().mockRejectedValue(new Error('s3 boom')),
+    );
+    // attemptsMade=2, attempts=3 → 2+1 === 3 is the FINAL attempt.
+    const job = makeJob(
+      { media_metadata_id: 'mm-1', s3_key: 's3-key' },
+      { attemptsMade: 2, attempts: 3 },
+    );
+    await expect(
+      processWhatsappPreloadJob(
+        job,
+        bucket,
+        makeWabot(jest.fn()),
+        makeCache(jest.fn()),
+        repo,
+      ),
+    ).rejects.toThrow('s3 boom');
+    expect(error).toHaveBeenCalledWith(
+      'S3 getBuffer failed for s3-key (final attempt): s3 boom',
+    );
+    // Must NOT also warn the non-final message
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringMatching(/\(attempt \d+\)/),
+    );
+    warn.mockRestore();
+    error.mockRestore();
+  });
+
+  it('S3 getBuffer non-final attempt logs WARN with the 1-based attempt number', async () => {
+    const { warn } = spyWarnError();
+    const repo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue({ ...baseEntity }),
+    });
+    const bucket = makeBucket(
+      jest.fn().mockRejectedValue(new Error('s3 boom')),
+    );
+    // attemptsMade=0, attempts=3 → 1-based attempt 1, NOT final.
+    const job = makeJob(
+      { media_metadata_id: 'mm-1', s3_key: 's3-key' },
+      { attemptsMade: 0, attempts: 3 },
+    );
+    await expect(
+      processWhatsappPreloadJob(
+        job,
+        bucket,
+        makeWabot(jest.fn()),
+        makeCache(jest.fn()),
+        repo,
+      ),
+    ).rejects.toThrow('s3 boom');
+    expect(warn).toHaveBeenCalledWith(
+      'S3 getBuffer failed for s3-key (attempt 1): s3 boom',
+    );
+    warn.mockRestore();
+  });
+
+  it.each<[string, number]>([
+    ['400 Bad Request', 400],
+    ['404 Not Found', 404],
+    ['499 unusual', 499],
+  ])(
+    'uploadMedia error containing "%s" is treated as 4XX (marks failed)',
+    async (msg, _status) => {
+      const { error } = spyWarnError();
+      const repo = makeRepo({
+        findOneBy: jest.fn().mockResolvedValue({ ...baseEntity }),
+        update: jest.fn().mockResolvedValue({ affected: 1 }),
+      });
+      const bucket = makeBucket(
+        jest
+          .fn()
+          .mockResolvedValue({ buffer: Buffer.from('a'), content_type: 'audio/mp3' }),
+      );
+      const wabot = makeWabot(jest.fn().mockRejectedValue(new Error(msg)));
+      await expect(
+        processWhatsappPreloadJob(
+          makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-key' }),
+          bucket,
+          wabot,
+          makeCache(jest.fn()),
+          repo,
+        ),
+      ).rejects.toThrow();
+      expect(error).toHaveBeenCalledWith('uploadMedia 4XX for mm-1');
+      expect(repo.update).toHaveBeenCalledWith('mm-1', { status: 'failed' });
+      error.mockRestore();
+    },
+  );
+
+  it('uploadMedia 5XX error (status === 500): does NOT mark failed (kills <500 → <=)', async () => {
+    const { warn, error } = spyWarnError();
+    const repo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue({ ...baseEntity }),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    });
+    const bucket = makeBucket(
+      jest
+        .fn()
+        .mockResolvedValue({ buffer: Buffer.from('a'), content_type: 'audio/mp3' }),
+    );
+    const wabot = makeWabot(jest.fn().mockRejectedValue(new Error('500 boom')));
+    await expect(
+      processWhatsappPreloadJob(
+        makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-key' }),
+        bucket,
+        wabot,
+        makeCache(jest.fn()),
+        repo,
+      ),
+    ).rejects.toThrow('500 boom');
+    expect(warn).toHaveBeenCalledWith('uploadMedia 5XX for mm-1');
+    // status 500 is NOT 4XX → no failed update
+    expect(repo.update).not.toHaveBeenCalled();
+    warn.mockRestore();
+    error.mockRestore();
+  });
+
+  it('uploadMedia 399 (just below 400) is NOT treated as 4XX (kills >=400 → > 400 boundary)', async () => {
+    const { warn } = spyWarnError();
+    const repo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue({ ...baseEntity }),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    });
+    const bucket = makeBucket(
+      jest
+        .fn()
+        .mockResolvedValue({ buffer: Buffer.from('a'), content_type: 'audio/mp3' }),
+    );
+    const wabot = makeWabot(jest.fn().mockRejectedValue(new Error('399 weird')));
+    await expect(
+      processWhatsappPreloadJob(
+        makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-key' }),
+        bucket,
+        wabot,
+        makeCache(jest.fn()),
+        repo,
+      ),
+    ).rejects.toThrow('399 weird');
+    expect(warn).toHaveBeenCalledWith('uploadMedia 5XX for mm-1');
+    expect(repo.update).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe('processWhatsappPreloadJob — reload enqueue payload', () => {
+  it('reload-enqueue uses the right name, payload (reload=true), and 20-day delay', async () => {
+    const repo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue({
+        id: 'mm-1',
+        rolled_back: false,
+        media_type: 'audio',
+        status: 'created',
+        state_transition_id: 'stid-1',
+      }),
+    });
+    const bucket = makeBucket(
+      jest
+        .fn()
+        .mockResolvedValue({ buffer: Buffer.from('a'), content_type: 'audio/mp3' }),
+    );
+    const wabot = makeWabot(
+      jest.fn().mockResolvedValue({ wa_media_url: 'https://wa/m1' }),
+    );
+    await processWhatsappPreloadJob(
+      makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-key', reload: false }),
+      bucket,
+      wabot,
+      makeCache(jest.fn().mockResolvedValue(undefined)),
+      repo,
+    );
+    expect(mockQueueAdd).toHaveBeenCalledTimes(1);
+    expect(mockQueueAdd.mock.calls[0][0]).toBe('reload-mm-1');
+    expect(mockQueueAdd.mock.calls[0][1]).toMatchObject({
+      media_metadata_id: 'mm-1',
+      s3_key: 's3-key',
+      reload: true,
+    });
+    expect(mockQueueAdd.mock.calls[0][2]).toEqual({
+      delay: 20 * 24 * 60 * 60 * 1000,
+    });
+  });
+});
+
+describe('processWhatsappPreloadJob — cache invalidation key', () => {
+  it('invalidates the media:stid:<stid> cache key on success', async () => {
+    const repo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue({
+        id: 'mm-1',
+        rolled_back: false,
+        media_type: 'audio',
+        status: 'created',
+        state_transition_id: 'कमल-start-word-initial',
+      }),
+    });
+    const bucket = makeBucket(
+      jest
+        .fn()
+        .mockResolvedValue({ buffer: Buffer.from('a'), content_type: 'audio/mp3' }),
+    );
+    const wabot = makeWabot(
+      jest.fn().mockResolvedValue({ wa_media_url: 'https://wa/m1' }),
+    );
+    const cacheDel = jest.fn().mockResolvedValue(undefined);
+    await processWhatsappPreloadJob(
+      makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-key', reload: false }),
+      bucket,
+      wabot,
+      makeCache(cacheDel),
+      repo,
+    );
+    expect(cacheDel).toHaveBeenCalledWith('media:stid:कमल-start-word-initial');
+  });
+});

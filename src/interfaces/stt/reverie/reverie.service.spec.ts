@@ -261,3 +261,119 @@ describe('ReverieService.run — STT_TIME_CAP timeout', () => {
     delete process.env.STT_TIME_CAP;
   });
 });
+
+// ─── mutation hardening ────────────────────────────────────────────────────
+
+import { Logger as NestLogger } from '@nestjs/common';
+
+function spyRevLog() {
+  return jest
+    .spyOn(NestLogger.prototype, 'warn')
+    .mockImplementation(() => undefined);
+}
+
+describe('ReverieService.run — multipart field name + filename', () => {
+  it('multipart field is "audio_file" with filename "<parentId>.ogg"', async () => {
+    const fetchSpy = jest
+      .fn()
+      .mockResolvedValue(makeResponse({ status: 200, json: okPayload }));
+    global.fetch = fetchSpy;
+    const svc = makeService(makeRepo());
+    await svc.run(Buffer.from('a'), parentMedia);
+    const body = fetchSpy.mock.calls[0][1].body as FormData;
+    const file = body.get('audio_file') as File | null;
+    expect(file).toBeDefined();
+    expect((file as unknown as { name: string }).name).toBe('parent-1.ogg');
+  });
+});
+
+describe('ReverieService.run — exact warn messages', () => {
+  it('"Reverie: empty audio buffer for <id>" on empty buffer', async () => {
+    const warn = spyRevLog();
+    const svc = makeService(makeRepo());
+    await expect(svc.run(Buffer.alloc(0), parentMedia)).rejects.toThrow();
+    expect(warn).toHaveBeenCalledWith(
+      'Reverie: empty audio buffer for parent-1',
+    );
+    warn.mockRestore();
+  });
+
+  it('"Reverie: network/timeout error for <id>: <msg>" on fetch reject', async () => {
+    const warn = spyRevLog();
+    global.fetch = jest.fn().mockRejectedValue(new Error('econn'));
+    const svc = makeService(makeRepo());
+    await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow('econn');
+    expect(warn).toHaveBeenCalledWith(
+      'Reverie: network/timeout error for parent-1: econn',
+    );
+    warn.mockRestore();
+  });
+
+  it('"Reverie <status> for <id>: <body>" on non-OK response', async () => {
+    const warn = spyRevLog();
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(makeResponse({ status: 502, text: 'gw err' }));
+    const svc = makeService(makeRepo());
+    await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow(
+      'Reverie STT failed: 502',
+    );
+    expect(warn).toHaveBeenCalledWith('Reverie 502 for parent-1: gw err');
+    warn.mockRestore();
+  });
+
+  it('"Reverie STT unsuccessful for <id>: <cause>" on success:false', async () => {
+    const warn = spyRevLog();
+    global.fetch = jest.fn().mockResolvedValue(
+      makeResponse({
+        status: 200,
+        json: { ...okPayload, success: false, cause: 'bad audio' },
+      }),
+    );
+    const svc = makeService(makeRepo());
+    await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow(
+      'Reverie STT unsuccessful: bad audio',
+    );
+    expect(warn).toHaveBeenCalledWith(
+      'Reverie STT unsuccessful for parent-1: bad audio',
+    );
+    warn.mockRestore();
+  });
+});
+
+describe('ReverieService.run — saved row + media_details', () => {
+  it('persists media_type=text, source=reverie, status=ready, rolled_back=false, plus media_details (raw_text, confidence, reverie_request_id, cause)', async () => {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(makeResponse({ status: 200, json: okPayload }));
+    const repo = makeRepo();
+    const svc = makeService(repo);
+    await svc.run(Buffer.from('a'), parentMedia);
+    const created = repo.create.mock.calls[0][0] as {
+      media_type: string;
+      source: string;
+      status: string;
+      rolled_back: boolean;
+      input_media_id: string;
+      text: string;
+      media_details: {
+        raw_text: string;
+        confidence: number;
+        reverie_request_id: string;
+        cause: string;
+      };
+    };
+    expect(created.media_type).toBe('text');
+    expect(created.source).toBe('reverie');
+    expect(created.status).toBe('ready');
+    expect(created.rolled_back).toBe(false);
+    expect(created.input_media_id).toBe('parent-1');
+    expect(created.text).toBe('नमस्ते');
+    expect(created.media_details).toEqual({
+      raw_text: 'नमस्ते',
+      confidence: 0.91,
+      reverie_request_id: 'rev-req-1',
+      cause: 'EOF received',
+    });
+  });
+});

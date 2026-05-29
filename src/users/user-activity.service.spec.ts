@@ -15,7 +15,9 @@ type UserRepoMock = {
 };
 
 // fluent QueryBuilder mock — every chain method returns the same object,
-// only getRawMany triggers a resolved Promise.
+// only getRawMany triggers a resolved Promise. `andWhere` additionally
+// executes a Brackets argument's whereFactory against the same qb so the
+// nested `where`/`andWhere` calls register on the mock too.
 function makeQB(rows: unknown[]): Record<string, jest.Mock> {
   const qb: Record<string, jest.Mock> = {
     select: jest.fn(),
@@ -29,6 +31,11 @@ function makeQB(rows: unknown[]): Record<string, jest.Mock> {
   for (const k of Object.keys(qb)) {
     if (k !== 'getRawMany') qb[k].mockReturnValue(qb);
   }
+  qb.andWhere.mockImplementation((...args: unknown[]) => {
+    const a0 = args[0] as { whereFactory?: (q: unknown) => void } | undefined;
+    if (a0 && typeof a0.whereFactory === 'function') a0.whereFactory(qb);
+    return qb;
+  });
   return qb;
 }
 
@@ -287,5 +294,235 @@ describe('UserActivityService.didJustCrossDailyActivityThreshold', () => {
         threshold_ms: THRESHOLD,
       }),
     ).resolves.toBe(false);
+  });
+});
+
+// ─── mutation hardening ─────────────────────────────────────────────────────
+
+describe('UserActivityService — exact query shape', () => {
+  const userA = { id: UUID_A, external_id: '919999990001' };
+
+  it('builds the voice-message query with the exact columns, filters, ordering and parameter set', async () => {
+    const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
+    const mediaRepo = makeMediaRepo([]);
+    const svc = makeService(userRepo, mediaRepo);
+    await svc.getActivityTime({
+      users: [UUID_A],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
+    });
+    const qb = mediaRepo._qb;
+    expect(mediaRepo.createQueryBuilder).toHaveBeenCalledWith('mm');
+    expect(qb.select).toHaveBeenCalledWith('mm.user_id', 'user_id');
+    expect(qb.addSelect).toHaveBeenCalledWith('mm.created_at', 'created_at');
+    expect(qb.where).toHaveBeenCalledWith('mm.user_id IN (:...userIds)', {
+      userIds: [UUID_A],
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith('mm.source = :source', {
+      source: 'whatsapp',
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith('mm.media_type = :media_type', {
+      media_type: 'audio',
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith('mm.rolled_back = :rolled_back', {
+      rolled_back: false,
+    });
+    expect(qb.orderBy).toHaveBeenCalledWith('mm.user_id', 'ASC');
+    expect(qb.addOrderBy).toHaveBeenCalledWith('mm.created_at', 'ASC');
+    // Inner Brackets clause — executed by the mock so the inner calls register.
+    expect(qb.where).toHaveBeenCalledWith('mm.created_at >= :earliestStart', {
+      earliestStart: new Date('2026-04-27T09:00:00Z'),
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith('mm.created_at <= :latestEnd', {
+      latestEnd: new Date('2026-04-27T11:00:00Z'),
+    });
+  });
+
+  it('reduces multiple non-monotonic windows to the EARLIEST start and LATEST end (kills the < / > reduce comparators)', async () => {
+    const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
+    const mediaRepo = makeMediaRepo([]);
+    const svc = makeService(userRepo, mediaRepo);
+    await svc.getActivityTime({
+      users: [UUID_A],
+      windows: [
+        { start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' },
+        { start: '2026-04-27T08:00:00Z', end: '2026-04-27T09:30:00Z' }, // earliest
+        { start: '2026-04-27T12:00:00Z', end: '2026-04-27T13:00:00Z' }, // latest
+      ],
+    });
+    const qb = mediaRepo._qb;
+    expect(qb.where).toHaveBeenCalledWith('mm.created_at >= :earliestStart', {
+      earliestStart: new Date('2026-04-27T08:00:00Z'),
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith('mm.created_at <= :latestEnd', {
+      latestEnd: new Date('2026-04-27T13:00:00Z'),
+    });
+  });
+});
+
+describe('UserActivityService.getActivityTime — boundary conditions', () => {
+  const userA = { id: UUID_A, external_id: '919999990001' };
+
+  it('a gap of EXACTLY 0 ms (duplicate timestamps) contributes 0 active_ms (kills gap > 0 → >=)', async () => {
+    const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
+    const t = new Date('2026-04-27T10:00:00Z');
+    const rows = [
+      { user_id: UUID_A, created_at: t },
+      { user_id: UUID_A, created_at: t },
+    ];
+    const mediaRepo = makeMediaRepo(rows);
+    const svc = makeService(userRepo, mediaRepo);
+    const out = await svc.getActivityTime({
+      users: [UUID_A],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
+    });
+    expect(out.results[0].windows[0].active_ms).toBe(0);
+  });
+
+  it('a gap of EXACTLY 59_999 ms is included but EXACTLY 60_000 ms is excluded (kills gap < 60_000 → <=)', async () => {
+    const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
+    const rows = [
+      { user_id: UUID_A, created_at: new Date('2026-04-27T10:00:00.000Z') },
+      { user_id: UUID_A, created_at: new Date('2026-04-27T10:00:59.999Z') }, // +59999 ✓
+      { user_id: UUID_A, created_at: new Date('2026-04-27T10:01:59.999Z') }, // +60000 ✗
+    ];
+    const mediaRepo = makeMediaRepo(rows);
+    const svc = makeService(userRepo, mediaRepo);
+    const out = await svc.getActivityTime({
+      users: [UUID_A],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
+    });
+    expect(out.results[0].windows[0].active_ms).toBe(59_999);
+  });
+
+  it('messages at EXACTLY the window start/end are included (kills t < startMs → <= and t > endMs → >=)', async () => {
+    const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
+    const rows = [
+      { user_id: UUID_A, created_at: new Date('2026-04-27T09:00:00Z') }, // = start
+      { user_id: UUID_A, created_at: new Date('2026-04-27T09:00:30Z') }, // +30s ✓
+      { user_id: UUID_A, created_at: new Date('2026-04-27T11:00:00Z') }, // = end (gap too large)
+    ];
+    const mediaRepo = makeMediaRepo(rows);
+    const svc = makeService(userRepo, mediaRepo);
+    const out = await svc.getActivityTime({
+      users: [UUID_A],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
+    });
+    // m0→m1 = 30s counted; m1→m2 ≫ 60s excluded. If start/end were exclusive
+    // (< → <= and > → >=) m0 and m2 would drop out and active would still be 0
+    // from m1 alone → the assertion below catches both flips.
+    expect(out.results[0].windows[0].active_ms).toBe(30_000);
+  });
+
+  it('a zero-length window (start === end) is allowed (kills start > end → >=)', async () => {
+    const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
+    const mediaRepo = makeMediaRepo([]);
+    const svc = makeService(userRepo, mediaRepo);
+    await expect(
+      svc.getActivityTime({
+        users: [UUID_A],
+        windows: [
+          { start: '2026-04-27T10:00:00Z', end: '2026-04-27T10:00:00Z' },
+        ],
+      }),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe('UserActivityService.didJustCrossDailyActivityThreshold — boundary conditions', () => {
+  const THRESHOLD = 5 * 60 * 1000; // 300_000 ms
+
+  beforeEach(() => {
+    // Fix "now" to the middle of an IST day so all relative timestamps stay
+    // within today's IST window.
+    jest.useFakeTimers().setSystemTime(new Date('2026-05-15T18:00:00Z'));
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('fires on EXACTLY before === threshold + after > threshold (kills before <= → before <)', async () => {
+    // 7 msgs × 50_000 ms = 6 gaps × 50_000 = 300_000 (== threshold) for "before";
+    // appending an 8th msg with a 59_999 ms gap → after = 359_999 (> threshold).
+    const now = Date.now();
+    const rows: { user_id: string; created_at: Date }[] = [];
+    for (let i = 0; i < 7; i++) {
+      rows.push({
+        user_id: UUID_A,
+        created_at: new Date(now - 59_999 - (6 - i) * 50_000),
+      });
+    }
+    rows.push({ user_id: UUID_A, created_at: new Date(now) });
+    const mediaRepo = makeMediaRepo(rows);
+    const svc = makeService(makeUserRepo(jest.fn()), mediaRepo);
+    await expect(
+      svc.didJustCrossDailyActivityThreshold({
+        user_id: UUID_A,
+        threshold_ms: THRESHOLD,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it('does NOT fire when after EXACTLY equals threshold (kills after > → after >=)', async () => {
+    // 7 msgs × 50_000 ms gaps → before = 5 × 50_000 = 250_000;
+    // after = 6 × 50_000 = 300_000 (== threshold, not strictly greater).
+    const now = Date.now();
+    const rows = Array.from({ length: 7 }, (_, i) => ({
+      user_id: UUID_A,
+      created_at: new Date(now - (6 - i) * 50_000),
+    }));
+    const mediaRepo = makeMediaRepo(rows);
+    const svc = makeService(makeUserRepo(jest.fn()), mediaRepo);
+    await expect(
+      svc.didJustCrossDailyActivityThreshold({
+        user_id: UUID_A,
+        threshold_ms: THRESHOLD,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('uses IST midnight as the lower bound of today\'s active window', async () => {
+    // Now = 2026-05-15T18:00:00Z UTC = 2026-05-15 23:30 IST.
+    // Today's IST midnight = 2026-05-15T00:00 IST = 2026-05-14T18:30:00Z UTC.
+    const mediaRepo = makeMediaRepo([]);
+    const svc = makeService(makeUserRepo(jest.fn()), mediaRepo);
+    await svc.didJustCrossDailyActivityThreshold({
+      user_id: UUID_A,
+      threshold_ms: THRESHOLD,
+    });
+    const qb = mediaRepo._qb;
+    expect(qb.where).toHaveBeenCalledWith('mm.created_at >= :earliestStart', {
+      earliestStart: new Date('2026-05-14T18:30:00Z'),
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith('mm.created_at <= :latestEnd', {
+      latestEnd: new Date('2026-05-15T18:00:00Z'),
+    });
+  });
+});
+
+describe('UserActivityService.getActivityTime — user resolution branches', () => {
+  const userA = { id: UUID_A, external_id: '919999990001' };
+
+  it('only the UUID branch fires when every input is a UUID (kills ids.length > 0 → >=)', async () => {
+    const find = jest.fn().mockResolvedValue([userA]);
+    const svc = makeService(makeUserRepo(find), makeMediaRepo([]));
+    await svc.getActivityTime({
+      users: [UUID_A],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
+    });
+    expect(find).toHaveBeenCalledTimes(1);
+    expect(find.mock.calls[0][0]).toEqual({ where: { id: expect.anything() } });
+  });
+
+  it('only the external_id branch fires when every input is non-UUID', async () => {
+    const find = jest.fn().mockResolvedValue([userA]);
+    const svc = makeService(makeUserRepo(find), makeMediaRepo([]));
+    await svc.getActivityTime({
+      users: ['919999990001'],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
+    });
+    expect(find).toHaveBeenCalledTimes(1);
+    expect(find.mock.calls[0][0]).toEqual({
+      where: { external_id: expect.anything() },
+    });
   });
 });

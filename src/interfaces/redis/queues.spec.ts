@@ -141,3 +141,76 @@ describe('createWorker', () => {
     expect(cfg.connection).toBe(mockRedisInstance);
   });
 });
+
+// ─── mutation hardening: exact DEFAULT_JOB_OPTIONS per queue ──────────────
+
+describe('DEFAULT_JOB_OPTIONS — exact per-queue shape', () => {
+  // Frozen reference table: each entry is the EXACT options shape we ship to
+  // production. Any drift here is intentional and must be reflected here too.
+  const expected: Record<string, unknown> = {
+    [QUEUE_NAMES.WABOT_INBOUND]: {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 2000 },
+      removeOnComplete: true,
+      removeOnFail: { count: 5000 },
+    },
+    [QUEUE_NAMES.HEYGEN_GENERATE]: {
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 5000 },
+      removeOnComplete: true,
+      removeOnFail: { count: 5000 },
+    },
+    [QUEUE_NAMES.HEYGEN_INBOUND]: {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5000 },
+      removeOnComplete: true,
+      removeOnFail: { count: 5000 },
+    },
+    [QUEUE_NAMES.ELEVENLABS_GENERATE]: {
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 5000 },
+      removeOnComplete: true,
+      removeOnFail: { count: 5000 },
+    },
+    [QUEUE_NAMES.WHATSAPP_PRELOAD]: {
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 10000 },
+      removeOnComplete: true,
+      removeOnFail: { count: 5000 },
+    },
+    [QUEUE_NAMES.NOTIFIER]: {
+      attempts: 1,
+      removeOnComplete: true,
+      removeOnFail: { count: 500 },
+    },
+    [QUEUE_NAMES.NOTIFIER_SEND]: {
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 3000 },
+      removeOnComplete: true,
+      removeOnFail: { count: 5000 },
+    },
+    [QUEUE_NAMES.MORNING_UPDATE]: {
+      attempts: 1,
+      removeOnComplete: true,
+      removeOnFail: { count: 500 },
+    },
+    [QUEUE_NAMES.MORNING_UPDATE_SEND]: {
+      attempts: 60,
+      backoff: { type: 'fixed', delay: 1000 },
+      removeOnComplete: true,
+      removeOnFail: { count: 5000 },
+    },
+    [QUEUE_NAMES.HAIL_MARY]: {
+      attempts: 1,
+      removeOnComplete: true,
+      removeOnFail: { count: 500 },
+    },
+  };
+
+  it.each(Object.entries(expected))(
+    '%s has the documented JobsOptions',
+    (queueName, opts) => {
+      expect(DEFAULT_JOB_OPTIONS[queueName]).toEqual(opts);
+    },
+  );
+});

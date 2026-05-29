@@ -220,3 +220,62 @@ describe('HeygenInboundController.receive — enqueue retry', () => {
     dateSpy.mockRestore();
   });
 });
+
+// ─── mutation hardening ────────────────────────────────────────────────────
+
+import { Logger as NestLogger } from '@nestjs/common';
+
+function spyHLog() {
+  return {
+    warn: jest.spyOn(NestLogger.prototype, 'warn').mockImplementation(() => undefined),
+    error: jest.spyOn(NestLogger.prototype, 'error').mockImplementation(() => undefined),
+  };
+}
+
+describe('HeygenInboundController.receive — exact error messages + log messages', () => {
+  it('missing signature: warn "Missing Signature header" + UnauthorizedException "Missing signature"', async () => {
+    const { warn } = spyHLog();
+    const ctrl = new HeygenInboundController();
+    await expect(
+      ctrl.receive({
+        rawBody: Buffer.from('{}'),
+        body: {},
+        headers: {},
+      } as never),
+    ).rejects.toThrow('Missing signature');
+    expect(warn).toHaveBeenCalledWith('Missing Signature header');
+    warn.mockRestore();
+  });
+
+  it('bad signature: warn "HeyGen webhook signature mismatch" + UnauthorizedException "Invalid signature"', async () => {
+    const { warn } = spyHLog();
+    const ctrl = new HeygenInboundController();
+    await expect(
+      ctrl.receive({
+        rawBody: Buffer.from('{}'),
+        body: {},
+        // 'wrong' has length 5 — same length as a valid hex would be 64, so
+        // the length check fails first; either way we hit the same warn+throw.
+        headers: { signature: 'wrong' },
+      } as never),
+    ).rejects.toThrow('Invalid signature');
+    expect(warn).toHaveBeenCalledWith('HeyGen webhook signature mismatch');
+    warn.mockRestore();
+  });
+
+  it('invalid body throws BadRequestException with exact "Invalid webhook payload"', async () => {
+    const ctrl = new HeygenInboundController();
+    const rawBody = JSON.stringify({ event_type: 'NOPE', event_data: {} });
+    const signature = require('crypto')
+      .createHmac('sha256', process.env.HEYGEN_WEBHOOK_SECRET!)
+      .update(rawBody)
+      .digest('hex');
+    await expect(
+      ctrl.receive({
+        rawBody: Buffer.from(rawBody),
+        body: JSON.parse(rawBody),
+        headers: { signature },
+      } as never),
+    ).rejects.toThrow('Invalid webhook payload');
+  });
+});

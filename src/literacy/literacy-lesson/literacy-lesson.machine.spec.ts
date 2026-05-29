@@ -81,6 +81,23 @@ describe('machine — word state', () => {
     a.stop();
   });
 
+  it('seeds the initial context (word entry sets answer=word, empties wrongLetters + pending)', () => {
+    const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
+    const c = a.snap().context;
+    expect(c.word).toBe('कमल');
+    expect(c.answer).toBe('कमल'); // word-state entry assigns answer = word
+    expect(c.answerCorrect).toBeNull();
+    expect(c.userMessageId).toBe('mm-1');
+    expect(c.wrongLetters).toEqual([]);
+    expect(c.pendingCorrect).toEqual([]);
+    expect(c.pendingIncorrect).toEqual([]);
+    expect(c.wordErrors).toBe(0);
+    expect(c.imageErrors).toBe(0);
+    expect(c.letterErrors).toBe(0);
+    expect(c.letterNoImageErrors).toBe(0);
+    a.stop();
+  });
+
   it('first-try correct word → complete + correct-first stid + pendingCorrect=Array(word)', () => {
     mockMarkWord.mockReturnValue(true);
     const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
@@ -580,5 +597,533 @@ describe('machine — checkAnswer guard error path', () => {
     expect(errors.length).toBeGreaterThan(0);
     expect(errors[0].message).toMatch(/checkAnswer guard requires/);
     actor.stop();
+  });
+});
+
+// ─── mutation hardening: full transition outcomes ────────────────────────────
+// The tests above pin the stateTransitionId of each branch. These pin the rest
+// of each transition's observable effect — target state, answerCorrect, the
+// pending-score arrays, and the error counters — so the assign()/action/guard
+// mutants on every branch are caught.
+
+import {
+  WELCOME_MESSAGE_STATE_TRANSITION_ID,
+  AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID,
+  STALE_LESSON_RESTART_STATE_TRANSITION_ID,
+} from './literacy-lesson.machine';
+
+const ANSWER = (studentAnswer: string) =>
+  ({ type: 'ANSWER', studentAnswer }) as const;
+
+// Reach the `word` state with wordErrors already at 1 via an end-matra error
+// (which also leaves pendingCorrect = Array(word), dirtying the score arrays).
+function wordWithOneError(word = 'कमल'): ActorHandle {
+  mockDetectIncorrectEndMatra.mockReturnValueOnce(true);
+  const a = makeActor({ word, userMessageId: 'mm-1' });
+  a.send(ANSWER('matra'));
+  allMarksFalse();
+  return a;
+}
+
+describe('machine — word state full outcomes', () => {
+  it('correct-first: complete, answerCorrect true, pendingCorrect=Array(word), pendingIncorrect empty', () => {
+    mockMarkWord.mockReturnValue(true);
+    const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
+    a.send(ANSWER('कमल'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('complete');
+    expect(c.answerCorrect).toBe(true);
+    expect(c.pendingCorrect).toEqual(['क', 'म', 'ल']);
+    expect(c.pendingIncorrect).toEqual([]);
+    expect(c.wordErrors).toBe(0);
+    // checkAnswer guard forwards both args to the marker fn (kills params.fn({}))
+    expect(mockMarkWord).toHaveBeenCalledWith({
+      correctAnswer: 'कमल',
+      studentAnswer: 'कमल',
+    });
+    a.stop();
+  });
+
+  it('correct-retry clears leaked pendingCorrect (kills clearPendingScores on the retry branch)', () => {
+    const a = wordWithOneError();
+    expect(a.snap().context.pendingCorrect).toEqual(['क', 'म', 'ल']); // leaked in
+    mockMarkWord.mockReturnValue(true);
+    a.send(ANSWER('कमल'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('complete');
+    expect(c.answerCorrect).toBe(true);
+    expect(c.pendingCorrect).toEqual([]); // cleared, not re-set
+    expect(c.pendingIncorrect).toEqual([]);
+    a.stop();
+  });
+
+  it('endMatra-first: stays in word, answerCorrect false, wordErrors incremented to 1, pendingCorrect set', () => {
+    mockDetectIncorrectEndMatra.mockReturnValue(true);
+    const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
+    a.send(ANSWER('कमलि'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('word');
+    expect(c.answerCorrect).toBe(false);
+    expect(c.wordErrors).toBe(1);
+    expect(c.pendingCorrect).toEqual(['क', 'म', 'ल']);
+    a.stop();
+  });
+
+  it('endMatra-retry: wordErrors incremented to 2, pendingCorrect cleared (not re-set)', () => {
+    const a = wordWithOneError();
+    mockDetectIncorrectEndMatra.mockReturnValue(true);
+    a.send(ANSWER('कमलि'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('word');
+    expect(c.answerCorrect).toBe(false);
+    expect(c.wordErrors).toBe(2);
+    expect(c.pendingCorrect).toEqual([]);
+    a.stop();
+  });
+
+  it('middleMatra-first: wordErrors→1, pendingCorrect set', () => {
+    mockDetectIncorrectMiddleMatra.mockReturnValue(true);
+    const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
+    a.send(ANSWER('कमिल'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('word');
+    expect(c.answerCorrect).toBe(false);
+    expect(c.wordErrors).toBe(1);
+    expect(c.pendingCorrect).toEqual(['क', 'म', 'ल']);
+    a.stop();
+  });
+
+  it('middleMatra-retry: wordErrors→2, pendingCorrect cleared', () => {
+    const a = wordWithOneError();
+    mockDetectIncorrectMiddleMatra.mockReturnValue(true);
+    a.send(ANSWER('कमिल'));
+    const c = a.snap().context;
+    expect(c.wordErrors).toBe(2);
+    expect(c.pendingCorrect).toEqual([]);
+    expect(a.snap().context.stateTransitionId).toBe(
+      'कमल-word-word-middleMatra-retry',
+    );
+    a.stop();
+  });
+
+  it('insertion-first: wordErrors→1, pendingCorrect set', () => {
+    mockDetectInsertion.mockReturnValue(true);
+    const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
+    a.send(ANSWER('कमालिकल'));
+    const c = a.snap().context;
+    expect(c.wordErrors).toBe(1);
+    expect(c.pendingCorrect).toEqual(['क', 'म', 'ल']);
+    a.stop();
+  });
+
+  it('insertion-retry: wordErrors→2, pendingCorrect cleared', () => {
+    const a = wordWithOneError();
+    mockDetectInsertion.mockReturnValue(true);
+    a.send(ANSWER('कमालिकल'));
+    const c = a.snap().context;
+    expect(c.wordErrors).toBe(2);
+    expect(c.pendingCorrect).toEqual([]);
+    expect(a.snap().context.stateTransitionId).toBe(
+      'कमल-word-word-insertion-retry',
+    );
+    a.stop();
+  });
+
+  it('loopBack fires at wordErrors=1 (kills >=1 boundary): stays in word, wordErrors→2', () => {
+    const a = wordWithOneError(); // wordErrors=1, all marks false
+    a.send(ANSWER('still-wrong')); // no matra/insertion/markWord
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('word');
+    expect(c.answerCorrect).toBe(false);
+    expect(c.wordErrors).toBe(2);
+    expect(c.stateTransitionId).toBe('कमल-word-word-loopBack');
+    a.stop();
+  });
+
+  it('maxErrors at wordErrors>=2: complete, answerCorrect false', () => {
+    const a = wordWithOneError(); // 1
+    mockDetectIncorrectEndMatra.mockReturnValueOnce(true);
+    a.send(ANSWER('matra2')); // endMatra-retry → wordErrors=2
+    a.send(ANSWER('totally-wrong')); // wordErrors>=2 → maxErrors
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('complete');
+    expect(c.answerCorrect).toBe(false);
+    expect(c.stateTransitionId).toBe('कमल-word-complete-maxErrors');
+    a.stop();
+  });
+
+  it('first wrong word (wordErrors=0) routes to the letter loop, NOT loopBack (kills loopBack guard → true)', () => {
+    mockIdentifyCharacterStatus.mockReturnValue({
+      correctChars: [],
+      incorrectChars: ['म', 'ल'],
+    });
+    const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
+    a.send(ANSWER('different'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('letter');
+    expect(c.answerCorrect).toBe(false);
+    expect(c.wordErrors).toBe(1);
+    expect(c.wrongLetters).toEqual(['म', 'ल']);
+    a.stop();
+  });
+});
+
+describe('machine — letter state full outcomes', () => {
+  function inLetter(wrongLetters: string[]): ActorHandle {
+    mockIdentifyCharacterStatus.mockReturnValue({
+      correctChars: [],
+      incorrectChars: wrongLetters,
+    });
+    const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
+    a.send(ANSWER('wrong-word'));
+    return a;
+  }
+
+  it('correct + last: back to word, answerCorrect true, pendingCorrect=[letter], wrongLetters drained', () => {
+    const a = inLetter(['म']);
+    mockMarkLetter.mockReturnValue(true);
+    a.send(ANSWER('म'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('word');
+    expect(c.answerCorrect).toBe(true);
+    expect(c.pendingCorrect).toEqual(['म']);
+    expect(c.wrongLetters).toEqual([]); // dropFirstWrongLetter
+    a.stop();
+  });
+
+  it('correct + more: routeWrongLetter→letter, pendingCorrect=[first], first letter dropped', () => {
+    const a = inLetter(['म', 'ल']);
+    mockMarkLetter.mockReturnValue(true);
+    a.send(ANSWER('म'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('letter');
+    expect(c.answerCorrect).toBe(true);
+    expect(c.pendingCorrect).toEqual(['म']);
+    expect(c.wrongLetters).toEqual(['ल']); // dropFirstWrongLetter
+    a.stop();
+  });
+
+  it('wrong: →image, answerCorrect false, pendingIncorrect=[letter]', () => {
+    const a = inLetter(['म']);
+    mockMarkLetter.mockReturnValue(false);
+    a.send(ANSWER('x'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('image');
+    expect(c.answerCorrect).toBe(false);
+    expect(c.pendingIncorrect).toEqual(['म']);
+    expect(c.wrongLetters).toEqual(['म']); // NOT dropped on wrong
+    a.stop();
+  });
+});
+
+describe('machine — image state full outcomes', () => {
+  function inImage(wrongLetters: string[]): ActorHandle {
+    mockIdentifyCharacterStatus.mockReturnValue({
+      correctChars: [],
+      incorrectChars: wrongLetters,
+    });
+    const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
+    a.send(ANSWER('wrong-word'));
+    mockMarkLetter.mockReturnValue(false);
+    a.send(ANSWER('x')); // letter → image
+    mockMarkLetter.mockReset();
+    allMarksFalse();
+    return a;
+  }
+
+  it('correct image: →letterImage, answerCorrect true, leaked pendingIncorrect cleared', () => {
+    const a = inImage(['म']);
+    expect(a.snap().context.pendingIncorrect).toEqual(['म']); // leaked from letter-wrong
+    mockMarkImage.mockReturnValue(true);
+    a.send(ANSWER('img'));
+    expect(a.snap().value).toBe('letterImage');
+    expect(a.snap().context.answerCorrect).toBe(true);
+    expect(a.snap().context.pendingIncorrect).toEqual([]); // clearPendingScores
+    a.stop();
+  });
+
+  it('wrong first attempt: stays in image, imageErrors→1, answerCorrect false, leaked pendingIncorrect cleared', () => {
+    const a = inImage(['म']);
+    mockMarkImage.mockReturnValue(false);
+    a.send(ANSWER('x'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('image');
+    expect(c.imageErrors).toBe(1);
+    expect(c.answerCorrect).toBe(false);
+    expect(c.pendingIncorrect).toEqual([]); // clearPendingScores cleared the leak
+    a.stop();
+  });
+
+  it('wrong second attempt: →letterImage, imageErrors reset to 0 (kills resetToZero)', () => {
+    const a = inImage(['म']);
+    mockMarkImage.mockReturnValue(false);
+    a.send(ANSWER('x1')); // imageErrors=1
+    expect(a.snap().context.imageErrors).toBe(1);
+    a.send(ANSWER('x2')); // >=1 → letterImage, reset
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('letterImage');
+    expect(c.imageErrors).toBe(0);
+    expect(c.answerCorrect).toBe(false);
+    a.stop();
+  });
+});
+
+describe('machine — letterImage state full outcomes', () => {
+  function inLetterImage(wrongLetters: string[]): ActorHandle {
+    mockIdentifyCharacterStatus.mockReturnValue({
+      correctChars: [],
+      incorrectChars: wrongLetters,
+    });
+    const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
+    a.send(ANSWER('wrong-word'));
+    mockMarkLetter.mockReturnValue(false);
+    a.send(ANSWER('x')); // letter → image
+    mockMarkImage.mockReturnValue(true);
+    a.send(ANSWER('img')); // image → letterImage
+    allMarksFalse();
+    return a;
+  }
+
+  it('correct + last: →word, answerCorrect true, wrongLetters drained', () => {
+    const a = inLetterImage(['म']);
+    mockMarkLetter.mockReturnValue(true);
+    a.send(ANSWER('म'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('word');
+    expect(c.answerCorrect).toBe(true);
+    expect(c.wrongLetters).toEqual([]);
+    a.stop();
+  });
+
+  it('correct + more: →letter, first letter dropped', () => {
+    const a = inLetterImage(['म', 'ल']);
+    mockMarkLetter.mockReturnValue(true);
+    a.send(ANSWER('म'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('letter');
+    expect(c.answerCorrect).toBe(true);
+    expect(c.wrongLetters).toEqual(['ल']);
+    a.stop();
+  });
+
+  it('wrong first: letterErrors→1', () => {
+    const a = inLetterImage(['म']);
+    mockMarkLetter.mockReturnValue(false);
+    a.send(ANSWER('x'));
+    expect(a.snap().value).toBe('letterImage');
+    expect(a.snap().context.letterErrors).toBe(1);
+    expect(a.snap().context.answerCorrect).toBe(false);
+    a.stop();
+  });
+
+  it('wrong second: letterErrors→2', () => {
+    const a = inLetterImage(['म']);
+    mockMarkLetter.mockReturnValue(false);
+    a.send(ANSWER('x1'));
+    a.send(ANSWER('x2'));
+    expect(a.snap().context.letterErrors).toBe(2);
+    a.stop();
+  });
+
+  it('wrong third + last: →word, letterErrors reset to 0, wrongLetters drained', () => {
+    const a = inLetterImage(['म']);
+    mockMarkLetter.mockReturnValue(false);
+    a.send(ANSWER('x1'));
+    a.send(ANSWER('x2'));
+    a.send(ANSWER('x3'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('word');
+    expect(c.letterErrors).toBe(0);
+    expect(c.wrongLetters).toEqual([]);
+    expect(c.answerCorrect).toBe(false);
+    a.stop();
+  });
+
+  it('wrong third + more (kills wrongLetters.length > 1 boundary): →letter, letterErrors reset, first dropped', () => {
+    const a = inLetterImage(['म', 'ल']);
+    mockMarkLetter.mockReturnValue(false);
+    a.send(ANSWER('x1'));
+    a.send(ANSWER('x2'));
+    a.send(ANSWER('x3'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('letter');
+    expect(c.letterErrors).toBe(0);
+    expect(c.wrongLetters).toEqual(['ल']);
+    a.stop();
+  });
+});
+
+describe('machine — letterNoImage state full outcomes', () => {
+  function inLetterNoImage(wrongLetters: string[]): ActorHandle {
+    mockIdentifyCharacterStatus.mockReturnValue({
+      correctChars: [],
+      incorrectChars: wrongLetters,
+    });
+    const a = makeActor({ word: 'word', userMessageId: 'mm-1' });
+    a.send(ANSWER('wrong'));
+    return a;
+  }
+
+  it('correct first + last: →word, answerCorrect true, pendingCorrect=[letter], drained', () => {
+    const a = inLetterNoImage(['ञ']);
+    mockMarkLetter.mockReturnValue(true);
+    a.send(ANSWER('ञ'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('word');
+    expect(c.answerCorrect).toBe(true);
+    expect(c.pendingCorrect).toEqual(['ञ']);
+    expect(c.wrongLetters).toEqual([]);
+    a.stop();
+  });
+
+  it('correct first + more: →routeWrongLetter, pendingCorrect=[first], first dropped', () => {
+    const a = inLetterNoImage(['ञ', 'क']);
+    mockMarkLetter.mockReturnValue(true);
+    a.send(ANSWER('ञ'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('letter');
+    expect(c.answerCorrect).toBe(true);
+    expect(c.pendingCorrect).toEqual(['ञ']);
+    expect(c.wrongLetters).toEqual(['क']);
+    a.stop();
+  });
+
+  it('wrong first: stays, letterNoImageErrors→1, pendingIncorrect=[letter]', () => {
+    const a = inLetterNoImage(['ञ']);
+    mockMarkLetter.mockReturnValue(false);
+    a.send(ANSWER('x'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('letterNoImage');
+    expect(c.answerCorrect).toBe(false);
+    expect(c.letterNoImageErrors).toBe(1);
+    expect(c.pendingIncorrect).toEqual(['ञ']);
+    a.stop();
+  });
+
+  it('correct second + last: →word, answerCorrect true, errors reset, drained, leaked pendingIncorrect cleared', () => {
+    const a = inLetterNoImage(['ञ']);
+    a.send(ANSWER('x')); // wrong → letterNoImageErrors=1, pendingIncorrect=['ञ']
+    expect(a.snap().context.pendingIncorrect).toEqual(['ञ']);
+    mockMarkLetter.mockReturnValue(true);
+    a.send(ANSWER('ञ'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('word');
+    expect(c.answerCorrect).toBe(true);
+    expect(c.letterNoImageErrors).toBe(0);
+    expect(c.wrongLetters).toEqual([]);
+    expect(c.pendingIncorrect).toEqual([]); // clearPendingScores
+    a.stop();
+  });
+
+  it('correct second + more: →routeWrongLetter, errors reset, first dropped, leaked pendingIncorrect cleared', () => {
+    const a = inLetterNoImage(['ञ', 'क']);
+    a.send(ANSWER('x'));
+    mockMarkLetter.mockReturnValue(true);
+    a.send(ANSWER('ञ'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('letter');
+    expect(c.answerCorrect).toBe(true);
+    expect(c.letterNoImageErrors).toBe(0);
+    expect(c.wrongLetters).toEqual(['क']);
+    expect(c.pendingIncorrect).toEqual([]); // clearPendingScores
+    a.stop();
+  });
+
+  it('wrong second + last: →word, answerCorrect false, errors reset, drained, leaked pendingIncorrect cleared', () => {
+    const a = inLetterNoImage(['ञ']);
+    mockMarkLetter.mockReturnValue(false);
+    a.send(ANSWER('x1'));
+    a.send(ANSWER('x2'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('word');
+    expect(c.answerCorrect).toBe(false);
+    expect(c.letterNoImageErrors).toBe(0);
+    expect(c.wrongLetters).toEqual([]);
+    expect(c.pendingIncorrect).toEqual([]); // clearPendingScores cleared the leak
+    a.stop();
+  });
+
+  it('wrong second + more: →routeWrongLetter, errors reset, first dropped, leaked pendingIncorrect cleared', () => {
+    const a = inLetterNoImage(['ञ', 'क']);
+    mockMarkLetter.mockReturnValue(false);
+    a.send(ANSWER('x1'));
+    a.send(ANSWER('x2'));
+    const c = a.snap().context;
+    expect(a.snap().value).toBe('letter');
+    expect(c.answerCorrect).toBe(false);
+    expect(c.letterNoImageErrors).toBe(0);
+    expect(c.wrongLetters).toEqual(['क']);
+    expect(c.pendingIncorrect).toEqual([]); // clearPendingScores cleared the leak
+    a.stop();
+  });
+});
+
+describe('machine — state entry sets answer to the current wrong letter', () => {
+  function wrongWord(incorrectChars: string[], word = 'कमल'): ActorHandle {
+    mockIdentifyCharacterStatus.mockReturnValue({ correctChars: [], incorrectChars });
+    const a = makeActor({ word, userMessageId: 'mm-1' });
+    a.send(ANSWER('wrong-word'));
+    return a;
+  }
+
+  it('letter entry sets answer to wrongLetters[0]', () => {
+    const a = wrongWord(['म']);
+    expect(a.snap().value).toBe('letter');
+    expect(a.snap().context.answer).toBe('म');
+    a.stop();
+  });
+
+  it('image entry sets answer to wrongLetters[0]', () => {
+    const a = wrongWord(['म']);
+    mockMarkLetter.mockReturnValue(false);
+    a.send(ANSWER('x')); // letter → image
+    expect(a.snap().value).toBe('image');
+    expect(a.snap().context.answer).toBe('म');
+    a.stop();
+  });
+
+  it('letterImage entry sets answer to wrongLetters[0]', () => {
+    const a = wrongWord(['म']);
+    mockMarkLetter.mockReturnValue(false);
+    a.send(ANSWER('x'));
+    mockMarkImage.mockReturnValue(true);
+    a.send(ANSWER('img')); // image → letterImage
+    expect(a.snap().value).toBe('letterImage');
+    expect(a.snap().context.answer).toBe('म');
+    a.stop();
+  });
+
+  it('letterNoImage entry sets answer to wrongLetters[0]', () => {
+    const a = wrongWord(['ञ'], 'word');
+    expect(a.snap().value).toBe('letterNoImage');
+    expect(a.snap().context.answer).toBe('ञ');
+    a.stop();
+  });
+
+  it('the wrong-word transition forwards both args to identifyCharacterStatus', () => {
+    wrongWord(['म']);
+    expect(mockIdentifyCharacterStatus).toHaveBeenCalledWith({
+      correctAnswer: 'कमल',
+      studentAnswer: 'wrong-word',
+    });
+  });
+});
+
+describe('machine — routing + constants', () => {
+  it('routes ण (the second NO_IMAGE_LETTER) to letterNoImage', () => {
+    mockIdentifyCharacterStatus.mockReturnValue({
+      correctChars: [],
+      incorrectChars: ['ण'],
+    });
+    const a = makeActor({ word: 'word', userMessageId: 'mm-1' });
+    a.send(ANSWER('wrong'));
+    expect(a.snap().value).toBe('letterNoImage');
+    a.stop();
+  });
+
+  it('exposes the externally-consumed state-transition-id constants', () => {
+    expect(WELCOME_MESSAGE_STATE_TRANSITION_ID).toBe('welcome-message');
+    expect(AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID).toBe('audio-only-request');
+    expect(STALE_LESSON_RESTART_STATE_TRANSITION_ID).toBe('stale-lesson-restart');
   });
 });

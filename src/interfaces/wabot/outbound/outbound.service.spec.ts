@@ -303,3 +303,219 @@ describe('WabotOutboundService.uploadMedia', () => {
     expect(mockSpanEnd).toHaveBeenCalledTimes(1);
   });
 });
+
+// ─── mutation hardening ────────────────────────────────────────────────────
+
+const tracerMock = jest.requireMock('../../../otel/otel') as {
+  tracer: { startActiveSpan: jest.Mock };
+};
+
+describe('WabotOutboundService — exact span names + endpoint attributes', () => {
+  it.each<[
+    'sendMessage' | 'sendNotification' | 'downloadMedia' | 'uploadMedia',
+    string,
+    string,
+  ]>([
+    ['sendMessage', 'wabot.outbound.sendMessage', 'sendMessage'],
+    ['sendNotification', 'wabot.outbound.sendNotification', 'sendNotification'],
+    ['downloadMedia', 'wabot.outbound.downloadMedia', 'downloadMedia'],
+    ['uploadMedia', 'wabot.outbound.uploadMedia', 'uploadMedia'],
+  ])('%s opens span "%s" with wabot.endpoint="%s"', async (op, spanName, ep) => {
+    global.fetch = jest.fn().mockResolvedValue(
+      fakeResponse({
+        status: 200,
+        json: { delivered: true, wa_media_url: 'wa://m1' },
+        body: 'stream-body',
+        headers: { 'content-type': 'audio/mpeg' },
+      }),
+    );
+    const svc = new WabotOutboundService();
+    if (op === 'sendMessage') {
+      await svc.sendMessage({
+        user_external_id: '919999990001',
+        wamid: 'w1',
+        media: baseMedia,
+        otel_carrier: carrier,
+      });
+    } else if (op === 'sendNotification') {
+      await svc.sendNotification({
+        user_external_id: '919999990001',
+        media: baseMedia,
+      });
+    } else if (op === 'downloadMedia') {
+      await svc.downloadMedia('https://media/x', carrier);
+    } else {
+      await svc.uploadMedia(Buffer.from([0]), 'audio/mpeg', 'audio', carrier);
+    }
+    expect(tracerMock.tracer.startActiveSpan).toHaveBeenCalledWith(
+      spanName,
+      expect.any(Function),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('wabot.endpoint', ep);
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'http.response.status_code',
+      200,
+    );
+    expect(mockSpanEnd).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WabotOutboundService — exact request URLs + headers', () => {
+  it.each<[string, string]>([
+    ['sendMessage', 'https://wabot.test/api/sendMessage'],
+    ['sendNotification', 'https://wabot.test/api/sendNotification'],
+    ['downloadMedia', 'https://wabot.test/api/downloadMedia'],
+  ])('%s POSTs to %s with Content-Type application/json + x-api-key', async (op, url) => {
+    const fetchSpy = jest.fn().mockResolvedValue(
+      fakeResponse({
+        status: 200,
+        json: { delivered: true },
+        body: 'stream-body',
+        headers: { 'content-type': 'audio/mpeg' },
+      }),
+    );
+    global.fetch = fetchSpy;
+    const svc = new WabotOutboundService();
+    if (op === 'sendMessage') {
+      await svc.sendMessage({
+        user_external_id: '919999990001',
+        wamid: 'w1',
+        media: baseMedia,
+        otel_carrier: carrier,
+      });
+    } else if (op === 'sendNotification') {
+      await svc.sendNotification({
+        user_external_id: '919999990001',
+        media: baseMedia,
+      });
+    } else {
+      await svc.downloadMedia('https://media/x', carrier);
+    }
+    expect(fetchSpy.mock.calls[0][0]).toBe(url);
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe('POST');
+    const headers = init.headers as Record<string, string>;
+    expect(headers['Content-Type']).toBe('application/json');
+    expect(headers['x-api-key']).toBe('test-api-key');
+  });
+
+  it('uploadMedia URL: /uploadMedia?otel=<urlencoded JSON carrier>, with Content-Type from arg + X-Media-Type + x-api-key', async () => {
+    const fetchSpy = jest.fn().mockResolvedValue(
+      fakeResponse({ status: 200, json: { wa_media_url: 'wa://m1' } }),
+    );
+    global.fetch = fetchSpy;
+    const svc = new WabotOutboundService();
+    await svc.uploadMedia(
+      Buffer.from([0x01, 0x02]),
+      'audio/mpeg',
+      'audio',
+      { traceparent: 'tp' } as never,
+    );
+    const url = fetchSpy.mock.calls[0][0] as string;
+    expect(url.startsWith('https://wabot.test/api/uploadMedia?otel=')).toBe(true);
+    const otelParam = url.split('otel=')[1];
+    expect(JSON.parse(decodeURIComponent(otelParam))).toEqual({ traceparent: 'tp' });
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe('POST');
+    const headers = init.headers as Record<string, string>;
+    expect(headers['Content-Type']).toBe('audio/mpeg');
+    expect(headers['X-Media-Type']).toBe('audio');
+    expect(headers['x-api-key']).toBe('test-api-key');
+  });
+});
+
+describe('WabotOutboundService — exact 4XX/5XX boundaries + log messages', () => {
+  function setup(op: 'download' | 'upload', status: number, text = '') {
+    const fetchSpy = jest.fn().mockResolvedValue(
+      fakeResponse({ status, text, json: {}, headers: { 'content-type': 'x' } }),
+    );
+    global.fetch = fetchSpy;
+    return new WabotOutboundService();
+  }
+
+  it.each<[number]>([[400], [404], [499]])(
+    'downloadMedia status %s is 4XX (kills <500 → <=) and throws',
+    async (status) => {
+      const svc = setup('download', status);
+      await expect(
+        svc.downloadMedia('https://m', carrier),
+      ).rejects.toThrow(`download-media failed with ${status}`);
+    },
+  );
+
+  it.each<[number]>([[500], [502], [599]])(
+    'downloadMedia status %s is 5XX and throws',
+    async (status) => {
+      const svc = setup('download', status);
+      await expect(
+        svc.downloadMedia('https://m', carrier),
+      ).rejects.toThrow(`download-media failed with ${status}`);
+    },
+  );
+
+  it('downloadMedia 399 falls through (no 4XX, no 5XX) and returns the stream', async () => {
+    const svc = setup('download', 399);
+    // 399 < 400 → no 4XX branch; 399 < 500 → no 5XX branch either; proceeds.
+    await expect(svc.downloadMedia('https://m', carrier)).resolves.toBeDefined();
+  });
+
+  it('uploadMedia 400 throws + error logged with "uploadMedia 4XX:" prefix', async () => {
+    const error = jest
+      .spyOn(require('@nestjs/common').Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+    const fetchSpy = jest.fn().mockResolvedValue(
+      fakeResponse({ status: 422, text: 'bad form' }),
+    );
+    global.fetch = fetchSpy;
+    const svc = new WabotOutboundService();
+    await expect(
+      svc.uploadMedia(Buffer.from([0]), 'audio/mpeg', 'audio', carrier),
+    ).rejects.toThrow('uploadMedia failed with 422');
+    expect(error).toHaveBeenCalledWith('uploadMedia 4XX: 422 body=bad form');
+    error.mockRestore();
+  });
+
+  it('uploadMedia 500 throws + warn logged with "uploadMedia 5XX:" prefix', async () => {
+    const warn = jest
+      .spyOn(require('@nestjs/common').Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    const fetchSpy = jest.fn().mockResolvedValue(
+      fakeResponse({ status: 503, text: 'try later' }),
+    );
+    global.fetch = fetchSpy;
+    const svc = new WabotOutboundService();
+    await expect(
+      svc.uploadMedia(Buffer.from([0]), 'audio/mpeg', 'audio', carrier),
+    ).rejects.toThrow('uploadMedia failed with 503');
+    expect(warn).toHaveBeenCalledWith('uploadMedia 5XX: 503 body=try later');
+    warn.mockRestore();
+  });
+});
+
+describe('WabotOutboundService — content-type defaulting', () => {
+  it('downloadMedia uses the header value when set', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      fakeResponse({
+        status: 200,
+        body: 'data',
+        headers: { 'content-type': 'audio/ogg' },
+      }),
+    );
+    const svc = new WabotOutboundService();
+    const out = await svc.downloadMedia('https://m', carrier);
+    expect(out.content_type).toBe('audio/ogg');
+  });
+
+  it('downloadMedia defaults to application/octet-stream when content-type header is missing', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      fakeResponse({
+        status: 200,
+        body: 'data',
+        headers: {},
+      }),
+    );
+    const svc = new WabotOutboundService();
+    const out = await svc.downloadMedia('https://m', carrier);
+    expect(out.content_type).toBe('application/octet-stream');
+  });
+});

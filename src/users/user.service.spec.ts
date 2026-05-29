@@ -352,3 +352,184 @@ describe('UserService.create', () => {
     await expect(svc.create({} as never)).rejects.toThrow(BadRequestException);
   });
 });
+
+// ─── mutation hardening ──────────────────────────────────────────────────
+
+describe('UserService — exact SQL + where-clause shapes', () => {
+  it('update: cycle-check uses the WITH RECURSIVE chain query with [referrer_user_id, user.id] params', async () => {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue({ id: 'u1', external_id: 'x' });
+    repo.save.mockImplementation(async (u) => ({
+      ...u,
+      referrer_user_id: 'ref-1',
+    }));
+    const ds = jest.fn().mockResolvedValue([]); // no cycle row
+    const svc = makeService(repo, ds, makeCache(), makeScore());
+    await svc.update({ id: 'u1', new_referrer_user_id: 'ref-1' });
+    expect(ds).toHaveBeenCalledTimes(1);
+    expect(ds.mock.calls[0][0]).toContain('WITH RECURSIVE chain');
+    expect(ds.mock.calls[0][0]).toContain(
+      'SELECT id, referrer_user_id FROM users WHERE id = $1',
+    );
+    expect(ds.mock.calls[0][0]).toContain(
+      'JOIN chain c ON u.id = c.referrer_user_id',
+    );
+    expect(ds.mock.calls[0][0]).toContain('SELECT 1 FROM chain WHERE id = $2');
+    expect(ds.mock.calls[0][1]).toEqual(['ref-1', 'u1']);
+  });
+
+  it('update: lookup uses { id } when id is given, { external_id } otherwise', async () => {
+    const repoA = makeRepo();
+    repoA.findOneBy.mockResolvedValue(null);
+    await makeService(repoA, jest.fn(), makeCache(), makeScore()).update({
+      id: 'u1',
+      new_name: 'A',
+    });
+    expect(repoA.findOneBy).toHaveBeenLastCalledWith({ id: 'u1' });
+
+    const repoB = makeRepo();
+    repoB.findOneBy.mockResolvedValue(null);
+    await makeService(repoB, jest.fn(), makeCache(), makeScore()).update({
+      external_id: '919999990001',
+      new_name: 'B',
+    });
+    expect(repoB.findOneBy).toHaveBeenLastCalledWith({
+      external_id: '919999990001',
+    });
+  });
+
+  it('update: a new_name-only update reaches save AND repopulates both cache keys', async () => {
+    const repo = makeRepo();
+    const cache = makeCache();
+    const existing = { id: 'u1', external_id: '919999990001', name: 'Old' };
+    repo.findOneBy.mockResolvedValue(existing);
+    repo.save.mockImplementation(async (u) => u);
+    const svc = makeService(repo, jest.fn(), cache, makeScore());
+    const out = await svc.update({ id: 'u1', new_name: 'New' });
+    expect(out!.name).toBe('New');
+    expect(repo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'New' }),
+    );
+    expect(cache.set).toHaveBeenCalledWith('user:id:u1', expect.anything(), 3600);
+    expect(cache.set).toHaveBeenCalledWith(
+      'user:ext:919999990001',
+      expect.anything(),
+      3600,
+    );
+  });
+
+  it('update: only evicts the OLD external_id cache key when BOTH new_external_id and external_id are given', async () => {
+    const repo = makeRepo();
+    const cache = makeCache();
+    const existing = { id: 'u1', external_id: '919999990001' };
+    repo.findOneBy.mockResolvedValue(existing);
+    repo.save.mockImplementation(async (u) => ({
+      ...u,
+      external_id: '918888880002',
+    }));
+    const svc = makeService(repo, jest.fn(), cache, makeScore());
+    // The new_external_id branch alone (no `external_id` field) must NOT evict
+    // the old key — both must be present.
+    await svc.update({ id: 'u1', new_external_id: '918888880002' });
+    expect(cache.del).toHaveBeenCalledTimes(1);
+    const delArg = (cache.del.mock.calls[0][0] as string[]) ?? [];
+    expect(delArg).toEqual([
+      'user:id:u1',
+      'user:ext:918888880002', // the NEW external_id, not the old one
+    ]);
+  });
+
+  it('create with referrer_user_id: cycle-check SQL + params, no cycle path', async () => {
+    const repo = makeRepo();
+    const saved = {
+      id: 'u-new',
+      external_id: '919999990001',
+      referrer_user_id: 'ref-1',
+    };
+    repo.save.mockResolvedValue(saved);
+    const ds = jest.fn().mockResolvedValue([]); // no cycle
+    const svc = makeService(repo, ds, makeCache(), makeScore());
+    await svc.create({
+      external_id: '919999990001',
+      referrer_user_id: 'ref-1',
+    });
+    expect(ds).toHaveBeenCalledTimes(1);
+    expect(ds.mock.calls[0][0]).toContain('WITH RECURSIVE chain');
+    expect(ds.mock.calls[0][1]).toEqual(['ref-1', 'u-new']);
+  });
+
+  it('create with referrer_external_id: INSERT...SELECT params + null-default for missing name', async () => {
+    const repo = makeRepo();
+    const ds = jest
+      .fn()
+      // INSERT row
+      .mockResolvedValueOnce([
+        {
+          id: 'u-new',
+          external_id: '919999990001',
+          referrer_user_id: 'ref-1',
+        },
+      ])
+      // cycle check
+      .mockResolvedValueOnce([]);
+    const svc = makeService(repo, ds, makeCache(), makeScore());
+    await svc.create({
+      external_id: '919999990001',
+      referrer_external_id: '918888880002',
+    });
+    // INSERT call
+    expect(ds.mock.calls[0][0]).toContain(
+      'INSERT INTO users (external_id, name, referrer_user_id)',
+    );
+    expect(ds.mock.calls[0][0]).toContain(
+      'SELECT $1, $2, id FROM users WHERE external_id = $3',
+    );
+    expect(ds.mock.calls[0][0]).toContain('RETURNING *');
+    expect(ds.mock.calls[0][1]).toEqual([
+      '919999990001',
+      null,
+      '918888880002',
+    ]);
+    // Cycle-check call
+    expect(ds.mock.calls[1][0]).toContain('WITH RECURSIVE chain');
+    expect(ds.mock.calls[1][1]).toEqual(['ref-1', 'u-new']);
+  });
+
+  it('create with referrer_external_id: cycle detected → DELETE FROM users WHERE id = $1', async () => {
+    const repo = makeRepo();
+    const ds = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          id: 'u-new',
+          external_id: '919999990001',
+          referrer_user_id: 'ref-1',
+        },
+      ]) // INSERT
+      .mockResolvedValueOnce([{ '1': 1 }]) // cycle hit
+      .mockResolvedValueOnce(undefined); // DELETE
+    const svc = makeService(repo, ds, makeCache(), makeScore());
+    await expect(
+      svc.create({
+        external_id: '919999990001',
+        referrer_external_id: '918888880002',
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(ds.mock.calls[2]).toEqual([
+      'DELETE FROM users WHERE id = $1',
+      ['u-new'],
+    ]);
+  });
+});
+
+describe('UserService.update — referrer resolution + assignments', () => {
+  it('skips the cycle-check entirely when neither referrer field is provided', async () => {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue({ id: 'u1', external_id: 'x' });
+    repo.save.mockImplementation(async (u) => u);
+    const ds = jest.fn();
+    const svc = makeService(repo, ds, makeCache(), makeScore());
+    await svc.update({ id: 'u1', new_name: 'just a name' });
+    expect(ds).not.toHaveBeenCalled();
+  });
+});

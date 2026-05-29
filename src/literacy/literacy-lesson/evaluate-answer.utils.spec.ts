@@ -799,4 +799,378 @@ describe('evaluate-answer.utils', () => {
       ).toBe(true);
     });
   });
+
+  // ── Left-match negatives: each hardcoded rule's left operand matches but the
+  // student answer does NOT, so the rule must NOT fire (result stays false via
+  // the general algorithm). These kill the && → || and `if(cond)` → true
+  // mutants on every hardcoded line, which the positive cases above cannot.
+  describe('hardcoded rules do not fire when only the correct word matches', () => {
+    it.each<string>([
+      'अमरस',
+      'कागज',
+      'खटमल',
+      'टमटम',
+      'नटखट',
+      'बलगम',
+      'पीपल',
+      'परसो',
+      'हलचल',
+      'हरदम',
+      'कलाकार',
+      'दोपहर',
+      'नाखून',
+      'भूगोल',
+      'चौकीदार',
+      'कारखाना',
+      'दालचीनी',
+      'नाशपाती',
+      'सोयाबीन',
+      'तकिया',
+      'तौलिया',
+      'करेला',
+      'पुलिस',
+      'अलमारी',
+      'नाना',
+      'मामा',
+      'माता',
+      'दादा',
+      'चाचा',
+      'केला',
+      'हलवा',
+      'राजमा',
+      'बुलबुल',
+      'हाथी',
+      'अचकन',
+      'ईख',
+      'दरवाज़ा',
+      'हथौड़ा',
+      'हथौड़ी',
+      'और',
+      'ओर',
+      'पढ़',
+      'पड़',
+      'गए',
+      'गये',
+      'डर',
+      'दर',
+      'एक',
+      'दो',
+      'तीन',
+      'चार',
+      'पाँच',
+      'छह',
+      'सात',
+      'आठ',
+      'नौ',
+      'दस',
+      'बीस',
+      'तीस',
+      'चालीस',
+      'पचास',
+      'साठ',
+      'सत्तर',
+      'अस्सी',
+      'नब्बे',
+      'सौ',
+      'चख',
+      'ठप',
+      'तन',
+      'फट',
+      'भर',
+      'हट',
+      'गुण',
+      'नहीं',
+      'नई',
+      'बच',
+      'हाँ',
+      'भय',
+      'ऊन',
+      'उन',
+      'वह',
+      'वे',
+      'इडली',
+      'सास',
+      'ऐनक',
+      'जनम',
+      'शकल',
+      'समझ',
+      'ऋषभ',
+      'ऋषि',
+      'वचन',
+      'सिपाही',
+      'महीना',
+      'गणित',
+      'औसत',
+      'औजार',
+      'औषधि',
+      'ऐलान',
+      'कैरम',
+      'कापी',
+      'काफी',
+      'बहू',
+      'पौधा',
+      'गोभी',
+      'कछुआ',
+      'अखरोट',
+      'मोबाइल',
+      'वीडियो',
+      'चोटी',
+      'चीनी',
+      'अधिकारी',
+      'सिख',
+      'सिखा',
+      'पोछा',
+      'मैना',
+      'नारियल',
+      'सुकून',
+      'मसूर',
+      'सुबह',
+      'गई',
+      'बैठ',
+    ])('markWord(correct=%s, student="q") → false', (correct) => {
+      expect(markWord({ correctAnswer: correct, studentAnswer: 'q' })).toBe(
+        false,
+      );
+    });
+
+    it.each<string>([
+      'म',
+      'ह',
+      'औ',
+      'ओ',
+      'आ',
+      'ा',
+      'ि',
+      'ी',
+      'ु',
+      'ू',
+      'ृ',
+      'े',
+      'ै',
+      'ो',
+      'ौ',
+      'ऋ',
+      'श',
+      'ष',
+      'ए',
+      'ब',
+      'ख',
+      'ऐ',
+      'छ',
+      'व',
+      'भ',
+    ])('markLetter(correct=%s, student="q") → false', (correct) => {
+      expect(markLetter({ correctAnswer: correct, studentAnswer: 'q' })).toBe(
+        false,
+      );
+    });
+  });
+
+
+  // ── Algorithmic (non-hardcoded) paths ──────────────────────────────────────
+  describe('markLetter — phoneme / conjunct algorithm', () => {
+    it('matches a single consonant against a same-family consonant (markPhoneme base via sameFamily)', () => {
+      // क and ख are in the same family; no hardcode covers this pair.
+      expect(markLetter({ correctAnswer: 'क', studentAnswer: 'ख' })).toBe(true);
+    });
+
+    it('matches a single consonant + trailing schwa ā (markPhoneme slice branch)', () => {
+      expect(markLetter({ correctAnswer: 'क', studentAnswer: 'का' })).toBe(true);
+    });
+
+    it('rejects a single consonant followed by a non-ā matra', () => {
+      expect(markLetter({ correctAnswer: 'क', studentAnswer: 'कि' })).toBe(
+        false,
+      );
+    });
+
+    it('rejects an empty student answer for a single phoneme', () => {
+      expect(markLetter({ correctAnswer: 'क', studentAnswer: '' })).toBe(false);
+    });
+
+    it('two-consonant (conjunct) requires an exact match', () => {
+      expect(markLetter({ correctAnswer: 'क्ष', studentAnswer: 'क्ष' })).toBe(
+        true,
+      );
+    });
+
+    it('two-consonant (conjunct) rejects a near miss', () => {
+      expect(markLetter({ correctAnswer: 'क्ष', studentAnswer: 'कष' })).toBe(
+        false,
+      );
+    });
+
+    it('three+ consonants in the correct letter never match (cCount fallthrough)', () => {
+      expect(markLetter({ correctAnswer: 'कमल', studentAnswer: 'कमल' })).toBe(
+        false,
+      );
+    });
+  });
+
+  describe('detectInsertion — subsequence completion', () => {
+    it('returns false for a longer answer that is NOT a supersequence (kills the inner return-false → true)', () => {
+      // पपपप is longer than कमल but contains none of क/म/ल in order.
+      expect(
+        detectInsertion({ correctAnswer: 'कमल', studentAnswer: 'पपपप' }),
+      ).toBe(false);
+    });
+  });
+
+
+  // ── "includes" hardcodes must fire on a SUBSTRING match, not just an exact
+  // word (the latter is also caught by the general per-word equality, leaving
+  // the rule's own left operand untested). Appending a suffix keeps the target
+  // a substring while defeating both the equality and the suffix-offset
+  // algorithm, so only the hardcoded includes-rule can return true.
+  describe('"includes" hardcodes fire on a substring (isolates the rule)', () => {
+    it.each<[string, string]>([
+      ['अमरस', 'अमररस'],
+      ['कागज', 'कागज'],
+      ['खटमल', 'खटमल'],
+      ['टमटम', 'टमटम'],
+      ['नटखट', 'नटखट'],
+      ['बलगम', 'बलगम'],
+      ['पीपल', 'पीपल'],
+      ['परसो', 'परसो'],
+      ['हलचल', 'हलचल'],
+      ['हरदम', 'हरदम'],
+      ['कलाकार', 'कलाकार'],
+      ['दोपहर', 'दोपहर'],
+      ['नाखून', 'नाखून'],
+      ['भूगोल', 'भूगोल'],
+      ['चौकीदार', 'चौकीदार'],
+      ['कारखाना', 'कारखाना'],
+      ['दालचीनी', 'दालचीनी'],
+      ['नाशपाती', 'नाशपाती'],
+      ['सोयाबीन', 'सोयाबीन'],
+      ['तकिया', 'तकया'],
+      ['तौलिया', 'तौलया'],
+      ['करेला', 'करेला'],
+      ['पुलिस', 'पुलइस'],
+      ['अलमारी', 'अलमारी'],
+      ['नाना', 'नाना'],
+      ['मामा', 'मामा'],
+      ['माता', 'माता'],
+      ['दादा', 'दादा'],
+      ['चाचा', 'चाचा'],
+      ['केला', 'केला'],
+      ['हलवा', 'हलवा'],
+      ['हलवा', 'हलवह'],
+      ['राजमा', 'राजमा'],
+      ['बुलबुल', 'बुलबुल'],
+      ['हाथी', 'हाथही'],
+      ['अचकन', 'अचिकन'],
+    ])('markWord(correct=%s, student contains %s) → true', (correct, sub) => {
+      expect(
+        markWord({ correctAnswer: correct, studentAnswer: sub + 'क' }),
+      ).toBe(true);
+    });
+  });
+
+  // ── Each "equals" hardcode also requires the SPECIFIC correct word: the same
+  // student token against an unrelated (long, non-matching) correct answer must
+  // not fire. Kills the per-rule "correct === X" → true mutants.
+  describe('"equals" hardcodes require the matching correct word', () => {
+    it.each<string>([
+      'एक',
+      'दरवाजा',
+      'हथौड़ी',
+      'हथौड़ा',
+      'ओर',
+      'और',
+      'पड़',
+      'पढ़',
+      'गये',
+      'गए',
+      'दर',
+      'डर',
+      '1',
+      'एकाएक',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7',
+      '8',
+      '9',
+      '10',
+      '20',
+      '30',
+      '40',
+      '50',
+      '60',
+      '70',
+      '80',
+      '90',
+      '100',
+      'चकाचक',
+      'थपाथप',
+      'टनाटन',
+      'फटाफट',
+      'बराबर',
+      'हताहत',
+      'गुन',
+      'गुड़',
+      'गुर',
+      'गुड',
+      'नई',
+      'नहीं',
+      'बच्च',
+      'हां',
+      'भाई',
+      'उन',
+      'ऊन',
+      'वे',
+      'वह',
+      'इटली',
+      'साँस',
+      'सांस',
+      'एनक',
+      'जन्म',
+      'शक्ल',
+      'समज',
+      'रिशभ',
+      'रिशि',
+      'बचन',
+      'सिपाई',
+      'महिना',
+      'गनित',
+      'ओसत',
+      'ओजार',
+      'ओषधि',
+      'एलान',
+      'केरम',
+      'कॉपी',
+      'कॉफी',
+      'बहु',
+      'पौदा',
+      'गोबी',
+      'कछुवा',
+      'अकरोट',
+      'मोबाईल',
+      'विडियो',
+      'छोटी',
+      'चिनी',
+      'अधिकरी',
+      'सीख',
+      'सीखा',
+      'पोचा',
+      'मेना',
+      'नरियल',
+      'सकून',
+      'मसुर',
+      'सुबा',
+      'गाय',
+      'गाई',
+      'रिसब',
+      'रिसभ',
+      'बेट',
+    ])('markWord(correct=<unrelated>, student=%s) → false', (student) => {
+      expect(
+        markWord({ correctAnswer: 'zzzzzzzzzz', studentAnswer: student }),
+      ).toBe(false);
+    });
+  });
+
 });

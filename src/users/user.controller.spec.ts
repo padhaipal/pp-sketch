@@ -537,3 +537,508 @@ describe('UserController.remove', () => {
     expect(userRepo.remove).toHaveBeenCalledWith(user);
   });
 });
+
+// ─── mutation hardening ───────────────────────────────────────────────────
+
+describe('UserController.dashboard — exact query shape + window construction', () => {
+  it('issues the active-users, users, and referrers queries with the exact columns, filters and ordering', async () => {
+    const activeUsers = [
+      { user_id: 'u1', last_active: new Date('2026-04-27T10:00:00Z') },
+    ];
+    const users = [
+      {
+        id: 'u1',
+        name: 'Alice',
+        external_id: '919999990001',
+        referrer_user_id: 'ref-1',
+      },
+    ];
+    const referrers = [
+      { id: 'ref-1', name: 'Ref', external_id: '917777770003' },
+    ];
+    const mediaQB = makeQB(activeUsers);
+    const userQB1 = makeQB(users);
+    const userQB2 = makeQB(referrers);
+    const mediaRepo = makeRepo({
+      createQueryBuilder: jest.fn().mockReturnValue(mediaQB),
+    });
+    const userRepo = makeRepo({
+      createQueryBuilder: jest
+        .fn()
+        .mockReturnValueOnce(userQB1)
+        .mockReturnValueOnce(userQB2),
+    });
+    const ctrl = makeController({
+      userRepo,
+      mediaRepo,
+      activitySvc: { getActivityTime: jest.fn().mockResolvedValue({ results: [] }) },
+    });
+
+    await ctrl.dashboard('40');
+
+    // Active-users query
+    expect(mediaRepo.createQueryBuilder).toHaveBeenCalledWith('mm');
+    expect(mediaQB.select).toHaveBeenCalledWith('mm.user_id', 'user_id');
+    expect(mediaQB.addSelect).toHaveBeenCalledWith(
+      'MAX(mm.created_at)',
+      'last_active',
+    );
+    expect(mediaQB.where).toHaveBeenCalledWith('mm.user_id IS NOT NULL');
+    expect(mediaQB.groupBy).toHaveBeenCalledWith('mm.user_id');
+    expect(mediaQB.orderBy).toHaveBeenCalledWith('last_active', 'DESC');
+    expect(mediaQB.offset).toHaveBeenCalledWith(40);
+    expect(mediaQB.limit).toHaveBeenCalledWith(100);
+
+    // Users query
+    expect(userRepo.createQueryBuilder).toHaveBeenNthCalledWith(1, 'u');
+    expect(userQB1.select).toHaveBeenCalledWith([
+      'u.id',
+      'u.name',
+      'u.external_id',
+      'u.referrer_user_id',
+    ]);
+    expect(userQB1.whereInIds).toHaveBeenCalledWith(['u1']);
+
+    // Referrers query (referrer_user_id was set so it must fire)
+    expect(userRepo.createQueryBuilder).toHaveBeenNthCalledWith(2, 'u');
+    expect(userQB2.select).toHaveBeenCalledWith([
+      'u.id',
+      'u.name',
+      'u.external_id',
+    ]);
+    expect(userQB2.whereInIds).toHaveBeenCalledWith(['ref-1']);
+  });
+
+  it('skips the referrers query entirely when no user has a referrer', async () => {
+    const activeUsers = [{ user_id: 'u1', last_active: new Date() }];
+    const users = [
+      {
+        id: 'u1',
+        name: 'A',
+        external_id: 'x',
+        referrer_user_id: null,
+      },
+    ];
+    const mediaQB = makeQB(activeUsers);
+    const userQB = makeQB(users);
+    const cqb = jest.fn().mockReturnValueOnce(userQB);
+    const userRepo = makeRepo({ createQueryBuilder: cqb });
+    const mediaRepo = makeRepo({
+      createQueryBuilder: jest.fn().mockReturnValue(mediaQB),
+    });
+    const ctrl = makeController({
+      userRepo,
+      mediaRepo,
+      activitySvc: { getActivityTime: jest.fn().mockResolvedValue({ results: [] }) },
+    });
+    await ctrl.dashboard();
+    // Only the users query fires; the referrers query does not.
+    expect(cqb).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds exactly 7 contiguous 24h windows ending today (kills addDays(-6) sign + Array.from length)', async () => {
+    const activeUsers = [{ user_id: 'u1', last_active: new Date() }];
+    const mediaQB = makeQB(activeUsers);
+    const userQB = makeQB([
+      { id: 'u1', name: 'A', external_id: 'x', referrer_user_id: null },
+    ]);
+    const userRepo = makeRepo({
+      createQueryBuilder: jest.fn().mockReturnValue(userQB),
+    });
+    const mediaRepo = makeRepo({
+      createQueryBuilder: jest.fn().mockReturnValue(mediaQB),
+    });
+    const getActivityTime = jest
+      .fn()
+      .mockResolvedValue({ results: [] });
+    const ctrl = makeController({
+      userRepo,
+      mediaRepo,
+      activitySvc: { getActivityTime },
+    });
+
+    await ctrl.dashboard();
+
+    expect(getActivityTime).toHaveBeenCalledTimes(1);
+    const [{ windows }] = getActivityTime.mock.calls[0];
+    expect(windows).toHaveLength(7);
+    // Each window is exactly 24h long (24 * 60 * 60 * 1000 ms).
+    for (const w of windows) {
+      const dur = new Date(w.end).getTime() - new Date(w.start).getTime();
+      expect(dur).toBe(24 * 60 * 60 * 1000);
+    }
+    // Consecutive windows are 24h apart (no gaps, no overlap).
+    for (let i = 1; i < windows.length; i++) {
+      expect(new Date(windows[i].start).getTime()).toBe(
+        new Date(windows[i - 1].end).getTime(),
+      );
+    }
+    // First start is 6 days before the last end (7 days total).
+    const span =
+      new Date(windows[6].end).getTime() -
+      new Date(windows[0].start).getTime();
+    expect(span).toBe(7 * 24 * 60 * 60 * 1000);
+  });
+
+  it('defaults external_id to "" and name to null when the user row is missing the column', async () => {
+    const activeUsers = [{ user_id: 'u-missing', last_active: new Date() }];
+    const mediaQB = makeQB(activeUsers);
+    const userQB = makeQB([]); // user row not returned
+    const userRepo = makeRepo({
+      createQueryBuilder: jest.fn().mockReturnValue(userQB),
+    });
+    const mediaRepo = makeRepo({
+      createQueryBuilder: jest.fn().mockReturnValue(mediaQB),
+    });
+    const ctrl = makeController({
+      userRepo,
+      mediaRepo,
+      activitySvc: { getActivityTime: jest.fn().mockResolvedValue({ results: [] }) },
+    });
+    const out = await ctrl.dashboard();
+    expect(out[0].name).toBeNull();
+    expect(out[0].external_id).toBe('');
+    expect(out[0].referrer).toBeNull();
+  });
+});
+
+describe('UserController.userMedia — exact query shape + branch handling', () => {
+  const userRow = { id: 'u1', name: 'Alice', external_id: '919999990001' };
+
+  it('queries media with the exact where/order/skip/take and assembles transcript + lesson + score sub-queries', async () => {
+    const mediaRows = [
+      { id: 'm1', s3_key: 'k', created_at: new Date('2026-04-27T10:00:00Z') },
+      { id: 'm2', s3_key: null, created_at: new Date('2026-04-27T09:00:00Z') },
+    ];
+    const transcriptRows = [
+      {
+        id: 't1',
+        input_media_id: 'm1',
+        text: 'hi',
+        source: 'sarvam',
+        created_at: new Date(),
+      },
+      // Orphan transcript: no input_media_id → must be skipped (kills the
+      // `if (!t.input_media_id) continue` block).
+      {
+        id: 't2',
+        input_media_id: null,
+        text: 'orphan',
+        source: 'azure',
+        created_at: new Date(),
+      },
+    ];
+    const lessonStateRows = [
+      {
+        user_message_id: 'm1',
+        word: 'कमल',
+        answer: 'क',
+        answer_correct: true,
+        snapshot: {
+          context: { stateTransitionId: 'word-routeWrongLetter-letter' },
+        },
+      },
+    ];
+    const transcriptQB = makeQB(transcriptRows);
+    const lessonQB = makeQB(lessonStateRows);
+    const find = jest.fn().mockResolvedValue(mediaRows);
+    const mediaRepo = makeRepo({
+      find,
+      createQueryBuilder: jest.fn().mockReturnValueOnce(transcriptQB),
+    });
+    const userRepo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue(userRow),
+    });
+    const lessonStateRepo = makeRepo({
+      createQueryBuilder: jest.fn().mockReturnValueOnce(lessonQB),
+    });
+    const scoreManagerQuery = jest.fn().mockResolvedValue([
+      {
+        user_message_id: 'm1',
+        grapheme: 'क',
+        score: '1.5',
+        prev_score: '1.0',
+      },
+      {
+        user_message_id: 'm2',
+        grapheme: 'म',
+        score: '2.0',
+        prev_score: null, // kills the prev_score !== null conditional
+      },
+    ]);
+    const scoreRepo = makeRepo({ manager: { query: scoreManagerQuery } });
+    const ctrl = makeController({
+      userRepo,
+      mediaRepo,
+      scoreRepo,
+      lessonStateRepo,
+    });
+
+    const out = await ctrl.userMedia('u1', '20');
+
+    // media.find exact shape
+    expect(find).toHaveBeenCalledWith({
+      where: { user_id: 'u1', source: 'whatsapp', media_type: 'audio' },
+      order: { created_at: 'DESC' },
+      skip: 20,
+      take: 100,
+    });
+
+    // transcripts QB
+    expect(mediaRepo.createQueryBuilder).toHaveBeenCalledWith('mm');
+    expect(transcriptQB.select).toHaveBeenCalledWith([
+      'mm.id',
+      'mm.input_media_id',
+      'mm.text',
+      'mm.source',
+      'mm.created_at',
+    ]);
+    expect(transcriptQB.where).toHaveBeenCalledWith(
+      'mm.input_media_id IN (:...mediaIds)',
+      { mediaIds: ['m1', 'm2'] },
+    );
+
+    // lessonStates QB
+    expect(lessonStateRepo.createQueryBuilder).toHaveBeenCalledWith('ls');
+    expect(lessonQB.select).toHaveBeenCalledWith([
+      'ls.user_message_id',
+      'ls.word',
+      'ls.answer',
+      'ls.answer_correct',
+      'ls.snapshot',
+    ]);
+    expect(lessonQB.where).toHaveBeenCalledWith(
+      'ls.user_message_id IN (:...mediaIds)',
+      { mediaIds: ['m1', 'm2'] },
+    );
+    expect(lessonQB.orderBy).toHaveBeenCalledWith('ls.created_at', 'ASC');
+
+    // Score-change SQL + params
+    expect(scoreManagerQuery).toHaveBeenCalledTimes(1);
+    expect(scoreManagerQuery.mock.calls[0][0]).toContain('WITH windowed AS');
+    expect(scoreManagerQuery.mock.calls[0][0]).toContain(
+      "LAG(s.score) OVER (PARTITION BY s.letter_id ORDER BY s.created_at)",
+    );
+    expect(scoreManagerQuery.mock.calls[0][1]).toEqual(['u1', ['m1', 'm2']]);
+
+    // Orphan transcript (no input_media_id) is dropped.
+    expect(out.media.map((m) => m.transcripts)).toEqual([
+      [
+        {
+          text: 'hi',
+          source: 'sarvam',
+          created_at: expect.any(Date),
+        },
+      ],
+      [], // m2 has no transcript
+    ]);
+
+    // transitionId parses → starting_state from parts[1], final_state from parts[2]
+    expect(out.media[0].starting_state).toBe('routeWrongLetter');
+    expect(out.media[0].final_state).toBe('letter');
+
+    // prev_score null is preserved as null in the output; numeric strings coerced to number.
+    const sc1 = out.media[0].score_changes[0];
+    expect(sc1.score).toBe(1.5);
+    expect(sc1.prev_score).toBe(1.0);
+    const sc2 = out.media[1].score_changes[0];
+    expect(sc2.score).toBe(2.0);
+    expect(sc2.prev_score).toBeNull();
+
+    // has_audio = !!m.s3_key
+    expect(out.media[0].has_audio).toBe(true);
+    expect(out.media[1].has_audio).toBe(false);
+  });
+
+  it('parses transitionIds with only 2 parts as no starting/final state (kills parts.length >= 3 → >)', async () => {
+    const mediaRows = [
+      { id: 'm1', s3_key: null, created_at: new Date() },
+    ];
+    const lessonStateRows = [
+      {
+        user_message_id: 'm1',
+        word: 'क',
+        answer: null,
+        answer_correct: null,
+        snapshot: { context: { stateTransitionId: 'foo-bar' } }, // 2 parts only
+      },
+    ];
+    const mediaRepo = makeRepo({
+      find: jest.fn().mockResolvedValue(mediaRows),
+      createQueryBuilder: jest.fn().mockReturnValue(makeQB([])),
+    });
+    const lessonStateRepo = makeRepo({
+      createQueryBuilder: jest.fn().mockReturnValue(makeQB(lessonStateRows)),
+    });
+    const scoreRepo = makeRepo({
+      manager: { query: jest.fn().mockResolvedValue([]) },
+    });
+    const userRepo = makeRepo({ findOneBy: jest.fn().mockResolvedValue(userRow) });
+    const ctrl = makeController({
+      userRepo,
+      mediaRepo,
+      scoreRepo,
+      lessonStateRepo,
+    });
+    const out = await ctrl.userMedia('u1');
+    expect(out.media[0].starting_state).toBeNull();
+    expect(out.media[0].final_state).toBeNull();
+  });
+
+  it('rolls the displayed answer back by one within a word and resets on a word boundary', async () => {
+    // Media is fetched in DESC order. Iteration goes oldest → newest. For
+    // consecutive same-word answers we display the PREVIOUS row's `answer`;
+    // when the word changes we display the new word as the displayed answer.
+    const mediaRows = [
+      { id: 'm3', s3_key: null, created_at: new Date('2026-04-27T12:00:00Z') }, // newest
+      { id: 'm2', s3_key: null, created_at: new Date('2026-04-27T11:00:00Z') },
+      { id: 'm1', s3_key: null, created_at: new Date('2026-04-27T10:00:00Z') }, // oldest
+    ];
+    const lessonStateRows = [
+      // m1 (oldest): first row of a word → displayed = lesson.word
+      {
+        user_message_id: 'm1',
+        word: 'कमल',
+        answer: 'क',
+        answer_correct: true,
+        snapshot: { context: { stateTransitionId: 'a-b-c' } },
+      },
+      // m2 (mid): same word → displayed = prev row's lesson.answer ('क')
+      {
+        user_message_id: 'm2',
+        word: 'कमल',
+        answer: 'म',
+        answer_correct: true,
+        snapshot: { context: { stateTransitionId: 'a-b-c' } },
+      },
+      // m3 (newest): word CHANGED → displayed = lesson.word ('पानी')
+      {
+        user_message_id: 'm3',
+        word: 'पानी',
+        answer: 'प',
+        answer_correct: true,
+        snapshot: { context: { stateTransitionId: 'a-b-c' } },
+      },
+    ];
+    const mediaRepo = makeRepo({
+      find: jest.fn().mockResolvedValue(mediaRows),
+      createQueryBuilder: jest.fn().mockReturnValue(makeQB([])),
+    });
+    const lessonStateRepo = makeRepo({
+      createQueryBuilder: jest.fn().mockReturnValue(makeQB(lessonStateRows)),
+    });
+    const scoreRepo = makeRepo({
+      manager: { query: jest.fn().mockResolvedValue([]) },
+    });
+    const userRepo = makeRepo({ findOneBy: jest.fn().mockResolvedValue(userRow) });
+    const ctrl = makeController({
+      userRepo,
+      mediaRepo,
+      scoreRepo,
+      lessonStateRepo,
+    });
+    const out = await ctrl.userMedia('u1');
+    const byId = new Map(out.media.map((m) => [m.id, m]));
+    expect(byId.get('m1')!.answer).toBe('कमल'); // first row of the word
+    expect(byId.get('m2')!.answer).toBe('क'); // prev row's lesson.answer
+    expect(byId.get('m3')!.answer).toBe('पानी'); // word changed
+  });
+
+  it('returns empty media + user info when the user has no whatsapp audio', async () => {
+    const userRepo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue(userRow),
+    });
+    const mediaRepo = makeRepo({ find: jest.fn().mockResolvedValue([]) });
+    const ctrl = makeController({ userRepo, mediaRepo });
+    const out = await ctrl.userMedia('u1');
+    expect(out).toEqual({
+      user: { name: 'Alice', phone: '919999990001' },
+      media: [],
+    });
+  });
+});
+
+describe('UserController.userScores — exact raw SQL', () => {
+  it('joins scores with letters and orders ASC; reports is_seed when user_message_id is null', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        score: '1.5',
+        created_at: new Date('2026-04-27T10:00:00Z'),
+        letter_id: 'L1',
+        grapheme: 'क',
+        user_message_id: null,
+      },
+      {
+        score: '2.5',
+        created_at: new Date('2026-04-27T11:00:00Z'),
+        letter_id: 'L2',
+        grapheme: 'म',
+        user_message_id: 'mm-1',
+      },
+    ]);
+    const scoreRepo = makeRepo({ manager: { query } });
+    const ctrl = makeController({ scoreRepo });
+    const out = await ctrl.userScores('u1');
+    expect(query.mock.calls[0][0]).toContain('FROM scores s');
+    expect(query.mock.calls[0][0]).toContain('JOIN letters l ON l.id = s.letter_id');
+    expect(query.mock.calls[0][0]).toContain('WHERE s.user_id = $1');
+    expect(query.mock.calls[0][0]).toContain('ORDER BY s.created_at ASC');
+    expect(query.mock.calls[0][1]).toEqual(['u1']);
+    expect(out).toEqual([
+      {
+        score: 1.5,
+        created_at: expect.any(Date),
+        letter_id: 'L1',
+        grapheme: 'क',
+        is_seed: true,
+        user_message_id: null,
+      },
+      {
+        score: 2.5,
+        created_at: expect.any(Date),
+        letter_id: 'L2',
+        grapheme: 'म',
+        is_seed: false,
+        user_message_id: 'mm-1',
+      },
+    ]);
+  });
+});
+
+describe('UserController.login + patchUser — bcrypt args', () => {
+  beforeEach(() => {
+    (bcrypt.compare as jest.Mock).mockReset();
+    (bcrypt.hash as jest.Mock).mockReset();
+  });
+
+  it('login calls bcrypt.compare(password, password_hash)', async () => {
+    const user = {
+      id: 'u1',
+      external_id: '919999990001',
+      password_hash: 'hash',
+      role: 'admin',
+    };
+    const userRepo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue(user),
+    });
+    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+    const ctrl = makeController({ userRepo });
+    await ctrl.login({ phone: '919999990001', password: 'pw' } as never);
+    expect(bcrypt.compare).toHaveBeenCalledWith('pw', 'hash');
+  });
+
+  it('patchUser bcrypts the new password with rounds=10', async () => {
+    const user = { id: 'u1', external_id: 'x', name: null, role: 'admin' };
+    const userRepo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue(user),
+      save: jest.fn().mockResolvedValue(undefined),
+    });
+    (bcrypt.hash as jest.Mock).mockResolvedValue('newhash');
+    const ctrl = makeController({ userRepo });
+    await ctrl.patchUser('u1', { password: 'newpw' } as never);
+    expect(bcrypt.hash).toHaveBeenCalledWith('newpw', 10);
+    expect(userRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ password_hash: 'newhash' }),
+    );
+  });
+});

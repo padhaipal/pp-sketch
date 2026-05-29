@@ -392,3 +392,283 @@ describe('processHailMaryJob — happy + media tolerance', () => {
     expect(mockSpanRecordException).toHaveBeenCalled();
   });
 });
+
+// ─── mutation hardening ────────────────────────────────────────────────────
+
+import { Logger as NestLogger } from '@nestjs/common';
+
+function spyLog2() {
+  return {
+    log: jest.spyOn(NestLogger.prototype, 'log').mockImplementation(() => undefined),
+    warn: jest.spyOn(NestLogger.prototype, 'warn').mockImplementation(() => undefined),
+  };
+}
+const tracerMock2 = jest.requireMock('../otel/otel') as {
+  tracer: { startActiveSpan: jest.Mock };
+};
+
+describe('hail-mary — constants + exports', () => {
+  it('HAIL_MARY_DELAY_MS is 1435 minutes = 23h55m', () => {
+    expect(HAIL_MARY_DELAY_MS).toBe(1435 * 60 * 1000);
+    expect(HAIL_MARY_DELAY_MS).toBe(23 * 60 * 60 * 1000 + 55 * 60 * 1000);
+  });
+});
+
+describe('rearmHailMary — exact queue call shape', () => {
+  it('removes the prior job by id then adds with the same id + delay', async () => {
+    mockQueueRemove.mockResolvedValue(undefined);
+    mockQueueAdd.mockResolvedValue({ id: 'queued' });
+    const data = {
+      user_id: 'u1',
+      user_external_id: '919999990001',
+      user_message_id: 'mm-1',
+      otel_carrier: { traceparent: 'tp' },
+    };
+    await rearmHailMary(data);
+    expect(mockCreateQueue).toHaveBeenCalledWith('hail-mary');
+    expect(mockQueueRemove).toHaveBeenCalledWith('hail-mary:u1');
+    expect(mockQueueAdd).toHaveBeenCalledWith('hail-mary', data, {
+      jobId: 'hail-mary:u1',
+      delay: HAIL_MARY_DELAY_MS,
+    });
+  });
+});
+
+describe('processHailMaryJob — span name + attributes + log messages', () => {
+  function dsWith(rows: unknown[]) {
+    return { query: jest.fn().mockResolvedValue(rows) } as unknown as DataSource;
+  }
+
+  function makeJob2(data: Partial<HailMaryJobData> = {}): Job<HailMaryJobData> {
+    return {
+      id: 'job-1',
+      data: {
+        user_id: 'u1',
+        user_external_id: '919999990001',
+        user_message_id: 'mm-1',
+        otel_carrier: { traceparent: 'tp' },
+        ...data,
+      },
+    } as unknown as Job<HailMaryJobData>;
+  }
+
+  it('opens "hail-mary.send" span and tags bullmq.job.id + user/source hashes', async () => {
+    await processHailMaryJob(
+      makeJob2(),
+      dsWith([]),
+      { find: jest.fn() } as unknown as UserService,
+      {} as unknown as MediaMetaDataService,
+      {} as unknown as LiteracyLessonService,
+      {} as unknown as WabotOutboundService,
+    );
+    expect(tracerMock2.tracer.startActiveSpan).toHaveBeenCalledWith(
+      'hail-mary.send',
+      expect.any(Function),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('bullmq.job.id', 'job-1');
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'user_id_hash',
+      expect.any(String),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'source_msg_id_hash',
+      expect.any(String),
+    );
+  });
+
+  it('latest-message SQL filters source=whatsapp + rolled_back=false and ORDER BY created_at DESC LIMIT 1', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    await processHailMaryJob(
+      makeJob2(),
+      { query } as unknown as DataSource,
+      { find: jest.fn() } as unknown as UserService,
+      {} as unknown as MediaMetaDataService,
+      {} as unknown as LiteracyLessonService,
+      {} as unknown as WabotOutboundService,
+    );
+    const sql = query.mock.calls[0][0] as string;
+    expect(sql).toContain('FROM media_metadata');
+    expect(sql).toContain('WHERE user_id = $1');
+    expect(sql).toContain("source = 'whatsapp'");
+    expect(sql).toContain('rolled_back = false');
+    expect(sql).toContain('ORDER BY created_at DESC');
+    expect(sql).toContain('LIMIT 1');
+    expect(query.mock.calls[0][1]).toEqual(['u1']);
+  });
+
+  it('on no-message: warns + tags hail_mary.skip_reason="no-latest-message"', async () => {
+    const { warn } = spyLog2();
+    await processHailMaryJob(
+      makeJob2(),
+      dsWith([]),
+      { find: jest.fn() } as unknown as UserService,
+      {} as unknown as MediaMetaDataService,
+      {} as unknown as LiteracyLessonService,
+      {} as unknown as WabotOutboundService,
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'hail_mary.skip_reason',
+      'no-latest-message',
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /hail-mary: no whatsapp messages for user .* — skipping/,
+      ),
+    );
+    warn.mockRestore();
+  });
+
+  it('on stale chain: warns + tags hail_mary.skip_reason="stale"', async () => {
+    const { warn } = spyLog2();
+    mockQueueGetJob.mockResolvedValueOnce(null);
+    mockQueueRemove.mockResolvedValue(undefined);
+    mockQueueAdd.mockResolvedValue({ id: 'new' });
+    await processHailMaryJob(
+      makeJob2(),
+      dsWith([{ id: 'mm-newer', created_at: new Date() }]),
+      { find: jest.fn() } as unknown as UserService,
+      {} as unknown as MediaMetaDataService,
+      {} as unknown as LiteracyLessonService,
+      {} as unknown as WabotOutboundService,
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'hail_mary.skip_reason',
+      'stale',
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/hail-mary: rearm chain broke for user /),
+    );
+    warn.mockRestore();
+  });
+
+  it('on 24h window expired: warns + tags hail_mary.skip_reason="window-expired"', async () => {
+    const { warn } = spyLog2();
+    const staleDate = new Date(Date.now() - 25 * 60 * 60 * 1000); // 25h ago
+    await processHailMaryJob(
+      makeJob2(),
+      dsWith([{ id: 'mm-1', created_at: staleDate }]),
+      { find: jest.fn() } as unknown as UserService,
+      {} as unknown as MediaMetaDataService,
+      {} as unknown as LiteracyLessonService,
+      {} as unknown as WabotOutboundService,
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'hail_mary.skip_reason',
+      'window-expired',
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/hail-mary: 24h window expired for user /),
+    );
+    warn.mockRestore();
+  });
+
+  it('on user not found: warns + tags hail_mary.skip_reason="user-not-found"', async () => {
+    const { warn } = spyLog2();
+    await processHailMaryJob(
+      makeJob2(),
+      dsWith([{ id: 'mm-1', created_at: new Date() }]),
+      { find: jest.fn().mockResolvedValue(null) } as unknown as UserService,
+      {} as unknown as MediaMetaDataService,
+      {} as unknown as LiteracyLessonService,
+      {} as unknown as WabotOutboundService,
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'hail_mary.skip_reason',
+      'user-not-found',
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/hail-mary: user .* not found — skipping/),
+    );
+    warn.mockRestore();
+  });
+
+  it('on empty media: warns + tags hail_mary.skip_reason="no-media"', async () => {
+    const { warn } = spyLog2();
+    await processHailMaryJob(
+      makeJob2(),
+      dsWith([{ id: 'mm-1', created_at: new Date() }]),
+      {
+        find: jest.fn().mockResolvedValue({ id: 'u1', external_id: '919999990001' }),
+      } as unknown as UserService,
+      {
+        findMediaByStateTransitionId: jest.fn().mockResolvedValue({}),
+      } as unknown as MediaMetaDataService,
+      {
+        processAnswer: jest
+          .fn()
+          .mockResolvedValue({ stateTransitionIds: [] }),
+      } as unknown as LiteracyLessonService,
+      {} as unknown as WabotOutboundService,
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'hail_mary.skip_reason',
+      'no-media',
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/hail-mary: no media to send for user /),
+    );
+    warn.mockRestore();
+  });
+
+  it('on success: sends to wabot with wamid="" + the assembled media + logs the delivery log', async () => {
+    const { log } = spyLog2();
+    const sendMessage = jest.fn().mockResolvedValue({ status: 200 });
+    await processHailMaryJob(
+      makeJob2(),
+      dsWith([{ id: 'mm-1', created_at: new Date() }]),
+      {
+        find: jest.fn().mockResolvedValue({ id: 'u1', external_id: '919999990001' }),
+      } as unknown as UserService,
+      {
+        findMediaByStateTransitionId: jest.fn().mockResolvedValue({
+          video: { wa_media_url: 'wa://v1', media_details: { mime_type: 'video/mp4' } },
+        }),
+      } as unknown as MediaMetaDataService,
+      {
+        processAnswer: jest
+          .fn()
+          .mockResolvedValue({ stateTransitionIds: [] }),
+      } as unknown as LiteracyLessonService,
+      { sendMessage } as unknown as WabotOutboundService,
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user_external_id: '919999990001',
+        wamid: '',
+        media: expect.arrayContaining([
+          expect.objectContaining({ type: 'video', url: 'wa://v1' }),
+        ]),
+      }),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'http.response.status_code',
+      200,
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.stringMatching(/hail-mary: sent to user .* status=200/),
+    );
+    log.mockRestore();
+  });
+
+  it('looks up hail-mary stid for the intro media (kills the HAIL_MARY_STATE_TRANSITION_ID constant)', async () => {
+    const findMediaByStateTransitionId = jest.fn().mockResolvedValue({});
+    await processHailMaryJob(
+      makeJob2(),
+      dsWith([{ id: 'mm-1', created_at: new Date() }]),
+      {
+        find: jest.fn().mockResolvedValue({ id: 'u1', external_id: '919999990001' }),
+      } as unknown as UserService,
+      {
+        findMediaByStateTransitionId,
+      } as unknown as MediaMetaDataService,
+      {
+        processAnswer: jest
+          .fn()
+          .mockResolvedValue({ stateTransitionIds: [] }),
+      } as unknown as LiteracyLessonService,
+      { sendMessage: jest.fn() } as unknown as WabotOutboundService,
+    );
+    // The first call to findMediaByStateTransitionId is the hail-mary stid.
+    expect(findMediaByStateTransitionId).toHaveBeenCalledWith('hail-mary');
+  });
+});
