@@ -4,6 +4,8 @@
 import { BadRequestException } from '@nestjs/common';
 import type { Repository } from 'typeorm';
 import { UserActivityService } from './user-activity.service';
+import type { UserService } from './user.service';
+import { partitionUserIdentifiers } from './user.dto';
 import type { UserEntity } from './user.entity';
 import type { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
 
@@ -57,9 +59,13 @@ function makeService(
   userRepo: UserRepoMock,
   mediaRepo: { createQueryBuilder: jest.Mock },
 ): UserActivityService {
+  const userService = {
+    partitionIdentifiers: partitionUserIdentifiers,
+  } as unknown as UserService;
   return new UserActivityService(
     userRepo as unknown as Repository<UserEntity>,
     mediaRepo as unknown as Repository<MediaMetaDataEntity>,
+    userService,
   );
 }
 

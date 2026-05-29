@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { parsePhoneNumberFromString } from 'libphonenumber-js';
+import { validate as isUuid } from 'uuid';
 import { Type } from 'class-transformer';
 import {
   IsString,
@@ -203,7 +204,54 @@ export interface CreateUserOptions {
   referrer_user_id?: string;
 }
 
-function validateE164PhoneNumber(value: string, fieldName: string): string {
+// Splits a list of user identifiers into uuids and normalized E.164 external
+// ids. Throws one BadRequestException listing every item that is neither a
+// valid uuid nor a valid E.164 phone. `canonical` mirrors `inputs` in order,
+// each item replaced with its canonical form (uuid or normalized E.164) —
+// useful for callers that align DB lookups back to input positions. Does no
+// I/O.
+export function partitionUserIdentifiers(inputs: string[]): {
+  ids: string[];
+  externalIds: string[];
+  canonical: string[];
+} {
+  const ids: string[] = [];
+  const externalIds: string[] = [];
+  const canonical: string[] = [];
+  const bad: string[] = [];
+  for (const raw of inputs) {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) {
+      bad.push('<empty>');
+      canonical.push(trimmed);
+      continue;
+    }
+    if (isUuid(trimmed)) {
+      ids.push(trimmed);
+      canonical.push(trimmed);
+      continue;
+    }
+    try {
+      const normalized = validateE164PhoneNumber(trimmed, 'identifier');
+      externalIds.push(normalized);
+      canonical.push(normalized);
+    } catch {
+      bad.push(trimmed);
+      canonical.push(trimmed);
+    }
+  }
+  if (bad.length > 0) {
+    throw new BadRequestException(
+      `invalid identifiers (not a uuid or E.164 phone): ${bad.join(', ')}`,
+    );
+  }
+  return { ids, externalIds, canonical };
+}
+
+export function validateE164PhoneNumber(
+  value: string,
+  fieldName: string,
+): string {
   const normalized = value.startsWith('+') ? value : `+${value}`;
   const parsed = parsePhoneNumberFromString(normalized);
   if (!parsed || !parsed.isValid()) {

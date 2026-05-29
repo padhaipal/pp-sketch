@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
+import { validate as isUuid } from 'uuid';
 import { UserEntity } from './user.entity';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
@@ -13,6 +14,7 @@ import {
   validateFindUserOptions,
   validateUpdateUserOptions,
   validateCreateUserOptions,
+  partitionUserIdentifiers,
 } from './user.dto';
 
 @Injectable()
@@ -26,6 +28,26 @@ export class UserService {
     private readonly cacheService: CacheService,
     private readonly scoreService: ScoreService,
   ) {}
+
+  // Resolves a user by either a uuid or an E.164 external_id. Throws
+  // BadRequestException on a string that is neither a valid uuid nor a valid
+  // E.164 phone (delegated to find() for the external_id path). Returns null
+  // on a well-shaped identifier that has no matching row.
+  async findByIdOrExternalId(input: string): Promise<User | null> {
+    return this.find(
+      isUuid(input) ? { id: input } : { external_id: input },
+    );
+  }
+
+  // See partitionUserIdentifiers in user.dto.ts. Exposed here as a method so
+  // callers with an injected UserService don't need a separate import.
+  partitionIdentifiers(inputs: string[]): {
+    ids: string[];
+    externalIds: string[];
+    canonical: string[];
+  } {
+    return partitionUserIdentifiers(inputs);
+  }
 
   async find(options: FindUserOptions): Promise<User | null> {
     const validated = validateFindUserOptions(options);

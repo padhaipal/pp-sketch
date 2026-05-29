@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository, Brackets } from 'typeorm';
 import { UserEntity } from './user.entity';
+import { UserService } from './user.service';
 import { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
 import {
   ActivityTimeRequestDto,
@@ -10,9 +11,6 @@ import {
   ActivityTimeWindowResult,
   TimeWindowDto,
 } from './user.dto';
-
-const UUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const ACTIVE_GAP_THRESHOLD_MS = 60_000;
 
@@ -35,6 +33,7 @@ export class UserActivityService {
     private readonly userRepo: Repository<UserEntity>,
     @InjectRepository(MediaMetaDataEntity)
     private readonly mediaRepo: Repository<MediaMetaDataEntity>,
+    private readonly userService: UserService,
   ) {}
 
   // Returns ms each user was "active" inside each window. Active ms = sum of
@@ -204,19 +203,8 @@ export class UserActivityService {
   private async resolveUsers(
     inputs: string[],
   ): Promise<{ id: string; external_id: string }[]> {
-    const ids: string[] = [];
-    const externalIds: string[] = [];
-    for (const raw of inputs) {
-      const trimmed = raw.trim();
-      if (trimmed.length === 0) {
-        throw new BadRequestException('user identifier must not be empty');
-      }
-      if (UUID_REGEX.test(trimmed)) {
-        ids.push(trimmed);
-      } else {
-        externalIds.push(trimmed);
-      }
-    }
+    const { ids, externalIds, canonical } =
+      this.userService.partitionIdentifiers(inputs);
 
     const found: UserEntity[] = [];
     if (ids.length > 0) {
@@ -238,8 +226,8 @@ export class UserActivityService {
     }
     const seen = new Set<string>();
     const ordered: { id: string; external_id: string }[] = [];
-    for (const raw of inputs) {
-      const u = byKey.get(raw.trim());
+    for (const key of canonical) {
+      const u = byKey.get(key);
       if (!u || seen.has(u.id)) continue;
       seen.add(u.id);
       ordered.push({ id: u.id, external_id: u.external_id });

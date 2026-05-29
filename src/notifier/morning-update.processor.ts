@@ -88,13 +88,7 @@ export async function triggerMorningUpdateForUser(
 ): Promise<{ job_id: string; user_id: string; user_external_id: string }> {
   return tracer.startActiveSpan('morning-update.trigger', async (span) => {
     try {
-      const isUuid =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-          userIdOrExternal,
-        );
-      const user = await userService.find(
-        isUuid ? { id: userIdOrExternal } : { external_id: userIdOrExternal },
-      );
+      const user = await userService.findByIdOrExternalId(userIdOrExternal);
       if (!user) {
         throw new NotFoundException(
           `User not found for ${toLogId(userIdOrExternal)}`,
