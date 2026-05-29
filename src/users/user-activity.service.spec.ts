@@ -1,6 +1,16 @@
 // Unit tests for UserActivityService. TypeORM repos and the fluent
 // QueryBuilder are mocked.
 
+// uuid is ESM-only — provide a CJS-shaped mock. validate uses the loose
+// hex-shape regex (no version/variant nibble checks) so test fixtures with
+// arbitrary hex bytes still classify as uuids.
+jest.mock('uuid', () => ({
+  v4: jest.fn(() => 'gen-uuid'),
+  validate: (s: unknown): boolean =>
+    typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s),
+}));
+
 import { BadRequestException } from '@nestjs/common';
 import type { Repository } from 'typeorm';
 import { UserActivityService } from './user-activity.service';
@@ -233,15 +243,37 @@ describe('UserActivityService.getActivityTime — user identification', () => {
     expect(out.results[0].user_id).toBe(UUID_A);
   });
 
-  it('skips IDs that resolve to no user', async () => {
+  it('drops well-shaped identifiers that have no matching user (lookup miss, not shape error)', async () => {
     const find = jest.fn().mockResolvedValue([]);
     const svc = makeService(makeUserRepo(find), makeMediaRepo([]));
 
     const out = await svc.getActivityTime({
-      users: ['nonexistent-phone-999999999999'],
+      users: ['919999990001'],
       windows: [{ start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' }],
     });
     expect(out.results).toEqual([]);
+  });
+
+  it('throws BadRequestException for malformed identifiers (not uuid, not valid E.164), listing all bad items in one message', async () => {
+    const find = jest.fn().mockResolvedValue([]);
+    const svc = makeService(makeUserRepo(find), makeMediaRepo([]));
+
+    await expect(
+      svc.getActivityTime({
+        users: ['nonexistent-phone-999999999999', 'also-bad'],
+        windows: [
+          { start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' },
+        ],
+      }),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      svc.getActivityTime({
+        users: ['nonexistent-phone-999999999999', 'also-bad'],
+        windows: [
+          { start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' },
+        ],
+      }),
+    ).rejects.toThrow(/nonexistent-phone-999999999999.*also-bad/);
   });
 });
 

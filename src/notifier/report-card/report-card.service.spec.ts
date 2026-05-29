@@ -5,6 +5,16 @@
 //   (c) user joined < 7 days ago → missing days = 0
 // Plus the SVG renderer itself: shape, brand colour, dotted line, QR, logo.
 
+// uuid is ESM-only — transitively imported via UserService. validate uses the
+// loose hex-shape regex so test fixtures with arbitrary hex bytes classify as
+// uuids.
+jest.mock('uuid', () => ({
+  v4: jest.fn(() => 'gen-uuid'),
+  validate: (s: unknown): boolean =>
+    typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s),
+}));
+
 import { ReportCardService } from './report-card.service';
 import {
   LANDSCAPE_REPORT_CARD_WIDTH,
@@ -26,7 +36,7 @@ function makeService(opts: {
   existingMedia?: { id: string; status: string };
 }): ReportCardService {
   const userService = {
-    find: jest.fn().mockResolvedValue(opts.user),
+    findByIdOrExternalId: jest.fn().mockResolvedValue(opts.user),
   };
   const userActivityService = {
     getActivityTime: jest.fn().mockImplementation(({ windows }) => ({
@@ -246,7 +256,7 @@ describe('ReportCardService.buildData', () => {
     expect(data.daily_bars.every((b) => b.active_ms === 0)).toBe(true);
   });
 
-  it('resolves a UUID-shaped input via {id} lookup; non-UUID via {external_id}', async () => {
+  it('delegates input resolution to UserService.findByIdOrExternalId, forwarding the raw input verbatim', async () => {
     const findSpy = jest.fn().mockResolvedValue({
       id: '11111111-2222-3333-4444-555555555555',
       external_id: '918888888001',
@@ -263,19 +273,19 @@ describe('ReportCardService.buildData', () => {
     };
     const mediaRepo = { createQueryBuilder: jest.fn() };
     const svc = new ReportCardService(
-      { find: findSpy } as never,
+      { findByIdOrExternalId: findSpy } as never,
       userActivityService as never,
       scoreService as never,
       mediaRepo as never,
     );
 
     await svc.buildData('11111111-2222-3333-4444-555555555555', { now: NOW });
-    expect(findSpy).toHaveBeenLastCalledWith({
-      id: '11111111-2222-3333-4444-555555555555',
-    });
+    expect(findSpy).toHaveBeenLastCalledWith(
+      '11111111-2222-3333-4444-555555555555',
+    );
 
     await svc.buildData('918888888001', { now: NOW });
-    expect(findSpy).toHaveBeenLastCalledWith({ external_id: '918888888001' });
+    expect(findSpy).toHaveBeenLastCalledWith('918888888001');
   });
 });
 
@@ -752,12 +762,12 @@ describe('ReportCardService.buildData — referral_url + UUID resolution', () =>
     );
   });
 
-  it('uses { id } lookup for a v4-like UUID, { external_id } otherwise', async () => {
-    const find = jest
+  it('delegates input resolution to UserService.findByIdOrExternalId, forwarding both uuid and external_id inputs verbatim', async () => {
+    const findByIdOrExternalId = jest
       .fn()
       .mockResolvedValue({ id: 'u', external_id: '919999990001' });
     const svc = new ReportCardService(
-      { find } as never,
+      { findByIdOrExternalId } as never,
       {
         getActivityTime: jest.fn().mockResolvedValue({ results: [] }),
       } as never,
@@ -771,10 +781,10 @@ describe('ReportCardService.buildData — referral_url + UUID resolution', () =>
       { createQueryBuilder: jest.fn() } as never,
     );
     await svc.buildData('11111111-2222-3333-4444-555555555555');
-    expect(find).toHaveBeenLastCalledWith({
-      id: '11111111-2222-3333-4444-555555555555',
-    });
+    expect(findByIdOrExternalId).toHaveBeenLastCalledWith(
+      '11111111-2222-3333-4444-555555555555',
+    );
     await svc.buildData('919999990001');
-    expect(find).toHaveBeenLastCalledWith({ external_id: '919999990001' });
+    expect(findByIdOrExternalId).toHaveBeenLastCalledWith('919999990001');
   });
 });

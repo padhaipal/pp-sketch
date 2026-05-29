@@ -1,8 +1,15 @@
 process.env.LOG_PII_HMAC_KEY =
   '0000000000000000000000000000000000000000000000000000000000000000';
 
-// uuid is ESM-only — transitively imported via MediaMetaDataService.
-jest.mock('uuid', () => ({ v4: jest.fn(() => 'unused-mock-uuid') }));
+// uuid is ESM-only — provide a CJS-shaped mock. validate uses the loose
+// hex-shape regex (no version/variant nibble checks) so test fixtures with
+// arbitrary hex bytes still classify as uuids.
+jest.mock('uuid', () => ({
+  v4: jest.fn(() => 'unused-mock-uuid'),
+  validate: (s: unknown): boolean =>
+    typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s),
+}));
 
 const mockQueueAdd = jest.fn();
 const mockCreateQueue = jest.fn(() => ({ add: mockQueueAdd }));
@@ -60,8 +67,8 @@ function makeMedia(findMediaByStateTransitionId: jest.Mock, extra: Record<string
     ...extra,
   } as unknown as MediaMetaDataService;
 }
-function makeUserService(find: jest.Mock): UserService {
-  return { find } as unknown as UserService;
+function makeUserService(findByIdOrExternalId: jest.Mock): UserService {
+  return { findByIdOrExternalId } as unknown as UserService;
 }
 function makeWabot(sendNotification: jest.Mock): WabotOutboundService {
   return { sendNotification } as unknown as WabotOutboundService;
@@ -162,7 +169,7 @@ describe('enqueueMorningUpdateSend', () => {
 describe('triggerMorningUpdateForUser', () => {
   const UUID = '11111111-2222-3333-4444-555555555555';
 
-  it('routes UUID inputs through {id} lookup; non-UUID through {external_id}', async () => {
+  it('forwards the raw input verbatim to UserService.findByIdOrExternalId for both uuid and external_id forms', async () => {
     const userSvc = makeUserService(
       jest
         .fn()
@@ -176,12 +183,14 @@ describe('triggerMorningUpdateForUser', () => {
     );
 
     await triggerMorningUpdateForUser(UUID, userSvc, mediaSvc);
-    expect((userSvc.find as jest.Mock).mock.calls[0][0]).toEqual({ id: UUID });
+    expect(
+      (userSvc.findByIdOrExternalId as jest.Mock).mock.calls[0][0],
+    ).toBe(UUID);
 
     await triggerMorningUpdateForUser('91999', userSvc, mediaSvc);
-    expect((userSvc.find as jest.Mock).mock.calls[1][0]).toEqual({
-      external_id: '91999',
-    });
+    expect(
+      (userSvc.findByIdOrExternalId as jest.Mock).mock.calls[1][0],
+    ).toBe('91999');
   });
 
   it('throws NotFoundException when user is not found', async () => {
@@ -619,7 +628,9 @@ describe('resolveMorningUpdateIntroMedia — exact stid lookup', () => {
 
 describe('triggerMorningUpdateForUser — span + log + error path', () => {
   function userSvc(user: { id: string; external_id: string } | null) {
-    return { find: jest.fn().mockResolvedValue(user) } as unknown as UserService;
+    return {
+      findByIdOrExternalId: jest.fn().mockResolvedValue(user),
+    } as unknown as UserService;
   }
   function mediaSvc(introResult: unknown) {
     return {

@@ -1,6 +1,14 @@
 // Unit tests for LiteracyLessonService. DB, score service, xstate, and the
 // word-list JSON are mocked so no Postgres / file I/O is needed.
 
+// uuid is ESM-only — transitively imported via UserService.
+jest.mock('uuid', () => ({
+  v4: jest.fn(() => 'gen-uuid'),
+  validate: (s: unknown): boolean =>
+    typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s),
+}));
+
 const TEST_WORD_LIST = [
   'अब',
   'कमल',

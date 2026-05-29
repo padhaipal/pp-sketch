@@ -1,3 +1,13 @@
+// uuid is ESM-only — provide a CJS-shaped mock. validate uses the loose
+// hex-shape regex (no version/variant nibble checks) so test fixtures with
+// arbitrary hex bytes still classify as uuids.
+jest.mock('uuid', () => ({
+  v4: jest.fn(() => 'gen-uuid'),
+  validate: (s: unknown): boolean =>
+    typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s),
+}));
+
 import { BadRequestException } from '@nestjs/common';
 import type { DataSource, Repository } from 'typeorm';
 import { UserService } from './user.service';
@@ -531,5 +541,85 @@ describe('UserService.update — referrer resolution + assignments', () => {
     const svc = makeService(repo, ds, makeCache(), makeScore());
     await svc.update({ id: 'u1', new_name: 'just a name' });
     expect(ds).not.toHaveBeenCalled();
+  });
+});
+
+describe('UserService.findByIdOrExternalId', () => {
+  const UUID = '11111111-2222-3333-4444-555555555555';
+
+  it('routes a uuid-shaped input to find({id})', async () => {
+    const repo = makeRepo();
+    const cache = makeCache();
+    const user = { id: UUID, external_id: '919999990001' };
+    cache.get.mockResolvedValue(null);
+    repo.findOneBy.mockResolvedValue(user);
+
+    const svc = makeService(repo, jest.fn(), cache, makeScore());
+    await expect(svc.findByIdOrExternalId(UUID)).resolves.toBe(user);
+    expect(repo.findOneBy).toHaveBeenCalledWith({ id: UUID });
+  });
+
+  it('routes a non-uuid input through find({external_id}), normalizing E.164', async () => {
+    const repo = makeRepo();
+    const cache = makeCache();
+    cache.get.mockResolvedValue(null);
+    const user = { id: UUID, external_id: '919999990001' };
+    repo.findOneBy.mockResolvedValue(user);
+
+    const svc = makeService(repo, jest.fn(), cache, makeScore());
+    await expect(svc.findByIdOrExternalId('+91 999 999 0001')).resolves.toBe(
+      user,
+    );
+    // find() normalizes through validateE164PhoneNumber → canonical form.
+    expect(repo.findOneBy).toHaveBeenCalledWith({
+      external_id: '919999990001',
+    });
+  });
+
+  it('returns null when the well-shaped identifier matches no user', async () => {
+    const repo = makeRepo();
+    const cache = makeCache();
+    cache.get.mockResolvedValue(null);
+    repo.findOneBy.mockResolvedValue(null);
+
+    const svc = makeService(repo, jest.fn(), cache, makeScore());
+    await expect(svc.findByIdOrExternalId(UUID)).resolves.toBeNull();
+  });
+
+  it('throws BadRequestException when the input is neither a uuid nor a valid E.164', async () => {
+    const repo = makeRepo();
+    const svc = makeService(repo, jest.fn(), makeCache(), makeScore());
+    await expect(
+      svc.findByIdOrExternalId('not-a-uuid-not-a-phone'),
+    ).rejects.toThrow(BadRequestException);
+    expect(repo.findOneBy).not.toHaveBeenCalled();
+  });
+});
+
+describe('UserService.partitionIdentifiers', () => {
+  const UUID = '11111111-2222-3333-4444-555555555555';
+
+  function svc(): UserService {
+    return makeService(makeRepo(), jest.fn(), makeCache(), makeScore());
+  }
+
+  it('splits uuids into ids and E.164 inputs into externalIds', () => {
+    expect(svc().partitionIdentifiers([UUID, '919999990001'])).toEqual({
+      ids: [UUID],
+      externalIds: ['919999990001'],
+      canonical: [UUID, '919999990001'],
+    });
+  });
+
+  it('normalizes E.164 inputs (strips the + and spaces)', () => {
+    const out = svc().partitionIdentifiers(['+91 999 999 0001']);
+    expect(out.externalIds).toEqual(['919999990001']);
+    expect(out.canonical).toEqual(['919999990001']);
+  });
+
+  it('throws BadRequestException listing every bad item at once', () => {
+    expect(() => svc().partitionIdentifiers(['garbage-a', 'garbage-b'])).toThrow(
+      /garbage-a.*garbage-b/,
+    );
   });
 });

@@ -1,3 +1,11 @@
+// uuid is ESM-only — transitively imported via ScoreService → user.dto.
+jest.mock('uuid', () => ({
+  v4: jest.fn(() => 'gen-uuid'),
+  validate: (s: unknown): boolean =>
+    typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s),
+}));
+
 import { ScoreController } from './score.controller';
 import type { ScoreService } from './score.service';
 

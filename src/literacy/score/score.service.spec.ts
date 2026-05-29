@@ -1,6 +1,16 @@
 // Unit tests for ScoreService. DataSource.query is mocked; tests verify
 // SQL shape + params and return-value mapping without touching Postgres.
 
+// uuid is ESM-only — provide a CJS-shaped mock. validate uses the loose
+// hex-shape regex (no version/variant nibble checks) so test fixtures with
+// arbitrary hex bytes still classify as uuids.
+jest.mock('uuid', () => ({
+  v4: jest.fn(() => 'gen-uuid'),
+  validate: (s: unknown): boolean =>
+    typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s),
+}));
+
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 import { ScoreService } from './score.service';
@@ -388,6 +398,15 @@ describe('ScoreService.getLetterBins', () => {
     await expect(service.getLetterBins('919999990001')).rejects.toThrow(
       NotFoundException,
     );
+  });
+
+  it('throws BadRequestException without hitting the DB when an identifier is malformed (not uuid, not valid E.164)', async () => {
+    const query = jest.fn();
+    const { service } = makeService(query);
+    await expect(service.getLetterBins('garbage-input')).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(query).not.toHaveBeenCalled();
   });
 
   it('returns a single LetterBinsResult when given a string (not wrapped in array)', async () => {
