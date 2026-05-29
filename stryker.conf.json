@@ -14,7 +14,7 @@
     "!src/**/migrations/**",
     "!src/interfaces/database/data-source.ts"
   ],
-  "thresholds": { "high": 80, "low": 60, "break": 75 },
+  "thresholds": { "high": 80, "low": 60, "break": 78 },
   "concurrency": 4,
   "incremental": true,
   "incrementalFile": ".stryker-tmp/incremental.json",
