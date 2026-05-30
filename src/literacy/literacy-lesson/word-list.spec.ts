@@ -11,8 +11,6 @@ describe('word-list.json', () => {
     expect(Array.isArray(parsed)).toBe(true);
     const arr = parsed as unknown[];
     expect(arr.length).toBeGreaterThan(0);
-    expect(
-      arr.every((s) => typeof s === 'string' && (s as string).length > 0),
-    ).toBe(true);
+    expect(arr.every((s) => typeof s === 'string' && s.length > 0)).toBe(true);
   });
 });
