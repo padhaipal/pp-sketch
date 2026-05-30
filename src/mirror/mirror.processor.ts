@@ -21,6 +21,7 @@ import {
   assertProdReadOnly,
   assertStagingBucketWritable,
   createBucketClient,
+  pgClientConfig,
   type BucketCreds,
 } from './mirror.guards';
 
@@ -151,7 +152,7 @@ export class MirrorProcessor {
   }
 
   private async assertPostRestoreSane(stagingUrl: string): Promise<void> {
-    const c = new Client({ connectionString: stagingUrl });
+    const c = new Client(pgClientConfig(stagingUrl));
     await c.connect();
     try {
       for (const table of SANITY_TABLES) {
@@ -277,7 +278,7 @@ export class MirrorProcessor {
       // Empty / comment-only — nothing to execute.
       return;
     }
-    const c = new Client({ connectionString: stagingUrl });
+    const c = new Client(pgClientConfig(stagingUrl));
     await c.connect();
     try {
       await c.query(sql);
