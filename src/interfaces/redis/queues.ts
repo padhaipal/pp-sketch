@@ -86,8 +86,8 @@ export const DEFAULT_JOB_OPTIONS: Record<string, JobsOptions> = {
   // service, not here.
   [QUEUE_NAMES.MIRROR]: {
     attempts: 1,
-    removeOnComplete: { count: 50 },
-    removeOnFail: { count: 50 },
+    removeOnComplete: true,
+    removeOnFail: { count: 500 },
   },
 };
 
