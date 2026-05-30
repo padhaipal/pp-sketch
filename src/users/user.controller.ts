@@ -175,8 +175,8 @@ export class UserController {
     const media = await this.mediaRepo.find({
       where: {
         user_id: id,
-        source: 'whatsapp' as any,
-        media_type: 'audio' as any,
+        source: 'whatsapp',
+        media_type: 'audio',
       },
       order: { created_at: 'DESC' },
       skip: offset,
@@ -246,8 +246,10 @@ export class UserController {
     >();
     for (const ls of lessonStates) {
       if (lessonMap.has(ls.user_message_id)) continue;
-      const transitionId: string | undefined = (ls.snapshot as any)?.context
-        ?.stateTransitionId;
+      const snapshotContext = (
+        ls.snapshot as { context?: { stateTransitionId?: string } }
+      ).context;
+      const transitionId = snapshotContext?.stateTransitionId;
       let startingState: string | null = null;
       let finalState: string | null = null;
       if (transitionId) {

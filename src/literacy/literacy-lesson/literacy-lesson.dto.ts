@@ -1,6 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
+import { SnapshotFrom } from 'xstate';
 import { User } from '../../users/user.dto';
 import { MediaMetaData } from '../../media-meta-data/media-meta-data.dto';
+import { machine } from './literacy-lesson.machine';
+
+export type LessonSnapshot = SnapshotFrom<typeof machine>;
 
 export interface LiteracyLessonState {
   id: string;
@@ -9,7 +13,7 @@ export interface LiteracyLessonState {
   word: string;
   answer: string | null;
   answer_correct: boolean | null;
-  snapshot: any;
+  snapshot: LessonSnapshot;
   created_at: Date;
 }
 

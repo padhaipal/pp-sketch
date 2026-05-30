@@ -310,9 +310,7 @@ describe('WabotOutboundService.uploadMedia', () => {
 
 // ─── mutation hardening ────────────────────────────────────────────────────
 
-const tracerMock = jest.requireMock('../../../otel/otel') as {
-  tracer: { startActiveSpan: jest.Mock };
-};
+const tracerMock = jest.requireMock('../../../otel/otel');
 
 describe('WabotOutboundService — exact span names + endpoint attributes', () => {
   it.each<
@@ -440,7 +438,7 @@ describe('WabotOutboundService — exact request URLs + headers', () => {
 });
 
 describe('WabotOutboundService — exact 4XX/5XX boundaries + log messages', () => {
-  function setup(op: 'download' | 'upload', status: number, text = '') {
+  function setup(_op: 'download' | 'upload', status: number, text = '') {
     const fetchSpy = jest.fn().mockResolvedValue(
       fakeResponse({
         status,

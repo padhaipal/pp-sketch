@@ -13,6 +13,7 @@ import {
   STALE_LESSON_RESTART_STATE_TRANSITION_ID,
 } from './literacy-lesson.machine';
 import {
+  LessonSnapshot,
   LiteracyLessonState,
   ProcessAnswerOptions,
   ProcessAnswerResult,
@@ -38,7 +39,9 @@ export class LiteracyLessonService {
     private readonly scoreService: ScoreService,
   ) {
     const wordListPath = path.join(__dirname, 'word-list.json');
-    this.wordList = JSON.parse(fs.readFileSync(wordListPath, 'utf-8'));
+    this.wordList = JSON.parse(
+      fs.readFileSync(wordListPath, 'utf-8'),
+    ) as string[];
   }
 
   async processAnswer(
@@ -92,7 +95,7 @@ export class LiteracyLessonService {
         }
         span.setAttribute('pp.lesson.path', lessonPath);
 
-        let snapshot: any;
+        let snapshot: LessonSnapshot;
 
         if (startFresh) {
           // 5. Start a new lesson
@@ -118,7 +121,7 @@ export class LiteracyLessonService {
               ...currentState!.snapshot.context,
               userMessageId: validated.user_message_id,
             },
-          };
+          } as unknown as LessonSnapshot;
 
           const actor = createActor(machine, {
             snapshot: restoredSnapshot,
@@ -144,7 +147,7 @@ export class LiteracyLessonService {
         const answer: string | null = snapshot.context.answer ?? null;
         const answerCorrect: boolean | null =
           snapshot.context.answerCorrect ?? null;
-        const rows = await this.dataSource.query(
+        const rows: unknown[] = await this.dataSource.query(
           `INSERT INTO literacy_lesson_states (user_id, user_message_id, word, answer, answer_correct, snapshot, created_at)
            SELECT $1, $2, $3, $4, $5, $6, now()
            FROM media_metadata m
@@ -229,17 +232,19 @@ export class LiteracyLessonService {
       where: { user_id: userId },
       order: { created_at: 'DESC' },
     });
-    return entity ?? null;
+    // jsonb column is `Record<string, unknown>` at the entity level; we trust
+    // it conforms to LessonSnapshot because we control writes.
+    return (entity ?? null) as LiteracyLessonState | null;
   }
 
   async cleanupPartialState(userMessageId: string): Promise<void> {
     const { scoresDeleted, statesDeleted } = await this.dataSource.transaction(
       async (manager) => {
-        const scoreRows = await manager.query(
+        const scoreRows: unknown[] = await manager.query(
           `DELETE FROM scores WHERE user_message_id = $1 RETURNING id`,
           [userMessageId],
         );
-        const stateRows = await manager.query(
+        const stateRows: unknown[] = await manager.query(
           `DELETE FROM literacy_lesson_states WHERE user_message_id = $1 RETURNING id`,
           [userMessageId],
         );
@@ -259,7 +264,15 @@ export class LiteracyLessonService {
       span.setAttribute('pp.user.id', userId);
       try {
         // Single DB round-trip
-        const rows = await this.dataSource.query(
+        interface SelectNextWordRow {
+          letter_scores: { grapheme: string; score: number }[];
+          recent_words: string[];
+          unique_in_add_window: number;
+          unique_in_keep_window: number;
+          recent_row_count: number;
+          distinct_word_count: number;
+        }
+        const rows: SelectNextWordRow[] = await this.dataSource.query(
           `WITH recent_distinct_words AS (
             SELECT word, MAX(created_at) AS latest_at
             FROM literacy_lesson_states
@@ -317,13 +330,12 @@ export class LiteracyLessonService {
         );
 
         const data = rows[0];
-        const letterScores: { grapheme: string; score: number }[] =
-          data.letter_scores;
-        const recentWords: string[] = data.recent_words;
-        const uniqueInAddWindow: number = Number(data.unique_in_add_window);
-        const uniqueInKeepWindow: number = Number(data.unique_in_keep_window);
-        const recentRowCount: number = Number(data.recent_row_count);
-        const distinctWordCount: number = Number(data.distinct_word_count);
+        const letterScores = data.letter_scores;
+        const recentWords = data.recent_words;
+        const uniqueInAddWindow = Number(data.unique_in_add_window);
+        const uniqueInKeepWindow = Number(data.unique_in_keep_window);
+        const recentRowCount = Number(data.recent_row_count);
+        const distinctWordCount = Number(data.distinct_word_count);
 
         // Build score map
         const scoreMap = new Map<string, number>();

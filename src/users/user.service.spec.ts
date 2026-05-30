@@ -649,9 +649,7 @@ describe('UserService.delete', () => {
   // SELECT, and whose `transaction(cb)` runs `cb` with a `manager.query` that
   // dispatches DELETE/UPDATE/SELECT calls through `scriptedTxn`.
   type TxnCall = { sql: string; params: unknown[] };
-  function txnRunner(
-    scripted: Array<unknown | ((sql: string, params: unknown[]) => unknown)>,
-  ): {
+  function txnRunner(scripted: unknown[]): {
     calls: TxnCall[];
     run: (
       cb: (m: { query: jest.Mock }) => Promise<unknown>,
@@ -662,7 +660,12 @@ describe('UserService.delete', () => {
     const managerQuery = jest.fn(async (sql: string, params: unknown[]) => {
       calls.push({ sql, params });
       const step = scripted[i++];
-      if (typeof step === 'function') return (step as Function)(sql, params);
+      if (typeof step === 'function') {
+        return (step as (sql: string, params: unknown[]) => unknown)(
+          sql,
+          params,
+        );
+      }
       return step;
     });
     return {
@@ -835,7 +838,7 @@ describe('UserService.delete', () => {
       const q = jest.fn(async (sql: string, params: unknown[]) => {
         calls.push({ sql, params });
         const step = script[i++];
-        if (typeof step === 'function') return (step as Function)();
+        if (typeof step === 'function') return step();
         return step;
       });
       return cb({ query: q });

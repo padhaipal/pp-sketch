@@ -17,7 +17,7 @@ import { ScoreService } from './score.service';
 
 const UUID_A = '11111111-2222-3333-4444-555555555555';
 const UUID_B = '22222222-3333-4444-5555-666666666666';
-const UUID_LETTER = '33333333-4444-5555-6666-777777777777';
+const _UUID_LETTER = '33333333-4444-5555-6666-777777777777';
 
 function makeDataSource(query: jest.Mock): DataSource {
   return { query } as unknown as DataSource;

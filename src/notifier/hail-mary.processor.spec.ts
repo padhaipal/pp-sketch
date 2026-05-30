@@ -409,9 +409,7 @@ function spyLog2() {
       .mockImplementation(() => undefined),
   };
 }
-const tracerMock2 = jest.requireMock('../otel/otel') as {
-  tracer: { startActiveSpan: jest.Mock };
-};
+const tracerMock2 = jest.requireMock('../otel/otel');
 
 describe('hail-mary — constants + exports', () => {
   it('HAIL_MARY_DELAY_MS is 1435 minutes = 23h55m', () => {

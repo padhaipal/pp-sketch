@@ -634,9 +634,7 @@ function spyLog() {
   };
 }
 
-const tracerMock = jest.requireMock('../otel/otel') as {
-  tracer: { startActiveSpan: jest.Mock };
-};
+const tracerMock = jest.requireMock('../otel/otel');
 
 describe('resolveMorningUpdateIntroMedia — exact stid lookup', () => {
   it('queries the "morning_notification_message" stid', async () => {

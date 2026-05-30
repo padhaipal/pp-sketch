@@ -12,7 +12,6 @@ import { tracer, injectCarrier } from '../otel/otel';
 import type { OtelCarrier } from '../otel/otel.dto';
 import { toLogId } from '../otel/pii';
 import type { UserService } from '../users/user.service';
-import type { User } from '../users/user.dto';
 
 const logger = new Logger('HailMaryProcessor');
 

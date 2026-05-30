@@ -70,9 +70,11 @@ export class AzureService {
 
     // 3. Handle response
     if (response.status !== 200) {
-      const errorBody = await response.json().catch(() => ({}));
+      const errorBody = (await response.json().catch(() => ({}))) as {
+        error?: { code?: string; message?: string };
+      };
       this.logger.warn(
-        `Azure ${response.status} for ${parentMedia.id}: ${errorBody?.error?.code} ${errorBody?.error?.message}`,
+        `Azure ${response.status} for ${parentMedia.id}: ${errorBody.error?.code} ${errorBody.error?.message}`,
       );
       throw new Error(`Azure STT failed: ${response.status}`);
     }

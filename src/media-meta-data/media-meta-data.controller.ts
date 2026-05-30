@@ -226,8 +226,8 @@ export class MediaMetaDataController {
 
     const existing = await this.mediaRepo.findOneBy({
       input_media_id: id,
-      source: 'dashboard' as any,
-      media_type: 'text' as any,
+      source: 'dashboard',
+      media_type: 'text',
     });
     if (existing)
       throw new BadRequestException('Dashboard transcript already exists');
@@ -266,8 +266,8 @@ export class MediaMetaDataController {
 
     const transcript = await this.mediaRepo.findOneBy({
       input_media_id: id,
-      source: 'dashboard' as any,
-      media_type: 'text' as any,
+      source: 'dashboard',
+      media_type: 'text',
     });
     if (!transcript)
       throw new NotFoundException('Dashboard transcript not found');
@@ -290,8 +290,8 @@ export class MediaMetaDataController {
   ): Promise<DeleteResponse> {
     const transcript = await this.mediaRepo.findOneBy({
       input_media_id: id,
-      source: 'dashboard' as any,
-      media_type: 'text' as any,
+      source: 'dashboard',
+      media_type: 'text',
     });
     if (!transcript)
       throw new NotFoundException('Dashboard transcript not found');

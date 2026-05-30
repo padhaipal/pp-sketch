@@ -699,7 +699,7 @@ describe('LiteracyLessonService — selectNextWord branches (via processAnswer f
 
 // ─── mutation hardening ──────────────────────────────────────────────────────
 
-const xstateMock = jest.requireMock('xstate') as { createActor: jest.Mock };
+const xstateMock = jest.requireMock('xstate');
 
 // Drive a fresh-lesson selection and return the word createActor was seeded
 // with. `row` is the single row returned by the selectNextWord query.
