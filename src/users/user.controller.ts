@@ -29,11 +29,11 @@ import {
   ScoreRow,
   LoginResponse,
   UserResponse,
-  DeleteResponse,
   ActivityTimeRequestDto,
   ActivityTimeResponse,
 } from './user.dto';
 import { UserActivityService } from './user-activity.service';
+import { UserService } from './user.service';
 import {
   addDays,
   istDateIso,
@@ -55,6 +55,7 @@ export class UserController {
     @InjectRepository(LiteracyLessonStateEntity)
     private readonly lessonStateRepo: Repository<LiteracyLessonStateEntity>,
     private readonly userActivityService: UserActivityService,
+    private readonly userService: UserService,
   ) {}
 
   @Post('activity-time')
@@ -433,13 +434,26 @@ export class UserController {
     };
   }
 
-  @Delete(':id')
-  async remove(@Param('id') id: string): Promise<DeleteResponse> {
-    const user = await this.userRepo.findOneBy({ id });
-    if (!user) {
-      throw new NotFoundException('User not found');
+  @Delete(':idOrExternalId')
+  async remove(
+    @Param('idOrExternalId') idOrExternalId: string,
+  ): Promise<{
+    deleted: string[];
+    failed: { input: string; reason: string }[];
+  }> {
+    return this.userService.delete(idOrExternalId);
+  }
+
+  @Post('bulk-delete')
+  async bulkRemove(
+    @Body() body: { identifiers: string[] },
+  ): Promise<{
+    deleted: string[];
+    failed: { input: string; reason: string }[];
+  }> {
+    if (!Array.isArray(body?.identifiers)) {
+      throw new BadRequestException('identifiers must be an array');
     }
-    await this.userRepo.remove(user);
-    return { deleted: true };
+    return this.userService.delete(body.identifiers);
   }
 }

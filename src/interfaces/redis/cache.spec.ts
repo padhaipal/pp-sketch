@@ -8,6 +8,7 @@ const mockRedisInstance = {
   set: jest.fn(),
   del: jest.fn(),
   ping: jest.fn(),
+  flushdb: jest.fn(),
 };
 const mockRedisCtor = jest.fn();
 jest.mock('ioredis', () => {
@@ -29,6 +30,7 @@ function resetInstance(): void {
   mockRedisInstance.set.mockReset().mockResolvedValue('OK');
   mockRedisInstance.del.mockReset().mockResolvedValue(1);
   mockRedisInstance.ping.mockReset();
+  mockRedisInstance.flushdb.mockReset().mockResolvedValue('OK');
   mockRedisCtor.mockClear();
 }
 
@@ -132,6 +134,36 @@ describe('CacheService.del', () => {
     mockRedisInstance.del.mockRejectedValue(new Error('redis down'));
     const svc = new CacheService();
     await expect(svc.del('k')).resolves.toBeUndefined();
+  });
+
+  it('rethrows when throwOnError:true and redis.del rejects', async () => {
+    mockRedisInstance.del.mockRejectedValue(new Error('redis down'));
+    const svc = new CacheService();
+    await expect(
+      svc.del('k', { throwOnError: true }),
+    ).rejects.toThrow('redis down');
+  });
+
+  it('does not throw when throwOnError:true and redis.del resolves', async () => {
+    const svc = new CacheService();
+    await expect(
+      svc.del(['a', 'b'], { throwOnError: true }),
+    ).resolves.toBeUndefined();
+    expect(mockRedisInstance.del).toHaveBeenCalledWith('a', 'b');
+  });
+});
+
+describe('CacheService.flushAll', () => {
+  it('calls redis.flushdb()', async () => {
+    const svc = new CacheService();
+    await svc.flushAll();
+    expect(mockRedisInstance.flushdb).toHaveBeenCalledTimes(1);
+  });
+
+  it('swallows errors from redis.flushdb', async () => {
+    mockRedisInstance.flushdb.mockRejectedValue(new Error('boom'));
+    const svc = new CacheService();
+    await expect(svc.flushAll()).resolves.toBeUndefined();
   });
 });
 
