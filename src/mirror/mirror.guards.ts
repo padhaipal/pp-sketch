@@ -1,4 +1,4 @@
-import { Client } from 'pg';
+import { Client, type ClientConfig } from 'pg';
 import {
   S3Client,
   ListObjectsV2Command,
@@ -15,11 +15,24 @@ export interface DbIdent {
   label: 'prod' | 'staging';
 }
 
+// Node pg v8 treats sslmode=require as verify-full and rejects Railway's
+// self-signed proxy chain. libpq (pg_dump/pg_restore) treats it correctly as
+// "encrypt, don't verify CA". Mirror only opts into SSL when the URL asks
+// for it — internal-network URLs without sslmode keep their existing
+// no-SSL behavior.
+export function pgClientConfig(url: string): ClientConfig {
+  const config: ClientConfig = { connectionString: url };
+  if (/[?&]sslmode=/i.test(url)) {
+    config.ssl = { rejectUnauthorized: false };
+  }
+  return config;
+}
+
 async function withClient<T>(
   url: string,
   fn: (c: Client) => Promise<T>,
 ): Promise<T> {
-  const client = new Client({ connectionString: url });
+  const client = new Client(pgClientConfig(url));
   await client.connect();
   try {
     return await fn(client);
