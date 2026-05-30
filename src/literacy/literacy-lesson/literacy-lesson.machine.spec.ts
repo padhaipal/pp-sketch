@@ -32,7 +32,9 @@ jest.mock('./identify-character-status.utils', () => ({
 import { createActor } from 'xstate';
 import { machine } from './literacy-lesson.machine';
 
-type Snapshot = ReturnType<ReturnType<typeof createActor<typeof machine>>['getSnapshot']>;
+type Snapshot = ReturnType<
+  ReturnType<typeof createActor<typeof machine>>['getSnapshot']
+>;
 
 interface ActorHandle {
   send: (event: { type: 'ANSWER'; studentAnswer: string }) => void;
@@ -40,7 +42,10 @@ interface ActorHandle {
   stop: () => void;
 }
 
-function makeActor(input: { word: string; userMessageId: string }): ActorHandle {
+function makeActor(input: {
+  word: string;
+  userMessageId: string;
+}): ActorHandle {
   const actor = createActor(machine, { input });
   actor.start();
   return {
@@ -171,9 +176,7 @@ describe('machine — word state', () => {
 
     const snap = b.snap();
     expect(snap.value).toBe('complete');
-    expect(snap.context.stateTransitionId).toBe(
-      'कमल-word-complete-maxErrors',
-    );
+    expect(snap.context.stateTransitionId).toBe('कमल-word-complete-maxErrors');
     expect(snap.context.answerCorrect).toBe(false);
 
     a.stop();
@@ -187,9 +190,7 @@ describe('machine — word state', () => {
 
     const snap = a.snap();
     expect(snap.value).toBe('word');
-    expect(snap.context.stateTransitionId).toBe(
-      'कमल-word-word-endMatra-first',
-    );
+    expect(snap.context.stateTransitionId).toBe('कमल-word-word-endMatra-first');
     expect(snap.context.wordErrors).toBe(1);
     expect(snap.context.pendingCorrect).toEqual(['क', 'म', 'ल']);
     a.stop();
@@ -339,9 +340,7 @@ describe('machine — image state', () => {
 
     const snap = a.snap();
     expect(snap.value).toBe('letterImage');
-    expect(snap.context.stateTransitionId).toBe(
-      'म-image-letterImage-correct',
-    );
+    expect(snap.context.stateTransitionId).toBe('म-image-letterImage-correct');
     a.stop();
   });
 
@@ -586,7 +585,9 @@ describe('machine — checkAnswer guard error path', () => {
     // empty. xstate v5 surfaces the error via subscribe({error}). Verify
     // here that the error makes it to the subscriber rather than being
     // silently swallowed.
-    const { createActor } = jest.requireActual('xstate') as typeof import('xstate');
+    const { createActor } = jest.requireActual(
+      'xstate',
+    ) as typeof import('xstate');
     const actor = createActor(machine, {
       input: { word: 'कमल', userMessageId: 'mm-1' },
     });
@@ -1060,7 +1061,10 @@ describe('machine — letterNoImage state full outcomes', () => {
 
 describe('machine — state entry sets answer to the current wrong letter', () => {
   function wrongWord(incorrectChars: string[], word = 'कमल'): ActorHandle {
-    mockIdentifyCharacterStatus.mockReturnValue({ correctChars: [], incorrectChars });
+    mockIdentifyCharacterStatus.mockReturnValue({
+      correctChars: [],
+      incorrectChars,
+    });
     const a = makeActor({ word, userMessageId: 'mm-1' });
     a.send(ANSWER('wrong-word'));
     return a;
@@ -1124,6 +1128,8 @@ describe('machine — routing + constants', () => {
   it('exposes the externally-consumed state-transition-id constants', () => {
     expect(WELCOME_MESSAGE_STATE_TRANSITION_ID).toBe('welcome-message');
     expect(AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID).toBe('audio-only-request');
-    expect(STALE_LESSON_RESTART_STATE_TRANSITION_ID).toBe('stale-lesson-restart');
+    expect(STALE_LESSON_RESTART_STATE_TRANSITION_ID).toBe(
+      'stale-lesson-restart',
+    );
   });
 });

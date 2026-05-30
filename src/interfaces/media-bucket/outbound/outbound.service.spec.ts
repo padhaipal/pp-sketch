@@ -123,7 +123,9 @@ describe('MediaBucketService.stream', () => {
     const key = await svc.stream(Readable.from([]), 'application/octet-stream');
 
     expect(key).toBe('gen-key');
-    const cmd = mockSend.mock.calls[0][0] as { input: { ContentLength: number; Body: Buffer } };
+    const cmd = mockSend.mock.calls[0][0] as {
+      input: { ContentLength: number; Body: Buffer };
+    };
     expect(cmd.input.ContentLength).toBe(0);
     expect(cmd.input.Body.length).toBe(0);
   });
@@ -170,7 +172,10 @@ describe('MediaBucketService.getBuffer', () => {
   });
 
   it('handles an empty S3 body stream (returns empty buffer)', async () => {
-    mockSend.mockResolvedValue({ Body: Readable.from([]), ContentType: 'audio/mpeg' });
+    mockSend.mockResolvedValue({
+      Body: Readable.from([]),
+      ContentType: 'audio/mpeg',
+    });
     const svc = new MediaBucketService();
     const out = await svc.getBuffer('s3-key-1');
     expect(out.buffer.length).toBe(0);

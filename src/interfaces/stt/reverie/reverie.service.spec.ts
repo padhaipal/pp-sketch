@@ -302,7 +302,9 @@ describe('ReverieService.run — exact warn messages', () => {
     const warn = spyRevLog();
     global.fetch = jest.fn().mockRejectedValue(new Error('econn'));
     const svc = makeService(makeRepo());
-    await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow('econn');
+    await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow(
+      'econn',
+    );
     expect(warn).toHaveBeenCalledWith(
       'Reverie: network/timeout error for parent-1: econn',
     );

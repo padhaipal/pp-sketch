@@ -26,12 +26,18 @@ import type { WhatsappPreloadJobDto } from './media-meta-data.dto';
 import { processWhatsappPreloadJob } from './whatsapp-preload.processor';
 
 function makeJob(
-  data: Partial<WhatsappPreloadJobDto> & { media_metadata_id: string; s3_key: string },
+  data: Partial<WhatsappPreloadJobDto> & {
+    media_metadata_id: string;
+    s3_key: string;
+  },
   opts: { attemptsMade?: number; attempts?: number } = {},
 ): Job<WhatsappPreloadJobDto> {
   return {
     id: 'job-1',
-    data: { otel_carrier: { traceparent: 'parent' }, ...data } as WhatsappPreloadJobDto,
+    data: {
+      otel_carrier: { traceparent: 'parent' },
+      ...data,
+    } as WhatsappPreloadJobDto,
     attemptsMade: opts.attemptsMade ?? 0,
     opts: { attempts: opts.attempts ?? 3 },
   } as unknown as Job<WhatsappPreloadJobDto>;
@@ -135,7 +141,9 @@ describe('processWhatsappPreloadJob — S3 failure', () => {
         media_type: 'audio',
       }),
     });
-    const bucket = makeBucket(jest.fn().mockRejectedValue(new Error('s3 down')));
+    const bucket = makeBucket(
+      jest.fn().mockRejectedValue(new Error('s3 down')),
+    );
 
     await expect(
       processWhatsappPreloadJob(
@@ -160,7 +168,9 @@ describe('processWhatsappPreloadJob — S3 failure', () => {
         media_type: 'audio',
       }),
     });
-    const bucket = makeBucket(jest.fn().mockRejectedValue(new Error('s3 down')));
+    const bucket = makeBucket(
+      jest.fn().mockRejectedValue(new Error('s3 down')),
+    );
 
     await expect(
       processWhatsappPreloadJob(
@@ -201,7 +211,9 @@ describe('processWhatsappPreloadJob — uploadMedia failure', () => {
   }
 
   it('on 4XX error: marks entity failed then rethrows', async () => {
-    const { repo, bucket, wabot } = setup(new Error('uploadMedia failed with 422'));
+    const { repo, bucket, wabot } = setup(
+      new Error('uploadMedia failed with 422'),
+    );
 
     await expect(
       processWhatsappPreloadJob(
@@ -217,7 +229,9 @@ describe('processWhatsappPreloadJob — uploadMedia failure', () => {
   });
 
   it('on 5XX error: does NOT mark failed (transient — let BullMQ retry)', async () => {
-    const { repo, bucket, wabot } = setup(new Error('uploadMedia failed with 503'));
+    const { repo, bucket, wabot } = setup(
+      new Error('uploadMedia failed with 503'),
+    );
 
     await expect(
       processWhatsappPreloadJob(
@@ -233,7 +247,9 @@ describe('processWhatsappPreloadJob — uploadMedia failure', () => {
   });
 
   it('on error with no parseable status: treats as 5XX (no failed write)', async () => {
-    const { repo, bucket, wabot } = setup(new Error('network timeout no status code'));
+    const { repo, bucket, wabot } = setup(
+      new Error('network timeout no status code'),
+    );
 
     await expect(
       processWhatsappPreloadJob(
@@ -249,10 +265,12 @@ describe('processWhatsappPreloadJob — uploadMedia failure', () => {
 });
 
 describe('processWhatsappPreloadJob — happy path', () => {
-  function setupHappy(opts: {
-    state_transition_id?: string | null;
-    reload?: boolean;
-  } = {}) {
+  function setupHappy(
+    opts: {
+      state_transition_id?: string | null;
+      reload?: boolean;
+    } = {},
+  ) {
     const entity = {
       id: 'mm-1',
       rolled_back: false,
@@ -368,8 +386,12 @@ import { Logger as NestLogger } from '@nestjs/common';
 
 function spyWarnError() {
   return {
-    warn: jest.spyOn(NestLogger.prototype, 'warn').mockImplementation(() => undefined),
-    error: jest.spyOn(NestLogger.prototype, 'error').mockImplementation(() => undefined),
+    warn: jest
+      .spyOn(NestLogger.prototype, 'warn')
+      .mockImplementation(() => undefined),
+    error: jest
+      .spyOn(NestLogger.prototype, 'error')
+      .mockImplementation(() => undefined),
   };
 }
 
@@ -532,9 +554,10 @@ describe('processWhatsappPreloadJob — boundaries', () => {
         update: jest.fn().mockResolvedValue({ affected: 1 }),
       });
       const bucket = makeBucket(
-        jest
-          .fn()
-          .mockResolvedValue({ buffer: Buffer.from('a'), content_type: 'audio/mp3' }),
+        jest.fn().mockResolvedValue({
+          buffer: Buffer.from('a'),
+          content_type: 'audio/mp3',
+        }),
       );
       const wabot = makeWabot(jest.fn().mockRejectedValue(new Error(msg)));
       await expect(
@@ -559,9 +582,10 @@ describe('processWhatsappPreloadJob — boundaries', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     });
     const bucket = makeBucket(
-      jest
-        .fn()
-        .mockResolvedValue({ buffer: Buffer.from('a'), content_type: 'audio/mp3' }),
+      jest.fn().mockResolvedValue({
+        buffer: Buffer.from('a'),
+        content_type: 'audio/mp3',
+      }),
     );
     const wabot = makeWabot(jest.fn().mockRejectedValue(new Error('500 boom')));
     await expect(
@@ -587,11 +611,14 @@ describe('processWhatsappPreloadJob — boundaries', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     });
     const bucket = makeBucket(
-      jest
-        .fn()
-        .mockResolvedValue({ buffer: Buffer.from('a'), content_type: 'audio/mp3' }),
+      jest.fn().mockResolvedValue({
+        buffer: Buffer.from('a'),
+        content_type: 'audio/mp3',
+      }),
     );
-    const wabot = makeWabot(jest.fn().mockRejectedValue(new Error('399 weird')));
+    const wabot = makeWabot(
+      jest.fn().mockRejectedValue(new Error('399 weird')),
+    );
     await expect(
       processWhatsappPreloadJob(
         makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-key' }),
@@ -619,9 +646,10 @@ describe('processWhatsappPreloadJob — reload enqueue payload', () => {
       }),
     });
     const bucket = makeBucket(
-      jest
-        .fn()
-        .mockResolvedValue({ buffer: Buffer.from('a'), content_type: 'audio/mp3' }),
+      jest.fn().mockResolvedValue({
+        buffer: Buffer.from('a'),
+        content_type: 'audio/mp3',
+      }),
     );
     const wabot = makeWabot(
       jest.fn().mockResolvedValue({ wa_media_url: 'https://wa/m1' }),
@@ -658,9 +686,10 @@ describe('processWhatsappPreloadJob — cache invalidation key', () => {
       }),
     });
     const bucket = makeBucket(
-      jest
-        .fn()
-        .mockResolvedValue({ buffer: Buffer.from('a'), content_type: 'audio/mp3' }),
+      jest.fn().mockResolvedValue({
+        buffer: Buffer.from('a'),
+        content_type: 'audio/mp3',
+      }),
     );
     const wabot = makeWabot(
       jest.fn().mockResolvedValue({ wa_media_url: 'https://wa/m1' }),

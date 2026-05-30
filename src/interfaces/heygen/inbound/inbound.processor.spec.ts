@@ -60,7 +60,11 @@ function successJob(
 }
 
 function failJob(
-  event_data: Partial<{ video_id: string; msg: string; callback_id: string }> = {
+  event_data: Partial<{
+    video_id: string;
+    msg: string;
+    callback_id: string;
+  }> = {
     video_id: 'v1',
     msg: 'oops',
     callback_id: 'cb1',
@@ -304,7 +308,8 @@ describe('processHeygenInboundJob — unhandled event_type', () => {
     await processHeygenInboundJob(
       {
         data: {
-          event_type: 'avatar_video.queued' as unknown as 'avatar_video.success',
+          event_type:
+            'avatar_video.queued' as unknown as 'avatar_video.success',
           event_data: {},
           otel_carrier: { traceparent: 'parent' } as never,
         },

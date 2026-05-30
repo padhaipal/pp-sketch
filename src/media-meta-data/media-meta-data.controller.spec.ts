@@ -287,14 +287,11 @@ describe('MediaMetaDataController.uploadStaticMedia', () => {
     const { ctrl } = makeController({});
 
     await expect(
-      ctrl.uploadStaticMedia(
-        [] as never,
-        {
-          items: JSON.stringify([
-            { state_transition_id: 'stid-1', media_type: 'image' },
-          ]),
-        },
-      ),
+      ctrl.uploadStaticMedia([] as never, {
+        items: JSON.stringify([
+          { state_transition_id: 'stid-1', media_type: 'image' },
+        ]),
+      }),
     ).rejects.toThrow(BadRequestException);
   });
 
@@ -337,7 +334,9 @@ describe('MediaMetaDataController.uploadStaticMedia', () => {
     });
 
     await ctrl.uploadStaticMedia([], {
-      items: [{ state_transition_id: 'stid-1', media_type: 'text', text: 'hi' }],
+      items: [
+        { state_transition_id: 'stid-1', media_type: 'text', text: 'hi' },
+      ],
     });
 
     expect(uploadStaticMedia).toHaveBeenCalled();
@@ -504,10 +503,14 @@ describe('MediaMetaDataController — exact error messages + find shapes', () =>
       ctrl.uploadStaticMedia(
         [], // 0 files
         {
-          items: JSON.stringify([{ state_transition_id: 's', media_type: 'image' }]),
+          items: JSON.stringify([
+            { state_transition_id: 's', media_type: 'image' },
+          ]),
         } as never,
       ),
-    ).rejects.toThrow('files length (0) must equal number of non-text items (1)');
+    ).rejects.toThrow(
+      'files length (0) must equal number of non-text items (1)',
+    );
   });
 
   it('starts a root span named "heygen-generate-controller" and ends it', async () => {
@@ -526,7 +529,9 @@ describe('MediaMetaDataController — exact error messages + find shapes', () =>
         },
       ],
     } as never);
-    expect(mockStartRootSpan).toHaveBeenCalledWith('heygen-generate-controller');
+    expect(mockStartRootSpan).toHaveBeenCalledWith(
+      'heygen-generate-controller',
+    );
     expect(mockSpanEnd).toHaveBeenCalledTimes(1);
   });
 
@@ -557,18 +562,15 @@ describe('MediaMetaDataController — exact error messages + find shapes', () =>
         .mockResolvedValue({ results: [], summary: {} }),
     } as Partial<MediaMetaDataService>;
     const { ctrl } = makeController({ mediaSvc });
-    await ctrl.uploadStaticMedia(
-      [],
-      {
-        items: JSON.stringify([
-          {
-            state_transition_id: 's',
-            media_type: 'text',
-            text: 'hi',
-          },
-        ]),
-      } as never,
-    );
+    await ctrl.uploadStaticMedia([], {
+      items: JSON.stringify([
+        {
+          state_transition_id: 's',
+          media_type: 'text',
+          text: 'hi',
+        },
+      ]),
+    } as never);
     expect(mockStartRootSpan).toHaveBeenCalledWith('upload-static-controller');
     expect(mockSpanEnd).toHaveBeenCalledTimes(1);
   });
@@ -594,9 +596,14 @@ describe('MediaMetaDataController — exact error messages + find shapes', () =>
     repo.findOneBy
       .mockResolvedValueOnce({ id: 'mm-1', user_id: 'u1' }) // parent
       .mockResolvedValueOnce(null); // no dup
-    repo.save.mockImplementation(async (e) => ({ ...e, created_at: new Date() }));
+    repo.save.mockImplementation(async (e) => ({
+      ...e,
+      created_at: new Date(),
+    }));
     const { ctrl } = makeController({ repo });
-    await ctrl.createDashboardTranscript('mm-1', { text: '  hello  ' } as never);
+    await ctrl.createDashboardTranscript('mm-1', {
+      text: '  hello  ',
+    } as never);
     expect(repo.findOneBy.mock.calls[1][0]).toEqual({
       input_media_id: 'mm-1',
       source: 'dashboard',

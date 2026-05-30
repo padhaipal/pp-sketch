@@ -24,7 +24,15 @@ function makeData(overrides: Partial<ReportCardData> = {}): ReportCardData {
     letters_learnt_yesterday: ['ग'],
     letters_currently_learning: ['च'],
     letters_already_known: ['ट'],
-    daily_bars: sevenBars([0, 60_000, 200_000, FIVE_MINUTES_MS, 360_000, 600_000, 0]),
+    daily_bars: sevenBars([
+      0,
+      60_000,
+      200_000,
+      FIVE_MINUTES_MS,
+      360_000,
+      600_000,
+      0,
+    ]),
     ...overrides,
   };
 }
@@ -282,13 +290,7 @@ describe('activity chart', () => {
     const svg = await buildReportCardSvg(
       makeData({
         daily_bars: sevenBars([
-          60_000,
-          120_000,
-          180_000,
-          240_000,
-          300_000,
-          360_000,
-          420_000,
+          60_000, 120_000, 180_000, 240_000, 300_000, 360_000, 420_000,
         ]),
       }),
     );
@@ -381,7 +383,9 @@ describe('QR code', () => {
     // module count, typically 21–33), NOT 900 (the qrSize box). Find a nested
     // svg whose viewBox max is small.
     const nested = elements(svg, 'svg').filter(
-      (s) => s.viewBox && s.viewBox !== `0 0 ${REPORT_CARD_WIDTH} ${REPORT_CARD_WIDTH}`,
+      (s) =>
+        s.viewBox &&
+        s.viewBox !== `0 0 ${REPORT_CARD_WIDTH} ${REPORT_CARD_WIDTH}`,
     );
     const qr = nested.find((s) => {
       const max = Number(s.viewBox.split(' ')[2]);
@@ -420,9 +424,9 @@ describe('heading wrapping (splitHeading)', () => {
     const svg = await buildReportCardSvg(makeData());
     // सीखे हुए अक्षर (13 chars) ≤ 22 → 1 tspan.
     // The two long headings (>22 chars) wrap to 2 tspans each.
-    const tspanGroups = [...svg.matchAll(/<text[^>]*>(<tspan[\s\S]*?)<\/text>/g)].map(
-      (m) => [...m[1].matchAll(/<tspan/g)].length,
-    );
+    const tspanGroups = [
+      ...svg.matchAll(/<text[^>]*>(<tspan[\s\S]*?)<\/text>/g),
+    ].map((m) => [...m[1].matchAll(/<tspan/g)].length);
     // At least one heading rendered as a single tspan and at least one as two.
     expect(tspanGroups).toContain(1);
     expect(tspanGroups).toContain(2);
@@ -433,7 +437,11 @@ describe('heading wrapping (splitHeading)', () => {
     // long heading wraps into two non-empty halves whose split point is a
     // space in the original — i.e. neither tspan starts/ends mid-word.
     const svg = await buildReportCardSvg(makeData());
-    const twoLine = [...svg.matchAll(/<text[^>]*>((?:<tspan[^>]*>[^<]*<\/tspan>){2})<\/text>/g)];
+    const twoLine = [
+      ...svg.matchAll(
+        /<text[^>]*>((?:<tspan[^>]*>[^<]*<\/tspan>){2})<\/text>/g,
+      ),
+    ];
     expect(twoLine.length).toBeGreaterThanOrEqual(1);
     const firstGroup = twoLine[0][1];
     const parts = [...firstGroup.matchAll(/<tspan[^>]*>([^<]*)<\/tspan>/g)].map(
@@ -469,7 +477,10 @@ describe('landscape layout', () => {
     // 3 subsection headings + activity heading + CTA heading = 5 of font-size 64.
     expect(headings.length).toBeGreaterThanOrEqual(3);
     // The 3 letter-subsection headings sit at distinct, increasing x (columns).
-    const subXs = headings.slice(0, 3).map((h) => num(h.x)).sort((a, b) => a - b);
+    const subXs = headings
+      .slice(0, 3)
+      .map((h) => num(h.x))
+      .sort((a, b) => a - b);
     expect(subXs[0]).toBeLessThan(subXs[1]);
     expect(subXs[1]).toBeLessThan(subXs[2]);
   });

@@ -86,7 +86,7 @@ describe('DEFAULT_JOB_OPTIONS', () => {
 });
 
 describe('createQueue', () => {
-  it('constructs a Queue with the shared connection and the queue\'s default options', () => {
+  it("constructs a Queue with the shared connection and the queue's default options", () => {
     const q = createQueue(QUEUE_NAMES.WABOT_INBOUND);
     expect(q).toBeDefined();
     expect(mockQueueCtor).toHaveBeenCalledTimes(1);
@@ -113,7 +113,7 @@ describe('createQueue', () => {
 });
 
 describe('createWorker', () => {
-  it('constructs a Worker with name, processor, shared connection, and the queue\'s default options', () => {
+  it("constructs a Worker with name, processor, shared connection, and the queue's default options", () => {
     const processor = jest.fn();
     createWorker(QUEUE_NAMES.HEYGEN_GENERATE, processor);
     const [name, proc, cfg] = mockWorkerCtor.mock.calls[0];

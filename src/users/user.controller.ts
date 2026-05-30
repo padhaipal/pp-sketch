@@ -435,9 +435,7 @@ export class UserController {
   }
 
   @Delete(':idOrExternalId')
-  async remove(
-    @Param('idOrExternalId') idOrExternalId: string,
-  ): Promise<{
+  async remove(@Param('idOrExternalId') idOrExternalId: string): Promise<{
     deleted: string[];
     failed: { input: string; reason: string }[];
   }> {
@@ -445,9 +443,7 @@ export class UserController {
   }
 
   @Post('bulk-delete')
-  async bulkRemove(
-    @Body() body: { identifiers: string[] },
-  ): Promise<{
+  async bulkRemove(@Body() body: { identifiers: string[] }): Promise<{
     deleted: string[];
     failed: { input: string; reason: string }[];
   }> {

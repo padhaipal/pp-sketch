@@ -184,7 +184,10 @@ function makeSystemJob(): Job<MessageJobDto> {
   } as any;
 }
 
-function makeTextJob(body: string, opts: { consecutive?: boolean } = {}): Job<MessageJobDto> {
+function makeTextJob(
+  body: string,
+  opts: { consecutive?: boolean } = {},
+): Job<MessageJobDto> {
   return {
     data: {
       message: {
@@ -195,7 +198,9 @@ function makeTextJob(body: string, opts: { consecutive?: boolean } = {}): Job<Me
         text: { body },
       },
       otel: { carrier: {} },
-      ...(opts.consecutive !== undefined ? { consecutive: opts.consecutive } : {}),
+      ...(opts.consecutive !== undefined
+        ? { consecutive: opts.consecutive }
+        : {}),
     } as any,
     attemptsMade: 0,
     opts: { attempts: 3 },
@@ -276,7 +281,9 @@ describe('processWabotInboundJob — new user onboarding', () => {
     mocks.mediaMetaDataService.createTextMedia.mockResolvedValue({
       id: 'text-1',
     });
-    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({});
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
+      {},
+    );
 
     await runJob(makeTextJob('hello world'), mocks);
 
@@ -286,9 +293,11 @@ describe('processWabotInboundJob — new user onboarding', () => {
     });
     expect(mocks.wabotOutbound.sendMessage).toHaveBeenCalled();
     // referral link must be present
-    const media = (mocks.wabotOutbound.sendMessage.mock.calls[0][0] as {
-      media: { type: string; body?: string }[];
-    }).media;
+    const media = (
+      mocks.wabotOutbound.sendMessage.mock.calls[0][0] as {
+        media: { type: string; body?: string }[];
+      }
+    ).media;
     expect(
       media.some(
         (m) =>
@@ -312,7 +321,9 @@ describe('processWabotInboundJob — new user onboarding', () => {
     mocks.mediaMetaDataService.createTextMedia.mockResolvedValue({
       id: 'text-1',
     });
-    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({});
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
+      {},
+    );
 
     await runJob(makeTextJob('thanks 9999999999'), mocks);
 
@@ -334,7 +345,9 @@ describe('processWabotInboundJob — new user onboarding', () => {
     mocks.mediaMetaDataService.createTextMedia.mockResolvedValue({
       id: 'text-1',
     });
-    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({});
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
+      {},
+    );
 
     await runJob(makeTextJob('thanks 9999999999'), mocks);
 
@@ -382,7 +395,9 @@ describe('processWabotInboundJob — new user onboarding', () => {
     mocks.mediaMetaDataService.createTextMedia.mockRejectedValue(
       new Error('save failed'),
     );
-    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({});
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
+      {},
+    );
 
     await runJob(makeTextJob('hi'), mocks);
 
@@ -396,7 +411,9 @@ describe('processWabotInboundJob — new user onboarding', () => {
       id: 'u-new',
       external_id: '+910000000001',
     });
-    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({});
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
+      {},
+    );
     // No transcripts → processAnswer not called for first audio (the new-user
     // path uses userMessageId from createWhatsappAudioMedia but does not
     // require transcripts).
@@ -419,7 +436,9 @@ describe('processWabotInboundJob — new user onboarding', () => {
       id: 'u-new',
       external_id: '+910000000001',
     });
-    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({});
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
+      {},
+    );
 
     await runJob(makeVideoJob(), mocks);
 
@@ -515,7 +534,9 @@ describe('processWabotInboundJob — non-audio existing-user message', () => {
       id: 'u1',
       external_id: '+910000000001',
     });
-    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({});
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
+      {},
+    );
 
     await expect(runJob(makeTextJob('hello'), mocks)).rejects.toThrow(
       /audio-only redirect media missing/,
@@ -757,7 +778,10 @@ describe('processWabotInboundJob — span attributes', () => {
       external_id: '+910000000002',
     });
     await runJob(makeSystemJob(), mocks);
-    expect(mockSpanSetAttribute.mock.calls).toContainEqual(['pp.path', 'system']);
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.path',
+      'system',
+    ]);
     expect(mockSpanSetAttribute.mock.calls).toContainEqual([
       'pp.outcome',
       'success',
@@ -895,7 +919,7 @@ describe('processWabotInboundJob — referrer extraction (new user, from text)',
     });
   });
 
-  it('excludes the sender\'s own number from being used as a referrer', async () => {
+  it("excludes the sender's own number from being used as a referrer", async () => {
     // The sender is +910000000001 → digits 910000000001 in the text must be
     // rejected by the `format(E.164) !== from` self-exclusion guard.
     const { mocks, job } = newUserText('this is my own number 910000000001');
@@ -926,9 +950,15 @@ describe('processWabotInboundJob — logged messages', () => {
   let logSpy: jest.SpyInstance;
 
   beforeEach(() => {
-    warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-    errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
-    logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    warnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    errorSpy = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+    logSpy = jest
+      .spyOn(Logger.prototype, 'log')
+      .mockImplementation(() => undefined);
   });
   afterEach(() => {
     jest.clearAllMocks();
@@ -1243,7 +1273,10 @@ describe('processWabotInboundJob — complete-restart second lesson', () => {
     expect(mocks.literacyLessonService.processAnswer).toHaveBeenCalledTimes(2);
     expect(mocks.literacyLessonService.processAnswer).toHaveBeenNthCalledWith(
       2,
-      { user: { id: 'user-1', external_id: '+910000000001' }, user_message_id: 'audio-entity-1' },
+      {
+        user: { id: 'user-1', external_id: '+910000000001' },
+        user_message_id: 'audio-entity-1',
+      },
     );
   });
 });
@@ -1293,7 +1326,9 @@ describe('processWabotInboundJob — new-user exact downstream args', () => {
       id: 'audio-new',
     });
     await runJob(createAudioJob(), mocks);
-    expect(mocks.mediaMetaDataService.createWhatsappAudioMedia).toHaveBeenCalledWith({
+    expect(
+      mocks.mediaMetaDataService.createWhatsappAudioMedia,
+    ).toHaveBeenCalledWith({
       wa_media_url: 'https://example.com/audio',
       user: { id: 'u-new', external_id: '+910000000001' },
       otel_carrier: { from: 'span' },
@@ -1306,7 +1341,7 @@ describe('processWabotInboundJob — new-user exact downstream args', () => {
     });
   });
 
-  it('starts the new user\'s first lesson with their user_message_id', async () => {
+  it("starts the new user's first lesson with their user_message_id", async () => {
     const mocks = newUserAudio();
     mocks.mediaMetaDataService.createWhatsappAudioMedia.mockResolvedValue({
       id: 'audio-new',
@@ -1335,9 +1370,15 @@ describe('processWabotInboundJob — failure tolerance (no-coverage catch blocks
   let errorSpy: jest.SpyInstance;
   let logSpy: jest.SpyInstance;
   beforeEach(() => {
-    warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-    errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
-    logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    warnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    errorSpy = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+    logSpy = jest
+      .spyOn(Logger.prototype, 'log')
+      .mockImplementation(() => undefined);
   });
   afterEach(() => {
     jest.clearAllMocks();
@@ -1453,8 +1494,12 @@ describe('processWabotInboundJob — handleSendResult logging (onboarding + audi
   let errorSpy: jest.SpyInstance;
   let warnSpy: jest.SpyInstance;
   beforeEach(() => {
-    errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
-    warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    errorSpy = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+    warnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
   });
   afterEach(() => {
     jest.clearAllMocks();
@@ -1506,7 +1551,10 @@ describe('processWabotInboundJob — handleSendResult logging (onboarding + audi
     mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
       {},
     );
-    mocks.wabotOutbound.sendMessage.mockResolvedValue({ status: 422, body: {} });
+    mocks.wabotOutbound.sendMessage.mockResolvedValue({
+      status: 422,
+      body: {},
+    });
     await runJob(makeTextJob('hi'), mocks);
     expect(errorSpy.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
       /new-user-onboarding sendMessage 4XX: 422/,

@@ -9,15 +9,7 @@ jest.mock('uuid', () => ({
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s),
 }));
 
-const TEST_WORD_LIST = [
-  'अब',
-  'कमल',
-  'पानी',
-  'खाना',
-  'दीवार',
-  'किताब',
-  'सूरज',
-];
+const TEST_WORD_LIST = ['अब', 'कमल', 'पानी', 'खाना', 'दीवार', 'किताब', 'सूरज'];
 
 jest.mock('fs', () => {
   const actual = jest.requireActual('fs');
@@ -87,7 +79,8 @@ function makeService(opts: {
   const ds = {
     query: opts.dsQuery ?? jest.fn(),
     transaction:
-      opts.dsTransaction ?? jest.fn(async (cb: any) => cb({ query: jest.fn() })),
+      opts.dsTransaction ??
+      jest.fn(async (cb: any) => cb({ query: jest.fn() })),
   } as unknown as DataSource;
   return {
     svc: new LiteracyLessonService(
@@ -298,9 +291,7 @@ describe('LiteracyLessonService.processAnswer — continue (rehydrate)', () => {
       studentAnswer: 'कम कमल', // joined by space
     });
     expect(out.isComplete).toBe(true);
-    expect(out.stateTransitionIds).toEqual([
-      'कमल-word-complete-correct-first',
-    ]);
+    expect(out.stateTransitionIds).toEqual(['कमल-word-complete-correct-first']);
   });
 
   it('throws BadRequest when continuing with no transcripts', async () => {
@@ -409,7 +400,10 @@ describe('LiteracyLessonService.processAnswer — score recording', () => {
     const gradeAndRecord = gradeReject
       ? jest.fn().mockRejectedValue(gradeReject)
       : jest.fn().mockResolvedValue([]);
-    return { ...makeService({ repo, dsQuery, scoreSvc: { gradeAndRecord } }), gradeAndRecord };
+    return {
+      ...makeService({ repo, dsQuery, scoreSvc: { gradeAndRecord } }),
+      gradeAndRecord,
+    };
   }
 
   it('skips gradeAndRecord when both pending arrays are empty', async () => {
@@ -468,9 +462,7 @@ describe('LiteracyLessonService.processAnswer — isComplete flag', () => {
   it('returns isComplete=true when snapshot.status is "done"', async () => {
     const repo = makeRepo();
     repo.findOne.mockResolvedValue(null);
-    mockActorGetSnapshot.mockReturnValue(
-      happySnapshot({ status: 'done' }),
-    );
+    mockActorGetSnapshot.mockReturnValue(happySnapshot({ status: 'done' }));
     const dsQuery = jest
       .fn()
       .mockResolvedValueOnce([
@@ -531,7 +523,9 @@ describe('LiteracyLessonService.cleanupPartialState', () => {
     expect(txQuery).toHaveBeenCalledTimes(2);
     expect(txQuery.mock.calls[0][0]).toMatch(/DELETE FROM scores/);
     expect(txQuery.mock.calls[0][1]).toEqual(['mm-1']);
-    expect(txQuery.mock.calls[1][0]).toMatch(/DELETE FROM literacy_lesson_states/);
+    expect(txQuery.mock.calls[1][0]).toMatch(
+      /DELETE FROM literacy_lesson_states/,
+    );
   });
 });
 
@@ -774,7 +768,10 @@ describe('LiteracyLessonService.processAnswer — lesson-path age boundaries', (
     mockActorGetSnapshot.mockReturnValue(happySnapshot());
     const { svc } = makeService({ repo, dsQuery });
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
-    expect(mockSpanSetAttribute.mock.calls).toContainEqual(['pp.lesson.path', 'fresh']);
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.path',
+      'fresh',
+    ]);
     nowSpy.mockRestore();
   });
 
@@ -788,7 +785,10 @@ describe('LiteracyLessonService.processAnswer — lesson-path age boundaries', (
       user_message_id: 'mm-1',
       transcripts: [{ id: 't1', text: 'कमल' }] as never,
     });
-    expect(mockSpanSetAttribute.mock.calls).toContainEqual(['pp.lesson.path', 'continue']);
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.path',
+      'continue',
+    ]);
     expect(mockActorSend).toHaveBeenCalled(); // rehydrate path sends ANSWER
     nowSpy.mockRestore();
   });
@@ -864,7 +864,10 @@ describe('LiteracyLessonService.processAnswer — persisted snapshot fields', ()
       .mockResolvedValueOnce([{ id: 'lls-1' }]);
     const { svc } = makeService({ repo, dsQuery });
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
-    expect(mockSpanSetAttribute.mock.calls).toContainEqual(['pp.lesson.word', 'कमल']);
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.word',
+      'कमल',
+    ]);
   });
 });
 
@@ -966,7 +969,10 @@ describe('LiteracyLessonService.selectNextWord — scoring + exclusion + tie-bre
         recent_words: ['कमल'], // कमल recent → excluded; mostRecentLen 3, +1 → maxLength 4
         unique_in_add_window: 5,
         // कमल would be the min (−15) but it's excluded; सूरज is the next target.
-        letter_scores: [...seed(['क', 'म', 'ल'], -15), ...seed(['स', 'ू', 'र', 'ज'], -5)],
+        letter_scores: [
+          ...seed(['क', 'म', 'ल'], -15),
+          ...seed(['स', 'ू', 'र', 'ज'], -5),
+        ],
       }),
     );
     expect(word).toBe('सूरज');
@@ -1190,7 +1196,11 @@ describe('LiteracyLessonService — log messages', () => {
     const gradeAndRecord = jest
       .fn()
       .mockRejectedValue(new Error('score svc down'));
-    const { svc } = makeService({ repo, dsQuery, scoreSvc: { gradeAndRecord } });
+    const { svc } = makeService({
+      repo,
+      dsQuery,
+      scoreSvc: { gradeAndRecord },
+    });
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -1387,7 +1397,9 @@ describe('LiteracyLessonService — combined transcript guard (L59)', () => {
         user_message_id: 'mm-1',
         transcripts: [] as never,
       }),
-    ).rejects.toThrow('Rehydrating an existing lesson requires a student answer');
+    ).rejects.toThrow(
+      'Rehydrating an existing lesson requires a student answer',
+    );
   });
 });
 
@@ -1408,7 +1420,11 @@ describe('LiteracyLessonService — pending-score defaults (L139/L141)', () => {
       .mockResolvedValueOnce([freshRow()])
       .mockResolvedValueOnce([{ id: 'lls-1' }]);
     const gradeAndRecord = jest.fn().mockResolvedValue([]);
-    const { svc } = makeService({ repo, dsQuery, scoreSvc: { gradeAndRecord } });
+    const { svc } = makeService({
+      repo,
+      dsQuery,
+      scoreSvc: { gradeAndRecord },
+    });
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     expect(gradeAndRecord).not.toHaveBeenCalled();
   });

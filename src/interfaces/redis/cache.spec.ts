@@ -57,9 +57,7 @@ describe('CacheService — constructor', () => {
 
   it('error handler logs (executes without throwing) when ioredis emits "error"', () => {
     new CacheService();
-    const handler = mockRedisInstance.on.mock.calls[0][1] as (
-      e: Error,
-    ) => void;
+    const handler = mockRedisInstance.on.mock.calls[0][1] as (e: Error) => void;
     expect(() => handler(new Error('boom'))).not.toThrow();
   });
 });
@@ -139,9 +137,9 @@ describe('CacheService.del', () => {
   it('rethrows when throwOnError:true and redis.del rejects', async () => {
     mockRedisInstance.del.mockRejectedValue(new Error('redis down'));
     const svc = new CacheService();
-    await expect(
-      svc.del('k', { throwOnError: true }),
-    ).rejects.toThrow('redis down');
+    await expect(svc.del('k', { throwOnError: true })).rejects.toThrow(
+      'redis down',
+    );
   });
 
   it('does not throw when throwOnError:true and redis.del resolves', async () => {
@@ -255,9 +253,7 @@ describe('CacheService — exact warn messages', () => {
     (mockRedisInstance.get as jest.Mock).mockRejectedValue(new Error('boom'));
     const svc = new CacheService();
     await svc.get('mykey');
-    expect(warn).toHaveBeenCalledWith(
-      'Cache get failed for key mykey: boom',
-    );
+    expect(warn).toHaveBeenCalledWith('Cache get failed for key mykey: boom');
     warn.mockRestore();
   });
 
@@ -266,9 +262,7 @@ describe('CacheService — exact warn messages', () => {
     (mockRedisInstance.set as jest.Mock).mockRejectedValue(new Error('boom'));
     const svc = new CacheService();
     await svc.set('k', { foo: 1 }, 60);
-    expect(warn).toHaveBeenCalledWith(
-      'Cache set failed for key k: boom',
-    );
+    expect(warn).toHaveBeenCalledWith('Cache set failed for key k: boom');
     warn.mockRestore();
   });
 

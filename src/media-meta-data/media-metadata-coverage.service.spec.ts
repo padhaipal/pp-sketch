@@ -18,15 +18,35 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
   it('groups counts by prefix/suffix and assembles ordered rows (`_` then letters then words)', async () => {
     const aggregateRows = [
       // letter prefix 'क'
-      { state_transition_id: 'क-letter-word-correct-last', media_type: 'audio', active: '3' },
-      { state_transition_id: 'क-letter-word-correct-last', media_type: 'video', active: 2 },
+      {
+        state_transition_id: 'क-letter-word-correct-last',
+        media_type: 'audio',
+        active: '3',
+      },
+      {
+        state_transition_id: 'क-letter-word-correct-last',
+        media_type: 'video',
+        active: 2,
+      },
       // generic prefix '_'
-      { state_transition_id: '_-image-image-wrong-first', media_type: 'image', active: '1' },
+      {
+        state_transition_id: '_-image-image-wrong-first',
+        media_type: 'image',
+        active: '1',
+      },
       // word prefix 'word1' — suffix is one of the WHOLE entries in SUFFIXES
-      { state_transition_id: 'word1-word-word-loopBack', media_type: 'text', active: '5' },
+      {
+        state_transition_id: 'word1-word-word-loopBack',
+        media_type: 'text',
+        active: '5',
+      },
       // word-word-loopBack maps to a SUFFIX entry "word-word-loopBack"
       // invalid media_type → ignored
-      { state_transition_id: 'क-letter-word-correct-last', media_type: 'BAD', active: '99' },
+      {
+        state_transition_id: 'क-letter-word-correct-last',
+        media_type: 'BAD',
+        active: '99',
+      },
     ];
     const letterRows = [{ grapheme: 'क' }, { grapheme: 'ख' }];
     const query = jest
@@ -40,17 +60,37 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
     // Static suffix list is in the implementation; verify a couple of known entries.
     expect(out.suffixes).toContain('letter-word-correct-last');
     expect(out.suffixes).toContain('image-image-wrong-first');
-    expect(out.media_types).toEqual(['audio', 'text', 'video', 'image', 'sticker']);
+    expect(out.media_types).toEqual([
+      'audio',
+      'text',
+      'video',
+      'image',
+      'sticker',
+    ]);
     expect(out.letters).toEqual(['क', 'ख']);
     expect(out.words).toEqual(['word1', 'word2']);
     // Row ordering: '_', then letters, then words.
-    expect(out.rows.map((r) => r.prefix)).toEqual(['_', 'क', 'ख', 'word1', 'word2']);
+    expect(out.rows.map((r) => r.prefix)).toEqual([
+      '_',
+      'क',
+      'ख',
+      'word1',
+      'word2',
+    ]);
   });
 
   it('produces the expected counts in the matching suffix column and zeroes elsewhere', async () => {
     const aggregateRows = [
-      { state_transition_id: 'क-letter-word-correct-last', media_type: 'audio', active: '3' },
-      { state_transition_id: 'क-letter-word-correct-last', media_type: 'video', active: 2 },
+      {
+        state_transition_id: 'क-letter-word-correct-last',
+        media_type: 'audio',
+        active: '3',
+      },
+      {
+        state_transition_id: 'क-letter-word-correct-last',
+        media_type: 'video',
+        active: 2,
+      },
     ];
     const letterRows = [{ grapheme: 'क' }];
     const query = jest
@@ -109,7 +149,11 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
   it('drops aggregate rows whose media_type is not in VALID_MEDIA_TYPES', async () => {
     const aggregateRows = [
       // 'tiktok' is not a valid type — must be ignored.
-      { state_transition_id: 'क-letter-word-correct-last', media_type: 'tiktok', active: '99' },
+      {
+        state_transition_id: 'क-letter-word-correct-last',
+        media_type: 'tiktok',
+        active: '99',
+      },
     ];
     const letterRows = [{ grapheme: 'क' }];
     const query = jest

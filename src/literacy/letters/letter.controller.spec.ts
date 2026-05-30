@@ -127,9 +127,9 @@ describe('LetterController.updateLetter', () => {
     svc.update.mockResolvedValue(null);
     const ctrl = makeController(svc);
 
-    await expect(
-      ctrl.updateLetter('क', { new_grapheme: 'ख' }),
-    ).rejects.toThrow(NotFoundException);
+    await expect(ctrl.updateLetter('क', { new_grapheme: 'ख' })).rejects.toThrow(
+      NotFoundException,
+    );
     expect(mockSpanEnd).toHaveBeenCalledTimes(1);
   });
 
@@ -138,9 +138,9 @@ describe('LetterController.updateLetter', () => {
     svc.update.mockRejectedValue(new Error('boom'));
     const ctrl = makeController(svc);
 
-    await expect(
-      ctrl.updateLetter('क', { new_grapheme: 'ख' }),
-    ).rejects.toThrow('boom');
+    await expect(ctrl.updateLetter('क', { new_grapheme: 'ख' })).rejects.toThrow(
+      'boom',
+    );
     expect(mockSpanEnd).toHaveBeenCalledTimes(1);
   });
 });

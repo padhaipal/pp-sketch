@@ -146,11 +146,7 @@ export class UserActivityService {
     );
     const midnight = new Date(istMidnight.getTime() - IST_OFFSET_MS);
 
-    const byUser = await this.fetchVoiceMessages(
-      [args.user_id],
-      midnight,
-      now,
-    );
+    const byUser = await this.fetchVoiceMessages([args.user_id], midnight, now);
     const msgs = byUser.get(args.user_id) ?? [];
     if (msgs.length < 2) return false;
 

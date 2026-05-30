@@ -41,9 +41,7 @@ export class UserService {
   // E.164 phone (delegated to find() for the external_id path). Returns null
   // on a well-shaped identifier that has no matching row.
   async findByIdOrExternalId(input: string): Promise<User | null> {
-    return this.find(
-      isUuid(input) ? { id: input } : { external_id: input },
-    );
+    return this.find(isUuid(input) ? { id: input } : { external_id: input });
   }
 
   // See partitionUserIdentifiers in user.dto.ts. Exposed here as a method so
@@ -282,9 +280,7 @@ export class UserService {
   // Per-user atomic delete. Each user runs in its own transaction so one
   // failure does not block the rest of the batch. Errors are surfaced as
   // `failed` entries, never swallowed silently.
-  async delete(
-    input: string | string[],
-  ): Promise<{
+  async delete(input: string | string[]): Promise<{
     deleted: string[];
     failed: { input: string; reason: string }[];
   }> {
@@ -366,10 +362,9 @@ export class UserService {
           // media rows via input_media_id is itself owned by this user. If a
           // future code path violates that, this DELETE will FK-error and
           // this list must be extended (e.g. with a recursive pre-delete).
-          await manager.query(
-            `DELETE FROM media_metadata WHERE user_id = $1`,
-            [target.id],
-          );
+          await manager.query(`DELETE FROM media_metadata WHERE user_id = $1`, [
+            target.id,
+          ]);
 
           // Convention deviation: scores / literacy_lesson_states /
           // media_metadata writes happen here as raw SQL rather than through

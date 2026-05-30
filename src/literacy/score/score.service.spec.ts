@@ -132,14 +132,16 @@ describe('ScoreService.find', () => {
 
   it('rejects limit=0', async () => {
     const { service } = makeService(jest.fn());
-    await expect(service.find({ limit: 0 })).rejects.toThrow(BadRequestException);
+    await expect(service.find({ limit: 0 })).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it('rejects limit exceeding the default cap', async () => {
     const { service } = makeService(jest.fn());
-    await expect(
-      service.find({ limit: 100_001 }),
-    ).rejects.toThrow(BadRequestException);
+    await expect(service.find({ limit: 100_001 })).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it('filters on s.user_id when user_id is provided', async () => {
@@ -366,12 +368,16 @@ describe('ScoreService.gradeAndRecord', () => {
 describe('ScoreService.getLetterBins', () => {
   it('throws BadRequest on empty string input (validator)', async () => {
     const { service } = makeService(jest.fn());
-    await expect(service.getLetterBins('')).rejects.toThrow(BadRequestException);
+    await expect(service.getLetterBins('')).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it('throws BadRequest on empty array input', async () => {
     const { service } = makeService(jest.fn());
-    await expect(service.getLetterBins([])).rejects.toThrow(BadRequestException);
+    await expect(service.getLetterBins([])).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it('throws BadRequest when asOf is an Invalid Date', async () => {
@@ -468,7 +474,14 @@ describe('ScoreService.getLetterBins', () => {
 
     // String input → single result, not array
     expect(Array.isArray(out)).toBe(false);
-    const result = out as { bins: { untouched: string[]; regressed: string[]; learnt: string[]; improved: string[] } };
+    const result = out as {
+      bins: {
+        untouched: string[];
+        regressed: string[];
+        learnt: string[];
+        improved: string[];
+      };
+    };
     expect(result.bins.untouched).toEqual(expect.arrayContaining(['क', 'ख']));
     expect(result.bins.regressed).toEqual(['ग']);
     expect(result.bins.learnt).toEqual(['घ']);
@@ -646,14 +659,60 @@ describe('ScoreService.createSeedScores', () => {
 // SEED_SCORES mirror — kept in lockstep with score.service.ts. A change there
 // without a change here should fail this test (that's the point).
 const SEED_PAIRS: [string, number][] = [
-  ['ऋ', 1], ['ा', 1.5], ['ी', 2], ['ु', 2.5], ['े', 3], ['ो', 3.5],
-  ['ै', 4], ['ू', 4.5], ['ौ', 5], ['ि', 5.5], ['ं', 6], ['ृ', 6.5],
-  ['ञ', 7], ['ण', 7], ['अ', 0], ['आ', 0], ['इ', 0], ['ई', 0], ['उ', 0],
-  ['ऊ', 0], ['ए', 0], ['ऐ', 0], ['ओ', 0], ['औ', 0], ['क', 0], ['ख', 0],
-  ['ग', 0], ['घ', 0], ['च', 0], ['छ', 0], ['ज', 0], ['झ', 0], ['ट', 0],
-  ['ठ', 0], ['ड', 0], ['ढ', 0], ['त', 0], ['थ', 0], ['द', 0], ['ध', 0],
-  ['न', 0], ['प', 0], ['फ', 0], ['ब', 0], ['भ', 0], ['म', 0], ['य', 0],
-  ['र', 0], ['ल', 0], ['व', 0], ['श', 0], ['ष', 0], ['स', 0], ['ह', 0],
+  ['ऋ', 1],
+  ['ा', 1.5],
+  ['ी', 2],
+  ['ु', 2.5],
+  ['े', 3],
+  ['ो', 3.5],
+  ['ै', 4],
+  ['ू', 4.5],
+  ['ौ', 5],
+  ['ि', 5.5],
+  ['ं', 6],
+  ['ृ', 6.5],
+  ['ञ', 7],
+  ['ण', 7],
+  ['अ', 0],
+  ['आ', 0],
+  ['इ', 0],
+  ['ई', 0],
+  ['उ', 0],
+  ['ऊ', 0],
+  ['ए', 0],
+  ['ऐ', 0],
+  ['ओ', 0],
+  ['औ', 0],
+  ['क', 0],
+  ['ख', 0],
+  ['ग', 0],
+  ['घ', 0],
+  ['च', 0],
+  ['छ', 0],
+  ['ज', 0],
+  ['झ', 0],
+  ['ट', 0],
+  ['ठ', 0],
+  ['ड', 0],
+  ['ढ', 0],
+  ['त', 0],
+  ['थ', 0],
+  ['द', 0],
+  ['ध', 0],
+  ['न', 0],
+  ['प', 0],
+  ['फ', 0],
+  ['ब', 0],
+  ['भ', 0],
+  ['म', 0],
+  ['य', 0],
+  ['र', 0],
+  ['ल', 0],
+  ['व', 0],
+  ['श', 0],
+  ['ष', 0],
+  ['स', 0],
+  ['ह', 0],
 ];
 
 function userRow(id: string, external_id = '919999990001') {
@@ -662,7 +721,9 @@ function userRow(id: string, external_id = '919999990001') {
 
 describe('ScoreService.create — exact SQL placeholders + clauses', () => {
   it('numbers the user/letter/message/score placeholders $1..$4 in order', async () => {
-    const { service, query } = makeService(jest.fn().mockResolvedValue([{ id: 's1' }]));
+    const { service, query } = makeService(
+      jest.fn().mockResolvedValue([{ id: 's1' }]),
+    );
     await service.create({
       user_id: 'u1',
       letter_id: 'l1',
@@ -675,14 +736,21 @@ describe('ScoreService.create — exact SQL placeholders + clauses', () => {
     // umIdx=$3, scoreIdx=$4 (kills the idx++ → idx-- + nextIdx +1 → -1 mutants).
     expect(sql).toContain('$3, $4');
     expect(sql).toContain('m.id = $3 AND m.rolled_back = false');
-    expect(sql).toContain('INSERT INTO scores (user_id, letter_id, user_message_id, score)');
+    expect(sql).toContain(
+      'INSERT INTO scores (user_id, letter_id, user_message_id, score)',
+    );
     expect(sql).toContain('RETURNING *');
   });
 
   it('throws the exact NotFound message when the insert matches nothing', async () => {
     const { service } = makeService(jest.fn().mockResolvedValue([]));
     await expect(
-      service.create({ user_id: 'u1', letter_id: 'l1', user_message_id: 'mm-1', score: 0 }),
+      service.create({
+        user_id: 'u1',
+        letter_id: 'l1',
+        user_message_id: 'mm-1',
+        score: 0,
+      }),
     ).rejects.toThrow(
       'create() referenced user, letter, or media_metadata not found (or rolled back)',
     );
@@ -727,14 +795,27 @@ describe('ScoreService.gradeAndRecord — placeholders + score math', () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce([
-        { id: 's1', letter_id: 'l-ka', user_id: 'u1', score: 0.5, user_message_id: 'mm-x', created_at: new Date() },
+        {
+          id: 's1',
+          letter_id: 'l-ka',
+          user_id: 'u1',
+          score: 0.5,
+          user_message_id: 'mm-x',
+          created_at: new Date(),
+        },
       ])
       .mockResolvedValueOnce([{ id: 'l-ka', grapheme: 'क' }])
       .mockResolvedValueOnce([{ id: 'new1' }]);
     const { service } = makeService(query);
-    await service.gradeAndRecord({ user_id: 'u1', correct: 'क', userMessageId: 'mm-1' });
+    await service.gradeAndRecord({
+      user_id: 'u1',
+      correct: 'क',
+      userMessageId: 'mm-1',
+    });
     const letterSql: string = query.mock.calls[1][0];
-    expect(letterSql).toContain('SELECT id, grapheme FROM letters WHERE id IN ($1)');
+    expect(letterSql).toContain(
+      'SELECT id, grapheme FROM letters WHERE id IN ($1)',
+    );
   });
 
   it('numbers the INSERT-UNION grapheme=$3 / score=$4 placeholders (kills idx+1 → idx-1)', async () => {
@@ -743,12 +824,18 @@ describe('ScoreService.gradeAndRecord — placeholders + score math', () => {
       .mockResolvedValueOnce([]) // find → no history
       .mockResolvedValueOnce([{ id: 'new1' }]); // insert
     const { service } = makeService(query);
-    await service.gradeAndRecord({ user_id: 'u1', correct: 'क', userMessageId: 'mm-1' });
+    await service.gradeAndRecord({
+      user_id: 'u1',
+      correct: 'क',
+      userMessageId: 'mm-1',
+    });
     const insertSql: string = query.mock.calls[1][0];
     expect(insertSql).toContain('l.grapheme = $3');
     expect(insertSql).toContain('$4::double precision AS score');
     expect(insertSql).toContain('m.id = $2 AND m.rolled_back = false');
-    expect(insertSql).toContain('INSERT INTO scores (user_id, letter_id, user_message_id, score)');
+    expect(insertSql).toContain(
+      'INSERT INTO scores (user_id, letter_id, user_message_id, score)',
+    );
   });
 
   it('applies +1.01 for a correct answer off a 0 baseline (exact)', async () => {
@@ -757,7 +844,11 @@ describe('ScoreService.gradeAndRecord — placeholders + score math', () => {
       .mockResolvedValueOnce([]) // no history → baseline 0
       .mockResolvedValueOnce([{ id: 'new1' }]);
     const { service } = makeService(query);
-    await service.gradeAndRecord({ user_id: 'u1', correct: 'क', userMessageId: 'mm-1' });
+    await service.gradeAndRecord({
+      user_id: 'u1',
+      correct: 'क',
+      userMessageId: 'mm-1',
+    });
     const params = query.mock.calls[1][1];
     // params: [userParam, userMessageId, grapheme, score]
     expect(params[2]).toBe('क');
@@ -770,7 +861,11 @@ describe('ScoreService.gradeAndRecord — placeholders + score math', () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ id: 'new1' }]);
     const { service } = makeService(query);
-    await service.gradeAndRecord({ user_id: 'u1', incorrect: 'क', userMessageId: 'mm-1' });
+    await service.gradeAndRecord({
+      user_id: 'u1',
+      incorrect: 'क',
+      userMessageId: 'mm-1',
+    });
     const params = query.mock.calls[1][1];
     expect(params[3]).toBeCloseTo(-3.001, 5);
   });
@@ -780,13 +875,31 @@ describe('ScoreService.gradeAndRecord — placeholders + score math', () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce([
-        { id: 's2', letter_id: 'l-ka', user_id: 'u1', score: 2.01, user_message_id: 'm2', created_at: new Date('2026-01-02') },
-        { id: 's1', letter_id: 'l-ka', user_id: 'u1', score: 0.5, user_message_id: 'm1', created_at: new Date('2026-01-01') },
+        {
+          id: 's2',
+          letter_id: 'l-ka',
+          user_id: 'u1',
+          score: 2.01,
+          user_message_id: 'm2',
+          created_at: new Date('2026-01-02'),
+        },
+        {
+          id: 's1',
+          letter_id: 'l-ka',
+          user_id: 'u1',
+          score: 0.5,
+          user_message_id: 'm1',
+          created_at: new Date('2026-01-01'),
+        },
       ])
       .mockResolvedValueOnce([{ id: 'l-ka', grapheme: 'क' }])
       .mockResolvedValueOnce([{ id: 'new1' }]);
     const { service } = makeService(query);
-    await service.gradeAndRecord({ user_id: 'u1', correct: 'क', userMessageId: 'mm-1' });
+    await service.gradeAndRecord({
+      user_id: 'u1',
+      correct: 'क',
+      userMessageId: 'mm-1',
+    });
     const params = query.mock.calls[2][1];
     expect(params[3]).toBeCloseTo(3.02, 5);
   });
@@ -795,7 +908,11 @@ describe('ScoreService.gradeAndRecord — placeholders + score math', () => {
     const query = jest.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const { service } = makeService(query);
     await expect(
-      service.gradeAndRecord({ user_id: 'u1', correct: 'क', userMessageId: 'mm-1' }),
+      service.gradeAndRecord({
+        user_id: 'u1',
+        correct: 'क',
+        userMessageId: 'mm-1',
+      }),
     ).resolves.toEqual([]);
   });
 });
@@ -832,11 +949,17 @@ describe('ScoreService.getLetterBins — resolution SQL + aggregate clauses', ()
     await service.getLetterBins(UUID_A);
     const aggSql: string = query.mock.calls[1][0];
     expect(aggSql).toContain('s.user_id = ANY($1::uuid[])');
-    expect(aggSql).toContain("MAX(score) FILTER (WHERE user_message_id IS NULL) AS seed_score");
-    expect(aggSql).toContain('MAX(score) FILTER (WHERE rn_last = 1) AS last_score');
+    expect(aggSql).toContain(
+      'MAX(score) FILTER (WHERE user_message_id IS NULL) AS seed_score',
+    );
+    expect(aggSql).toContain(
+      'MAX(score) FILTER (WHERE rn_last = 1) AS last_score',
+    );
     expect(aggSql).toContain('MIN(score) AS min_score');
     expect(aggSql).toContain('CROSS JOIN letters l');
-    expect(aggSql).toContain('LEFT JOIN agg a ON a.user_id = u.id AND a.letter_id = l.id');
+    expect(aggSql).toContain(
+      'LEFT JOIN agg a ON a.user_id = u.id AND a.letter_id = l.id',
+    );
   });
 
   it('throws the exact NotFound message for an unresolved id', async () => {
@@ -862,39 +985,79 @@ describe('ScoreService.getLetterBins — bin classification boundaries', () => {
       .mockResolvedValueOnce([userRow(UUID_A)])
       .mockResolvedValueOnce([{ user_id: UUID_A, grapheme: 'क', ...agg }]);
     return makeService(query).service.getLetterBins(UUID_A) as Promise<{
-      bins: { untouched: string[]; regressed: string[]; learnt: string[]; improved: string[] };
+      bins: {
+        untouched: string[];
+        regressed: string[];
+        learnt: string[];
+        improved: string[];
+      };
     }>;
   }
 
   it('n_scores=1 → untouched (boundary of n <= 1)', async () => {
-    const out = await bins({ n_scores: 1, seed_score: 0, last_score: 0, min_score: 0 });
+    const out = await bins({
+      n_scores: 1,
+      seed_score: 0,
+      last_score: 0,
+      min_score: 0,
+    });
     expect(out.bins.untouched).toContain('क');
   });
 
   it('n_scores=2 with last>seed and shallow dip → NOT untouched (improved)', async () => {
-    const out = await bins({ n_scores: 2, seed_score: 0, last_score: 1, min_score: -1 });
+    const out = await bins({
+      n_scores: 2,
+      seed_score: 0,
+      last_score: 1,
+      min_score: -1,
+    });
     expect(out.bins.untouched).not.toContain('क');
     expect(out.bins.improved).toContain('क');
   });
 
   it('seed_score=null → untouched even with scores present', async () => {
-    const out = await bins({ n_scores: 3, seed_score: null, last_score: 2, min_score: -2 });
+    const out = await bins({
+      n_scores: 3,
+      seed_score: null,
+      last_score: 2,
+      min_score: -2,
+    });
     expect(out.bins.untouched).toContain('क');
   });
 
   it('last==seed → regressed; last just above seed → not regressed', async () => {
-    const eq = await bins({ n_scores: 3, seed_score: 0, last_score: 0, min_score: -1 });
+    const eq = await bins({
+      n_scores: 3,
+      seed_score: 0,
+      last_score: 0,
+      min_score: -1,
+    });
     expect(eq.bins.regressed).toContain('क');
-    const above = await bins({ n_scores: 3, seed_score: 0, last_score: 0.01, min_score: -1 });
+    const above = await bins({
+      n_scores: 3,
+      seed_score: 0,
+      last_score: 0.01,
+      min_score: -1,
+    });
     expect(above.bins.regressed).not.toContain('क');
   });
 
   it('learnt requires BOTH n>=4 AND a dip of at least 4 below seed', async () => {
     // n=4, min=seed-4 exactly, last>seed → learnt.
-    const learnt = await bins({ n_scores: 4, seed_score: 0, last_score: 2, min_score: -4 });
+    const learnt = await bins({
+      n_scores: 4,
+      seed_score: 0,
+      last_score: 2,
+      min_score: -4,
+    });
     expect(learnt.bins.learnt).toContain('क');
     // n=3 (too few) → improved, not learnt (kills n>=4 → || and the >= boundary).
-    const tooFew = await bins({ n_scores: 3, seed_score: 0, last_score: 2, min_score: -4 });
+    const tooFew = await bins({
+      n_scores: 3,
+      seed_score: 0,
+      last_score: 2,
+      min_score: -4,
+    });
     expect(tooFew.bins.improved).toContain('क');
     expect(tooFew.bins.learnt).not.toContain('क');
   });
@@ -902,18 +1065,33 @@ describe('ScoreService.getLetterBins — bin classification boundaries', () => {
   it('a shallow dip (min between seed-4 and seed) is improved, not learnt (kills seed-4 → seed+4)', async () => {
     // n>=4, last>seed, min=seed-2 (dip not deep enough). Correct: -2 <= -4 false → improved.
     // Mutant seed+4: -2 <= 4 true → would be learnt. Asserting improved kills it.
-    const out = await bins({ n_scores: 5, seed_score: 0, last_score: 3, min_score: -2 });
+    const out = await bins({
+      n_scores: 5,
+      seed_score: 0,
+      last_score: 3,
+      min_score: -2,
+    });
     expect(out.bins.improved).toContain('क');
     expect(out.bins.learnt).not.toContain('क');
   });
 
   it('coerces a string n_scores (pg COUNT text) before the numeric comparisons', async () => {
-    const out = await bins({ n_scores: '5', seed_score: 0, last_score: 2, min_score: -4 });
+    const out = await bins({
+      n_scores: '5',
+      seed_score: 0,
+      last_score: 2,
+      min_score: -4,
+    });
     expect(out.bins.learnt).toContain('क');
   });
 
   it('treats null n_scores as 0 → untouched (kills the n_scores===null ternary)', async () => {
-    const out = await bins({ n_scores: null, seed_score: null, last_score: null, min_score: null });
+    const out = await bins({
+      n_scores: null,
+      seed_score: null,
+      last_score: null,
+      min_score: null,
+    });
     expect(out.bins.untouched).toContain('क');
   });
 });
@@ -936,7 +1114,9 @@ describe('ScoreService.createSeedScores — full seed contract', () => {
     const sql: string = query.mock.calls[0][0];
     expect(sql).toContain('INSERT INTO scores (user_id, letter_id, score)');
     expect(sql).toContain('SELECT $1::uuid, l.id,');
-    expect(sql).toContain('::double precision FROM letters l WHERE l.grapheme =');
+    expect(sql).toContain(
+      '::double precision FROM letters l WHERE l.grapheme =',
+    );
     expect(sql).toContain('UNION ALL');
   });
 });

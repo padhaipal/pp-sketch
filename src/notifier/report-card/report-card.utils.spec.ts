@@ -18,7 +18,7 @@ describe('istMidnightUtc', () => {
     );
   });
 
-  it('an instant just before IST midnight (23:59 IST) maps to TODAY\'s IST midnight (= yesterday 18:30Z)', () => {
+  it("an instant just before IST midnight (23:59 IST) maps to TODAY's IST midnight (= yesterday 18:30Z)", () => {
     // 2026-04-27 23:59 IST = 2026-04-27 18:29Z → IST midnight of 2026-04-27.
     const lateIst = new Date('2026-04-27T18:29:00Z');
     expect(istMidnightUtc(lateIst).toISOString()).toBe(
@@ -26,7 +26,7 @@ describe('istMidnightUtc', () => {
     );
   });
 
-  it('an instant at IST 00:01 maps to today\'s IST midnight (= yesterday 18:30Z)', () => {
+  it("an instant at IST 00:01 maps to today's IST midnight (= yesterday 18:30Z)", () => {
     // 2026-04-28 00:01 IST = 2026-04-27 18:31Z.
     const earlyIst = new Date('2026-04-27T18:31:00Z');
     expect(istMidnightUtc(earlyIst).toISOString()).toBe(

@@ -120,9 +120,11 @@ afterEach(() => {
 
 describe('processHeygenGenerateJob — video branch', () => {
   it('200 OK: updates media row with video_id + queued and ends span', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: true, json: { data: { video_id: 'vid-42' } } }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        fakeResponse({ ok: true, json: { data: { video_id: 'vid-42' } } }),
+      );
     const repo = makeRepo();
     const bucket = makeBucket();
 
@@ -150,9 +152,11 @@ describe('processHeygenGenerateJob — video branch', () => {
   });
 
   it('200 OK: passes through caller-supplied avatar/voice/style/background/dimension', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: true, json: { data: { video_id: 'vid-42' } } }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        fakeResponse({ ok: true, json: { data: { video_id: 'vid-42' } } }),
+      );
     const repo = makeRepo();
 
     await processHeygenGenerateJob(
@@ -173,9 +177,7 @@ describe('processHeygenGenerateJob — video branch', () => {
       repo as unknown as Repository<MediaMetaDataEntity>,
     );
 
-    const sent = JSON.parse(
-      (global.fetch as jest.Mock).mock.calls[0][1].body,
-    );
+    const sent = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
     expect(sent.video_inputs[0].character.avatar_id).toBe('custom-av');
     expect(sent.video_inputs[0].character.avatar_style).toBe('circle');
     expect(sent.video_inputs[0].voice.voice_id).toBe('custom-voice');
@@ -218,9 +220,11 @@ describe('processHeygenGenerateJob — video branch', () => {
   });
 
   it('5XX (non-final attempt): does NOT write failed; throws', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: false, status: 503, text: 'upstream down' }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        fakeResponse({ ok: false, status: 503, text: 'upstream down' }),
+      );
     const repo = makeRepo();
 
     await expect(
@@ -236,9 +240,11 @@ describe('processHeygenGenerateJob — video branch', () => {
   });
 
   it('5XX (final attempt): writes failed + error, then throws', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: false, status: 502, text: 'gateway' }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        fakeResponse({ ok: false, status: 502, text: 'gateway' }),
+      );
     const repo = makeRepo();
 
     await expect(
@@ -256,15 +262,21 @@ describe('processHeygenGenerateJob — video branch', () => {
   });
 
   it('5XX with no opts.attempts defaults to 1 — single attempt is the final attempt', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: false, status: 500, text: 'oops' }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        fakeResponse({ ok: false, status: 500, text: 'oops' }),
+      );
     const repo = makeRepo();
 
     await expect(
       processHeygenGenerateJob(
         // attemptsMade=0, attempts undefined → effective max=1, isLastAttempt=true
-        { data: videoData(), attemptsMade: 0, opts: {} } as unknown as Job<HeygenGenerateJobData>,
+        {
+          data: videoData(),
+          attemptsMade: 0,
+          opts: {},
+        } as unknown as Job<HeygenGenerateJobData>,
         makeBucket() as unknown as MediaBucketService,
         repo as unknown as Repository<MediaMetaDataEntity>,
       ),
@@ -345,9 +357,7 @@ describe('processHeygenGenerateJob — audio branch', () => {
           },
         }),
       )
-      .mockResolvedValueOnce(
-        fakeResponse({ ok: true, status: 200, body: {} }),
-      );
+      .mockResolvedValueOnce(fakeResponse({ ok: true, status: 200, body: {} }));
     const repo = makeRepo();
 
     await processHeygenGenerateJob(
@@ -356,7 +366,11 @@ describe('processHeygenGenerateJob — audio branch', () => {
       repo as unknown as Repository<MediaMetaDataEntity>,
     );
 
-    const details = (repo.update.mock.calls[0][1] as { media_details: { byte_size: number | null } }).media_details;
+    const details = (
+      repo.update.mock.calls[0][1] as {
+        media_details: { byte_size: number | null };
+      }
+    ).media_details;
     expect(details.byte_size).toBeNull();
   });
 
@@ -378,9 +392,7 @@ describe('processHeygenGenerateJob — audio branch', () => {
       repo as unknown as Repository<MediaMetaDataEntity>,
     );
 
-    const sent = JSON.parse(
-      (global.fetch as jest.Mock).mock.calls[0][1].body,
-    );
+    const sent = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
     expect(sent.speed).toBeUndefined();
   });
 
@@ -434,9 +446,9 @@ describe('processHeygenGenerateJob — audio branch', () => {
   });
 
   it('5XX (non-final attempt): does NOT write failed; throws', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: false, status: 502, text: 'gw' }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(fakeResponse({ ok: false, status: 502, text: 'gw' }));
     const repo = makeRepo();
 
     await expect(
@@ -451,9 +463,11 @@ describe('processHeygenGenerateJob — audio branch', () => {
   });
 
   it('5XX (final attempt): writes failed + error and throws', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: false, status: 500, text: 'down' }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        fakeResponse({ ok: false, status: 500, text: 'down' }),
+      );
     const repo = makeRepo();
 
     await expect(
@@ -489,9 +503,11 @@ describe('processHeygenGenerateJob — outer error handling', () => {
   });
 
   it('starts a child span with the carrier from job.data', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: true, json: { data: { video_id: 'v' } } }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        fakeResponse({ ok: true, json: { data: { video_id: 'v' } } }),
+      );
     await processHeygenGenerateJob(
       makeJob(videoData()),
       makeBucket() as unknown as MediaBucketService,

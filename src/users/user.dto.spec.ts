@@ -40,7 +40,11 @@ describe('partitionUserIdentifiers', () => {
   });
 
   it('preserves input order in canonical even when uuids and phones interleave', () => {
-    const out = partitionUserIdentifiers(['919999990001', UUID, '919999990002']);
+    const out = partitionUserIdentifiers([
+      '919999990001',
+      UUID,
+      '919999990002',
+    ]);
     expect(out.canonical).toEqual(['919999990001', UUID, '919999990002']);
     expect(out.ids).toEqual([UUID]);
     expect(out.externalIds).toEqual(['919999990001', '919999990002']);

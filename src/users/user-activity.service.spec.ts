@@ -55,9 +55,10 @@ function makeUserRepo(find: jest.Mock): UserRepoMock {
   return { find };
 }
 
-function makeMediaRepo(
-  rows: unknown[],
-): { createQueryBuilder: jest.Mock; _qb: Record<string, jest.Mock> } {
+function makeMediaRepo(rows: unknown[]): {
+  createQueryBuilder: jest.Mock;
+  _qb: Record<string, jest.Mock>;
+} {
   const qb = makeQB(rows);
   return {
     createQueryBuilder: jest.fn().mockReturnValue(qb),
@@ -107,7 +108,9 @@ describe('UserActivityService.getActivityTime — window parsing', () => {
     await expect(
       svc.getActivityTime({
         users: ['   '],
-        windows: [{ start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' }],
+        windows: [
+          { start: '2026-04-27T10:00:00Z', end: '2026-04-27T11:00:00Z' },
+        ],
       }),
     ).rejects.toThrow(BadRequestException);
   });
@@ -518,7 +521,7 @@ describe('UserActivityService.didJustCrossDailyActivityThreshold — boundary co
     ).resolves.toBe(false);
   });
 
-  it('uses IST midnight as the lower bound of today\'s active window', async () => {
+  it("uses IST midnight as the lower bound of today's active window", async () => {
     // Now = 2026-05-15T18:00:00Z UTC = 2026-05-15 23:30 IST.
     // Today's IST midnight = 2026-05-15T00:00 IST = 2026-05-14T18:30:00Z UTC.
     const mediaRepo = makeMediaRepo([]);

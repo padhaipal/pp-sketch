@@ -61,7 +61,10 @@ import {
   MorningUpdateSendJobData,
 } from './morning-update.processor';
 
-function makeMedia(findMediaByStateTransitionId: jest.Mock, extra: Record<string, unknown> = {}): MediaMetaDataService {
+function makeMedia(
+  findMediaByStateTransitionId: jest.Mock,
+  extra: Record<string, unknown> = {},
+): MediaMetaDataService {
   return {
     findMediaByStateTransitionId,
     ...extra,
@@ -101,8 +104,14 @@ describe('resolveMorningUpdateIntroMedia', () => {
   it('prefers video when both video and image are present', async () => {
     const svc = makeMedia(
       jest.fn().mockResolvedValue({
-        video: { wa_media_url: 'https://v', media_details: { mime_type: 'video/mp4' } },
-        image: { wa_media_url: 'https://i', media_details: { mime_type: 'image/png' } },
+        video: {
+          wa_media_url: 'https://v',
+          media_details: { mime_type: 'video/mp4' },
+        },
+        image: {
+          wa_media_url: 'https://i',
+          media_details: { mime_type: 'image/png' },
+        },
       }),
     );
 
@@ -116,7 +125,10 @@ describe('resolveMorningUpdateIntroMedia', () => {
   it('falls back to image when only image is present', async () => {
     const svc = makeMedia(
       jest.fn().mockResolvedValue({
-        image: { wa_media_url: 'https://i', media_details: { mime_type: 'image/png' } },
+        image: {
+          wa_media_url: 'https://i',
+          media_details: { mime_type: 'image/png' },
+        },
       }),
     );
 
@@ -139,7 +151,9 @@ describe('resolveMorningUpdateIntroMedia', () => {
       }),
     );
     const out = await resolveMorningUpdateIntroMedia(svc);
-    expect(out).toEqual([{ type: 'image', url: 'https://i', mime_type: undefined }]);
+    expect(out).toEqual([
+      { type: 'image', url: 'https://i', mime_type: undefined },
+    ]);
   });
 });
 
@@ -183,14 +197,14 @@ describe('triggerMorningUpdateForUser', () => {
     );
 
     await triggerMorningUpdateForUser(UUID, userSvc, mediaSvc);
-    expect(
-      (userSvc.findByIdOrExternalId as jest.Mock).mock.calls[0][0],
-    ).toBe(UUID);
+    expect((userSvc.findByIdOrExternalId as jest.Mock).mock.calls[0][0]).toBe(
+      UUID,
+    );
 
     await triggerMorningUpdateForUser('91999', userSvc, mediaSvc);
-    expect(
-      (userSvc.findByIdOrExternalId as jest.Mock).mock.calls[1][0],
-    ).toBe('91999');
+    expect((userSvc.findByIdOrExternalId as jest.Mock).mock.calls[1][0]).toBe(
+      '91999',
+    );
   });
 
   it('throws NotFoundException when user is not found', async () => {
@@ -270,11 +284,7 @@ describe('processMorningUpdateCronJob', () => {
     } as unknown as DataSource;
     const mediaSvc = makeMedia(jest.fn().mockResolvedValue({})); // no media
 
-    await processMorningUpdateCronJob(
-      { id: 'cron-1' } as Job,
-      ds,
-      mediaSvc,
-    );
+    await processMorningUpdateCronJob({ id: 'cron-1' } as Job, ds, mediaSvc);
 
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'morning_update.skip_reason',
@@ -306,11 +316,7 @@ describe('processMorningUpdateCronJob', () => {
       }),
     );
 
-    await processMorningUpdateCronJob(
-      { id: 'cron-1' } as Job,
-      ds,
-      mediaSvc,
-    );
+    await processMorningUpdateCronJob({ id: 'cron-1' } as Job, ds, mediaSvc);
 
     expect(mockQueueAdd).toHaveBeenCalledTimes(2);
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
@@ -343,7 +349,10 @@ describe('processMorningUpdateSendJob', () => {
     otel_carrier: { traceparent: 'parent' },
   };
   function makeSendJob(): Job<MorningUpdateSendJobData> {
-    return { id: 'send-1', data: baseData } as unknown as Job<MorningUpdateSendJobData>;
+    return {
+      id: 'send-1',
+      data: baseData,
+    } as unknown as Job<MorningUpdateSendJobData>;
   }
 
   it('happy path: existing+ready report card → sends and returns', async () => {
@@ -386,7 +395,10 @@ describe('processMorningUpdateSendJob', () => {
     const generatePng = jest
       .fn()
       .mockResolvedValue({ buffer: Buffer.from('png') });
-    const report = makeReportCard(jest.fn().mockResolvedValue(null), generatePng);
+    const report = makeReportCard(
+      jest.fn().mockResolvedValue(null),
+      generatePng,
+    );
     const createRenderedImageMedia = jest
       .fn()
       .mockResolvedValue({ status: 'queued' });
@@ -420,7 +432,9 @@ describe('processMorningUpdateSendJob', () => {
     );
     const mediaRepo = makeMediaRepo(jest.fn().mockResolvedValue(null));
     const mediaSvc = makeMedia(jest.fn(), {
-      createRenderedImageMedia: jest.fn().mockResolvedValue({ status: 'queued' }),
+      createRenderedImageMedia: jest
+        .fn()
+        .mockResolvedValue({ status: 'queued' }),
     });
 
     await expect(
@@ -520,9 +534,11 @@ describe('processMorningUpdateSendJob', () => {
       }),
     );
     const wabot = makeWabot(
-      jest
-        .fn()
-        .mockResolvedValue({ delivered: false, status: 429, error_code: 130429 }),
+      jest.fn().mockResolvedValue({
+        delivered: false,
+        status: 429,
+        error_code: 130429,
+      }),
     );
 
     await expect(
@@ -549,9 +565,11 @@ describe('processMorningUpdateSendJob', () => {
       }),
     );
     const wabot = makeWabot(
-      jest
-        .fn()
-        .mockResolvedValue({ delivered: false, status: 200, error_code: 131047 }),
+      jest.fn().mockResolvedValue({
+        delivered: false,
+        status: 200,
+        error_code: 131047,
+      }),
     );
 
     await processMorningUpdateSendJob(
@@ -604,9 +622,15 @@ import { Logger as NestLogger } from '@nestjs/common';
 
 function spyLog() {
   return {
-    log: jest.spyOn(NestLogger.prototype, 'log').mockImplementation(() => undefined),
-    warn: jest.spyOn(NestLogger.prototype, 'warn').mockImplementation(() => undefined),
-    error: jest.spyOn(NestLogger.prototype, 'error').mockImplementation(() => undefined),
+    log: jest
+      .spyOn(NestLogger.prototype, 'log')
+      .mockImplementation(() => undefined),
+    warn: jest
+      .spyOn(NestLogger.prototype, 'warn')
+      .mockImplementation(() => undefined),
+    error: jest
+      .spyOn(NestLogger.prototype, 'error')
+      .mockImplementation(() => undefined),
   };
 }
 
@@ -741,7 +765,10 @@ describe('processMorningUpdateCronJob — span + skip-reasons + log messages', (
       'morning-update.cron',
       expect.any(Function),
     );
-    expect(mockSpanSetAttribute).toHaveBeenCalledWith('bullmq.job.id', 'cron-1');
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'bullmq.job.id',
+      'cron-1',
+    );
     // 24h back and 5min back from system time
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'morning_update.window.start',
@@ -854,10 +881,9 @@ describe('processMorningUpdateSendJob — child span + error_code branches + ski
       mediaRepo,
       wabot,
     );
-    expect(mockStartChildSpan).toHaveBeenCalledWith(
-      'morning-update.send',
-      { traceparent: 'tp' },
-    );
+    expect(mockStartChildSpan).toHaveBeenCalledWith('morning-update.send', {
+      traceparent: 'tp',
+    });
   });
 
   it('on 130429 throws the rate-limit error and tags wabot.error_code', async () => {
@@ -885,7 +911,10 @@ describe('processMorningUpdateSendJob — child span + error_code branches + ski
         wabot,
       ),
     ).rejects.toThrow(/WhatsApp rate-limit \(130429\)/);
-    expect(mockSpanSetAttribute).toHaveBeenCalledWith('wabot.error_code', 130429);
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'wabot.error_code',
+      130429,
+    );
   });
 
   it('on 131047 silently returns + tags morning_update.skip_reason="window-expired" + warns', async () => {
@@ -935,9 +964,7 @@ describe('processMorningUpdateSendJob — child span + error_code branches + ski
         wa_media_url: 'wa://img1',
       }),
     } as unknown as Repository<MediaMetaDataEntity>;
-    const sendNotification = jest
-      .fn()
-      .mockResolvedValue({ delivered: true });
+    const sendNotification = jest.fn().mockResolvedValue({ delivered: true });
     const wabot = { sendNotification } as unknown as WabotOutboundService;
     await processMorningUpdateSendJob(
       baseJob(),
@@ -986,7 +1013,9 @@ describe('processMorningUpdateSendJob — child span + error_code branches + ski
       'image-failed',
     );
     expect(error).toHaveBeenCalledWith(
-      expect.stringMatching(/Morning-update report card media mm-img.*status=failed — skipping/),
+      expect.stringMatching(
+        /Morning-update report card media mm-img.*status=failed — skipping/,
+      ),
     );
     expect(wabot.sendNotification).not.toHaveBeenCalled();
     error.mockRestore();
