@@ -585,9 +585,7 @@ describe('machine — checkAnswer guard error path', () => {
     // empty. xstate v5 surfaces the error via subscribe({error}). Verify
     // here that the error makes it to the subscriber rather than being
     // silently swallowed.
-    const { createActor } = jest.requireActual(
-      'xstate',
-    ) as typeof import('xstate');
+    const { createActor } = jest.requireActual('xstate');
     const actor = createActor(machine, {
       input: { word: 'कमल', userMessageId: 'mm-1' },
     });

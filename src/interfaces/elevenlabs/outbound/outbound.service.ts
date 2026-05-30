@@ -92,7 +92,7 @@ export async function processElevenlabsGenerateJob(
 
       span.end();
     } else if (response.status >= 400 && response.status < 500) {
-      const errorBody = await response.json();
+      const errorBody = (await response.json()) as Record<string, unknown>;
       logger.error(
         `ElevenLabs TTS ${response.status}: ${JSON.stringify(errorBody)}`,
       );

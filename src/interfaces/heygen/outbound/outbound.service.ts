@@ -6,8 +6,11 @@ import { MediaMetaDataEntity } from '../../../media-meta-data/media-meta-data.en
 import { MediaBucketService } from '../../media-bucket/outbound/outbound.service';
 import { createQueue, QUEUE_NAMES } from '../../redis/queues';
 import {
+  VideoBackground,
+  VideoCharacter,
   VideoGenerateRequest,
   VideoGenerateResponse,
+  VideoVoice,
   TtsRequest,
   TtsResponse,
 } from './outbound.dto';
@@ -30,15 +33,15 @@ export interface HeygenGenerateJobData {
   heygen_params: {
     script_text: string;
     avatar_id?: string;
-    avatar_style?: string;
+    avatar_style?: VideoCharacter['avatar_style'];
     voice_id?: string;
     speed?: number;
-    emotion?: string;
+    emotion?: VideoVoice['emotion'];
     locale?: string;
     language?: string;
     title?: string;
     dimension?: { width: number; height: number };
-    background?: any;
+    background?: VideoBackground;
   };
 }
 
@@ -63,14 +66,14 @@ export async function processHeygenGenerateJob(
             character: {
               type: 'avatar',
               avatar_id: heygen_params.avatar_id ?? HEYGEN_AVATAR_ID,
-              avatar_style: (heygen_params.avatar_style as any) ?? 'normal',
+              avatar_style: heygen_params.avatar_style ?? 'normal',
             },
             voice: {
               type: 'text',
               voice_id: heygen_params.voice_id ?? HEYGEN_VOICE_ID,
               input_text: heygen_params.script_text,
               speed: heygen_params.speed,
-              emotion: heygen_params.emotion as any,
+              emotion: heygen_params.emotion,
               locale: heygen_params.locale,
             },
             background: heygen_params.background,
@@ -102,7 +105,7 @@ export async function processHeygenGenerateJob(
         });
         span.end();
       } else if (response.status >= 400 && response.status < 500) {
-        const errorBody = await response.json();
+        const errorBody = (await response.json()) as Record<string, unknown>;
         logger.error(`HeyGen video 4XX: ${JSON.stringify(errorBody)}`);
         await mediaRepo.update(media_metadata_id, {
           status: 'failed',
@@ -188,7 +191,7 @@ export async function processHeygenGenerateJob(
 
         span.end();
       } else if (response.status >= 400 && response.status < 500) {
-        const errorBody = await response.json();
+        const errorBody = (await response.json()) as Record<string, unknown>;
         logger.error(`HeyGen TTS 4XX: ${JSON.stringify(errorBody)}`);
         await mediaRepo.update(media_metadata_id, {
           status: 'failed',

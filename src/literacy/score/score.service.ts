@@ -164,7 +164,7 @@ export class ScoreService {
     params.push(validated.score);
     const scoreIdx = idx++;
 
-    const rows = await this.dataSource.query(
+    const rows: Score[] = await this.dataSource.query(
       `INSERT INTO scores (user_id, letter_id, user_message_id, score)
        SELECT u.id, l.id, $${umIdx}, $${scoreIdx}
        FROM users u, letters l, media_metadata m
@@ -237,7 +237,7 @@ export class ScoreService {
     const whereStr =
       whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-    const rows = await this.dataSource.query(
+    const rows: Score[] = await this.dataSource.query(
       `SELECT s.* FROM ${fromClause} ${whereStr}
        ORDER BY s.created_at DESC LIMIT $${limitIdx}`,
       params,
@@ -273,15 +273,13 @@ export class ScoreService {
 
     if (letterIds.length > 0) {
       const placeholders = letterIds.map((_, i) => `$${i + 1}`).join(',');
-      const letterRows = await this.dataSource.query(
-        `SELECT id, grapheme FROM letters WHERE id IN (${placeholders})`,
-        letterIds,
-      );
+      const letterRows: { id: string; grapheme: string }[] =
+        await this.dataSource.query(
+          `SELECT id, grapheme FROM letters WHERE id IN (${placeholders})`,
+          letterIds,
+        );
       const idToGrapheme = new Map<string, string>(
-        letterRows.map((r: { id: string; grapheme: string }) => [
-          r.id,
-          r.grapheme,
-        ]),
+        letterRows.map((r) => [r.id, r.grapheme]),
       );
 
       for (const [letterId, score] of latestPerLetter) {
@@ -350,7 +348,7 @@ export class ScoreService {
     }
 
     const unionQuery = selectParts.join('\nUNION ALL\n');
-    const rows = await this.dataSource.query(
+    const rows: Score[] = await this.dataSource.query(
       `INSERT INTO scores (user_id, letter_id, user_message_id, score)
        ${unionQuery}
        RETURNING *`,
@@ -550,7 +548,7 @@ export class ScoreService {
       );
     }
 
-    const rows = await this.dataSource.query(
+    const rows: unknown[] = await this.dataSource.query(
       `INSERT INTO scores (user_id, letter_id, score)
        ${selects.join('\n       UNION ALL\n       ')}`,
       params,

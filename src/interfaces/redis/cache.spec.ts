@@ -226,7 +226,7 @@ describe('CacheService — exact warn messages', () => {
     const warn = spyCacheLog();
     new CacheService();
     // Trigger the error handler registered in the constructor.
-    const handler = (mockRedisInstance.on as jest.Mock).mock.calls.find(
+    const handler = mockRedisInstance.on.mock.calls.find(
       (c) => c[0] === 'error',
     )?.[1];
     handler?.(new Error('econn'));
@@ -236,7 +236,7 @@ describe('CacheService — exact warn messages', () => {
 
   it('get on corrupt JSON warns "Corrupt cache value for key <k>, deleting" and deletes the key', async () => {
     const warn = spyCacheLog();
-    (mockRedisInstance.get as jest.Mock).mockResolvedValue('not-json');
+    mockRedisInstance.get.mockResolvedValue('not-json');
     const del = jest.fn().mockResolvedValue(undefined);
     (mockRedisInstance as unknown as { del: jest.Mock }).del = del;
     const svc = new CacheService();
@@ -250,7 +250,7 @@ describe('CacheService — exact warn messages', () => {
 
   it('get failure warns "Cache get failed for key <k>: <msg>"', async () => {
     const warn = spyCacheLog();
-    (mockRedisInstance.get as jest.Mock).mockRejectedValue(new Error('boom'));
+    mockRedisInstance.get.mockRejectedValue(new Error('boom'));
     const svc = new CacheService();
     await svc.get('mykey');
     expect(warn).toHaveBeenCalledWith('Cache get failed for key mykey: boom');
@@ -259,7 +259,7 @@ describe('CacheService — exact warn messages', () => {
 
   it('set failure warns "Cache set failed for key <k>: <msg>"', async () => {
     const warn = spyCacheLog();
-    (mockRedisInstance.set as jest.Mock).mockRejectedValue(new Error('boom'));
+    mockRedisInstance.set.mockRejectedValue(new Error('boom'));
     const svc = new CacheService();
     await svc.set('k', { foo: 1 }, 60);
     expect(warn).toHaveBeenCalledWith('Cache set failed for key k: boom');

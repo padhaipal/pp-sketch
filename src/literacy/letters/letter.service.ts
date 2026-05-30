@@ -30,8 +30,8 @@ export class LetterService {
         media_metadata_id: validated.media_metadata_id ?? null,
       });
       return await this.letterRepo.save(entity);
-    } catch (err: any) {
-      if (err.code === '23505') {
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') {
         throw new BadRequestException('create() grapheme already exists');
       }
       throw err;
@@ -50,8 +50,8 @@ export class LetterService {
 
     try {
       return await this.letterRepo.save(entities);
-    } catch (err: any) {
-      if (err.code === '23505') {
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') {
         throw new BadRequestException(
           'createBulk() one or more graphemes already exist',
         );
@@ -77,8 +77,8 @@ export class LetterService {
 
     try {
       return await this.letterRepo.save(existing);
-    } catch (err: any) {
-      if (err.code === '23505') {
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') {
         throw new BadRequestException('update() new_grapheme already exists');
       }
       throw err;
@@ -93,8 +93,8 @@ export class LetterService {
         grapheme: validated.grapheme,
       });
       return (result.affected ?? 0) > 0;
-    } catch (err: any) {
-      if (err.code === '23503') {
+    } catch (err) {
+      if ((err as { code?: string }).code === '23503') {
         throw new BadRequestException(
           'delete() letter is referenced by existing scores — remove scores first',
         );

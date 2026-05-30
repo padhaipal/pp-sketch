@@ -126,7 +126,7 @@ export class UserService {
       validated.new_referrer_user_id !== undefined ||
       validated.new_referrer_external_id !== undefined;
     if (referrerWasSet && updatedUser.referrer_user_id) {
-      const cycleRows = await this.dataSource.query(
+      const cycleRows: unknown[] = await this.dataSource.query(
         `WITH RECURSIVE chain AS (
           SELECT id, referrer_user_id FROM users WHERE id = $1
           UNION ALL
@@ -190,7 +190,7 @@ export class UserService {
 
       // Cycle check (raw SQL — recursive CTE)
       if (user.referrer_user_id) {
-        const cycleRows = await this.dataSource.query(
+        const cycleRows: unknown[] = await this.dataSource.query(
           `WITH RECURSIVE chain AS (
             SELECT id, referrer_user_id FROM users WHERE id = $1
             UNION ALL
@@ -214,7 +214,7 @@ export class UserService {
       return user;
     } else if (validated.referrer_external_id) {
       // INSERT...SELECT with referrer lookup — raw SQL (complex query #5)
-      const rows = await this.dataSource.query(
+      const rows: UserEntity[] = await this.dataSource.query(
         `INSERT INTO users (external_id, name, referrer_user_id)
                SELECT $1, $2, id FROM users WHERE external_id = $3
                RETURNING *`,
@@ -240,7 +240,7 @@ export class UserService {
 
       // Cycle check (raw SQL — recursive CTE)
       if (user.referrer_user_id) {
-        const cycleRows = await this.dataSource.query(
+        const cycleRows: unknown[] = await this.dataSource.query(
           `WITH RECURSIVE chain AS (
             SELECT id, referrer_user_id FROM users WHERE id = $1
             UNION ALL

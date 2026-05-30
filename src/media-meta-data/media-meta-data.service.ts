@@ -340,7 +340,7 @@ export class MediaMetaDataService {
     const keys = genericKey
       ? [stateTransitionId, genericKey]
       : [stateTransitionId];
-    const rows = await this.dataSource.query(
+    const rows: MediaMetaData[] = await this.dataSource.query(
       `SELECT * FROM media_metadata
        WHERE state_transition_id = ANY($1::text[])
          AND status = 'ready'
@@ -405,7 +405,7 @@ export class MediaMetaDataService {
     await this.dataSource.transaction(async (manager) => {
       // TypeORM's pg manager.query returns [rowsArray, affectedCount] for
       // UPDATE/INSERT/DELETE — affectedCount is the second element.
-      const [, affected] = await manager.query(
+      const [, affected]: [unknown[], number] = await manager.query(
         `UPDATE media_metadata SET rolled_back = true WHERE id = $1`,
         [mediaId],
       );

@@ -689,7 +689,7 @@ describe('processWabotInboundJob — exact downstream call args (audio reply)', 
   it('re-arms hail-mary with the exact user + audio-entity id + span carrier', async () => {
     const { rearmHailMary } = jest.requireMock(
       '../../../notifier/hail-mary.processor',
-    ) as { rearmHailMary: jest.Mock };
+    );
     const mocks = makeMocks();
     await runJob(createAudioJob(), mocks);
     expect(rearmHailMary).toHaveBeenCalledWith({
@@ -1078,9 +1078,8 @@ describe('processWabotInboundJob — span/start identifiers', () => {
   afterEach(() => jest.clearAllMocks());
 
   it('starts the child span named "wabot-inbound-processor" with the incoming carrier', async () => {
-    const { startChildSpanWithContext } = jest.requireMock(
-      '../../../otel/otel',
-    ) as { startChildSpanWithContext: jest.Mock };
+    const { startChildSpanWithContext } =
+      jest.requireMock('../../../otel/otel');
     const mocks = makeMocks();
     const job = createAudioJob();
     (job.data as { otel: { carrier: unknown } }).otel = {
@@ -1320,7 +1319,7 @@ describe('processWabotInboundJob — new-user exact downstream args', () => {
   it('saves a new AUDIO user message + re-arms hail-mary with the span carrier', async () => {
     const { rearmHailMary } = jest.requireMock(
       '../../../notifier/hail-mary.processor',
-    ) as { rearmHailMary: jest.Mock };
+    );
     const mocks = newUserAudio();
     mocks.mediaMetaDataService.createWhatsappAudioMedia.mockResolvedValue({
       id: 'audio-new',
@@ -1405,7 +1404,7 @@ describe('processWabotInboundJob — failure tolerance (no-coverage catch blocks
   it('tolerates rearmHailMary throwing for a NEW audio user (logs, still sends onboarding)', async () => {
     const { rearmHailMary } = jest.requireMock(
       '../../../notifier/hail-mary.processor',
-    ) as { rearmHailMary: jest.Mock };
+    );
     rearmHailMary.mockRejectedValueOnce(new Error('queue down'));
     const mocks = newUser();
     mocks.mediaMetaDataService.createWhatsappAudioMedia.mockResolvedValue({

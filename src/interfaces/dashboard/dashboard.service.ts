@@ -107,11 +107,14 @@ export class DashboardService {
     }
     const sessionId = sessionRows[0].session_id;
 
+    const answersPromise: Promise<
+      { question_index: number; answer: string | number }[]
+    > = this.dataSource.query(
+      `SELECT question_index, answer FROM quiz_responses WHERE session_id = $1 ORDER BY question_index`,
+      [sessionId],
+    );
     const [answers, completed] = await Promise.all([
-      this.dataSource.query(
-        `SELECT question_index, answer FROM quiz_responses WHERE session_id = $1 ORDER BY question_index`,
-        [sessionId],
-      ),
+      answersPromise,
       this.getCompletedSessionCount(),
     ]);
 

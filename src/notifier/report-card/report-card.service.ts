@@ -101,7 +101,7 @@ export class ReportCardService {
     });
 
     const userActivity = activity.results[0];
-    const daily: DailyBar[] = windows.map((w, i) => {
+    const daily: DailyBar[] = windows.map((_w, i) => {
       const start = addDays(weekAgoMid, i);
       return {
         date_iso: istDateIso(start),

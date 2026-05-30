@@ -233,7 +233,7 @@ function validateLetterOutcomes(value: unknown, fieldName: string): string[] {
         );
       }
     }
-    return value;
+    return value as string[];
   }
   throw new BadRequestException(
     `gradeAndRecord() options.${fieldName} must be a string or array of strings`,
@@ -281,7 +281,7 @@ export class LetterBinsQueryDto {
           .filter((t: string) => t.length > 0),
       );
     }
-    return value;
+    return value as unknown;
   })
   @IsArray()
   @ArrayMinSize(1, {
@@ -313,7 +313,7 @@ export function validateLetterBinsInput(users: unknown): string[] {
         );
       }
     }
-    return users;
+    return users as string[];
   }
   throw new BadRequestException(
     'getLetterBins() users must be a string or array of strings',

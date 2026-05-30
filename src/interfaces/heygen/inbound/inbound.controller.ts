@@ -56,7 +56,7 @@ export class HeygenInboundController {
     }
 
     // 2. Validate body
-    const parsed =
+    const parsed: unknown =
       typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const dto = plainToInstance(HeygenWebhookDto, parsed);
     const errors = await validate(dto);

@@ -312,9 +312,7 @@ function spyLog() {
 }
 
 // Pull the mocked tracer so we can inspect its calls
-const tracerMock = jest.requireMock('../otel/otel') as {
-  tracer: { startActiveSpan: jest.Mock };
-};
+const tracerMock = jest.requireMock('../otel/otel');
 
 describe('processNotifierCronJob — span names + span attributes + log messages', () => {
   it('starts the cron span with name "notifier.cron" and sets bullmq.job.id', async () => {

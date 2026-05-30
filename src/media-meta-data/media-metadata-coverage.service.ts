@@ -68,7 +68,9 @@ export class MediaMetadataCoverageService {
       'literacy-lesson',
       'word-list.json',
     );
-    this.wordList = JSON.parse(fs.readFileSync(wordListPath, 'utf-8'));
+    this.wordList = JSON.parse(
+      fs.readFileSync(wordListPath, 'utf-8'),
+    ) as string[];
   }
 
   async getCoverage(): Promise<MediaMetadataCoverageResponse> {
