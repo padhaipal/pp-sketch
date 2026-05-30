@@ -73,36 +73,35 @@ export async function assertPgVersionMatch(
   return { prod_major: prodMajor, staging_major: stagingMajor };
 }
 
-async function migrationsRows(url: string): Promise<string[]> {
-  return withClient(url, async (c) => {
-    const r = await c.query<{ name: string }>(
-      `SELECT name FROM ${MIGRATIONS_TABLE} ORDER BY id ASC`,
-    );
-    return r.rows.map((row) => row.name);
-  });
-}
-
-export async function assertMigrationsEqual(
+// Lightweight presence check: confirm both envs are TypeORM-managed (have a
+// `migrations` table with ≥1 row). Replaces the previous full-equality check,
+// which was at the wrong layer — pg_restore IS the reconciliation step, and
+// requiring equality before reconciliation was tautological. False positives
+// on legitimate historical divergence (e.g. timestamp renames affecting only
+// fresh envs) were blocking real mirror runs without protecting against any
+// failure mode the deploy model (single main branch → both envs) can produce.
+export async function assertMigrationsTablesPresent(
   prod: DbIdent,
   staging: DbIdent,
-): Promise<{ count: number }> {
-  const [prodRows, stagingRows] = await Promise.all([
-    migrationsRows(prod.url),
-    migrationsRows(staging.url),
-  ]);
-  if (prodRows.length !== stagingRows.length) {
-    throw new Error(
-      `migrations row count differs: prod=${prodRows.length} staging=${stagingRows.length}`,
-    );
-  }
-  for (let i = 0; i < prodRows.length; i++) {
-    if (prodRows[i] !== stagingRows[i]) {
-      throw new Error(
-        `migrations row[${i}] differs: prod="${prodRows[i]}" staging="${stagingRows[i]}"`,
+): Promise<{ prod_count: number; staging_count: number }> {
+  const count = async (url: string): Promise<number> =>
+    withClient(url, async (c) => {
+      const r = await c.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM ${MIGRATIONS_TABLE}`,
       );
-    }
+      return Number(r.rows[0].count);
+    });
+  const [prodCount, stagingCount] = await Promise.all([
+    count(prod.url),
+    count(staging.url),
+  ]);
+  if (prodCount < 1) {
+    throw new Error(`prod migrations table is empty — not TypeORM-managed?`);
   }
-  return { count: prodRows.length };
+  if (stagingCount < 1) {
+    throw new Error(`staging migrations table is empty — not TypeORM-managed?`);
+  }
+  return { prod_count: prodCount, staging_count: stagingCount };
 }
 
 export async function assertProdReadOnly(prodUrl: string): Promise<void> {
