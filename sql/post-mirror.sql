@@ -1,0 +1,4 @@
+-- post-mirror.sql — runs after pg_restore + bucket mirror on staging.
+-- Add staging-only fixtures here (PII scrub, seed users, etc.).
+-- Empty for now; the seed user is created via `npm run seed` at boot when
+-- needed. Future PII scrub statements go below.

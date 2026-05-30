@@ -12,6 +12,7 @@ export const QUEUE_NAMES = {
   MORNING_UPDATE: 'morning-update',
   MORNING_UPDATE_SEND: 'morning-update-send',
   HAIL_MARY: 'hail-mary',
+  MIRROR: 'mirror',
 } as const;
 
 const connection = new Redis(process.env.BULLMQ_REDIS_URL!, {
@@ -76,6 +77,14 @@ export const DEFAULT_JOB_OPTIONS: Record<string, JobsOptions> = {
     removeOnFail: { count: 5000 },
   },
   [QUEUE_NAMES.HAIL_MARY]: {
+    attempts: 1,
+    removeOnComplete: true,
+    removeOnFail: { count: 500 },
+  },
+  // Mirror is fired by GH Actions on a daily cron. attempts:1 — no in-run
+  // retry; next-day trigger is the retry path. Singleton jobId is set by the
+  // service, not here.
+  [QUEUE_NAMES.MIRROR]: {
     attempts: 1,
     removeOnComplete: true,
     removeOnFail: { count: 500 },
