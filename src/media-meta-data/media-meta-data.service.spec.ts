@@ -71,10 +71,17 @@ function makeService(opts: {
     service: new MediaMetaDataService(
       repo as unknown as Repository<MediaMetaDataEntity>,
       ds,
-      (opts.cache ?? { get: jest.fn(), set: jest.fn(), del: jest.fn() }) as CacheService,
+      (opts.cache ?? {
+        get: jest.fn(),
+        set: jest.fn(),
+        del: jest.fn(),
+      }) as CacheService,
       (opts.userSvc ?? { find: jest.fn() }) as UserService,
       (opts.wabot ?? { downloadMedia: jest.fn() }) as WabotOutboundService,
-      (opts.bucket ?? { stream: jest.fn(), delete: jest.fn() }) as MediaBucketService,
+      (opts.bucket ?? {
+        stream: jest.fn(),
+        delete: jest.fn(),
+      }) as MediaBucketService,
       (opts.sarvam ?? { run: jest.fn() }) as SarvamService,
       (opts.azure ?? { run: jest.fn() }) as AzureService,
       (opts.reverie ?? { run: jest.fn() }) as ReverieService,
@@ -185,7 +192,9 @@ describe('MediaMetaDataService.createWhatsappAudioMedia', () => {
         content_type: 'audio/mpeg',
       }),
     };
-    const bucket = { stream: jest.fn().mockRejectedValue(new Error('s3 down')) };
+    const bucket = {
+      stream: jest.fn().mockRejectedValue(new Error('s3 down')),
+    };
 
     const { service } = makeService({ repo, wabot, bucket });
 
@@ -247,7 +256,10 @@ describe('MediaMetaDataService.createTextMedia', () => {
 
   it('inserts with default source=whatsapp when none provided', async () => {
     const repo = makeRepo();
-    repo.save.mockImplementation(async (e) => ({ ...e, created_at: new Date() }));
+    repo.save.mockImplementation(async (e) => ({
+      ...e,
+      created_at: new Date(),
+    }));
     const { service } = makeService({ repo });
 
     const out = await service.createTextMedia({
@@ -262,7 +274,10 @@ describe('MediaMetaDataService.createTextMedia', () => {
 
   it('respects an explicit source', async () => {
     const repo = makeRepo();
-    repo.save.mockImplementation(async (e) => ({ ...e, created_at: new Date() }));
+    repo.save.mockImplementation(async (e) => ({
+      ...e,
+      created_at: new Date(),
+    }));
     const { service } = makeService({ repo });
 
     const out = await service.createTextMedia({
@@ -278,7 +293,10 @@ describe('MediaMetaDataService.createTextMedia', () => {
 describe('MediaMetaDataService.createTextMedia — optional fields', () => {
   it('forwards input_media_id and media_details when provided', async () => {
     const repo = makeRepo();
-    repo.save.mockImplementation(async (e) => ({ ...e, created_at: new Date() }));
+    repo.save.mockImplementation(async (e) => ({
+      ...e,
+      created_at: new Date(),
+    }));
     const { service } = makeService({ repo });
 
     await service.createTextMedia({
@@ -302,7 +320,10 @@ describe('MediaMetaDataService.createHeygenMedia — optional generation_request
     process.env.HEYGEN_AVATAR_ID = 'env-av';
     process.env.HEYGEN_VOICE_ID = 'env-voice';
     const repo = makeRepo();
-    repo.save.mockImplementation(async (e) => ({ ...e, created_at: new Date() }));
+    repo.save.mockImplementation(async (e) => ({
+      ...e,
+      created_at: new Date(),
+    }));
     const { service } = makeService({ repo });
 
     await service.createHeygenMedia(
@@ -341,8 +362,14 @@ describe('MediaMetaDataService.createHeygenMedia — optional generation_request
     expect(saved.generation_request_json.locale).toBe('en-IN');
     expect(saved.generation_request_json.language).toBe('en');
     expect(saved.generation_request_json.title).toBe('t');
-    expect(saved.generation_request_json.dimension).toEqual({ width: 1, height: 1 });
-    expect(saved.generation_request_json.background).toEqual({ type: 'color', value: '#fff' });
+    expect(saved.generation_request_json.dimension).toEqual({
+      width: 1,
+      height: 1,
+    });
+    expect(saved.generation_request_json.background).toEqual({
+      type: 'color',
+      value: '#fff',
+    });
   });
 });
 
@@ -350,7 +377,10 @@ describe('MediaMetaDataService.createElevenlabsMedia — optional generation_req
   it('omits voice_id when it matches env default, includes model/language/voice_settings when provided', async () => {
     process.env.ELEVENLABS_VOICE_ID = 'env-elevenlabs-voice';
     const repo = makeRepo();
-    repo.save.mockImplementation(async (e) => ({ ...e, created_at: new Date() }));
+    repo.save.mockImplementation(async (e) => ({
+      ...e,
+      created_at: new Date(),
+    }));
     const { service } = makeService({ repo });
 
     await service.createElevenlabsMedia(
@@ -375,7 +405,9 @@ describe('MediaMetaDataService.createElevenlabsMedia — optional generation_req
     expect(saved.generation_request_json.voice_id).toBeUndefined();
     expect(saved.generation_request_json.model_id).toBe('m-1');
     expect(saved.generation_request_json.language_code).toBe('hi');
-    expect(saved.generation_request_json.voice_settings).toEqual({ stability: 0.5 });
+    expect(saved.generation_request_json.voice_settings).toEqual({
+      stability: 0.5,
+    });
   });
 });
 
@@ -404,7 +436,9 @@ describe('MediaMetaDataService.findTranscripts', () => {
     await service.findTranscripts({ media_metadata_id: 'mm-1' });
 
     expect(repo.find).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ input_media_id: 'mm-1' }) }),
+      expect.objectContaining({
+        where: expect.objectContaining({ input_media_id: 'mm-1' }),
+      }),
     );
   });
 
@@ -451,7 +485,9 @@ describe('MediaMetaDataService.findMediaByStateTransitionId', () => {
     const dsQuery = jest.fn();
     const { service } = makeService({ cache, dsQuery });
 
-    const out = await service.findMediaByStateTransitionId('क-letter-word-correct-last');
+    const out = await service.findMediaByStateTransitionId(
+      'क-letter-word-correct-last',
+    );
     expect(out).toEqual({ audio: { id: 'mm-cached' } });
     expect(dsQuery).not.toHaveBeenCalled();
   });
@@ -560,8 +596,15 @@ describe('MediaMetaDataService.markRolledBack', () => {
       };
       return cb(m);
     });
-    const cache = { get: jest.fn(), set: jest.fn(), del: jest.fn().mockResolvedValue(undefined) };
-    const bucket = { stream: jest.fn(), delete: jest.fn().mockResolvedValue(undefined) };
+    const cache = {
+      get: jest.fn(),
+      set: jest.fn(),
+      del: jest.fn().mockResolvedValue(undefined),
+    };
+    const bucket = {
+      stream: jest.fn(),
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
 
     const { service } = makeService({
       repo,
@@ -607,7 +650,11 @@ describe('MediaMetaDataService.markRolledBack', () => {
 
   it('skips cache invalidation when entity has no state_transition_id, and skips S3 when no s3_key', async () => {
     const repo = makeRepo();
-    repo.findOneBy.mockResolvedValue({ id: 'mm-1', s3_key: null, state_transition_id: null });
+    repo.findOneBy.mockResolvedValue({
+      id: 'mm-1',
+      s3_key: null,
+      state_transition_id: null,
+    });
     const transaction = jest.fn().mockImplementation(async (cb) => {
       return cb({
         query: jest
@@ -634,7 +681,10 @@ describe('MediaMetaDataService.markRolledBack', () => {
 describe('MediaMetaDataService.createHeygenMedia', () => {
   it('saves an entity per item, enqueues addBulk, marks rows queued', async () => {
     const repo = makeRepo();
-    repo.save.mockImplementation(async (e) => ({ ...e, created_at: new Date() }));
+    repo.save.mockImplementation(async (e) => ({
+      ...e,
+      created_at: new Date(),
+    }));
     const { service } = makeService({ repo });
 
     const out = await service.createHeygenMedia(
@@ -658,7 +708,10 @@ describe('MediaMetaDataService.createHeygenMedia', () => {
 
   it('on enqueue deadline (>10s): marks rows failed and throws', async () => {
     const repo = makeRepo();
-    repo.save.mockImplementation(async (e) => ({ ...e, created_at: new Date() }));
+    repo.save.mockImplementation(async (e) => ({
+      ...e,
+      created_at: new Date(),
+    }));
 
     let now = 0;
     const dateSpy = jest.spyOn(Date, 'now').mockImplementation(() => now);
@@ -671,7 +724,13 @@ describe('MediaMetaDataService.createHeygenMedia', () => {
     await expect(
       service.createHeygenMedia(
         {
-          items: [{ state_transition_id: 'stid-1', media_type: 'video', script_text: 'hi' }],
+          items: [
+            {
+              state_transition_id: 'stid-1',
+              media_type: 'video',
+              script_text: 'hi',
+            },
+          ],
         },
         carrier,
       ),
@@ -689,14 +748,15 @@ describe('MediaMetaDataService.createHeygenMedia', () => {
 describe('MediaMetaDataService.createElevenlabsMedia', () => {
   it('mirrors heygen happy path (save + addBulk + mark queued)', async () => {
     const repo = makeRepo();
-    repo.save.mockImplementation(async (e) => ({ ...e, created_at: new Date() }));
+    repo.save.mockImplementation(async (e) => ({
+      ...e,
+      created_at: new Date(),
+    }));
     const { service } = makeService({ repo });
 
     const out = await service.createElevenlabsMedia(
       {
-        items: [
-          { state_transition_id: 'stid-1', script_text: 'hello' },
-        ],
+        items: [{ state_transition_id: 'stid-1', script_text: 'hello' }],
       },
       carrier,
     );
@@ -709,8 +769,14 @@ describe('MediaMetaDataService.createElevenlabsMedia', () => {
 describe('MediaMetaDataService.createRenderedImageMedia', () => {
   it('happy path: hashes, streams to S3, enqueues preload, returns queued entity', async () => {
     const repo = makeRepo();
-    repo.save.mockImplementation(async (e) => ({ ...e, created_at: new Date() }));
-    const bucket = { stream: jest.fn().mockResolvedValue('s3/key.png'), delete: jest.fn() };
+    repo.save.mockImplementation(async (e) => ({
+      ...e,
+      created_at: new Date(),
+    }));
+    const bucket = {
+      stream: jest.fn().mockResolvedValue('s3/key.png'),
+      delete: jest.fn(),
+    };
     const { service } = makeService({ repo, bucket });
 
     const out = await service.createRenderedImageMedia({
@@ -729,7 +795,10 @@ describe('MediaMetaDataService.createRenderedImageMedia', () => {
   it('marks entity failed and rethrows when S3 stream fails', async () => {
     const repo = makeRepo();
     repo.save.mockImplementation(async (e) => e);
-    const bucket = { stream: jest.fn().mockRejectedValue(new Error('s3 down')), delete: jest.fn() };
+    const bucket = {
+      stream: jest.fn().mockRejectedValue(new Error('s3 down')),
+      delete: jest.fn(),
+    };
     const { service } = makeService({ repo, bucket });
 
     await expect(
@@ -751,7 +820,10 @@ describe('MediaMetaDataService.createRenderedImageMedia', () => {
   it('marks entity failed when preload queue add fails', async () => {
     const repo = makeRepo();
     repo.save.mockImplementation(async (e) => e);
-    const bucket = { stream: jest.fn().mockResolvedValue('s3/key'), delete: jest.fn() };
+    const bucket = {
+      stream: jest.fn().mockResolvedValue('s3/key'),
+      delete: jest.fn(),
+    };
     mockQueueAdd.mockRejectedValue(new Error('queue down'));
 
     const { service } = makeService({ repo, bucket });
@@ -772,7 +844,10 @@ describe('MediaMetaDataService.uploadStaticMedia', () => {
   it('text item — fresh create returns {status:created}', async () => {
     const repo = makeRepo();
     repo.findOne.mockResolvedValue(null);
-    repo.save.mockImplementation(async (e) => ({ ...e, created_at: new Date() }));
+    repo.save.mockImplementation(async (e) => ({
+      ...e,
+      created_at: new Date(),
+    }));
     const { service } = makeService({ repo });
 
     const out = await service.uploadStaticMedia(
@@ -842,8 +917,14 @@ describe('MediaMetaDataService.uploadStaticMedia', () => {
   it('non-text item — happy path: hash + dedup miss + S3 + enqueue + mark queued', async () => {
     const repo = makeRepo();
     repo.findOne.mockResolvedValue(null);
-    repo.save.mockImplementation(async (e) => ({ ...e, created_at: new Date() }));
-    const bucket = { stream: jest.fn().mockResolvedValue('s3/key'), delete: jest.fn() };
+    repo.save.mockImplementation(async (e) => ({
+      ...e,
+      created_at: new Date(),
+    }));
+    const bucket = {
+      stream: jest.fn().mockResolvedValue('s3/key'),
+      delete: jest.fn(),
+    };
 
     const { service } = makeService({ repo, bucket });
 
@@ -856,9 +937,7 @@ describe('MediaMetaDataService.uploadStaticMedia', () => {
 
     const out = await service.uploadStaticMedia(
       [file],
-      [
-        { state_transition_id: 'stid-1', media_type: 'image' } as never,
-      ],
+      [{ state_transition_id: 'stid-1', media_type: 'image' } as never],
       carrier,
     );
 
@@ -917,7 +996,10 @@ describe('MediaMetaDataService.uploadStaticMedia', () => {
   it('non-text item — S3 upload failure is captured as a per-item failure (continues loop)', async () => {
     const repo = makeRepo();
     repo.findOne.mockResolvedValue(null);
-    const bucket = { stream: jest.fn().mockRejectedValue(new Error('s3 down')), delete: jest.fn() };
+    const bucket = {
+      stream: jest.fn().mockRejectedValue(new Error('s3 down')),
+      delete: jest.fn(),
+    };
 
     const { service } = makeService({ repo, bucket });
 
@@ -941,7 +1023,10 @@ describe('MediaMetaDataService.uploadStaticMedia', () => {
     const repo = makeRepo();
     repo.findOne.mockResolvedValue(null);
     repo.save.mockImplementation(async (e) => ({ ...e }));
-    const bucket = { stream: jest.fn().mockResolvedValue('s3/key'), delete: jest.fn() };
+    const bucket = {
+      stream: jest.fn().mockResolvedValue('s3/key'),
+      delete: jest.fn(),
+    };
     mockQueueAdd.mockRejectedValue(new Error('queue down'));
 
     const { service } = makeService({ repo, bucket });
@@ -972,7 +1057,11 @@ describe('MediaMetaDataService.uploadStaticMedia', () => {
 
 describe('markRolledBack — exact SQL + params + cache keys', () => {
   function rolledBackRun(opts: {
-    entity?: { id: string; s3_key: string | null; state_transition_id: string | null } | null;
+    entity?: {
+      id: string;
+      s3_key: string | null;
+      state_transition_id: string | null;
+    } | null;
     updateAffected?: number;
     fkRows?: { sql: string }[];
     bucketDelete?: jest.Mock;
@@ -987,7 +1076,9 @@ describe('markRolledBack — exact SQL + params + cache keys', () => {
     for (const _ of opts.fkRows ?? []) {
       txQuery.mockResolvedValueOnce(undefined); // each FK delete
     }
-    const transaction = jest.fn().mockImplementation(async (cb) => cb({ query: txQuery }));
+    const transaction = jest
+      .fn()
+      .mockImplementation(async (cb) => cb({ query: txQuery }));
     const cache = {
       get: jest.fn(),
       set: jest.fn(),
@@ -997,7 +1088,12 @@ describe('markRolledBack — exact SQL + params + cache keys', () => {
       stream: jest.fn(),
       delete: opts.bucketDelete ?? jest.fn().mockResolvedValue(undefined),
     };
-    const { service } = makeService({ repo, dsTransaction: transaction, cache, bucket });
+    const { service } = makeService({
+      repo,
+      dsTransaction: transaction,
+      cache,
+      bucket,
+    });
     return { service, txQuery, repo, cache, bucket };
   }
 
@@ -1052,7 +1148,9 @@ describe('markRolledBack — exact SQL + params + cache keys', () => {
       entity: { id: 'mm-1', s3_key: null, state_transition_id: null },
       fkRows: [
         { sql: 'DELETE FROM scores WHERE user_message_id = $1' },
-        { sql: 'DELETE FROM literacy_lesson_states WHERE user_message_id = $1' },
+        {
+          sql: 'DELETE FROM literacy_lesson_states WHERE user_message_id = $1',
+        },
       ],
     });
     await service.markRolledBack('mm-1');
@@ -1087,7 +1185,11 @@ describe('findMediaByStateTransitionId — exact SQL + cache keys', () => {
   it('SQL fragment is correct: SELECT * FROM media_metadata WHERE state_transition_id = ANY($1::text[]), filtered', async () => {
     const dsQuery = jest.fn().mockResolvedValue([]);
     const { service } = makeService({
-      cache: { get: jest.fn().mockResolvedValue(null), set: jest.fn(), del: jest.fn() },
+      cache: {
+        get: jest.fn().mockResolvedValue(null),
+        set: jest.fn(),
+        del: jest.fn(),
+      },
       dsQuery,
     });
     await service.findMediaByStateTransitionId('कमल-start-word-initial');
@@ -1096,15 +1198,17 @@ describe('findMediaByStateTransitionId — exact SQL + cache keys', () => {
     expect(sql).toContain('state_transition_id = ANY($1::text[])');
     expect(sql).toContain("status = 'ready'");
     expect(sql).toContain('rolled_back = false');
-    expect(sql).toContain(
-      "(wa_media_url IS NOT NULL OR media_type = 'text')",
-    );
+    expect(sql).toContain("(wa_media_url IS NOT NULL OR media_type = 'text')");
   });
 
   it('queries specific stid + the generic suffix (after the first dash) when present', async () => {
     const dsQuery = jest.fn().mockResolvedValue([]);
     const { service } = makeService({
-      cache: { get: jest.fn().mockResolvedValue(null), set: jest.fn(), del: jest.fn() },
+      cache: {
+        get: jest.fn().mockResolvedValue(null),
+        set: jest.fn(),
+        del: jest.fn(),
+      },
       dsQuery,
     });
     // 'कमल-start-word-initial' has a dash → query both specific and generic.
@@ -1117,7 +1221,11 @@ describe('findMediaByStateTransitionId — exact SQL + cache keys', () => {
   it('queries only the specific stid when there is no dash (kills dashIdx >= 0 → > 0)', async () => {
     const dsQuery = jest.fn().mockResolvedValue([]);
     const { service } = makeService({
-      cache: { get: jest.fn().mockResolvedValue(null), set: jest.fn(), del: jest.fn() },
+      cache: {
+        get: jest.fn().mockResolvedValue(null),
+        set: jest.fn(),
+        del: jest.fn(),
+      },
       dsQuery,
     });
     await service.findMediaByStateTransitionId('welcome');
@@ -1320,7 +1428,10 @@ describe('uploadStaticMedia — mime-to-type mapping + create() args', () => {
     rolled_back: false,
   });
 
-  function makeFile(mimetype: string, buf = Buffer.from('x')): Express.Multer.File {
+  function makeFile(
+    mimetype: string,
+    buf = Buffer.from('x'),
+  ): Express.Multer.File {
     return {
       buffer: buf,
       mimetype,
@@ -1355,7 +1466,9 @@ describe('uploadStaticMedia — mime-to-type mapping + create() args', () => {
       [{ state_transition_id: 's', media_type: expected as never }],
       carrier,
     );
-    expect(repo.create.mock.calls[0][0]).toMatchObject({ media_type: expected });
+    expect(repo.create.mock.calls[0][0]).toMatchObject({
+      media_type: expected,
+    });
   });
 
   it('non-text item: row is created with source=dashboard, status=created, rolled_back=false, content_hash + media_details set', async () => {
@@ -1472,8 +1585,12 @@ import { Logger } from '@nestjs/common';
 // helpers to spy/restore the NestJS logger
 function spyLogger() {
   return {
-    warn: jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined),
-    error: jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined),
+    warn: jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined),
+    error: jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined),
   };
 }
 function makeFileForUpload(mimetype: string, buf = Buffer.from('x')) {
@@ -1496,9 +1613,11 @@ jest.mock('../interfaces/openfeature/openfeature.service', () => ({}), {
 });
 
 describe('createWhatsappAudioMedia — STT provider names + dedup-existing status', () => {
-  function setup(opts: {
-    sttFlags?: Partial<Record<'sarvam' | 'azure' | 'reverie', boolean>>;
-  } = {}) {
+  function setup(
+    opts: {
+      sttFlags?: Partial<Record<'sarvam' | 'azure' | 'reverie', boolean>>;
+    } = {},
+  ) {
     const repo = makeRepo();
     repo.findOneBy.mockResolvedValue(null); // no duplicate wa_media_url
     repo.save.mockImplementation(async (e) => e);
@@ -1506,12 +1625,19 @@ describe('createWhatsappAudioMedia — STT provider names + dedup-existing statu
       stream: jest.fn().mockResolvedValue('s3/k'),
       delete: jest.fn(),
     };
-    const flags = { sarvam: false, azure: false, reverie: false, ...opts.sttFlags };
+    const flags = {
+      sarvam: false,
+      azure: false,
+      reverie: false,
+      ...opts.sttFlags,
+    };
     const sarvam = { run: jest.fn().mockResolvedValue(undefined) };
     const azure = { run: jest.fn().mockResolvedValue(undefined) };
     const reverie = { run: jest.fn().mockResolvedValue(undefined) };
     const userSvc = {
-      find: jest.fn().mockResolvedValue({ id: 'u1', external_id: '919999990001' }),
+      find: jest
+        .fn()
+        .mockResolvedValue({ id: 'u1', external_id: '919999990001' }),
     };
     const wabot = {
       downloadMedia: jest
@@ -1520,10 +1646,12 @@ describe('createWhatsappAudioMedia — STT provider names + dedup-existing statu
     };
     // The service reads STT flags via this.featureFlag.isSttEnabled (or similar);
     // intercept globalThis to simulate provider toggles.
-    const flagOrig: unknown =
-      (globalThis as unknown as { __TEST_STT_FLAGS__?: typeof flags }).__TEST_STT_FLAGS__;
-    (globalThis as unknown as { __TEST_STT_FLAGS__?: typeof flags }).__TEST_STT_FLAGS__ =
-      flags;
+    const flagOrig: unknown = (
+      globalThis as unknown as { __TEST_STT_FLAGS__?: typeof flags }
+    ).__TEST_STT_FLAGS__;
+    (
+      globalThis as unknown as { __TEST_STT_FLAGS__?: typeof flags }
+    ).__TEST_STT_FLAGS__ = flags;
     const { service } = makeService({
       repo,
       userSvc,
@@ -1540,8 +1668,9 @@ describe('createWhatsappAudioMedia — STT provider names + dedup-existing statu
       azure,
       reverie,
       restoreFlags: () => {
-        (globalThis as unknown as { __TEST_STT_FLAGS__?: typeof flags }).__TEST_STT_FLAGS__ =
-          flagOrig as typeof flags;
+        (
+          globalThis as unknown as { __TEST_STT_FLAGS__?: typeof flags }
+        ).__TEST_STT_FLAGS__ = flagOrig as typeof flags;
       },
     };
   }
@@ -1550,13 +1679,11 @@ describe('createWhatsappAudioMedia — STT provider names + dedup-existing statu
     const { service, repo, restoreFlags } = setup();
     try {
       await service
-        .createWhatsappAudioMedia(
-          {
-            user_external_id: '919999990001',
-            wa_media_url: 'wa.example/m1',
-            otel_carrier: carrier,
-          } as never,
-        )
+        .createWhatsappAudioMedia({
+          user_external_id: '919999990001',
+          wa_media_url: 'wa.example/m1',
+          otel_carrier: carrier,
+        } as never)
         .catch(() => undefined); // no STT enabled → fails after upload; we only assert the create() args
       const created = repo.create.mock.calls[0]?.[0] as
         | {
@@ -1599,9 +1726,7 @@ describe('uploadStaticMedia — log messages + dedup-failed reuse paths', () => 
       carrier,
     );
     expect(warn).toHaveBeenCalledWith(
-      expect.stringMatching(
-        /uploadStaticMedia\[0\]: text insert failed: boom/,
-      ),
+      expect.stringMatching(/uploadStaticMedia\[0\]: text insert failed: boom/),
     );
     warn.mockRestore();
   });
@@ -1819,7 +1944,14 @@ describe('createWhatsappAudioMedia — exact warn/error messages', () => {
     // azure is default-enabled but resolves to satisfy the "all failed" guard
     const azure = { run: jest.fn().mockResolvedValue({ id: 'stt' }) };
     const reverie = { run: jest.fn().mockResolvedValue({ id: 'stt' }) };
-    const { service } = makeService({ repo, wabot, bucket, sarvam, azure, reverie });
+    const { service } = makeService({
+      repo,
+      wabot,
+      bucket,
+      sarvam,
+      azure,
+      reverie,
+    });
     await service.createWhatsappAudioMedia({
       wa_media_url: 'https://wa/m/1',
       user: { id: 'u1' } as never,
@@ -1837,7 +1969,14 @@ describe('createWhatsappAudioMedia — exact warn/error messages', () => {
     const sarvam = { run: jest.fn().mockRejectedValue(new Error('s1')) };
     const azure = { run: jest.fn().mockRejectedValue(new Error('s2')) };
     const reverie = { run: jest.fn().mockRejectedValue(new Error('s3')) };
-    const { service } = makeService({ repo, wabot, bucket, sarvam, azure, reverie });
+    const { service } = makeService({
+      repo,
+      wabot,
+      bucket,
+      sarvam,
+      azure,
+      reverie,
+    });
     await expect(
       service.createWhatsappAudioMedia({
         wa_media_url: 'https://wa/m/1',
@@ -1846,7 +1985,9 @@ describe('createWhatsappAudioMedia — exact warn/error messages', () => {
       }),
     ).rejects.toThrow('All STT providers failed');
     expect(warn).toHaveBeenCalledWith(
-      expect.stringMatching(/createWhatsappAudioMedia: all STT providers failed for/),
+      expect.stringMatching(
+        /createWhatsappAudioMedia: all STT providers failed for/,
+      ),
     );
     warn.mockRestore();
   });

@@ -13,7 +13,9 @@ type RepoMock = { create: jest.Mock; save: jest.Mock };
 function makeRepo(): RepoMock {
   return {
     create: jest.fn((row) => ({ ...row })),
-    save: jest.fn().mockImplementation(async (e) => ({ ...e, created_at: new Date() })),
+    save: jest
+      .fn()
+      .mockImplementation(async (e) => ({ ...e, created_at: new Date() })),
   };
 }
 
@@ -64,7 +66,9 @@ describe('AzureService.run', () => {
 
   it('throws "Azure STT failed: NNN" when status is not 200', async () => {
     global.fetch = jest.fn().mockResolvedValue(
-      jsonResponse(401, { error: { code: 'Unauthorized', message: 'bad key' } }),
+      jsonResponse(401, {
+        error: { code: 'Unauthorized', message: 'bad key' },
+      }),
     );
     const svc = makeService(makeRepo());
     await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow(
@@ -234,15 +238,13 @@ function spyWarn() {
 
 describe('AzureService.run — exact request payload + endpoint', () => {
   it('POSTs to {AZURE_SPEECH_ENDPOINT}/speechtotext/transcriptions:transcribe?api-version=2024-11-15', async () => {
-    const fetchSpy = jest
-      .fn()
-      .mockResolvedValue(
-        jsonResponse(200, {
-          durationMilliseconds: 100,
-          combinedPhrases: [{ text: 't' }],
-          phrases: [{ text: 't', locale: 'hi-IN', confidence: 1 }],
-        }),
-      );
+    const fetchSpy = jest.fn().mockResolvedValue(
+      jsonResponse(200, {
+        durationMilliseconds: 100,
+        combinedPhrases: [{ text: 't' }],
+        phrases: [{ text: 't', locale: 'hi-IN', confidence: 1 }],
+      }),
+    );
     global.fetch = fetchSpy;
     process.env.AZURE_SPEECH_ENDPOINT = 'https://azure.test';
     const svc = makeService(makeRepo());
@@ -253,15 +255,13 @@ describe('AzureService.run — exact request payload + endpoint', () => {
   });
 
   it('multipart body uses field name "audio" + filename "<parentId>.ogg" + definition locales hi-IN', async () => {
-    const fetchSpy = jest
-      .fn()
-      .mockResolvedValue(
-        jsonResponse(200, {
-          durationMilliseconds: 100,
-          combinedPhrases: [{ text: 't' }],
-          phrases: [{ text: 't', locale: 'hi-IN', confidence: 1 }],
-        }),
-      );
+    const fetchSpy = jest.fn().mockResolvedValue(
+      jsonResponse(200, {
+        durationMilliseconds: 100,
+        combinedPhrases: [{ text: 't' }],
+        phrases: [{ text: 't', locale: 'hi-IN', confidence: 1 }],
+      }),
+    );
     global.fetch = fetchSpy;
     const svc = makeService(makeRepo());
     await svc.run(Buffer.from('a'), parentMedia);
@@ -269,9 +269,7 @@ describe('AzureService.run — exact request payload + endpoint', () => {
     const file = body.get('audio') as File | null;
     expect(file).toBeDefined();
     expect((file as unknown as { name: string }).name).toBe('parent-1.ogg');
-    expect(body.get('definition')).toBe(
-      JSON.stringify({ locales: ['hi-IN'] }),
-    );
+    expect(body.get('definition')).toBe(JSON.stringify({ locales: ['hi-IN'] }));
   });
 });
 
@@ -288,7 +286,9 @@ describe('AzureService.run — exact warn messages', () => {
     const warn = spyWarn();
     global.fetch = jest.fn().mockRejectedValue(new Error('econn'));
     const svc = makeService(makeRepo());
-    await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow('econn');
+    await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow(
+      'econn',
+    );
     expect(warn).toHaveBeenCalledWith(
       'Azure: network/timeout error for parent-1: econn',
     );

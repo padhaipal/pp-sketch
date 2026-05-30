@@ -69,7 +69,9 @@ function makeQuery(...rounds: unknown[][]): jest.Mock {
 function makeUserService(find: jest.Mock): UserService {
   return { find } as unknown as UserService;
 }
-function makeMedia(findMediaByStateTransitionId: jest.Mock): MediaMetaDataService {
+function makeMedia(
+  findMediaByStateTransitionId: jest.Mock,
+): MediaMetaDataService {
   return {
     findMediaByStateTransitionId,
   } as unknown as MediaMetaDataService;
@@ -399,8 +401,12 @@ import { Logger as NestLogger } from '@nestjs/common';
 
 function spyLog2() {
   return {
-    log: jest.spyOn(NestLogger.prototype, 'log').mockImplementation(() => undefined),
-    warn: jest.spyOn(NestLogger.prototype, 'warn').mockImplementation(() => undefined),
+    log: jest
+      .spyOn(NestLogger.prototype, 'log')
+      .mockImplementation(() => undefined),
+    warn: jest
+      .spyOn(NestLogger.prototype, 'warn')
+      .mockImplementation(() => undefined),
   };
 }
 const tracerMock2 = jest.requireMock('../otel/otel') as {
@@ -436,7 +442,9 @@ describe('rearmHailMary — exact queue call shape', () => {
 
 describe('processHailMaryJob — span name + attributes + log messages', () => {
   function dsWith(rows: unknown[]) {
-    return { query: jest.fn().mockResolvedValue(rows) } as unknown as DataSource;
+    return {
+      query: jest.fn().mockResolvedValue(rows),
+    } as unknown as DataSource;
   }
 
   function makeJob2(data: Partial<HailMaryJobData> = {}): Job<HailMaryJobData> {
@@ -588,15 +596,15 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
       makeJob2(),
       dsWith([{ id: 'mm-1', created_at: new Date() }]),
       {
-        find: jest.fn().mockResolvedValue({ id: 'u1', external_id: '919999990001' }),
+        find: jest
+          .fn()
+          .mockResolvedValue({ id: 'u1', external_id: '919999990001' }),
       } as unknown as UserService,
       {
         findMediaByStateTransitionId: jest.fn().mockResolvedValue({}),
       } as unknown as MediaMetaDataService,
       {
-        processAnswer: jest
-          .fn()
-          .mockResolvedValue({ stateTransitionIds: [] }),
+        processAnswer: jest.fn().mockResolvedValue({ stateTransitionIds: [] }),
       } as unknown as LiteracyLessonService,
       {} as unknown as WabotOutboundService,
     );
@@ -617,17 +625,20 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
       makeJob2(),
       dsWith([{ id: 'mm-1', created_at: new Date() }]),
       {
-        find: jest.fn().mockResolvedValue({ id: 'u1', external_id: '919999990001' }),
+        find: jest
+          .fn()
+          .mockResolvedValue({ id: 'u1', external_id: '919999990001' }),
       } as unknown as UserService,
       {
         findMediaByStateTransitionId: jest.fn().mockResolvedValue({
-          video: { wa_media_url: 'wa://v1', media_details: { mime_type: 'video/mp4' } },
+          video: {
+            wa_media_url: 'wa://v1',
+            media_details: { mime_type: 'video/mp4' },
+          },
         }),
       } as unknown as MediaMetaDataService,
       {
-        processAnswer: jest
-          .fn()
-          .mockResolvedValue({ stateTransitionIds: [] }),
+        processAnswer: jest.fn().mockResolvedValue({ stateTransitionIds: [] }),
       } as unknown as LiteracyLessonService,
       { sendMessage } as unknown as WabotOutboundService,
     );
@@ -656,15 +667,15 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
       makeJob2(),
       dsWith([{ id: 'mm-1', created_at: new Date() }]),
       {
-        find: jest.fn().mockResolvedValue({ id: 'u1', external_id: '919999990001' }),
+        find: jest
+          .fn()
+          .mockResolvedValue({ id: 'u1', external_id: '919999990001' }),
       } as unknown as UserService,
       {
         findMediaByStateTransitionId,
       } as unknown as MediaMetaDataService,
       {
-        processAnswer: jest
-          .fn()
-          .mockResolvedValue({ stateTransitionIds: [] }),
+        processAnswer: jest.fn().mockResolvedValue({ stateTransitionIds: [] }),
       } as unknown as LiteracyLessonService,
       { sendMessage: jest.fn() } as unknown as WabotOutboundService,
     );

@@ -40,7 +40,9 @@ describe('DashboardService.submitAnswer', () => {
     expect(query).toHaveBeenCalledTimes(1);
     const [sql, params] = query.mock.calls[0];
     expect(sql).toMatch(/INSERT INTO quiz_responses/);
-    expect(sql).toMatch(/ON CONFLICT ON CONSTRAINT uq_quiz_responses_session_question/);
+    expect(sql).toMatch(
+      /ON CONFLICT ON CONSTRAINT uq_quiz_responses_session_question/,
+    );
     expect(params).toEqual(['sess-1', 2, 7]);
   });
 });
@@ -85,7 +87,10 @@ describe('DashboardService.subscribeEmail', () => {
     const query = jest.fn().mockResolvedValue(undefined);
     const { service } = makeService(query);
 
-    await service.subscribeEmail({ email: '  Foo@Bar.COM  ', name: '  Alice  ' });
+    await service.subscribeEmail({
+      email: '  Foo@Bar.COM  ',
+      name: '  Alice  ',
+    });
 
     const [, params] = query.mock.calls[0];
     expect(params).toEqual(['foo@bar.com', 'Alice']);
@@ -141,9 +146,7 @@ describe('DashboardService.createOrGetShareToken', () => {
   }
 
   it('returns the existing token when one is already mapped to the session', async () => {
-    const query = jest
-      .fn()
-      .mockResolvedValueOnce([{ token: 'existing-tok' }]); // SELECT
+    const query = jest.fn().mockResolvedValueOnce([{ token: 'existing-tok' }]); // SELECT
     const { service } = makeService(query);
 
     const out = await service.createOrGetShareToken('sess-1');
@@ -175,9 +178,7 @@ describe('DashboardService.createOrGetShareToken', () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce([]) // initial SELECT — empty
-      .mockRejectedValueOnce(
-        Object.assign(new Error('dup'), { code: '23505' }),
-      ) // INSERT collides
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' })) // INSERT collides
       .mockResolvedValueOnce([{ token: 'winner-tok' }]); // re-SELECT finds winner
     const { service } = makeService(query);
 

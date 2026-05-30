@@ -54,11 +54,16 @@ describe('ReportCardController.preview', () => {
 
   it('passes the userIdOrPhone param verbatim (no normalization)', async () => {
     const svc = {
-      generatePng: jest.fn().mockResolvedValue({ buffer: Buffer.from('x'), data: {} }),
+      generatePng: jest
+        .fn()
+        .mockResolvedValue({ buffer: Buffer.from('x'), data: {} }),
     } as unknown as ReportCardService;
     const ctrl = new ReportCardController(svc);
 
-    await ctrl.preview('11111111-2222-3333-4444-555555555555', makeRes() as never);
+    await ctrl.preview(
+      '11111111-2222-3333-4444-555555555555',
+      makeRes() as never,
+    );
     expect(svc.generatePng).toHaveBeenCalledWith(
       '11111111-2222-3333-4444-555555555555',
     );

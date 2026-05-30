@@ -96,11 +96,7 @@ describe('UserService.find', () => {
     await expect(svc.find({ id: 'u1' })).resolves.toBe(user);
     expect(repo.findOneBy).toHaveBeenCalledWith({ id: 'u1' });
     expect(cache.set).toHaveBeenCalledWith('user:id:u1', user, 3600);
-    expect(cache.set).toHaveBeenCalledWith(
-      'user:ext:919999990001',
-      user,
-      3600,
-    );
+    expect(cache.set).toHaveBeenCalledWith('user:ext:919999990001', user, 3600);
   });
 
   it('loads by external_id (E.164 normalized) when id is not given', async () => {
@@ -113,7 +109,9 @@ describe('UserService.find', () => {
     const svc = makeService(repo, jest.fn(), cache, makeScore());
     const out = await svc.find({ external_id: '919999990001' });
 
-    expect(repo.findOneBy).toHaveBeenCalledWith({ external_id: '919999990001' });
+    expect(repo.findOneBy).toHaveBeenCalledWith({
+      external_id: '919999990001',
+    });
     expect(out).toBe(user);
   });
 
@@ -140,7 +138,9 @@ describe('UserService.update', () => {
     repo.findOneBy.mockResolvedValue(null);
 
     const svc = makeService(repo, jest.fn(), makeCache(), makeScore());
-    await expect(svc.update({ id: 'u1', new_name: 'Alice' })).resolves.toBeNull();
+    await expect(
+      svc.update({ id: 'u1', new_name: 'Alice' }),
+    ).resolves.toBeNull();
     expect(repo.save).not.toHaveBeenCalled();
   });
 
@@ -434,7 +434,11 @@ describe('UserService — exact SQL + where-clause shapes', () => {
     expect(repo.save).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'New' }),
     );
-    expect(cache.set).toHaveBeenCalledWith('user:id:u1', expect.anything(), 3600);
+    expect(cache.set).toHaveBeenCalledWith(
+      'user:id:u1',
+      expect.anything(),
+      3600,
+    );
     expect(cache.set).toHaveBeenCalledWith(
       'user:ext:919999990001',
       expect.anything(),
@@ -509,11 +513,7 @@ describe('UserService — exact SQL + where-clause shapes', () => {
       'SELECT $1, $2, id FROM users WHERE external_id = $3',
     );
     expect(ds.mock.calls[0][0]).toContain('RETURNING *');
-    expect(ds.mock.calls[0][1]).toEqual([
-      '919999990001',
-      null,
-      '918888880002',
-    ]);
+    expect(ds.mock.calls[0][1]).toEqual(['919999990001', null, '918888880002']);
     // Cycle-check call
     expect(ds.mock.calls[1][0]).toContain('WITH RECURSIVE chain');
     expect(ds.mock.calls[1][1]).toEqual(['ref-1', 'u-new']);
@@ -632,9 +632,9 @@ describe('UserService.partitionIdentifiers', () => {
   });
 
   it('throws BadRequestException listing every bad item at once', () => {
-    expect(() => svc().partitionIdentifiers(['garbage-a', 'garbage-b'])).toThrow(
-      /garbage-a.*garbage-b/,
-    );
+    expect(() =>
+      svc().partitionIdentifiers(['garbage-a', 'garbage-b']),
+    ).toThrow(/garbage-a.*garbage-b/);
   });
 });
 

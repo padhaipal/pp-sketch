@@ -12,7 +12,9 @@ type RepoMock = { create: jest.Mock; save: jest.Mock };
 function makeRepo(): RepoMock {
   return {
     create: jest.fn((row) => ({ ...row })),
-    save: jest.fn().mockImplementation(async (e) => ({ ...e, created_at: new Date() })),
+    save: jest
+      .fn()
+      .mockImplementation(async (e) => ({ ...e, created_at: new Date() })),
   };
 }
 
@@ -66,9 +68,9 @@ describe('SarvamService.run', () => {
   });
 
   it('throws "Sarvam STT failed: NNN" on 4XX response', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ status: 401, text: 'unauthorized' }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(fakeResponse({ status: 401, text: 'unauthorized' }));
     const svc = makeService(makeRepo());
     await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow(
       'Sarvam STT failed: 401',
@@ -76,9 +78,11 @@ describe('SarvamService.run', () => {
   });
 
   it('throws "Sarvam STT failed: NNN" on 5XX response (separate branch)', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ status: 503, text: 'service unavail' }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        fakeResponse({ status: 503, text: 'service unavail' }),
+      );
     const svc = makeService(makeRepo());
     await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow(
       'Sarvam STT failed: 503',
@@ -324,7 +328,9 @@ describe('SarvamService.run — exact warn messages', () => {
     const warn = spyWarn();
     const svc = makeService(makeRepo());
     await expect(svc.run(Buffer.alloc(0), parentMedia)).rejects.toThrow();
-    expect(warn).toHaveBeenCalledWith('Sarvam: empty audio buffer for parent-1');
+    expect(warn).toHaveBeenCalledWith(
+      'Sarvam: empty audio buffer for parent-1',
+    );
     warn.mockRestore();
   });
 
@@ -332,7 +338,9 @@ describe('SarvamService.run — exact warn messages', () => {
     const warn = spyWarn();
     global.fetch = jest.fn().mockRejectedValue(new Error('econn'));
     const svc = makeService(makeRepo());
-    await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow('econn');
+    await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow(
+      'econn',
+    );
     expect(warn).toHaveBeenCalledWith(
       'Sarvam: network/timeout error for parent-1: econn',
     );
@@ -348,9 +356,7 @@ describe('SarvamService.run — exact warn messages', () => {
     await expect(svc.run(Buffer.from('a'), parentMedia)).rejects.toThrow(
       'Sarvam STT failed: 422',
     );
-    expect(warn).toHaveBeenCalledWith(
-      'Sarvam 4XX for parent-1: 422 bad input',
-    );
+    expect(warn).toHaveBeenCalledWith('Sarvam 4XX for parent-1: 422 bad input');
     warn.mockRestore();
   });
 

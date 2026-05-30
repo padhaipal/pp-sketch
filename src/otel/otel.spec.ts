@@ -111,10 +111,9 @@ describe('startChildSpan', () => {
     const out = startChildSpan('child-op', { traceparent: 'tp' });
 
     expect(out).toBe(fakeSpan);
-    expect(mockPropagationExtract).toHaveBeenCalledWith(
-      ROOT_CONTEXT,
-      { traceparent: 'tp' },
-    );
+    expect(mockPropagationExtract).toHaveBeenCalledWith(ROOT_CONTEXT, {
+      traceparent: 'tp',
+    });
     expect(mockTracerStartSpan).toHaveBeenCalledWith(
       'child-op',
       {},
@@ -205,11 +204,13 @@ describe('initOtel', () => {
     registeredSigInt = undefined;
     processOnceSpy = jest
       .spyOn(process, 'once')
-      .mockImplementation((evt: string | symbol, cb: (...args: unknown[]) => void) => {
-        if (evt === 'SIGTERM') registeredSigTerm = cb as () => void;
-        if (evt === 'SIGINT') registeredSigInt = cb as () => void;
-        return process;
-      });
+      .mockImplementation(
+        (evt: string | symbol, cb: (...args: unknown[]) => void) => {
+          if (evt === 'SIGTERM') registeredSigTerm = cb as () => void;
+          if (evt === 'SIGINT') registeredSigInt = cb as () => void;
+          return process;
+        },
+      );
     consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
   });
 

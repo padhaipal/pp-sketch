@@ -36,9 +36,7 @@ function makeReq(opts: {
   return {
     rawBody: opts.rawBody ?? undefined,
     body: opts.body,
-    headers: opts.signatureHeader
-      ? { signature: opts.signatureHeader }
-      : {},
+    headers: opts.signatureHeader ? { signature: opts.signatureHeader } : {},
   };
 }
 
@@ -227,8 +225,12 @@ import { Logger as NestLogger } from '@nestjs/common';
 
 function spyHLog() {
   return {
-    warn: jest.spyOn(NestLogger.prototype, 'warn').mockImplementation(() => undefined),
-    error: jest.spyOn(NestLogger.prototype, 'error').mockImplementation(() => undefined),
+    warn: jest
+      .spyOn(NestLogger.prototype, 'warn')
+      .mockImplementation(() => undefined),
+    error: jest
+      .spyOn(NestLogger.prototype, 'error')
+      .mockImplementation(() => undefined),
   };
 }
 

@@ -38,7 +38,9 @@ type SimpleRepo = {
   manager: { query: jest.Mock };
 };
 
-function makeQB(rows: unknown[] | ((args: unknown) => unknown[])): Record<string, jest.Mock> {
+function makeQB(
+  rows: unknown[] | ((args: unknown) => unknown[]),
+): Record<string, jest.Mock> {
   const qb: Record<string, jest.Mock> = {
     select: jest.fn(),
     addSelect: jest.fn(),
@@ -49,12 +51,16 @@ function makeQB(rows: unknown[] | ((args: unknown) => unknown[])): Record<string
     orderBy: jest.fn(),
     offset: jest.fn(),
     limit: jest.fn(),
-    getRawMany: jest.fn().mockImplementation(async () =>
-      typeof rows === 'function' ? rows(undefined) : rows,
-    ),
-    getMany: jest.fn().mockImplementation(async () =>
-      typeof rows === 'function' ? rows(undefined) : rows,
-    ),
+    getRawMany: jest
+      .fn()
+      .mockImplementation(async () =>
+        typeof rows === 'function' ? rows(undefined) : rows,
+      ),
+    getMany: jest
+      .fn()
+      .mockImplementation(async () =>
+        typeof rows === 'function' ? rows(undefined) : rows,
+      ),
   };
   for (const k of Object.keys(qb)) {
     if (!['getRawMany', 'getMany'].includes(k)) qb[k].mockReturnValue(qb);
@@ -83,9 +89,11 @@ function makeController(opts: {
 }): UserController {
   return new UserController(
     (opts.userRepo ?? makeRepo()) as unknown as Repository<UserEntity>,
-    (opts.mediaRepo ?? makeRepo()) as unknown as Repository<MediaMetaDataEntity>,
+    (opts.mediaRepo ??
+      makeRepo()) as unknown as Repository<MediaMetaDataEntity>,
     (opts.scoreRepo ?? makeRepo()) as unknown as Repository<ScoreEntity>,
-    (opts.lessonStateRepo ?? makeRepo()) as unknown as Repository<LiteracyLessonStateEntity>,
+    (opts.lessonStateRepo ??
+      makeRepo()) as unknown as Repository<LiteracyLessonStateEntity>,
     (opts.activitySvc ?? {}) as UserActivityService,
     (opts.userSvc ?? { delete: jest.fn() }) as UserService,
   );
@@ -150,7 +158,9 @@ describe('UserController.dashboard', () => {
     const mediaQB = makeQB(activeUsers);
     const userQB1 = makeQB(users);
     const userQB2 = makeQB(referrers);
-    const mediaRepo = makeRepo({ createQueryBuilder: jest.fn().mockReturnValue(mediaQB) });
+    const mediaRepo = makeRepo({
+      createQueryBuilder: jest.fn().mockReturnValue(mediaQB),
+    });
     const userRepo = makeRepo({
       createQueryBuilder: jest
         .fn()
@@ -187,9 +197,7 @@ describe('UserController.dashboard', () => {
   });
 
   it('falls back to null referrer when the referrer fetch would be empty (no referrer ids)', async () => {
-    const activeUsers = [
-      { user_id: 'u1', last_active: new Date() },
-    ];
+    const activeUsers = [{ user_id: 'u1', last_active: new Date() }];
     const users = [
       {
         id: 'u1',
@@ -252,9 +260,17 @@ describe('UserController.userMedia', () => {
     const user = { id: 'u1', name: 'A', external_id: '919999990001' };
     // Media ordered created_at DESC (controller-supplied via repo.find).
     const media = [
-      { id: 'm3', created_at: new Date('2026-04-27T12:00:00Z'), s3_key: 's3-3' },
+      {
+        id: 'm3',
+        created_at: new Date('2026-04-27T12:00:00Z'),
+        s3_key: 's3-3',
+      },
       { id: 'm2', created_at: new Date('2026-04-27T11:00:00Z'), s3_key: null },
-      { id: 'm1', created_at: new Date('2026-04-27T10:00:00Z'), s3_key: 's3-1' },
+      {
+        id: 'm1',
+        created_at: new Date('2026-04-27T10:00:00Z'),
+        s3_key: 's3-1',
+      },
     ];
     const transcripts = [
       {
@@ -420,9 +436,12 @@ describe('UserController.login', () => {
 
   it('throws Unauthorized when the user has no password_hash', async () => {
     const userRepo = makeRepo({
-      findOneBy: jest
-        .fn()
-        .mockResolvedValue({ id: 'u1', external_id: '919999990001', role: 'dev', password_hash: null }),
+      findOneBy: jest.fn().mockResolvedValue({
+        id: 'u1',
+        external_id: '919999990001',
+        role: 'dev',
+        password_hash: null,
+      }),
     });
     const ctrl = makeController({ userRepo });
     await expect(
@@ -432,9 +451,12 @@ describe('UserController.login', () => {
 
   it('throws Unauthorized when the user has no role', async () => {
     const userRepo = makeRepo({
-      findOneBy: jest
-        .fn()
-        .mockResolvedValue({ id: 'u1', external_id: '919999990001', role: null, password_hash: 'h' }),
+      findOneBy: jest.fn().mockResolvedValue({
+        id: 'u1',
+        external_id: '919999990001',
+        role: null,
+        password_hash: 'h',
+      }),
     });
     const ctrl = makeController({ userRepo });
     await expect(
@@ -492,9 +514,9 @@ describe('UserController.patchUser', () => {
   it('throws NotFoundException when the user does not exist', async () => {
     const userRepo = makeRepo({ findOneBy: jest.fn().mockResolvedValue(null) });
     const ctrl = makeController({ userRepo });
-    await expect(
-      ctrl.patchUser('u1', { name: 'Alice' }),
-    ).rejects.toThrow(NotFoundException);
+    await expect(ctrl.patchUser('u1', { name: 'Alice' })).rejects.toThrow(
+      NotFoundException,
+    );
   });
 
   it('applies each provided field and bcrypt-hashes password', async () => {
@@ -625,7 +647,9 @@ describe('UserController.dashboard — exact query shape + window construction',
     const ctrl = makeController({
       userRepo,
       mediaRepo,
-      activitySvc: { getActivityTime: jest.fn().mockResolvedValue({ results: [] }) },
+      activitySvc: {
+        getActivityTime: jest.fn().mockResolvedValue({ results: [] }),
+      },
     });
 
     await ctrl.dashboard('40');
@@ -683,7 +707,9 @@ describe('UserController.dashboard — exact query shape + window construction',
     const ctrl = makeController({
       userRepo,
       mediaRepo,
-      activitySvc: { getActivityTime: jest.fn().mockResolvedValue({ results: [] }) },
+      activitySvc: {
+        getActivityTime: jest.fn().mockResolvedValue({ results: [] }),
+      },
     });
     await ctrl.dashboard();
     // Only the users query fires; the referrers query does not.
@@ -702,9 +728,7 @@ describe('UserController.dashboard — exact query shape + window construction',
     const mediaRepo = makeRepo({
       createQueryBuilder: jest.fn().mockReturnValue(mediaQB),
     });
-    const getActivityTime = jest
-      .fn()
-      .mockResolvedValue({ results: [] });
+    const getActivityTime = jest.fn().mockResolvedValue({ results: [] });
     const ctrl = makeController({
       userRepo,
       mediaRepo,
@@ -729,8 +753,7 @@ describe('UserController.dashboard — exact query shape + window construction',
     }
     // First start is 6 days before the last end (7 days total).
     const span =
-      new Date(windows[6].end).getTime() -
-      new Date(windows[0].start).getTime();
+      new Date(windows[6].end).getTime() - new Date(windows[0].start).getTime();
     expect(span).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
@@ -747,7 +770,9 @@ describe('UserController.dashboard — exact query shape + window construction',
     const ctrl = makeController({
       userRepo,
       mediaRepo,
-      activitySvc: { getActivityTime: jest.fn().mockResolvedValue({ results: [] }) },
+      activitySvc: {
+        getActivityTime: jest.fn().mockResolvedValue({ results: [] }),
+      },
     });
     const out = await ctrl.dashboard();
     expect(out[0].name).toBeNull();
@@ -871,7 +896,7 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
     expect(scoreManagerQuery).toHaveBeenCalledTimes(1);
     expect(scoreManagerQuery.mock.calls[0][0]).toContain('WITH windowed AS');
     expect(scoreManagerQuery.mock.calls[0][0]).toContain(
-      "LAG(s.score) OVER (PARTITION BY s.letter_id ORDER BY s.created_at)",
+      'LAG(s.score) OVER (PARTITION BY s.letter_id ORDER BY s.created_at)',
     );
     expect(scoreManagerQuery.mock.calls[0][1]).toEqual(['u1', ['m1', 'm2']]);
 
@@ -905,9 +930,7 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
   });
 
   it('parses transitionIds with only 2 parts as no starting/final state (kills parts.length >= 3 → >)', async () => {
-    const mediaRows = [
-      { id: 'm1', s3_key: null, created_at: new Date() },
-    ];
+    const mediaRows = [{ id: 'm1', s3_key: null, created_at: new Date() }];
     const lessonStateRows = [
       {
         user_message_id: 'm1',
@@ -927,7 +950,9 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
     const scoreRepo = makeRepo({
       manager: { query: jest.fn().mockResolvedValue([]) },
     });
-    const userRepo = makeRepo({ findOneBy: jest.fn().mockResolvedValue(userRow) });
+    const userRepo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue(userRow),
+    });
     const ctrl = makeController({
       userRepo,
       mediaRepo,
@@ -984,7 +1009,9 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
     const scoreRepo = makeRepo({
       manager: { query: jest.fn().mockResolvedValue([]) },
     });
-    const userRepo = makeRepo({ findOneBy: jest.fn().mockResolvedValue(userRow) });
+    const userRepo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue(userRow),
+    });
     const ctrl = makeController({
       userRepo,
       mediaRepo,
@@ -1034,7 +1061,9 @@ describe('UserController.userScores — exact raw SQL', () => {
     const ctrl = makeController({ scoreRepo });
     const out = await ctrl.userScores('u1');
     expect(query.mock.calls[0][0]).toContain('FROM scores s');
-    expect(query.mock.calls[0][0]).toContain('JOIN letters l ON l.id = s.letter_id');
+    expect(query.mock.calls[0][0]).toContain(
+      'JOIN letters l ON l.id = s.letter_id',
+    );
     expect(query.mock.calls[0][0]).toContain('WHERE s.user_id = $1');
     expect(query.mock.calls[0][0]).toContain('ORDER BY s.created_at ASC');
     expect(query.mock.calls[0][1]).toEqual(['u1']);

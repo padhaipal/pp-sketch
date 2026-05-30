@@ -45,7 +45,11 @@ describe('LetterService.create', () => {
 
   it('passes media_metadata_id through when provided', async () => {
     const repo = makeRepoMock();
-    repo.save.mockResolvedValue({ id: 'u1', grapheme: 'क', media_metadata_id: 'm1' });
+    repo.save.mockResolvedValue({
+      id: 'u1',
+      grapheme: 'क',
+      media_metadata_id: 'm1',
+    });
     const svc = makeService(repo);
 
     await svc.create({ grapheme: 'क', media_metadata_id: 'm1' });
@@ -58,7 +62,9 @@ describe('LetterService.create', () => {
 
   it('throws BadRequestException on unique-violation (23505)', async () => {
     const repo = makeRepoMock();
-    repo.save.mockRejectedValue(Object.assign(new Error('dup'), { code: '23505' }));
+    repo.save.mockRejectedValue(
+      Object.assign(new Error('dup'), { code: '23505' }),
+    );
     const svc = makeService(repo);
 
     await expect(svc.create({ grapheme: 'क' })).rejects.toThrow(
@@ -111,7 +117,9 @@ describe('LetterService.createBulk', () => {
 
   it('throws BadRequestException on unique-violation (23505)', async () => {
     const repo = makeRepoMock();
-    repo.save.mockRejectedValue(Object.assign(new Error('dup'), { code: '23505' }));
+    repo.save.mockRejectedValue(
+      Object.assign(new Error('dup'), { code: '23505' }),
+    );
     const svc = makeService(repo);
 
     await expect(
@@ -125,9 +133,9 @@ describe('LetterService.createBulk', () => {
     repo.save.mockRejectedValue(err);
     const svc = makeService(repo);
 
-    await expect(
-      svc.createBulk({ items: [{ grapheme: 'क' }] }),
-    ).rejects.toBe(err);
+    await expect(svc.createBulk({ items: [{ grapheme: 'क' }] })).rejects.toBe(
+      err,
+    );
   });
 });
 
@@ -152,7 +160,11 @@ describe('LetterService.update', () => {
 
     const result = await svc.update({ grapheme: 'क', new_grapheme: 'ख' });
 
-    expect(result).toEqual({ id: 'u1', grapheme: 'ख', media_metadata_id: 'm1' });
+    expect(result).toEqual({
+      id: 'u1',
+      grapheme: 'ख',
+      media_metadata_id: 'm1',
+    });
   });
 
   it('updates media_metadata_id only when new_media_metadata_id is provided', async () => {
@@ -167,7 +179,11 @@ describe('LetterService.update', () => {
       new_media_metadata_id: 'm2',
     });
 
-    expect(result).toEqual({ id: 'u1', grapheme: 'क', media_metadata_id: 'm2' });
+    expect(result).toEqual({
+      id: 'u1',
+      grapheme: 'क',
+      media_metadata_id: 'm2',
+    });
   });
 
   it('allows clearing media_metadata_id by passing null', async () => {
@@ -182,7 +198,11 @@ describe('LetterService.update', () => {
       new_media_metadata_id: null,
     });
 
-    expect(result).toEqual({ id: 'u1', grapheme: 'क', media_metadata_id: null });
+    expect(result).toEqual({
+      id: 'u1',
+      grapheme: 'क',
+      media_metadata_id: null,
+    });
   });
 
   it('updates both fields when both are provided', async () => {
@@ -198,13 +218,23 @@ describe('LetterService.update', () => {
       new_media_metadata_id: 'm2',
     });
 
-    expect(result).toEqual({ id: 'u1', grapheme: 'ख', media_metadata_id: 'm2' });
+    expect(result).toEqual({
+      id: 'u1',
+      grapheme: 'ख',
+      media_metadata_id: 'm2',
+    });
   });
 
   it('throws BadRequestException when save hits unique-violation', async () => {
     const repo = makeRepoMock();
-    repo.findOneBy.mockResolvedValue({ id: 'u1', grapheme: 'क', media_metadata_id: null });
-    repo.save.mockRejectedValue(Object.assign(new Error('dup'), { code: '23505' }));
+    repo.findOneBy.mockResolvedValue({
+      id: 'u1',
+      grapheme: 'क',
+      media_metadata_id: null,
+    });
+    repo.save.mockRejectedValue(
+      Object.assign(new Error('dup'), { code: '23505' }),
+    );
     const svc = makeService(repo);
 
     await expect(
@@ -214,14 +244,18 @@ describe('LetterService.update', () => {
 
   it('rethrows non-23505 save errors', async () => {
     const repo = makeRepoMock();
-    repo.findOneBy.mockResolvedValue({ id: 'u1', grapheme: 'क', media_metadata_id: null });
+    repo.findOneBy.mockResolvedValue({
+      id: 'u1',
+      grapheme: 'क',
+      media_metadata_id: null,
+    });
     const err = Object.assign(new Error('boom'), { code: '08000' });
     repo.save.mockRejectedValue(err);
     const svc = makeService(repo);
 
-    await expect(
-      svc.update({ grapheme: 'क', new_grapheme: 'ख' }),
-    ).rejects.toBe(err);
+    await expect(svc.update({ grapheme: 'क', new_grapheme: 'ख' })).rejects.toBe(
+      err,
+    );
   });
 });
 
@@ -253,7 +287,9 @@ describe('LetterService.delete', () => {
 
   it('throws BadRequestException on FK-violation (23503)', async () => {
     const repo = makeRepoMock();
-    repo.delete.mockRejectedValue(Object.assign(new Error('fk'), { code: '23503' }));
+    repo.delete.mockRejectedValue(
+      Object.assign(new Error('fk'), { code: '23503' }),
+    );
     const svc = makeService(repo);
 
     await expect(svc.delete({ grapheme: 'क' })).rejects.toThrow(

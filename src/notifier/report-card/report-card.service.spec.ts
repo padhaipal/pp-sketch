@@ -361,8 +361,9 @@ describe('ReportCardService.generatePng', () => {
   it('uses the landscape renderer by default', async () => {
     const svc = makeWithUser();
     await svc.generatePng('u1', { now: new Date('2026-04-28T01:30:00Z') });
-    const svgStr = (sharp as unknown as { __calls: Buffer[] }).__calls[0]
-      .toString('utf-8');
+    const svgStr = (
+      sharp as unknown as { __calls: Buffer[] }
+    ).__calls[0].toString('utf-8');
     // The landscape canvas is wider than the portrait one. Check the width
     // attribute matches LANDSCAPE_REPORT_CARD_WIDTH.
     expect(svgStr).toContain(`width="${LANDSCAPE_REPORT_CARD_WIDTH}"`);
@@ -374,8 +375,9 @@ describe('ReportCardService.generatePng', () => {
       now: new Date('2026-04-28T01:30:00Z'),
       variant: 'portrait',
     });
-    const svgStr = (sharp as unknown as { __calls: Buffer[] }).__calls[0]
-      .toString('utf-8');
+    const svgStr = (
+      sharp as unknown as { __calls: Buffer[] }
+    ).__calls[0].toString('utf-8');
     // Portrait canvas is narrower; assert it is NOT the landscape width.
     expect(svgStr).not.toContain(`width="${LANDSCAPE_REPORT_CARD_WIDTH}"`);
   });
@@ -386,8 +388,9 @@ describe('ReportCardService.generatePng', () => {
       now: new Date('2026-04-28T01:30:00Z'),
       variant: 'landscape',
     });
-    const svgStr = (sharp as unknown as { __calls: Buffer[] }).__calls[0]
-      .toString('utf-8');
+    const svgStr = (
+      sharp as unknown as { __calls: Buffer[] }
+    ).__calls[0].toString('utf-8');
     expect(svgStr).toContain(`width="${LANDSCAPE_REPORT_CARD_WIDTH}"`);
   });
 });
@@ -706,10 +709,9 @@ describe('ReportCardService.findExistingForUser — exact QueryBuilder shape', (
     expect(qb.andWhere).toHaveBeenCalledWith('mm.media_type = :media_type', {
       media_type: 'image',
     });
-    expect(qb.andWhere).toHaveBeenCalledWith(
-      'mm.rolled_back = :rolled_back',
-      { rolled_back: false },
-    );
+    expect(qb.andWhere).toHaveBeenCalledWith('mm.rolled_back = :rolled_back', {
+      rolled_back: false,
+    });
     expect(qb.andWhere).toHaveBeenCalledWith('mm.created_at >= :since', {
       since,
     });
@@ -772,11 +774,9 @@ describe('ReportCardService.buildData — referral_url + UUID resolution', () =>
         getActivityTime: jest.fn().mockResolvedValue({ results: [] }),
       } as never,
       {
-        getLetterBins: jest
-          .fn()
-          .mockResolvedValue({
-            bins: { learnt: [], regressed: [], improved: [], untouched: [] },
-          }),
+        getLetterBins: jest.fn().mockResolvedValue({
+          bins: { learnt: [], regressed: [], improved: [], untouched: [] },
+        }),
       } as never,
       { createQueryBuilder: jest.fn() } as never,
     );

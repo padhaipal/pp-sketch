@@ -636,11 +636,14 @@ describe('evaluate-answer.utils', () => {
         ['बुलबुल', 'बुलबुल'],
         ['हाथी', 'हाथही'],
         ['अचकन', 'अचिकन'],
-      ])('correct=%s, studentAnswer.includes(%s) → true', (correct, student) => {
-        expect(
-          markWord({ correctAnswer: correct, studentAnswer: student }),
-        ).toBe(true);
-      });
+      ])(
+        'correct=%s, studentAnswer.includes(%s) → true',
+        (correct, student) => {
+          expect(
+            markWord({ correctAnswer: correct, studentAnswer: student }),
+          ).toBe(true);
+        },
+      );
     });
 
     describe('per-word "equals" hardcodes (single transcript word)', () => {
@@ -966,7 +969,6 @@ describe('evaluate-answer.utils', () => {
     });
   });
 
-
   // ── Algorithmic (non-hardcoded) paths ──────────────────────────────────────
   describe('markLetter — phoneme / conjunct algorithm', () => {
     it('matches a single consonant against a same-family consonant (markPhoneme base via sameFamily)', () => {
@@ -975,7 +977,9 @@ describe('evaluate-answer.utils', () => {
     });
 
     it('matches a single consonant + trailing schwa ā (markPhoneme slice branch)', () => {
-      expect(markLetter({ correctAnswer: 'क', studentAnswer: 'का' })).toBe(true);
+      expect(markLetter({ correctAnswer: 'क', studentAnswer: 'का' })).toBe(
+        true,
+      );
     });
 
     it('rejects a single consonant followed by a non-ā matra', () => {
@@ -1015,7 +1019,6 @@ describe('evaluate-answer.utils', () => {
       ).toBe(false);
     });
   });
-
 
   // ── "includes" hardcodes must fire on a SUBSTRING match, not just an exact
   // word (the latter is also caught by the general per-word equality, leaving
@@ -1172,5 +1175,4 @@ describe('evaluate-answer.utils', () => {
       ).toBe(false);
     });
   });
-
 });

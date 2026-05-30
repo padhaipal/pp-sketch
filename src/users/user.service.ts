@@ -41,9 +41,7 @@ export class UserService {
   // E.164 phone (delegated to find() for the external_id path). Returns null
   // on a well-shaped identifier that has no matching row.
   async findByIdOrExternalId(input: string): Promise<User | null> {
-    return this.find(
-      isUuid(input) ? { id: input } : { external_id: input },
-    );
+    return this.find(isUuid(input) ? { id: input } : { external_id: input });
   }
 
   // See partitionUserIdentifiers in user.dto.ts. Exposed here as a method so

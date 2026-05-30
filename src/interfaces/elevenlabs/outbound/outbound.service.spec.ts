@@ -134,9 +134,9 @@ describe('processElevenlabsGenerateJob — 200 OK', () => {
   });
 
   it('uses caller-supplied voice_id (URL-encoded) and forwards all optional TTS params', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: true, body: {} }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(fakeResponse({ ok: true, body: {} }));
 
     await processElevenlabsGenerateJob(
       makeJob({
@@ -163,9 +163,9 @@ describe('processElevenlabsGenerateJob — 200 OK', () => {
   });
 
   it('sets byte_size to null when Content-Length header is absent', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: true, body: {} }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(fakeResponse({ ok: true, body: {} }));
     const repo = makeRepo();
 
     await processElevenlabsGenerateJob(
@@ -211,9 +211,11 @@ describe('processElevenlabsGenerateJob — 4XX', () => {
 
 describe('processElevenlabsGenerateJob — 5XX', () => {
   it('non-final attempt: does NOT mark failed, just throws', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: false, status: 503, text: 'unavail' }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        fakeResponse({ ok: false, status: 503, text: 'unavail' }),
+      );
     const repo = makeRepo();
 
     await expect(
@@ -228,9 +230,9 @@ describe('processElevenlabsGenerateJob — 5XX', () => {
   });
 
   it('final attempt: marks failed and throws', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: false, status: 502, text: 'gw' }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(fakeResponse({ ok: false, status: 502, text: 'gw' }));
     const repo = makeRepo();
 
     await expect(
@@ -248,9 +250,11 @@ describe('processElevenlabsGenerateJob — 5XX', () => {
   });
 
   it('treats single attempt as final when opts.attempts is undefined', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: false, status: 500, text: 'oops' }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        fakeResponse({ ok: false, status: 500, text: 'oops' }),
+      );
     const repo = makeRepo();
 
     await expect(
@@ -291,9 +295,9 @@ describe('processElevenlabsGenerateJob — outer error handling', () => {
   });
 
   it('opens the child span with the carrier from job.data', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      fakeResponse({ ok: true, body: {} }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(fakeResponse({ ok: true, body: {} }));
     await processElevenlabsGenerateJob(
       makeJob(),
       makeBucket() as unknown as MediaBucketService,
@@ -312,8 +316,12 @@ import { Logger as NestLogger } from '@nestjs/common';
 
 function spyELabsLog() {
   return {
-    warn: jest.spyOn(NestLogger.prototype, 'warn').mockImplementation(() => undefined),
-    error: jest.spyOn(NestLogger.prototype, 'error').mockImplementation(() => undefined),
+    warn: jest
+      .spyOn(NestLogger.prototype, 'warn')
+      .mockImplementation(() => undefined),
+    error: jest
+      .spyOn(NestLogger.prototype, 'error')
+      .mockImplementation(() => undefined),
   };
 }
 
@@ -325,17 +333,19 @@ describe('processElevenlabsGenerateJob — exact request shape + log messages', 
       headers: { get: () => '1024' },
     });
     global.fetch = fetchSpy as never;
-    const mediaBucket = { stream: jest.fn().mockResolvedValue('s3/k') } as never;
-    const mediaRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) } as never;
+    const mediaBucket = {
+      stream: jest.fn().mockResolvedValue('s3/k'),
+    } as never;
+    const mediaRepo = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    } as never;
     await processElevenlabsGenerateJob(
       makeJob({ script_text: 'hi' }),
       mediaBucket,
       mediaRepo,
     );
-    const headers = (fetchSpy.mock.calls[0][1] as RequestInit).headers as Record<
-      string,
-      string
-    >;
+    const headers = (fetchSpy.mock.calls[0][1] as RequestInit)
+      .headers as Record<string, string>;
     expect(headers['Content-Type']).toBe('application/json');
   });
 
@@ -346,14 +356,20 @@ describe('processElevenlabsGenerateJob — exact request shape + log messages', 
       headers: { get: () => null },
     });
     global.fetch = fetchSpy as never;
-    const mediaBucket = { stream: jest.fn().mockResolvedValue('s3/k') } as never;
-    const mediaRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) } as never;
+    const mediaBucket = {
+      stream: jest.fn().mockResolvedValue('s3/k'),
+    } as never;
+    const mediaRepo = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    } as never;
     await processElevenlabsGenerateJob(
       makeJob({ script_text: 'hi' }),
       mediaBucket,
       mediaRepo,
     );
-    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    const body = JSON.parse(
+      (fetchSpy.mock.calls[0][1] as RequestInit).body as string,
+    );
     expect(body).toEqual({ text: 'hi' });
     expect(body).not.toHaveProperty('model_id');
     expect(body).not.toHaveProperty('language_code');
@@ -367,7 +383,9 @@ describe('processElevenlabsGenerateJob — exact request shape + log messages', 
       status: 422,
       json: async () => ({ message: 'bad input' }),
     }) as never;
-    const mediaRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) } as never;
+    const mediaRepo = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    } as never;
     await expect(
       processElevenlabsGenerateJob(
         makeJob({ script_text: 'hi' }),
@@ -388,10 +406,19 @@ describe('processElevenlabsGenerateJob — exact request shape + log messages', 
       status: 502,
       text: async () => 'upstream down',
     }) as never;
-    const mediaRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) } as never;
-    const job = makeJob({ script_text: 'hi' }, { attemptsMade: 2, attempts: 3 });
+    const mediaRepo = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    } as never;
+    const job = makeJob(
+      { script_text: 'hi' },
+      { attemptsMade: 2, attempts: 3 },
+    );
     await expect(
-      processElevenlabsGenerateJob(job, { stream: jest.fn() } as never, mediaRepo),
+      processElevenlabsGenerateJob(
+        job,
+        { stream: jest.fn() } as never,
+        mediaRepo,
+      ),
     ).rejects.toThrow(/ElevenLabs TTS 5XX: 502/);
     expect(error).toHaveBeenCalledWith(
       'ElevenLabs TTS 5XX (final attempt): upstream down',
@@ -407,9 +434,16 @@ describe('processElevenlabsGenerateJob — exact request shape + log messages', 
       text: async () => 'upstream down',
     }) as never;
     const mediaRepo = { update: jest.fn() } as never;
-    const job = makeJob({ script_text: 'hi' }, { attemptsMade: 0, attempts: 3 });
+    const job = makeJob(
+      { script_text: 'hi' },
+      { attemptsMade: 0, attempts: 3 },
+    );
     await expect(
-      processElevenlabsGenerateJob(job, { stream: jest.fn() } as never, mediaRepo),
+      processElevenlabsGenerateJob(
+        job,
+        { stream: jest.fn() } as never,
+        mediaRepo,
+      ),
     ).rejects.toThrow(/ElevenLabs TTS 5XX: 502/);
     expect(warn).toHaveBeenCalledWith(
       'ElevenLabs TTS 5XX (attempt 1): upstream down',
@@ -425,9 +459,16 @@ describe('processElevenlabsGenerateJob — exact request shape + log messages', 
       text: async () => 'odd',
     }) as never;
     const mediaRepo = { update: jest.fn() } as never;
-    const job = makeJob({ script_text: 'hi' }, { attemptsMade: 0, attempts: 3 });
+    const job = makeJob(
+      { script_text: 'hi' },
+      { attemptsMade: 0, attempts: 3 },
+    );
     await expect(
-      processElevenlabsGenerateJob(job, { stream: jest.fn() } as never, mediaRepo),
+      processElevenlabsGenerateJob(
+        job,
+        { stream: jest.fn() } as never,
+        mediaRepo,
+      ),
     ).rejects.toThrow();
     expect(warn).toHaveBeenCalledWith('ElevenLabs TTS 5XX (attempt 1): odd');
     warn.mockRestore();
