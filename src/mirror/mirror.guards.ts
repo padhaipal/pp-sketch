@@ -17,15 +17,21 @@ export interface DbIdent {
 
 // Node pg v8 treats sslmode=require as verify-full and rejects Railway's
 // self-signed proxy chain. libpq (pg_dump/pg_restore) treats it correctly as
-// "encrypt, don't verify CA". Mirror only opts into SSL when the URL asks
-// for it — internal-network URLs without sslmode keep their existing
-// no-SSL behavior.
+// "encrypt, don't verify CA". Strip sslmode from the URL before handing it
+// to pg so pg-connection-string can't set verify-full from the URL, then
+// pass ssl explicitly: encrypt without CA verify. Internal-network URLs
+// without sslmode keep their existing no-SSL behavior.
 export function pgClientConfig(url: string): ClientConfig {
-  const config: ClientConfig = { connectionString: url };
-  if (/[?&]sslmode=/i.test(url)) {
-    config.ssl = { rejectUnauthorized: false };
+  if (!/[?&]sslmode=/i.test(url)) {
+    return { connectionString: url };
   }
-  return config;
+  const stripped = url
+    .replace(/([?&])sslmode=[^&]*&?/gi, '$1')
+    .replace(/[?&]$/, '');
+  return {
+    connectionString: stripped,
+    ssl: { rejectUnauthorized: false },
+  };
 }
 
 async function withClient<T>(
