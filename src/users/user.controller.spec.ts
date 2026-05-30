@@ -27,6 +27,7 @@ import type { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.ent
 import type { ScoreEntity } from '../literacy/score/score.entity';
 import type { LiteracyLessonStateEntity } from '../literacy/literacy-lesson/literacy-lesson-state.entity';
 import type { UserActivityService } from './user-activity.service';
+import type { UserService } from './user.service';
 
 type SimpleRepo = {
   findOneBy: jest.Mock;
@@ -78,6 +79,7 @@ function makeController(opts: {
   scoreRepo?: SimpleRepo;
   lessonStateRepo?: SimpleRepo;
   activitySvc?: Partial<UserActivityService>;
+  userSvc?: Partial<UserService>;
 }): UserController {
   return new UserController(
     (opts.userRepo ?? makeRepo()) as unknown as Repository<UserEntity>,
@@ -85,6 +87,7 @@ function makeController(opts: {
     (opts.scoreRepo ?? makeRepo()) as unknown as Repository<ScoreEntity>,
     (opts.lessonStateRepo ?? makeRepo()) as unknown as Repository<LiteracyLessonStateEntity>,
     (opts.activitySvc ?? {}) as UserActivityService,
+    (opts.userSvc ?? { delete: jest.fn() }) as UserService,
   );
 }
 
@@ -527,22 +530,65 @@ describe('UserController.patchUser', () => {
 });
 
 describe('UserController.remove', () => {
-  it('throws NotFoundException when the user does not exist', async () => {
-    const userRepo = makeRepo({ findOneBy: jest.fn().mockResolvedValue(null) });
-    const ctrl = makeController({ userRepo });
-    await expect(ctrl.remove('u1')).rejects.toThrow(NotFoundException);
+  it('delegates the param straight to UserService.delete', async () => {
+    const del = jest.fn().mockResolvedValue({ deleted: ['u1'], failed: [] });
+    const ctrl = makeController({ userSvc: { delete: del } });
+
+    await expect(ctrl.remove('u1')).resolves.toEqual({
+      deleted: ['u1'],
+      failed: [],
+    });
+    expect(del).toHaveBeenCalledWith('u1');
   });
 
-  it('removes via the repo and returns {deleted:true}', async () => {
-    const user = { id: 'u1', external_id: '919999990001' };
-    const userRepo = makeRepo({
-      findOneBy: jest.fn().mockResolvedValue(user),
-      remove: jest.fn().mockResolvedValue(undefined),
-    });
-    const ctrl = makeController({ userRepo });
+  it('forwards an external_id input unchanged', async () => {
+    const del = jest
+      .fn()
+      .mockResolvedValue({ deleted: ['919999990001'], failed: [] });
+    const ctrl = makeController({ userSvc: { delete: del } });
 
-    await expect(ctrl.remove('u1')).resolves.toEqual({ deleted: true });
-    expect(userRepo.remove).toHaveBeenCalledWith(user);
+    await ctrl.remove('919999990001');
+    expect(del).toHaveBeenCalledWith('919999990001');
+  });
+});
+
+describe('UserController.bulkRemove', () => {
+  it('rejects a missing identifiers field', async () => {
+    const ctrl = makeController({});
+    await expect(
+      ctrl.bulkRemove({} as never),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects a non-array identifiers field', async () => {
+    const ctrl = makeController({});
+    await expect(
+      ctrl.bulkRemove({ identifiers: 'u1' } as never),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('delegates the array straight to UserService.delete', async () => {
+    const del = jest
+      .fn()
+      .mockResolvedValue({ deleted: ['u1', 'u2'], failed: [] });
+    const ctrl = makeController({ userSvc: { delete: del } });
+
+    const out = await ctrl.bulkRemove({ identifiers: ['u1', 'u2'] });
+    expect(out).toEqual({ deleted: ['u1', 'u2'], failed: [] });
+    expect(del).toHaveBeenCalledWith(['u1', 'u2']);
+  });
+
+  it('passes through the failed entries from UserService', async () => {
+    const del = jest.fn().mockResolvedValue({
+      deleted: ['u1'],
+      failed: [{ input: 'nope', reason: 'user not found' }],
+    });
+    const ctrl = makeController({ userSvc: { delete: del } });
+
+    const out = await ctrl.bulkRemove({ identifiers: ['u1', 'nope'] });
+    expect(out.failed).toEqual([
+      { input: 'nope', reason: 'user not found' },
+    ]);
   });
 });
 
