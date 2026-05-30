@@ -143,13 +143,7 @@ export class ReportCardService {
     id: string;
     external_id: string;
   }> {
-    const isUuid =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-        idOrExternalId,
-      );
-    const user = await this.userService.find(
-      isUuid ? { id: idOrExternalId } : { external_id: idOrExternalId },
-    );
+    const user = await this.userService.findByIdOrExternalId(idOrExternalId);
     if (!user) {
       throw new NotFoundException(`User not found: ${idOrExternalId}`);
     }

@@ -1,3 +1,11 @@
+// uuid is ESM-only — transitively imported via UserService.
+jest.mock('uuid', () => ({
+  v4: jest.fn(() => 'gen-uuid'),
+  validate: (s: unknown): boolean =>
+    typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s),
+}));
+
 import { ReportCardController } from './report-card.controller';
 import type { ReportCardService } from './report-card.service';
 

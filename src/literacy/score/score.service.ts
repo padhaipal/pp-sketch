@@ -18,7 +18,7 @@ import {
   validateGradeAndRecordOptions,
   validateLetterBinsInput,
 } from './score.dto';
-import { User } from '../../users/user.dto';
+import { User, partitionUserIdentifiers } from '../../users/user.dto';
 import { Letter } from '../letters/letter.dto';
 
 function buildUserWhere(
@@ -74,9 +74,6 @@ function buildLetterWhere(
     nextIdx: startIdx + 1,
   };
 }
-
-const UUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function calculateNewScore(
   _average: number,
@@ -383,15 +380,7 @@ export class ScoreService {
       );
     }
 
-    const ids: string[] = [];
-    const phones: string[] = [];
-    for (const u of normalized) {
-      if (UUID_REGEX.test(u)) {
-        ids.push(u);
-      } else {
-        phones.push(u);
-      }
-    }
+    const { ids, externalIds: phones } = partitionUserIdentifiers(normalized);
 
     // Resolve all users in a single round-trip.
     const userParams: unknown[] = [];
