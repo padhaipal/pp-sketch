@@ -42,4 +42,21 @@ export default tseslint.config(
       'prettier/prettier': ['error', { endOfLine: 'auto' }],
     },
   },
+  // Spec files lean heavily on untyped jest.fn() mocks. Type drift between
+  // prod and specs is caught at test-time by ts-jest, so we relax the
+  // typed-lint rules here. Keep this scoped to *.spec.ts only.
+  {
+    files: ['**/*.spec.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/unbound-method': 'off',
+      '@typescript-eslint/require-await': 'off',
+      // jest.isolateModules() needs require() to re-import w/ different env state
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
 );
