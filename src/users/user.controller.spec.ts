@@ -577,9 +577,9 @@ describe('UserController.remove', () => {
 describe('UserController.bulkRemove', () => {
   it('rejects a missing identifiers field', async () => {
     const ctrl = makeController({});
-    await expect(
-      ctrl.bulkRemove({} as never),
-    ).rejects.toThrow(BadRequestException);
+    await expect(ctrl.bulkRemove({} as never)).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it('rejects a non-array identifiers field', async () => {
@@ -608,9 +608,7 @@ describe('UserController.bulkRemove', () => {
     const ctrl = makeController({ userSvc: { delete: del } });
 
     const out = await ctrl.bulkRemove({ identifiers: ['u1', 'nope'] });
-    expect(out.failed).toEqual([
-      { input: 'nope', reason: 'user not found' },
-    ]);
+    expect(out.failed).toEqual([{ input: 'nope', reason: 'user not found' }]);
   });
 });
 

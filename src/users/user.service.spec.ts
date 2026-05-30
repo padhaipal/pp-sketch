@@ -49,7 +49,9 @@ function makeBucket(): BucketMock {
 }
 function makeDataSource(
   query: jest.Mock,
-  transactionImpl?: (cb: (m: { query: jest.Mock }) => Promise<unknown>) => Promise<unknown>,
+  transactionImpl?: (
+    cb: (m: { query: jest.Mock }) => Promise<unknown>,
+  ) => Promise<unknown>,
 ): DataSource {
   const transaction =
     transactionImpl ??
@@ -62,7 +64,9 @@ function makeService(
   cache: CacheMock,
   score: ScoreMock,
   bucket: BucketMock = makeBucket(),
-  transactionImpl?: (cb: (m: { query: jest.Mock }) => Promise<unknown>) => Promise<unknown>,
+  transactionImpl?: (
+    cb: (m: { query: jest.Mock }) => Promise<unknown>,
+  ) => Promise<unknown>,
 ): UserService {
   return new UserService(
     repo as unknown as Repository<UserEntity>,
@@ -647,7 +651,12 @@ describe('UserService.delete', () => {
   type TxnCall = { sql: string; params: unknown[] };
   function txnRunner(
     scripted: Array<unknown | ((sql: string, params: unknown[]) => unknown)>,
-  ): { calls: TxnCall[]; run: (cb: (m: { query: jest.Mock }) => Promise<unknown>) => Promise<unknown> } {
+  ): {
+    calls: TxnCall[];
+    run: (
+      cb: (m: { query: jest.Mock }) => Promise<unknown>,
+    ) => Promise<unknown>;
+  } {
     const calls: TxnCall[] = [];
     let i = 0;
     const managerQuery = jest.fn(async (sql: string, params: unknown[]) => {
@@ -691,7 +700,9 @@ describe('UserService.delete', () => {
     expect(out).toEqual({ deleted: ['u1'], failed: [] });
 
     // Resolve query
-    expect(resolveSql.mock.calls[0][0]).toContain('SELECT id, external_id FROM users');
+    expect(resolveSql.mock.calls[0][0]).toContain(
+      'SELECT id, external_id FROM users',
+    );
     expect(resolveSql.mock.calls[0][1]).toEqual([['u1']]);
 
     // Pre-write cache del throws on Redis failure
@@ -728,7 +739,14 @@ describe('UserService.delete', () => {
     const resolveSql = jest
       .fn()
       .mockResolvedValueOnce([{ id: 'u1', external_id: '919999990001' }]);
-    const txn = txnRunner([[], [], undefined, undefined, undefined, [{ id: 'u1' }]]);
+    const txn = txnRunner([
+      [],
+      [],
+      undefined,
+      undefined,
+      undefined,
+      [{ id: 'u1' }],
+    ]);
 
     const svc = makeService(
       repo,
@@ -751,8 +769,18 @@ describe('UserService.delete', () => {
       { id: 'u2', external_id: '918888880002' },
     ]);
     const txn = txnRunner([
-      [], [], undefined, undefined, undefined, [{ id: 'u1' }], // user 1
-      [], [], undefined, undefined, undefined, [{ id: 'u2' }], // user 2
+      [],
+      [],
+      undefined,
+      undefined,
+      undefined,
+      [{ id: 'u1' }], // user 1
+      [],
+      [],
+      undefined,
+      undefined,
+      undefined,
+      [{ id: 'u2' }], // user 2
     ]);
 
     const svc = makeService(
@@ -764,11 +792,7 @@ describe('UserService.delete', () => {
       txn.run,
     );
 
-    const out = await svc.delete([
-      'u1',
-      'unknown-input',
-      '918888880002',
-    ]);
+    const out = await svc.delete(['u1', 'unknown-input', '918888880002']);
     expect(out.deleted.sort()).toEqual(['918888880002', 'u1']);
     expect(out.failed).toEqual([
       { input: 'unknown-input', reason: 'user not found' },
@@ -779,12 +803,7 @@ describe('UserService.delete', () => {
     const repo = makeRepo();
     const resolveSql = jest.fn().mockResolvedValueOnce([]); // nothing resolves
 
-    const svc = makeService(
-      repo,
-      resolveSql,
-      makeCache(),
-      makeScore(),
-    );
+    const svc = makeService(repo, resolveSql, makeCache(), makeScore());
 
     const out = await svc.delete('nope');
     expect(out).toEqual({
@@ -833,9 +852,7 @@ describe('UserService.delete', () => {
 
     const out = await svc.delete(['u1', 'u2']);
     expect(out.deleted).toEqual(['u2']);
-    expect(out.failed).toEqual([
-      { input: 'u1', reason: 'boom from user 1' },
-    ]);
+    expect(out.failed).toEqual([{ input: 'u1', reason: 'boom from user 1' }]);
   });
 
   it('S3 delete failure does not roll back: user still in deleted + warn', async () => {
@@ -877,10 +894,12 @@ describe('UserService.delete', () => {
   it('pre-write cache del throwing aborts that user → failed, no DB writes', async () => {
     const repo = makeRepo();
     const cache = makeCache();
-    cache.del.mockImplementation((_keys: unknown, opts?: { throwOnError?: boolean }) => {
-      if (opts?.throwOnError) return Promise.reject(new Error('redis down'));
-      return Promise.resolve(undefined);
-    });
+    cache.del.mockImplementation(
+      (_keys: unknown, opts?: { throwOnError?: boolean }) => {
+        if (opts?.throwOnError) return Promise.reject(new Error('redis down'));
+        return Promise.resolve(undefined);
+      },
+    );
     const resolveSql = jest
       .fn()
       .mockResolvedValueOnce([{ id: 'u1', external_id: 'ext1' }]);
@@ -899,9 +918,7 @@ describe('UserService.delete', () => {
 
     const out = await svc.delete('u1');
     expect(out.deleted).toEqual([]);
-    expect(out.failed).toEqual([
-      { input: 'u1', reason: 'redis down' },
-    ]);
+    expect(out.failed).toEqual([{ input: 'u1', reason: 'redis down' }]);
     // Only the media SELECT ran; no UPDATE/DELETE statements.
     expect(txn.calls).toHaveLength(1);
     expect(txn.calls[0].sql).toContain('SELECT s3_key FROM media_metadata');
@@ -920,7 +937,12 @@ describe('UserService.delete', () => {
       .fn()
       .mockResolvedValueOnce([{ id: 'u1', external_id: 'ext1' }]);
     const txn = txnRunner([
-      [], [], undefined, undefined, undefined, [{ id: 'u1' }],
+      [],
+      [],
+      undefined,
+      undefined,
+      undefined,
+      [{ id: 'u1' }],
     ]);
     const warn = jest
       .spyOn(require('@nestjs/common').Logger.prototype, 'warn')
@@ -938,7 +960,9 @@ describe('UserService.delete', () => {
     const out = await svc.delete('u1');
     expect(out.deleted).toEqual(['u1']);
     expect(warn).toHaveBeenCalledWith(
-      expect.stringMatching(/Post-commit cache del failed for user u1.*post-commit fail/),
+      expect.stringMatching(
+        /Post-commit cache del failed for user u1.*post-commit fail/,
+      ),
     );
     warn.mockRestore();
   });
@@ -988,7 +1012,12 @@ describe('UserService.delete', () => {
       .fn()
       .mockResolvedValueOnce([{ id: 'u1', external_id: 'ext1' }]);
     const txn = txnRunner([
-      [], [], undefined, undefined, undefined, [], // 0 rows from RETURNING
+      [],
+      [],
+      undefined,
+      undefined,
+      undefined,
+      [], // 0 rows from RETURNING
     ]);
 
     const svc = makeService(
@@ -1023,7 +1052,12 @@ describe('UserService.delete', () => {
       .fn()
       .mockResolvedValueOnce([{ id: 'u1', external_id: 'ext1' }]);
     const txn = txnRunner([
-      [], [], undefined, undefined, undefined, [{ id: 'u1' }],
+      [],
+      [],
+      undefined,
+      undefined,
+      undefined,
+      [{ id: 'u1' }],
     ]);
 
     const svc = makeService(

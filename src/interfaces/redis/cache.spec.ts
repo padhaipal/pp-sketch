@@ -137,9 +137,9 @@ describe('CacheService.del', () => {
   it('rethrows when throwOnError:true and redis.del rejects', async () => {
     mockRedisInstance.del.mockRejectedValue(new Error('redis down'));
     const svc = new CacheService();
-    await expect(
-      svc.del('k', { throwOnError: true }),
-    ).rejects.toThrow('redis down');
+    await expect(svc.del('k', { throwOnError: true })).rejects.toThrow(
+      'redis down',
+    );
   });
 
   it('does not throw when throwOnError:true and redis.del resolves', async () => {
