@@ -12,7 +12,11 @@ jobs:
   # of the same name continues to receive a status report.
   gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,20 +50,6 @@ jobs:
             --verbose \
             --log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}"
 
-      # Enforces the 80% global threshold (statements / branches / functions
-      # / lines) declared in package.json#jest.coverageThreshold.
-      - run: npm run test:cov
-
-  codeql:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@v4
-
       - uses: github/codeql-action/init@v3
         with:
           languages: javascript-typescript
@@ -67,3 +57,7 @@ jobs:
       - uses: github/codeql-action/analyze@v3
         with:
           category: '/language:javascript-typescript'
+
+      # Enforces the 80% global threshold (statements / branches / functions
+      # / lines) declared in package.json#jest.coverageThreshold.
+      - run: npm run test:cov
