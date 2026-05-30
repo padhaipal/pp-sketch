@@ -1,0 +1,23 @@
+name: Mirror prod → staging
+
+on:
+  schedule:
+    - cron: '30 7 * * *' # 07:30 UTC = 13:00 IST daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Kick mirror endpoint
+        env:
+          MIRROR_URL: ${{ secrets.STAGING_MIRROR_URL }}
+        run: |
+          set -euo pipefail
+          curl -fsS -X POST "$MIRROR_URL" \
+            -H "Content-Type: application/json" \
+            -w "\nHTTP %{http_code}\n"

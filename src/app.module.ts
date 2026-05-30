@@ -15,6 +15,7 @@ import { HealthController } from './health/health.controller';
 import { WabotInboundController } from './interfaces/wabot/inbound/inbound.controller';
 import { HeygenInboundController } from './interfaces/heygen/inbound/inbound.controller';
 import { CacheService } from './interfaces/redis/cache';
+import { MirrorModule } from './mirror/mirror.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { CacheService } from './interfaces/redis/cache';
     DashboardModule,
     ReportCardModule,
     MorningUpdateModule,
+    MirrorModule.register(),
   ],
   controllers: [
     AppController,
