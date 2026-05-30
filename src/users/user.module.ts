@@ -9,6 +9,7 @@ import { UserActivityService } from './user-activity.service';
 import { UserController } from './user.controller';
 import { CacheService } from '../interfaces/redis/cache';
 import { ScoreModule } from '../literacy/score/score.module';
+import { MediaBucketModule } from '../interfaces/media-bucket/outbound/outbound.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { ScoreModule } from '../literacy/score/score.module';
       LiteracyLessonStateEntity,
     ]),
     ScoreModule,
+    MediaBucketModule,
   ],
   controllers: [UserController],
   providers: [UserService, UserActivityService, CacheService],

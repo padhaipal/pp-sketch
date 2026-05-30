@@ -51,13 +51,25 @@ export class CacheService implements OnModuleDestroy {
     }
   }
 
-  async del(keys: string | string[]): Promise<void> {
+  async del(
+    keys: string | string[],
+    options?: { throwOnError?: boolean },
+  ): Promise<void> {
     const arr = Array.isArray(keys) ? keys : [keys];
     if (arr.length === 0) return;
     try {
       await this.redis.del(...arr);
     } catch (err) {
       this.logger.warn(`Cache del failed: ${(err as Error).message}`);
+      if (options?.throwOnError) throw err;
+    }
+  }
+
+  async flushAll(): Promise<void> {
+    try {
+      await this.redis.flushdb();
+    } catch (err) {
+      this.logger.warn(`Cache flushAll failed: ${(err as Error).message}`);
     }
   }
 

@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { validate as isUuid } from 'uuid';
@@ -6,6 +11,7 @@ import { UserEntity } from './user.entity';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
 import { ScoreService } from '../literacy/score/score.service';
+import { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound.service';
 import {
   User,
   FindUserOptions,
@@ -27,6 +33,7 @@ export class UserService {
     private readonly dataSource: DataSource,
     private readonly cacheService: CacheService,
     private readonly scoreService: ScoreService,
+    private readonly mediaBucket: MediaBucketService,
   ) {}
 
   // Resolves a user by either a uuid or an E.164 external_id. Throws
@@ -270,6 +277,163 @@ export class UserService {
     await this.scoreService.createSeedScores(user.id);
     await this.populateUserCache(user);
     return user;
+  }
+
+  // Per-user atomic delete. Each user runs in its own transaction so one
+  // failure does not block the rest of the batch. Errors are surfaced as
+  // `failed` entries, never swallowed silently.
+  async delete(
+    input: string | string[],
+  ): Promise<{
+    deleted: string[];
+    failed: { input: string; reason: string }[];
+  }> {
+    const inputs = Array.isArray(input) ? input : [input];
+    const deleted: string[] = [];
+    const failed: { input: string; reason: string }[] = [];
+
+    if (inputs.length === 0) return { deleted, failed };
+
+    const resolvedRows: { id: string; external_id: string }[] =
+      await this.dataSource.query(
+        `SELECT id, external_id FROM users
+         WHERE id::text = ANY($1) OR external_id = ANY($1)`,
+        [inputs],
+      );
+
+    const resolvedById = new Map<string, { id: string; external_id: string }>();
+    const resolvedByExternalId = new Map<
+      string,
+      { id: string; external_id: string }
+    >();
+    for (const row of resolvedRows) {
+      resolvedById.set(row.id, row);
+      resolvedByExternalId.set(row.external_id, row);
+    }
+
+    const seenIds = new Set<string>();
+    const toProcess: { input: string; id: string; external_id: string }[] = [];
+    for (const raw of inputs) {
+      const row = resolvedById.get(raw) ?? resolvedByExternalId.get(raw);
+      if (!row) {
+        failed.push({ input: raw, reason: 'user not found' });
+        continue;
+      }
+      if (seenIds.has(row.id)) continue;
+      seenIds.add(row.id);
+      toProcess.push({ input: raw, id: row.id, external_id: row.external_id });
+    }
+
+    for (const target of toProcess) {
+      let s3Keys: string[] = [];
+      let nulledReferrers: { id: string; external_id: string }[] = [];
+
+      try {
+        await this.dataSource.transaction(async (manager) => {
+          const mediaRows: { s3_key: string }[] = await manager.query(
+            `SELECT s3_key FROM media_metadata
+             WHERE user_id = $1 AND s3_key IS NOT NULL`,
+            [target.id],
+          );
+          s3Keys = mediaRows.map((r) => r.s3_key);
+
+          // Invalidate this user's cache as late as possible before writes.
+          // Throwing here aborts the txn: if Redis is unreachable we cannot
+          // guarantee the post-commit del either, so we refuse the write.
+          await this.cacheService.del(
+            [
+              CACHE_KEYS.userById(target.id),
+              CACHE_KEYS.userByExternalId(target.external_id),
+            ],
+            { throwOnError: true },
+          );
+
+          nulledReferrers = await manager.query(
+            `UPDATE users SET referrer_user_id = NULL
+             WHERE referrer_user_id = $1
+             RETURNING id, external_id`,
+            [target.id],
+          );
+
+          await manager.query(`DELETE FROM scores WHERE user_id = $1`, [
+            target.id,
+          ]);
+          await manager.query(
+            `DELETE FROM literacy_lesson_states WHERE user_id = $1`,
+            [target.id],
+          );
+          // Invariant: any media_metadata row referencing one of this user's
+          // media rows via input_media_id is itself owned by this user. If a
+          // future code path violates that, this DELETE will FK-error and
+          // this list must be extended (e.g. with a recursive pre-delete).
+          await manager.query(
+            `DELETE FROM media_metadata WHERE user_id = $1`,
+            [target.id],
+          );
+
+          // Convention deviation: scores / literacy_lesson_states /
+          // media_metadata writes happen here as raw SQL rather than through
+          // their entity services. Done to keep one transaction per user
+          // atomic without opening the UserService <-> MediaMetaDataService
+          // module cycle.
+
+          const userDelete: { id: string }[] = await manager.query(
+            `DELETE FROM users WHERE id = $1 RETURNING id`,
+            [target.id],
+          );
+          if (userDelete.length === 0) {
+            throw new NotFoundException(
+              `user ${target.id} vanished mid-transaction`,
+            );
+          }
+        });
+      } catch (err) {
+        failed.push({ input: target.input, reason: (err as Error).message });
+        continue;
+      }
+
+      deleted.push(target.input);
+
+      // Best-effort post-commit cleanup. Failures are warn-logged, not
+      // rolled back: the DB is the source of truth.
+      for (const key of s3Keys) {
+        try {
+          await this.mediaBucket.delete(key);
+        } catch (err) {
+          this.logger.warn(
+            `S3 delete failed for key ${key} during user ${target.id} delete: ${(err as Error).message}`,
+          );
+        }
+      }
+
+      // Second cache del closes the repopulate race: any reader between the
+      // pre-write del and txn commit could have re-filled the cache.
+      try {
+        await this.cacheService.del([
+          CACHE_KEYS.userById(target.id),
+          CACHE_KEYS.userByExternalId(target.external_id),
+        ]);
+      } catch (err) {
+        this.logger.warn(
+          `Post-commit cache del failed for user ${target.id}: ${(err as Error).message}`,
+        );
+      }
+
+      for (const ref of nulledReferrers) {
+        try {
+          await this.cacheService.del([
+            CACHE_KEYS.userById(ref.id),
+            CACHE_KEYS.userByExternalId(ref.external_id),
+          ]);
+        } catch (err) {
+          this.logger.warn(
+            `Referrer cache del failed for user ${ref.id}: ${(err as Error).message}`,
+          );
+        }
+      }
+    }
+
+    return { deleted, failed };
   }
 
   private async populateUserCache(user: User): Promise<void> {
