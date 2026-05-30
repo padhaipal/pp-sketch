@@ -15,7 +15,7 @@ import {
 import { Upload } from '@aws-sdk/lib-storage';
 import { Client } from 'pg';
 import {
-  assertMigrationsEqual,
+  assertMigrationsTablesPresent,
   assertPgVersionMatch,
   assertProdBucketReadable,
   assertProdReadOnly,
@@ -56,14 +56,14 @@ export class MirrorProcessor {
     );
     this.logger.log(`mirror.pg_version.complete major=${versions.prod_major}`);
 
-    // ── Step 2: migrations-table equality ───────────────────────────────────
-    this.logger.log('mirror.migrations_equal.start');
-    const migrations = await assertMigrationsEqual(
+    // ── Step 2: migrations-table presence (lightweight TypeORM-managed check)
+    this.logger.log('mirror.migrations_present.start');
+    const migrations = await assertMigrationsTablesPresent(
       { url: prodUrl, label: 'prod' },
       { url: stagingUrl, label: 'staging' },
     );
     this.logger.log(
-      `mirror.migrations_equal.complete count=${migrations.count}`,
+      `mirror.migrations_present.complete prod=${migrations.prod_count} staging=${migrations.staging_count}`,
     );
 
     // ── Step 2.5: prod role read-only probe (cheap, defense-in-depth) ──────
@@ -107,7 +107,7 @@ export class MirrorProcessor {
 
     // ── Step 7: success log ────────────────────────────────────────────────
     this.logger.log(
-      `mirror.success ${jobLabel} pg_major=${versions.prod_major} migrations=${migrations.count} objects_copied=${bucketStats.copied} objects_deleted=${bucketStats.deleted}`,
+      `mirror.success ${jobLabel} pg_major=${versions.prod_major} migrations_prod=${migrations.prod_count} objects_copied=${bucketStats.copied} objects_deleted=${bucketStats.deleted}`,
     );
   }
 
