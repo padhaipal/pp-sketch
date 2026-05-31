@@ -1,0 +1,88 @@
+name: Staging post-merge
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-postmerge
+  cancel-in-progress: false
+
+jobs:
+  staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Wait for Railway staging deploy
+        run: sleep 600
+
+      - name: Health check pp-sketch
+        run: |
+          curl -fsS --max-time 10 \
+            "${{ secrets.PP_STAGING_BASE }}/health" > /dev/null
+
+      - name: Health check wabot-sketch
+        run: |
+          curl -fsS --max-time 10 \
+            "${{ secrets.WABOT_STAGING_BASE }}/health" > /dev/null
+
+      - name: Install artillery
+        run: npm i -g artillery@2
+
+      - name: Run load test
+        env:
+          WABOT_STAGING_BASE: ${{ secrets.WABOT_STAGING_BASE }}
+          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          WHATSAPP_BUSINESS_ACCOUNT_ID: ${{ secrets.WHATSAPP_BUSINESS_ACCOUNT_ID }}
+          WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}
+          LOAD_TEST_PHONE_PREFIX: '911000'
+        run: |
+          artillery run \
+            --output report.json \
+            load-tests/scenarios/load-test.yml
+
+      - name: Render HTML report
+        if: always()
+        run: artillery report --output report.html report.json
+
+      - name: Write job summary
+        if: always()
+        run: node load-tests/scripts/summary.js >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artillery-report-${{ github.run_id }}
+          path: |
+            report.json
+            report.html
+          retention-days: 14
+
+      - name: Notify Tom
+        if: always()
+        env:
+          WABOT_STAGING_BASE: ${{ secrets.WABOT_STAGING_BASE }}
+          WABOT_INTERNAL_API_KEY: ${{ secrets.WABOT_INTERNAL_API_KEY }}
+          TOM_PHONE_E164: ${{ secrets.TOM_PHONE_E164 }}
+        run: |
+          P95=$(node -e "try { const r = require('./report.json').aggregate.summaries['http.response_time']; console.log(r.p95 ?? 'n/a'); } catch { console.log('n/a'); }")
+          MSG="Staging ${GITHUB_SHA:0:7} - load test complete (p95=${P95}ms, run=${GITHUB_RUN_ID})"
+          BODY=$(jq -nc \
+            --arg uid "$TOM_PHONE_E164" \
+            --arg msg "$MSG" \
+            '{user_external_id: $uid, media: [{type: "text", body: $msg}]}')
+          curl -fsS -X POST "$WABOT_STAGING_BASE/sendNotification" \
+            -H "x-api-key: $WABOT_INTERNAL_API_KEY" \
+            -H "content-type: application/json" \
+            -d "$BODY" \
+            || echo "Notify failed (likely outside WA service window or missing secret) - non-fatal"
