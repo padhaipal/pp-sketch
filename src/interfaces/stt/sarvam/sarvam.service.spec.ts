@@ -458,19 +458,17 @@ describe('SarvamService.run — load-test phone-prefix stub', () => {
   });
 
   it('calls Sarvam fetch when userExternalId does not match the prefix', async () => {
-    const fetchSpy = jest
-      .fn()
-      .mockResolvedValue(
-        fakeResponse({
-          status: 200,
-          json: {
-            request_id: 'r1',
-            transcript: 'real',
-            language_code: 'hi-IN',
-            language_probability: 0.9,
-          },
-        }),
-      );
+    const fetchSpy = jest.fn().mockResolvedValue(
+      fakeResponse({
+        status: 200,
+        json: {
+          request_id: 'r1',
+          transcript: 'real',
+          language_code: 'hi-IN',
+          language_probability: 0.9,
+        },
+      }),
+    );
     global.fetch = fetchSpy as never;
     const repo = makeRepo();
     const svc = makeService(repo);
