@@ -431,3 +431,48 @@ describe('SarvamService.run — saved row fields', () => {
     });
   });
 });
+
+describe('SarvamService.run — load-test phone-prefix stub', () => {
+  const PREFIX = '911000';
+  const STUB_USER = `${PREFIX}123456`;
+  const REAL_USER = '919999990001';
+
+  beforeEach(() => {
+    process.env.LOAD_TEST_PHONE_PREFIX = PREFIX;
+  });
+
+  afterEach(() => {
+    delete process.env.LOAD_TEST_PHONE_PREFIX;
+  });
+
+  it('short-circuits Sarvam fetch and writes a canned text row when userExternalId matches', async () => {
+    const fetchSpy = jest.fn();
+    global.fetch = fetchSpy as never;
+    const repo = makeRepo();
+    const svc = makeService(repo);
+    const out = await svc.run(Buffer.from('a'), parentMedia, STUB_USER);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(repo.save).toHaveBeenCalledTimes(1);
+    expect(out.source).toBe('sarvam');
+    expect(out.text).toBe('<load-test stub transcript>');
+  });
+
+  it('calls Sarvam fetch when userExternalId does not match the prefix', async () => {
+    const fetchSpy = jest.fn().mockResolvedValue(
+      fakeResponse({
+        status: 200,
+        json: {
+          request_id: 'r1',
+          transcript: 'real',
+          language_code: 'hi-IN',
+          language_probability: 0.9,
+        },
+      }),
+    );
+    global.fetch = fetchSpy as never;
+    const repo = makeRepo();
+    const svc = makeService(repo);
+    await svc.run(Buffer.from('a'), parentMedia, REAL_USER);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});

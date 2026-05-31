@@ -9,6 +9,11 @@ import {
   assertValidMediaSource,
   assertValidMediaStatus,
 } from '../../../media-meta-data/media-meta-data.dto';
+import {
+  isLoadTestUser,
+  loadTestDelay,
+  saveStubTranscript,
+} from '../load-test-stub';
 
 @Injectable()
 export class SarvamService {
@@ -22,10 +27,16 @@ export class SarvamService {
   async run(
     audioBuffer: Buffer,
     parentMedia: MediaMetaData,
+    userExternalId?: string,
   ): Promise<MediaMetaData> {
     if (audioBuffer.length === 0) {
       this.logger.warn(`Sarvam: empty audio buffer for ${parentMedia.id}`);
       throw new Error('Empty audio buffer');
+    }
+
+    if (isLoadTestUser(userExternalId)) {
+      await loadTestDelay();
+      return saveStubTranscript(this.mediaRepo, parentMedia, 'sarvam');
     }
 
     // 2. POST to Sarvam

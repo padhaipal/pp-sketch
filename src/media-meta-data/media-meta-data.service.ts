@@ -95,8 +95,10 @@ export class MediaMetaDataService {
 
     // 2. Resolve user
     let userId: string;
+    let userExternalId: string;
     if (validated.user) {
       userId = validated.user.id;
+      userExternalId = validated.user.external_id;
     } else {
       const user = await this.userService.find({
         external_id: validated.user_external_id!,
@@ -110,6 +112,7 @@ export class MediaMetaDataService {
         );
       }
       userId = user.id;
+      userExternalId = validated.user_external_id!;
     }
 
     // 3. Check existing
@@ -184,32 +187,38 @@ export class MediaMetaDataService {
 
     if (sarvamEnabled) {
       sttPromises.push(
-        this.sarvamService.run(audioBuffer, entity).catch((err) => {
-          this.logger.warn(
-            `Sarvam STT failed for ${entity.id}: ${(err as Error).message}`,
-          );
-          return null;
-        }),
+        this.sarvamService
+          .run(audioBuffer, entity, userExternalId)
+          .catch((err) => {
+            this.logger.warn(
+              `Sarvam STT failed for ${entity.id}: ${(err as Error).message}`,
+            );
+            return null;
+          }),
       );
     }
     if (azureEnabled) {
       sttPromises.push(
-        this.azureService.run(audioBuffer, entity).catch((err) => {
-          this.logger.warn(
-            `Azure STT failed for ${entity.id}: ${(err as Error).message}`,
-          );
-          return null;
-        }),
+        this.azureService
+          .run(audioBuffer, entity, userExternalId)
+          .catch((err) => {
+            this.logger.warn(
+              `Azure STT failed for ${entity.id}: ${(err as Error).message}`,
+            );
+            return null;
+          }),
       );
     }
     if (reverieEnabled) {
       sttPromises.push(
-        this.reverieService.run(audioBuffer, entity).catch((err) => {
-          this.logger.warn(
-            `Reverie STT failed for ${entity.id}: ${(err as Error).message}`,
-          );
-          return null;
-        }),
+        this.reverieService
+          .run(audioBuffer, entity, userExternalId)
+          .catch((err) => {
+            this.logger.warn(
+              `Reverie STT failed for ${entity.id}: ${(err as Error).message}`,
+            );
+            return null;
+          }),
       );
     }
 

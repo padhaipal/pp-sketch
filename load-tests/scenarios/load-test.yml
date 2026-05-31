@@ -1,0 +1,23 @@
+config:
+  target: "{{ $env.WABOT_STAGING_BASE }}"
+  http:
+    timeout: 10
+  processor: "../processors/webhook.js"
+  phases:
+    - name: warmup
+      duration: 60
+      arrivalRate: 1
+    - name: sustained
+      duration: 240
+      arrivalRate: 5
+
+scenarios:
+  - name: webhook
+    flow:
+      - function: prepareWebhook
+      - post:
+          url: /webhook
+          headers:
+            content-type: application/json
+            x-hub-signature-256: "{{ signature }}"
+          body: "{{ payload }}"
