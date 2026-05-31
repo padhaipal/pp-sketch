@@ -404,3 +404,44 @@ describe('AzureService.run — saved row + media_details', () => {
     expect(created.media_details.confidence).toBeCloseTo(0.7); // (0.8 + 0.6) / 2
   });
 });
+
+describe('AzureService.run — load-test phone-prefix stub', () => {
+  const PREFIX = '911000';
+  const STUB_USER = `${PREFIX}123456`;
+  const REAL_USER = '919999990001';
+
+  beforeEach(() => {
+    process.env.LOAD_TEST_PHONE_PREFIX = PREFIX;
+  });
+
+  afterEach(() => {
+    delete process.env.LOAD_TEST_PHONE_PREFIX;
+  });
+
+  it('short-circuits Azure fetch and writes a canned text row when userExternalId matches', async () => {
+    const fetchSpy = jest.fn();
+    global.fetch = fetchSpy as never;
+    const repo = makeRepo();
+    const svc = makeService(repo);
+    const out = await svc.run(Buffer.from('a'), parentMedia, STUB_USER);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(repo.save).toHaveBeenCalledTimes(1);
+    expect(out.source).toBe('azure');
+    expect(out.text).toBe('<load-test stub transcript>');
+  });
+
+  it('calls Azure fetch when userExternalId does not match the prefix', async () => {
+    const fetchSpy = jest.fn().mockResolvedValue(
+      jsonResponse(200, {
+        durationMilliseconds: 100,
+        combinedPhrases: [{ text: 'hello' }],
+        phrases: [{ text: 'hello', locale: 'hi-IN', confidence: 0.9 }],
+      }),
+    );
+    global.fetch = fetchSpy as never;
+    const repo = makeRepo();
+    const svc = makeService(repo);
+    await svc.run(Buffer.from('a'), parentMedia, REAL_USER);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
