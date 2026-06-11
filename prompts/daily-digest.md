@@ -23,29 +23,30 @@ Read it with `cat /tmp/digest-input.json | jq …`. The whole file is small enou
 
 If something is missing, you may issue follow-up Loki queries against `$GRAFANA_URL/api/datasources/proxy/7/loki/api/v1/...` with `Authorization: Bearer $GRAFANA_API_KEY`. Datasource ids: 7 = Loki, 10 = Tempo. Loki indexed labels are ONLY `service_name` and `deployment_environment`; severity, log_context etc. are structured metadata — filter via `| label=~"…"` pipe form, NOT in the stream selector. Use sparingly.
 
-Write the digest as **GitHub-flavored Markdown**, to stdout, with no preamble or commentary. Required structure:
+Write the digest as **GitHub-flavored Markdown**, to stdout, with no preamble or commentary. Hard ceiling: ~500 words total. Required structure:
 
 ```
 [SEVERITY:OK|WARN|ALERT]
 # PadhaiPal daily digest — YYYY-MM-DD
 
 ## TL;DR
-- 3 short bullets, the most important things only
+- Max 3 short bullets. Only what matters.
 
 ## Errors last 24h
-By service × env, grouped by message similarity. For each cluster: count, sample line, what it likely is. Skip the section entirely if zero errors.
+One bullet per distinct issue (NOT per cluster — collapse clusters that are the same root cause across services/envs). Format:
+- `<service>·<env> <SEV> ×<count>` — one-line root cause + a single representative line snippet. No bullet sub-lists. Skip the section if zero errors.
 
 ## Failed CI runs
-Workflow + branch + failure cause if visible from run name. Skip if none.
+One line per failed workflow: workflow @ branch — short cause. Skip if none.
 
 ## Aging PRs
-Open PRs older than 24h, title + age. Skip if none.
+One line per PR aged >24h: title — Nd. Skip if none.
 
 ## Trends
-Week-over-week and month-over-month error/warn rate by service. One short paragraph each. Mention anomalies (today >2× the 7d mean) explicitly.
+ONE short paragraph (not two). Combine week + month deltas. State only the anomalies (today >2× 7d mean). Skip if no anomalies worth flagging.
 
 ## Notable
-Anything else that surprised you and is worth a human eyeball. Skip if nothing.
+At most one sentence on the single most surprising/cross-cutting observation that the sections above wouldn't make obvious. Skip if nothing.
 ```
 
 Severity rules for the first line:
@@ -53,4 +54,4 @@ Severity rules for the first line:
 - `WARN` — production errors 5–50, staging errors >100, anomaly 2–5×, aging PRs >7d
 - `OK` — none of the above
 
-Be terse. Skip empty sections entirely — don't say "no errors". No filler. Sacrifice grammar for concision.
+Tone: terse, declarative. Sacrifice grammar for concision. Skip empty sections entirely — don't say "no errors". No transitional sentences. No restating the data — interpret it.
