@@ -138,20 +138,27 @@ if [[ "$mode" == "daily" ]] && command -v gh >/dev/null 2>&1; then
   gh_prs=$(gh pr list --state open --limit 50 --json number,title,createdAt,updatedAt,author,headRefName 2>/dev/null || echo 'null')
 fi
 
+mkdir -p /tmp/digest-staging
+printf '%s' "$primary"   > /tmp/digest-staging/primary.json
+printf '%s' "$week_agg"  > /tmp/digest-staging/week.json
+printf '%s' "$month_agg" > /tmp/digest-staging/month.json
+printf '%s' "$gh_runs"   > /tmp/digest-staging/runs.json
+printf '%s' "$gh_prs"    > /tmp/digest-staging/prs.json
+
 jq -n \
+  --slurpfile p  /tmp/digest-staging/primary.json \
+  --slurpfile w  /tmp/digest-staging/week.json \
+  --slurpfile m  /tmp/digest-staging/month.json \
+  --slurpfile r  /tmp/digest-staging/runs.json \
+  --slurpfile pr /tmp/digest-staging/prs.json \
   --arg mode "$mode" \
   --arg window "$window" \
   --arg user_id "$user_id" \
   --arg start "$start_ns" \
   --arg end "$now_ns" \
-  --argjson primary_logs "$primary" \
-  --argjson week_aggregate "$week_agg" \
-  --argjson month_aggregate "$month_agg" \
-  --argjson gh_runs "$gh_runs" \
-  --argjson gh_prs "$gh_prs" \
   '{mode: $mode, window: $window, user_id: $user_id, window_start_ns: $start, window_end_ns: $end,
-    primary_logs: $primary_logs, week_aggregate: $week_aggregate, month_aggregate: $month_aggregate,
-    gh_runs: $gh_runs, gh_prs: $gh_prs}' \
+    primary_logs: $p[0], week_aggregate: $w[0], month_aggregate: $m[0],
+    gh_runs: $r[0], gh_prs: $pr[0]}' \
   > /tmp/digest-input.json
 
 printf 'wrote /tmp/digest-input.json (%s bytes, mode=%s, window=%s)\n' \
