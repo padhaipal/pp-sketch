@@ -53,13 +53,25 @@ jobs:
           GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
           GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
         run: |
+          echo "Input file size: $(wc -c </tmp/digest-input.json) bytes ($(jq '.primary_logs.data.result | length' </tmp/digest-input.json) primary streams)"
           PROMPT="$(cat prompts/daily-digest.md)
           ---
           INPUT: /tmp/digest-input.json (read it via Bash). Write the digest to stdout. Today is $(date -u +%Y-%m-%d)."
+          set +e
           claude -p "$PROMPT" \
             --allowed-tools 'Bash(cat:*) Bash(jq:*) Bash(curl:*) Bash(grep:*) Read Glob Grep' \
             --max-turns 20 \
-            > /tmp/digest.md
+            > /tmp/digest.md 2> /tmp/digest.err
+          claude_exit=$?
+          set -e
+          echo "claude exit code: $claude_exit"
+          echo "--- claude stderr (last 100 lines) ---"
+          tail -n 100 /tmp/digest.err || true
+          echo "--- claude stdout size: $(wc -c </tmp/digest.md 2>/dev/null || echo 0) bytes ---"
+          echo "--- claude stdout (first 50 lines) ---"
+          head -50 /tmp/digest.md || true
+          echo "--- end ---"
+          if [[ $claude_exit -ne 0 ]]; then exit $claude_exit; fi
           test -s /tmp/digest.md
           head -1 /tmp/digest.md
 
@@ -109,4 +121,5 @@ jobs:
             /tmp/digest-input.json
             /tmp/digest.md
             /tmp/digest.html
+            /tmp/digest.err
           retention-days: 30
