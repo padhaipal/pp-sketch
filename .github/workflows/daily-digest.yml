@@ -53,7 +53,7 @@ jobs:
           GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
           GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
         run: |
-          echo "Input file size: $(wc -c </tmp/digest-input.json) bytes ($(jq '.primary_logs.data.result | length' </tmp/digest-input.json) primary streams)"
+          echo "Input file size: $(wc -c </tmp/digest-input.json) bytes — primary: $(jq '.primary_logs.total_streams // 0' </tmp/digest-input.json) raw streams, $(jq '.primary_logs.clusters | length' </tmp/digest-input.json) compacted clusters, $(jq '.primary_logs.total_lines // 0' </tmp/digest-input.json) total log lines"
           PROMPT="$(cat prompts/daily-digest.md)
           ---
           INPUT: /tmp/digest-input.json (read it via Bash). Write the digest to stdout. Today is $(date -u +%Y-%m-%d)."

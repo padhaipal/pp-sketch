@@ -145,9 +145,10 @@ primary_compact=$(printf '%s' "$primary" | jq -c '
             log_context: .[0].log_context,
             msg_prefix: (.[0].msg[0:80]),
             count: length,
-            samples: ([.[0:3] | .[] | {ts_ns, msg: (.msg[0:400])}])
+            samples: ([.[0:2] | .[] | {ts_ns, msg: (.msg[0:200])}])
           })
         | sort_by(-.count)
+        | .[0:100]  # cap to top-100 clusters (tail is usually 1-count noise)
       )
     }
 ')
