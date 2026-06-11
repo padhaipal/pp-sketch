@@ -1,0 +1,112 @@
+name: Daily digest
+
+on:
+  schedule:
+    - cron: '0 11 * * *'  # 11:00 UTC = 7am EDT / 6am EST
+  workflow_dispatch:
+    inputs:
+      window:
+        description: 'Time window (e.g. 24h, 6h, 1h)'
+        required: false
+        default: '24h'
+      test_mode:
+        description: 'Prefix subject with [TEST] (true/false)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: daily-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code + tools
+        run: |
+          npm i -g @anthropic-ai/claude-code marked
+          which jq curl gh
+
+      - name: Fetch digest input
+        env:
+          GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
+          GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash scripts/fetch-digest-data.sh daily "${{ inputs.window || '24h' }}"
+
+      - name: Summarize with Claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
+          GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
+        run: |
+          PROMPT="$(cat prompts/daily-digest.md)
+          ---
+          INPUT: /tmp/digest-input.json (read it via Bash). Write the digest to stdout. Today is $(date -u +%Y-%m-%d)."
+          claude -p "$PROMPT" \
+            --allowed-tools 'Bash(cat:*) Bash(jq:*) Bash(curl:*) Bash(grep:*) Read Glob Grep' \
+            --max-turns 20 \
+            > /tmp/digest.md
+          test -s /tmp/digest.md
+          head -1 /tmp/digest.md
+
+      - name: Parse severity + render HTML
+        id: render
+        run: |
+          first_line=$(head -1 /tmp/digest.md)
+          if [[ "$first_line" =~ ^\[SEVERITY:([A-Z]+)\] ]]; then
+            severity="${BASH_REMATCH[1]}"
+            tail -n +2 /tmp/digest.md > /tmp/digest.body.md
+          else
+            severity="UNKNOWN"
+            cp /tmp/digest.md /tmp/digest.body.md
+          fi
+          echo "severity=$severity" >> "$GITHUB_OUTPUT"
+          marked /tmp/digest.body.md > /tmp/digest.html
+
+      - name: Send via Resend
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          DIGEST_RECIPIENTS: ${{ secrets.DIGEST_RECIPIENTS }}
+          SEVERITY: ${{ steps.render.outputs.severity }}
+          TEST_MODE: ${{ inputs.test_mode || 'false' }}
+        run: |
+          today=$(date -u +%Y-%m-%d)
+          prefix=""
+          [[ "$TEST_MODE" == "true" ]] && prefix="[TEST] "
+          subject="${prefix}[${SEVERITY}] PadhaiPal daily digest — ${today}"
+          recipients_json=$(printf '%s' "$DIGEST_RECIPIENTS" | jq -R 'split(",")')
+          body=$(jq -n \
+            --arg from 'noreply@padhaipal.com' \
+            --argjson to "$recipients_json" \
+            --arg subject "$subject" \
+            --rawfile html /tmp/digest.html \
+            --rawfile text /tmp/digest.body.md \
+            '{from:$from, to:$to, subject:$subject, html:$html, text:$text}')
+          curl -fsS -X POST 'https://api.resend.com/emails' \
+            -H "Authorization: Bearer ${RESEND_API_KEY}" \
+            -H 'Content-Type: application/json' \
+            -d "$body"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: digest-${{ github.run_id }}
+          path: |
+            /tmp/digest-input.json
+            /tmp/digest.md
+            /tmp/digest.html
+          retention-days: 30
