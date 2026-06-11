@@ -35,15 +35,10 @@ start_ns="${start_sec}000000000"
 
 auth_hdr="Authorization: Bearer ${GRAFANA_API_KEY}"
 
-# Resolve Loki datasource id by name pattern (not hardcoded; viewer-scoped tokens
-# may see different ids than admin)
-loki_ds_id=$(curl -sS -H "$auth_hdr" "${GRAFANA_URL}/api/datasources" \
-  | jq -r '[.[] | select(.type=="loki" and (.name | test("logs"; "i")))] | .[0].id // empty')
-if [[ -z "$loki_ds_id" ]]; then
-  echo "ERROR: could not resolve Loki datasource id. Listing what the token can see:" >&2
-  curl -sS -H "$auth_hdr" "${GRAFANA_URL}/api/datasources" | head -c 2000 >&2
-  exit 1
-fi
+# Loki datasource id. Viewer-role service-account tokens can query through the
+# proxy but can't list /api/datasources, so we hardcode the id we already
+# discovered (override via env if it ever moves).
+loki_ds_id="${LOKI_DATASOURCE_ID:-7}"
 loki_proxy="${GRAFANA_URL}/api/datasources/proxy/${loki_ds_id}/loki/api/v1"
 echo "Using Loki datasource id=${loki_ds_id}" >&2
 
