@@ -33,12 +33,34 @@ start_sec=$(( now_sec - window_sec ))
 now_ns="${now_sec}000000000"
 start_ns="${start_sec}000000000"
 
-loki_proxy="${GRAFANA_URL}/api/datasources/proxy/7/loki/api/v1"
 auth_hdr="Authorization: Bearer ${GRAFANA_API_KEY}"
+
+# Resolve Loki datasource id by name pattern (not hardcoded; viewer-scoped tokens
+# may see different ids than admin)
+loki_ds_id=$(curl -sS -H "$auth_hdr" "${GRAFANA_URL}/api/datasources" \
+  | jq -r '[.[] | select(.type=="loki" and (.name | test("logs"; "i")))] | .[0].id // empty')
+if [[ -z "$loki_ds_id" ]]; then
+  echo "ERROR: could not resolve Loki datasource id. Listing what the token can see:" >&2
+  curl -sS -H "$auth_hdr" "${GRAFANA_URL}/api/datasources" | head -c 2000 >&2
+  exit 1
+fi
+loki_proxy="${GRAFANA_URL}/api/datasources/proxy/${loki_ds_id}/loki/api/v1"
+echo "Using Loki datasource id=${loki_ds_id}" >&2
+
+# Wraps curl + validates the response is JSON; prints body on failure.
+require_json() {
+  local label="$1" body="$2"
+  if ! printf '%s' "$body" | jq -e . >/dev/null 2>&1; then
+    echo "ERROR: ${label} returned non-JSON. First 1KB of response:" >&2
+    printf '%s' "$body" | head -c 1024 >&2
+    echo >&2
+    exit 1
+  fi
+}
 
 loki_query_range() {
   local q="$1" start="$2" end="$3" limit="${4:-5000}"
-  curl -sG -H "$auth_hdr" \
+  curl -sS -G -H "$auth_hdr" \
     --data-urlencode "query=$q" \
     --data-urlencode "start=$start" \
     --data-urlencode "end=$end" \
@@ -49,7 +71,7 @@ loki_query_range() {
 
 loki_instant() {
   local q="$1" t="$2"
-  curl -sG -H "$auth_hdr" \
+  curl -sS -G -H "$auth_hdr" \
     --data-urlencode "query=$q" \
     --data-urlencode "time=$t" \
     "${loki_proxy}/query"
@@ -64,6 +86,7 @@ if [[ -n "$user_id" ]]; then
   primary_query="${primary_query} |~ \"${user_id}\""
 fi
 primary=$(loki_query_range "$primary_query" "$start_ns" "$now_ns" 5000)
+require_json "primary loki query" "$primary"
 
 # Daily-only: 7d hourly aggregates + 30d daily aggregates
 week_agg='null'
@@ -73,18 +96,20 @@ if [[ "$mode" == "daily" ]]; then
   month_start_ns=$(( (now_sec - 30*86400) * 1000000000 ))
   week_q="sum by (service_name, deployment_environment, severity_text) (count_over_time({service_name=~\"${services}\", severity_text=~\"${severity}\"}[1h]))"
   month_q="sum by (service_name, deployment_environment, severity_text) (count_over_time({service_name=~\"${services}\", severity_text=~\"${severity}\"}[1d]))"
-  week_agg=$(curl -sG -H "$auth_hdr" \
+  week_agg=$(curl -sS -G -H "$auth_hdr" \
     --data-urlencode "query=$week_q" \
     --data-urlencode "start=$week_start_ns" \
     --data-urlencode "end=$now_ns" \
     --data-urlencode "step=3600" \
     "${loki_proxy}/query_range")
-  month_agg=$(curl -sG -H "$auth_hdr" \
+  require_json "week aggregate" "$week_agg"
+  month_agg=$(curl -sS -G -H "$auth_hdr" \
     --data-urlencode "query=$month_q" \
     --data-urlencode "start=$month_start_ns" \
     --data-urlencode "end=$now_ns" \
     --data-urlencode "step=86400" \
     "${loki_proxy}/query_range")
+  require_json "month aggregate" "$month_agg"
 fi
 
 # GitHub runs + open PRs (daily mode only)
