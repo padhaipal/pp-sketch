@@ -92,8 +92,10 @@ loki_instant() {
 services='pp-sketch|wabot-sketch|pp-dashboard'
 severity='WARN|ERROR|FATAL'
 
-# Primary window: raw error/warn/fatal lines across services × envs
-primary_query="{service_name=~\"${services}\", severity_text=~\"${severity}\"}"
+# Loki indexed labels here are only {deployment_environment, service_name}.
+# severity_text is structured metadata, so it MUST be filtered via pipe syntax
+# (| severity_text=~"...") — putting it in the stream selector returns 0 rows.
+primary_query="{service_name=~\"${services}\"} | severity_text=~\"${severity}\""
 if [[ -n "$user_id" ]]; then
   primary_query="${primary_query} |~ \"${user_id}\""
 fi
@@ -107,8 +109,8 @@ month_agg='null'
 if [[ "$mode" == "daily" ]]; then
   week_start_ns=$(( (now_sec - 7*86400) * 1000000000 ))
   month_start_ns=$(( (now_sec - 30*86400) * 1000000000 ))
-  week_q="sum by (service_name, deployment_environment, severity_text) (count_over_time({service_name=~\"${services}\", severity_text=~\"${severity}\"}[1h]))"
-  month_q="sum by (service_name, deployment_environment, severity_text) (count_over_time({service_name=~\"${services}\", severity_text=~\"${severity}\"}[1d]))"
+  week_q="sum by (service_name, deployment_environment, severity_text) (count_over_time({service_name=~\"${services}\"} | severity_text=~\"${severity}\" [1h]))"
+  month_q="sum by (service_name, deployment_environment, severity_text) (count_over_time({service_name=~\"${services}\"} | severity_text=~\"${severity}\" [1d]))"
   week_raw=$(curl -sSL -G -H "$auth_hdr" \
     -w "\n${SEP}%{http_code}" \
     --data-urlencode "query=$week_q" \
