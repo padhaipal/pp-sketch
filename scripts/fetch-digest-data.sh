@@ -103,6 +103,56 @@ primary_raw=$(loki_query_range "$primary_query" "$start_ns" "$now_ns" 5000)
 primary=$(require_json "primary loki query" "$primary_raw")
 echo "primary: status=$(printf '%s' "$primary" | jq -r '.status // "n/a"') streams=$(printf '%s' "$primary" | jq -r '.data.result | length') sample=$(printf '%s' "$primary" | jq -rc '.data.result[0].stream // {}' 2>/dev/null | head -c 200)" >&2
 
+# Pre-aggregate primary logs so Claude doesn't have to digest raw multi-MB JSON.
+#   summary: counts by service × env × severity
+#   clusters: groups by (service, env, severity, first 80 chars of message),
+#             with count + up to 3 sample lines per cluster, sorted by count desc.
+primary_compact=$(printf '%s' "$primary" | jq -c '
+  .data.result as $streams
+  | {
+      total_streams: ($streams | length),
+      total_lines: ([$streams[].values | length] | add // 0),
+      summary: (
+        [$streams[] | {
+          service: (.stream.service_name // "unknown"),
+          env: (.stream.deployment_environment // "unknown"),
+          severity: (.stream.severity_text // "unknown"),
+          count: (.values | length)
+        }]
+        | group_by(.service + "|" + .env + "|" + .severity)
+        | map({
+            service: .[0].service, env: .[0].env, severity: .[0].severity,
+            count: (map(.count) | add)
+          })
+        | sort_by(-.count)
+      ),
+      clusters: (
+        [$streams[]
+          | (.stream) as $s
+          | .values[]
+          | {
+              service: ($s.service_name // "unknown"),
+              env: ($s.deployment_environment // "unknown"),
+              severity: ($s.severity_text // "unknown"),
+              log_context: ($s.log_context // null),
+              ts_ns: .[0],
+              msg: .[1]
+            }
+        ]
+        | group_by(.service + "|" + .env + "|" + .severity + "|" + (.msg[0:80]))
+        | map({
+            service: .[0].service, env: .[0].env, severity: .[0].severity,
+            log_context: .[0].log_context,
+            msg_prefix: (.[0].msg[0:80]),
+            count: length,
+            samples: ([.[0:3] | .[] | {ts_ns, msg: (.msg[0:400])}])
+          })
+        | sort_by(-.count)
+      )
+    }
+')
+echo "primary_compact: clusters=$(printf '%s' "$primary_compact" | jq -r '.clusters | length') total_lines=$(printf '%s' "$primary_compact" | jq -r '.total_lines') bytes=$(printf '%s' "$primary_compact" | wc -c)" >&2
+
 # Daily-only: 7d hourly aggregates + 30d daily aggregates
 week_agg='null'
 month_agg='null'
@@ -139,11 +189,13 @@ if [[ "$mode" == "daily" ]] && command -v gh >/dev/null 2>&1; then
 fi
 
 mkdir -p /tmp/digest-staging
-printf '%s' "$primary"   > /tmp/digest-staging/primary.json
-printf '%s' "$week_agg"  > /tmp/digest-staging/week.json
-printf '%s' "$month_agg" > /tmp/digest-staging/month.json
-printf '%s' "$gh_runs"   > /tmp/digest-staging/runs.json
-printf '%s' "$gh_prs"    > /tmp/digest-staging/prs.json
+printf '%s' "$primary_compact" > /tmp/digest-staging/primary.json
+printf '%s' "$week_agg"        > /tmp/digest-staging/week.json
+printf '%s' "$month_agg"       > /tmp/digest-staging/month.json
+printf '%s' "$gh_runs"         > /tmp/digest-staging/runs.json
+printf '%s' "$gh_prs"          > /tmp/digest-staging/prs.json
+# Keep the full raw primary as an artifact, but don't put it into the LLM input.
+printf '%s' "$primary"         > /tmp/digest-staging/primary-raw.json
 
 jq -n \
   --slurpfile p  /tmp/digest-staging/primary.json \
