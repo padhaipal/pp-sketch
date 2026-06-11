@@ -33,14 +33,21 @@ start_sec=$(( now_sec - window_sec ))
 now_ns="${now_sec}000000000"
 start_ns="${start_sec}000000000"
 
+# Normalize: strip trailing slash, force https scheme.
+grafana_url="${GRAFANA_URL%/}"
+grafana_url="${grafana_url/#http:/https:}"
+if [[ "$grafana_url" != "$GRAFANA_URL" ]]; then
+  echo "Normalized GRAFANA_URL → ${grafana_url}" >&2
+fi
+
 auth_hdr="Authorization: Bearer ${GRAFANA_API_KEY}"
 
 # Loki datasource id. Viewer-role service-account tokens can query through the
 # proxy but can't list /api/datasources, so we hardcode the id we already
 # discovered (override via env if it ever moves).
 loki_ds_id="${LOKI_DATASOURCE_ID:-7}"
-loki_proxy="${GRAFANA_URL}/api/datasources/proxy/${loki_ds_id}/loki/api/v1"
-echo "Using Loki datasource id=${loki_ds_id}" >&2
+loki_proxy="${grafana_url}/api/datasources/proxy/${loki_ds_id}/loki/api/v1"
+echo "Using Loki datasource id=${loki_ds_id} via ${loki_proxy}" >&2
 
 # Body separator used by curl to write http status on its own line
 SEP='__HTTP_STATUS__'
@@ -63,7 +70,7 @@ require_json() {
 
 loki_query_range() {
   local q="$1" start="$2" end="$3" limit="${4:-5000}"
-  curl -sS -G -H "$auth_hdr" \
+  curl -sSL -G -H "$auth_hdr" \
     -w "\n${SEP}%{http_code}" \
     --data-urlencode "query=$q" \
     --data-urlencode "start=$start" \
@@ -75,7 +82,7 @@ loki_query_range() {
 
 loki_instant() {
   local q="$1" t="$2"
-  curl -sS -G -H "$auth_hdr" \
+  curl -sSL -G -H "$auth_hdr" \
     -w "\n${SEP}%{http_code}" \
     --data-urlencode "query=$q" \
     --data-urlencode "time=$t" \
@@ -92,6 +99,7 @@ if [[ -n "$user_id" ]]; then
 fi
 primary_raw=$(loki_query_range "$primary_query" "$start_ns" "$now_ns" 5000)
 primary=$(require_json "primary loki query" "$primary_raw")
+echo "primary: status=$(printf '%s' "$primary" | jq -r '.status // "n/a"') streams=$(printf '%s' "$primary" | jq -r '.data.result | length') sample=$(printf '%s' "$primary" | jq -rc '.data.result[0].stream // {}' 2>/dev/null | head -c 200)" >&2
 
 # Daily-only: 7d hourly aggregates + 30d daily aggregates
 week_agg='null'
@@ -101,7 +109,7 @@ if [[ "$mode" == "daily" ]]; then
   month_start_ns=$(( (now_sec - 30*86400) * 1000000000 ))
   week_q="sum by (service_name, deployment_environment, severity_text) (count_over_time({service_name=~\"${services}\", severity_text=~\"${severity}\"}[1h]))"
   month_q="sum by (service_name, deployment_environment, severity_text) (count_over_time({service_name=~\"${services}\", severity_text=~\"${severity}\"}[1d]))"
-  week_raw=$(curl -sS -G -H "$auth_hdr" \
+  week_raw=$(curl -sSL -G -H "$auth_hdr" \
     -w "\n${SEP}%{http_code}" \
     --data-urlencode "query=$week_q" \
     --data-urlencode "start=$week_start_ns" \
@@ -109,7 +117,7 @@ if [[ "$mode" == "daily" ]]; then
     --data-urlencode "step=3600" \
     "${loki_proxy}/query_range")
   week_agg=$(require_json "week aggregate" "$week_raw")
-  month_raw=$(curl -sS -G -H "$auth_hdr" \
+  month_raw=$(curl -sSL -G -H "$auth_hdr" \
     -w "\n${SEP}%{http_code}" \
     --data-urlencode "query=$month_q" \
     --data-urlencode "start=$month_start_ns" \
@@ -146,3 +154,5 @@ jq -n \
 
 printf 'wrote /tmp/digest-input.json (%s bytes, mode=%s, window=%s)\n' \
   "$(wc -c </tmp/digest-input.json)" "$mode" "$window"
+echo "gh_runs: $(printf '%s' "$gh_runs" | jq -r 'if . == null then "null" else length | tostring + " runs" end')" >&2
+echo "gh_prs: $(printf '%s' "$gh_prs" | jq -r 'if . == null then "null" else length | tostring + " open PRs" end')" >&2
