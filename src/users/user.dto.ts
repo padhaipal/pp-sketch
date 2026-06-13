@@ -120,6 +120,16 @@ export interface DashboardUserRow {
   activity: ActivityDay[];
 }
 
+// GET /users/:id/metrics — headline numbers for the user page. All computed at
+// read time (no stored columns): days_since_signup from users.created_at;
+// active-minute figures from the canonical UserActivityService logic, bucketed
+// by IST day.
+export interface UserMetrics {
+  days_since_signup: number;
+  total_active_ms: number;
+  days_over_five_min: number;
+}
+
 export interface TranscriptRow {
   text: string | null;
   source: string;

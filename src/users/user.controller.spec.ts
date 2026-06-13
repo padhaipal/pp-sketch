@@ -231,6 +231,69 @@ describe('UserController.dashboard', () => {
   });
 });
 
+describe('UserController.userMetrics', () => {
+  it('throws NotFoundException when the user does not exist', async () => {
+    const userRepo = makeRepo({ findOneBy: jest.fn().mockResolvedValue(null) });
+    const ctrl = makeController({ userRepo });
+    await expect(ctrl.userMetrics('u1')).rejects.toThrow(NotFoundException);
+  });
+
+  it('builds one IST-day window per day from signup through today and aggregates', async () => {
+    // Signed up 3 IST-days ago → 4 windows (days 0..3 inclusive).
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const userRepo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue({
+        id: 'u1',
+        created_at: threeDaysAgo,
+      }),
+    });
+    // Two days over the 5-min (300_000 ms) threshold, one just under, one idle.
+    const getActivityTime = jest.fn().mockResolvedValue({
+      results: [
+        {
+          user_id: 'u1',
+          windows: [
+            { active_ms: 600_000 },
+            { active_ms: 300_000 }, // exactly 5 min → NOT counted (strict >)
+            { active_ms: 400_000 },
+            { active_ms: 0 },
+          ],
+        },
+      ],
+    });
+    const ctrl = makeController({ userRepo, activitySvc: { getActivityTime } });
+
+    const out = await ctrl.userMetrics('u1');
+
+    // 4 windows requested for [signup .. today] inclusive.
+    const [{ users, windows }] = getActivityTime.mock.calls[0];
+    expect(users).toEqual(['u1']);
+    expect(windows).toHaveLength(4);
+    expect(out).toEqual({
+      days_since_signup: 3,
+      total_active_ms: 1_300_000,
+      days_over_five_min: 2,
+    });
+  });
+
+  it('defaults to zeroes when the user has no activity results', async () => {
+    const userRepo = makeRepo({
+      findOneBy: jest
+        .fn()
+        .mockResolvedValue({ id: 'u1', created_at: new Date() }),
+    });
+    const getActivityTime = jest.fn().mockResolvedValue({ results: [] });
+    const ctrl = makeController({ userRepo, activitySvc: { getActivityTime } });
+
+    const out = await ctrl.userMetrics('u1');
+    expect(out).toEqual({
+      days_since_signup: 0,
+      total_active_ms: 0,
+      days_over_five_min: 0,
+    });
+  });
+});
+
 describe('UserController.userMedia', () => {
   it('throws NotFoundException when the user does not exist', async () => {
     const userRepo = makeRepo({ findOneBy: jest.fn().mockResolvedValue(null) });
