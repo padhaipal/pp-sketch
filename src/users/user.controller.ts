@@ -31,6 +31,7 @@ import {
   UserResponse,
   ActivityTimeRequestDto,
   ActivityTimeResponse,
+  UserMetrics,
 } from './user.dto';
 import { UserActivityService } from './user-activity.service';
 import { UserService } from './user.service';
@@ -157,6 +158,43 @@ export class UserController {
         })),
       };
     });
+  }
+
+  @Get(':id/metrics')
+  async userMetrics(@Param('id') id: string): Promise<UserMetrics> {
+    const FIVE_MIN_MS = 5 * 60 * 1000;
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    const user = await this.userRepo.findOneBy({ id });
+    if (!user) throw new NotFoundException('User not found');
+
+    // One IST-day window per day from the signup day through today, inclusive.
+    // Today's window extends past "now" — getActivityTime only counts events
+    // that have happened, so today reads as partial. getActivityTime fetches
+    // the underlying audio once over the whole span, so window count is cheap.
+    const signupMidIst = istMidnightUtc(user.created_at);
+    const todayMidIst = istMidnightUtc(new Date());
+    const daysSinceSignup = Math.round(
+      (todayMidIst.getTime() - signupMidIst.getTime()) / DAY_MS,
+    );
+    const windows = Array.from({ length: daysSinceSignup + 1 }, (_, i) => {
+      const start = addDays(signupMidIst, i);
+      const end = addDays(start, 1);
+      return { start: start.toISOString(), end: end.toISOString() };
+    });
+
+    const activity = await this.userActivityService.getActivityTime({
+      users: [id],
+      windows,
+    });
+
+    const dayMs = activity.results[0]?.windows.map((w) => w.active_ms) ?? [];
+
+    return {
+      days_since_signup: daysSinceSignup,
+      total_active_ms: dayMs.reduce((sum, ms) => sum + ms, 0),
+      days_over_five_min: dayMs.filter((ms) => ms > FIVE_MIN_MS).length,
+    };
   }
 
   @Get(':id/media')
