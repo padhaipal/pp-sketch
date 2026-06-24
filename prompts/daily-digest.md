@@ -21,9 +21,11 @@ You receive a pre-aggregated JSON file at `/tmp/digest-input.json`. Shape:
 
 Read it with `cat /tmp/digest-input.json | jq …`. The whole file is small enough to read once — start there.
 
-If something is missing, you may issue follow-up Loki queries against `$GRAFANA_URL/api/datasources/proxy/7/loki/api/v1/...` with `Authorization: Bearer $GRAFANA_API_KEY`. Datasource ids: 7 = Loki, 10 = Tempo. Loki indexed labels are ONLY `service_name` and `deployment_environment`; severity, log_context etc. are structured metadata — filter via `| label=~"…"` pipe form, NOT in the stream selector. Use sparingly.
+If something is missing, you may issue follow-up Loki queries against `$GRAFANA_URL/api/datasources/proxy/7/loki/api/v1/...` with `Authorization: Bearer $GRAFANA_API_KEY`. Datasource ids: 7 = Loki, 8 = Prometheus (metrics), 10 = Tempo. Loki indexed labels are ONLY `service_name` and `deployment_environment`; severity, log_context etc. are structured metadata — filter via `| label=~"…"` pipe form, NOT in the stream selector. Use sparingly.
 
-Write the digest as **GitHub-flavored Markdown**, to stdout, with no preamble or commentary. Hard ceiling: ~500 words total. Required structure:
+Load-test signal lives in Prometheus: histogram `wabot_message_e2e_duration_ms_milliseconds` (`_bucket` / `_count` / `_sum`), labeled by `outcome` (`delivered` / `inflight-expired` / `whatsapp-error` / `fallback`). Records inbound-msg → outbound-dispatch latency end-to-end. Query via `$GRAFANA_URL/api/datasources/proxy/8/api/v1/query_range`.
+
+Write the digest as **GitHub-flavored Markdown**, to stdout, with no preamble or commentary. Hard ceiling: ~560 words total. Required structure:
 
 ```
 [SEVERITY:OK|WARN|ALERT]
@@ -47,11 +49,22 @@ ONE short paragraph (not two). Combine week + month deltas. State only the anoma
 
 ## Notable
 At most one sentence on the single most surprising/cross-cutting observation that the sections above wouldn't make obvious. Skip if nothing.
+
+## Load test
+Skip this section entirely if `gh_runs` contains no `Staging post-merge` workflow run that completed within the window. Otherwise:
+
+1. Identify the most recent such run. Its time window is `createdAt` → `createdAt + ~16min` (10min Railway-deploy wait + ~5min artillery + overhead).
+2. Query Prometheus (datasource id=8) for `wabot_message_e2e_duration_ms_milliseconds` over the run window, by `outcome`. Compute p50 / p95 / p99 across the `delivered` outcome via `histogram_quantile`. Sum counts of non-`delivered` outcomes (`inflight-expired`, `whatsapp-error`, `fallback`) as failure modes. If the metric is absent / 0 samples, say so plainly and stop.
+
+Output one short paragraph (≤60 words):
+- Run conclusion + total `delivered` count + non-delivered count broken by outcome.
+- e2e p50 / p95 / p99 ms for the `delivered` outcome. Call out specifically if p95 > 5000ms, p99 > 10000ms, or any non-`delivered` outcomes.
+- Closing remark: artillery's own `/webhook` enqueue latency is *not* this metric — this is the real user-perceived inbound→outbound delivery time end-to-end.
 ```
 
 Severity rules for the first line:
-- `ALERT` — any FATAL log, any production error count >50, any failed prod CI run, any anomaly >5× baseline
-- `WARN` — production errors 5–50, staging errors >100, anomaly 2–5×, aging PRs >7d
+- `ALERT` — any FATAL log, any production error count >50, any failed prod CI run, any anomaly >5× baseline, any load-test `whatsapp-error` outcome or e2e p99 > 10000ms
+- `WARN` — production errors 5–50, staging errors >100, anomaly 2–5×, aging PRs >7d, load-test e2e p95 > 5000ms or any `inflight-expired` / `fallback`
 - `OK` — none of the above
 
 Tone: terse, declarative. Sacrifice grammar for concision. Skip empty sections entirely — don't say "no errors". No transitional sentences. No restating the data — interpret it.
