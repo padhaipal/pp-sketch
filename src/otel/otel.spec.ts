@@ -74,6 +74,23 @@ jest.mock('@opentelemetry/sdk-trace-base', () => ({
     exporter,
   })),
 }));
+jest.mock('@opentelemetry/core', () => ({
+  CompositePropagator: jest.fn().mockImplementation((cfg: unknown) => ({
+    tag: 'composite',
+    cfg,
+  })),
+  W3CTraceContextPropagator: jest
+    .fn()
+    .mockImplementation(() => ({ tag: 'trace-prop' })),
+  W3CBaggagePropagator: jest
+    .fn()
+    .mockImplementation(() => ({ tag: 'baggage-prop' })),
+}));
+jest.mock('@opentelemetry/instrumentation-undici', () => ({
+  UndiciInstrumentation: jest
+    .fn()
+    .mockImplementation(() => ({ tag: 'undici-instrumentation' })),
+}));
 jest.mock('./baggage-span-processor', () => ({
   BaggageSpanProcessor: jest.fn().mockImplementation((keys: unknown) => ({
     tag: 'baggage',
