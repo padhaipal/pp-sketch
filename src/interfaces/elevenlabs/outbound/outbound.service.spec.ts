@@ -13,6 +13,11 @@ jest.mock('../../../otel/otel', () => ({
   injectCarrier: (...args: unknown[]) => mockInjectCarrier(...args),
 }));
 
+const mockIsLoadTestCarrier = jest.fn().mockReturnValue(false);
+jest.mock('../../../otel/load-test-context', () => ({
+  isLoadTestCarrier: (...args: unknown[]) => mockIsLoadTestCarrier(...args),
+}));
+
 jest.mock('stream', () => {
   const actual = jest.requireActual('stream');
   return {
@@ -86,6 +91,7 @@ beforeEach(() => {
   mockSpanEnd.mockReset();
   mockStartChildSpan.mockClear();
   mockInjectCarrier.mockClear();
+  mockIsLoadTestCarrier.mockReset().mockReturnValue(false);
 });
 afterEach(() => {
   global.fetch = globalFetch;
@@ -472,5 +478,76 @@ describe('processElevenlabsGenerateJob — exact request shape + log messages', 
     ).rejects.toThrow();
     expect(warn).toHaveBeenCalledWith('ElevenLabs TTS 5XX (attempt 1): odd');
     warn.mockRestore();
+  });
+});
+
+// The ElevenLabs processor short-circuits when the propagated carrier carries
+// padhaipal.load_test=true, marking the row 'failed' with a load_test_stub
+// flag and skipping the API call + preload enqueue entirely. When the
+// helper returns false (no baggage, no carrier, or load_test='false') the
+// real fetch path runs — this is the "let it pass" semantic.
+describe('processElevenlabsGenerateJob — load-test stub', () => {
+  it('short-circuits when isLoadTestCarrier returns true: no fetch, no preload enqueue, row marked failed with stub flag', async () => {
+    mockIsLoadTestCarrier.mockReturnValueOnce(true);
+    const fetchSpy = jest.fn();
+    global.fetch = fetchSpy as never;
+    const repo = makeRepo();
+    const bucket = makeBucket();
+
+    await processElevenlabsGenerateJob(
+      makeJob(),
+      bucket as unknown as MediaBucketService,
+      repo as unknown as Repository<MediaMetaDataEntity>,
+    );
+
+    expect(mockIsLoadTestCarrier).toHaveBeenCalledWith({
+      traceparent: 'parent',
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(repo.update).toHaveBeenCalledTimes(1);
+    expect(repo.update).toHaveBeenCalledWith('mm-1', {
+      status: 'failed',
+      media_details: { load_test_stub: true },
+    });
+    expect(mockQueueAdd).not.toHaveBeenCalled();
+    expect(mockSpanEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('proceeds with real fetch when isLoadTestCarrier returns false (default)', async () => {
+    // default mock value is false — no override needed
+    const audioBody = { kind: 'webstream' };
+    global.fetch = jest.fn().mockResolvedValue(
+      fakeResponse({
+        ok: true,
+        body: audioBody,
+        headers: { 'content-length': '8421' },
+      }),
+    );
+    const repo = makeRepo();
+    const bucket = makeBucket();
+
+    await processElevenlabsGenerateJob(
+      makeJob(),
+      bucket as unknown as MediaBucketService,
+      repo as unknown as Repository<MediaMetaDataEntity>,
+    );
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(mockQueueAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT throw when isLoadTestCarrier returns true (BullMQ must not retry the stub)', async () => {
+    mockIsLoadTestCarrier.mockReturnValueOnce(true);
+    global.fetch = jest.fn() as never;
+    const repo = makeRepo();
+    const bucket = makeBucket();
+
+    await expect(
+      processElevenlabsGenerateJob(
+        makeJob(),
+        bucket as unknown as MediaBucketService,
+        repo as unknown as Repository<MediaMetaDataEntity>,
+      ),
+    ).resolves.toBeUndefined();
   });
 });

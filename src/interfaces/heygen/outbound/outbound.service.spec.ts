@@ -16,6 +16,11 @@ jest.mock('../../../otel/otel', () => ({
   injectCarrier: (...args: unknown[]) => mockInjectCarrier(...args),
 }));
 
+const mockIsLoadTestCarrier = jest.fn().mockReturnValue(false);
+jest.mock('../../../otel/load-test-context', () => ({
+  isLoadTestCarrier: (...args: unknown[]) => mockIsLoadTestCarrier(...args),
+}));
+
 // Readable.fromWeb pulls in real web streams — bypass it.
 jest.mock('stream', () => {
   const actual = jest.requireActual('stream');
@@ -112,6 +117,7 @@ beforeEach(() => {
   mockSpanEnd.mockReset();
   mockStartChildSpan.mockClear();
   mockInjectCarrier.mockClear();
+  mockIsLoadTestCarrier.mockReset().mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -517,5 +523,84 @@ describe('processHeygenGenerateJob — outer error handling', () => {
       'heygen-generate-processor',
       { traceparent: 'parent' },
     );
+  });
+});
+
+// The HeyGen processor short-circuits BOTH the video and audio branches
+// when the propagated carrier carries padhaipal.load_test=true. The
+// short-circuit lives BEFORE the media_type switch so neither path can
+// reach the HeyGen API.
+describe('processHeygenGenerateJob — load-test stub', () => {
+  it('video: short-circuits when isLoadTestCarrier returns true; no fetch, no preload', async () => {
+    mockIsLoadTestCarrier.mockReturnValueOnce(true);
+    const fetchSpy = jest.fn();
+    global.fetch = fetchSpy as never;
+    const repo = makeRepo();
+
+    await processHeygenGenerateJob(
+      makeJob(videoData()),
+      makeBucket() as unknown as MediaBucketService,
+      repo as unknown as Repository<MediaMetaDataEntity>,
+    );
+
+    expect(mockIsLoadTestCarrier).toHaveBeenCalledWith({
+      traceparent: 'parent',
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(repo.update).toHaveBeenCalledWith('mm-1', {
+      status: 'failed',
+      media_details: { load_test_stub: true },
+    });
+    expect(mockQueueAdd).not.toHaveBeenCalled();
+    expect(mockSpanEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('audio: short-circuits when isLoadTestCarrier returns true; no fetch, no preload', async () => {
+    mockIsLoadTestCarrier.mockReturnValueOnce(true);
+    const fetchSpy = jest.fn();
+    global.fetch = fetchSpy as never;
+    const repo = makeRepo();
+
+    await processHeygenGenerateJob(
+      makeJob(audioData()),
+      makeBucket() as unknown as MediaBucketService,
+      repo as unknown as Repository<MediaMetaDataEntity>,
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(repo.update).toHaveBeenCalledWith('mm-2', {
+      status: 'failed',
+      media_details: { load_test_stub: true },
+    });
+    expect(mockQueueAdd).not.toHaveBeenCalled();
+  });
+
+  it('does NOT throw when stubbed (BullMQ must not retry)', async () => {
+    mockIsLoadTestCarrier.mockReturnValueOnce(true);
+    global.fetch = jest.fn() as never;
+
+    await expect(
+      processHeygenGenerateJob(
+        makeJob(videoData()),
+        makeBucket() as unknown as MediaBucketService,
+        makeRepo() as unknown as Repository<MediaMetaDataEntity>,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('proceeds with real fetch when isLoadTestCarrier returns false', async () => {
+    // default is false — no override
+    global.fetch = jest.fn().mockResolvedValue(
+      fakeResponse({
+        ok: true,
+        json: { data: { video_id: 'vid-real' } },
+      }),
+    );
+    await processHeygenGenerateJob(
+      makeJob(videoData()),
+      makeBucket() as unknown as MediaBucketService,
+      makeRepo() as unknown as Repository<MediaMetaDataEntity>,
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 });

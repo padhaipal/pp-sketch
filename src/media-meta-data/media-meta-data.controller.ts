@@ -38,7 +38,12 @@ import {
   MediaItemResponse,
 } from './media-meta-data.dto';
 import { v4 as uuid } from 'uuid';
-import { startRootSpan, injectCarrier } from '../otel/otel';
+import { context, trace } from '@opentelemetry/api';
+import {
+  startRootSpan,
+  injectCarrier,
+  injectCarrierFromContext,
+} from '../otel/otel';
 
 @ApiTags('media-meta-data')
 @Controller('media-meta-data')
@@ -118,9 +123,14 @@ export class MediaMetaDataController {
     const validated = validateCreateHeygenMediaOptions(body);
     const span = startRootSpan('heygen-generate-controller');
     try {
+      // Use injectCarrierFromContext so any W3C Baggage on the active
+      // context (e.g. padhaipal.load_test=true propagated from the
+      // upstream caller) flows into the job carrier — required for the
+      // ElevenLabs/HeyGen processors' load-test stub to actually fire.
+      const ctxWithSpan = trace.setSpan(context.active(), span);
       const entities = await this.mediaMetaDataService.createHeygenMedia(
         validated,
-        injectCarrier(span),
+        injectCarrierFromContext(ctxWithSpan),
       );
       return { created: entities.length, entities };
     } finally {
@@ -138,9 +148,10 @@ export class MediaMetaDataController {
     const validated = validateCreateElevenlabsMediaOptions(body);
     const span = startRootSpan('elevenlabs-generate-controller');
     try {
+      const ctxWithSpan = trace.setSpan(context.active(), span);
       const entities = await this.mediaMetaDataService.createElevenlabsMedia(
         validated,
-        injectCarrier(span),
+        injectCarrierFromContext(ctxWithSpan),
       );
       return { created: entities.length, entities };
     } finally {
