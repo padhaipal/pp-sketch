@@ -1,8 +1,23 @@
 import { ConsoleLogger } from '@nestjs/common';
+import { context, propagation } from '@opentelemetry/api';
 import { logs, SeverityNumber } from '@opentelemetry/api-logs';
+import { PROPAGATED_BAGGAGE_KEYS } from './baggage-keys';
 
 export class OtelLogger extends ConsoleLogger {
   private readonly otelLogger = logs.getLogger('pp');
+
+  private collectBaggageAttributes(): Record<string, string> {
+    const baggage = propagation.getBaggage(context.active());
+    if (!baggage) return {};
+    const attrs: Record<string, string> = {};
+    for (const key of PROPAGATED_BAGGAGE_KEYS) {
+      const value = baggage.getEntry(key)?.value;
+      if (typeof value === 'string' && value.length > 0) {
+        attrs[key] = value;
+      }
+    }
+    return attrs;
+  }
 
   override log(message: any, ...optionalParams: any[]): void {
     super.log(message, ...optionalParams);
@@ -92,6 +107,7 @@ export class OtelLogger extends ConsoleLogger {
           ? opts.message
           : JSON.stringify(opts.message),
       attributes: {
+        ...this.collectBaggageAttributes(),
         ...(logContext !== undefined ? { 'log.context': logContext } : {}),
         ...(stack !== undefined ? { 'exception.stacktrace': stack } : {}),
       },

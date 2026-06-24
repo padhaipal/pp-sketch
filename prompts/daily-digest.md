@@ -23,7 +23,14 @@ Read it with `cat /tmp/digest-input.json | jq …`. The whole file is small enou
 
 If something is missing, you may issue follow-up Loki queries against `$GRAFANA_URL/api/datasources/proxy/7/loki/api/v1/...` with `Authorization: Bearer $GRAFANA_API_KEY`. Datasource ids: 7 = Loki, 8 = Prometheus (metrics), 10 = Tempo. Loki indexed labels are ONLY `service_name` and `deployment_environment`; severity, log_context etc. are structured metadata — filter via `| label=~"…"` pipe form, NOT in the stream selector. Use sparingly.
 
-Load-test signal lives in Prometheus: histogram `wabot_message_e2e_duration_ms_milliseconds` (`_bucket` / `_count` / `_sum`), labeled by `outcome` (`delivered` / `inflight-expired` / `whatsapp-error` / `fallback`). Records inbound-msg → outbound-dispatch latency end-to-end. Query via `$GRAFANA_URL/api/datasources/proxy/8/api/v1/query_range`.
+Load-test signal lives in Prometheus: histogram `wabot_message_e2e_duration_ms_milliseconds` (`_bucket` / `_count` / `_sum`), labeled by:
+  - `outcome` — `success` (pp-sketch accepted the queued message) / `delivered` (WhatsApp send succeeded) / `inflight-expired` / `whatsapp-error` / `fallback`
+  - `load_test` — `"true"` for synthetic artillery traffic, `"false"` for real traffic. Label is ALWAYS present.
+  - `test_phase` — `"phase_1"` (first message per phone, exercises onboarding) / `"phase_2"` (second message per phone, exercises lesson flow). Only set on `load_test="true"` series.
+
+Records inbound-msg → outbound-dispatch latency end-to-end. Query via `$GRAFANA_URL/api/datasources/proxy/8/api/v1/query_range`.
+
+pp-sketch records a parallel histogram `pp_wabot_inbound_job_duration_ms_milliseconds` for pp-internal stage latency (BullMQ dequeue → job completion) with the same `load_test` / `test_phase` labels plus its own `outcome` set (`success` / `skipped` / `error`).
 
 Write the digest as **GitHub-flavored Markdown**, to stdout, with no preamble or commentary. Hard ceiling: ~560 words **of prose**; the `## Raw data` section at the end is exempt from the word cap but is itself capped at 200 lines. Required structure:
 
@@ -53,13 +60,16 @@ At most one sentence on the single most surprising/cross-cutting observation tha
 ## Load test
 Skip this section entirely if `gh_runs` contains no `Staging post-merge` workflow run that completed within the window. Otherwise:
 
-1. Identify the most recent such run. Its time window is `createdAt` → `createdAt + ~16min` (10min Railway-deploy wait + ~5min artillery + overhead).
-2. Query Prometheus (datasource id=8) for `wabot_message_e2e_duration_ms_milliseconds` over the run window, by `outcome`. Compute p50 / p95 / p99 across the `delivered` outcome via `histogram_quantile`. Sum counts of non-`delivered` outcomes (`inflight-expired`, `whatsapp-error`, `fallback`) as failure modes. If the metric is absent / 0 samples, say so plainly and stop.
+1. Identify the most recent such run as a sanity check that load-test traffic should exist in the window. (You do NOT use the run's timestamps to filter metrics — the `load_test="true"` label does that cleanly.)
+2. Query Prometheus (datasource id=8) for `wabot_message_e2e_duration_ms_milliseconds_bucket{load_test="true"}` over the window, grouped by `test_phase` and `outcome`. For each of `test_phase="phase_1"` and `test_phase="phase_2"` separately, compute p50 / p95 / p99 across the `delivered` outcome via `histogram_quantile`, and sum counts of non-`delivered` outcomes. If the metric is absent / 0 samples for either phase, say so plainly for that phase and continue.
 
-Output one short paragraph (≤60 words):
-- Run conclusion + total `delivered` count + non-delivered count broken by outcome.
-- e2e p50 / p95 / p99 ms for the `delivered` outcome. Call out specifically if p95 > 5000ms, p99 > 10000ms, or any non-`delivered` outcomes.
-- Closing remark: artillery's own `/webhook` enqueue latency is *not* this metric — this is the real user-perceived inbound→outbound delivery time end-to-end.
+Output two short paragraphs (≤60 words each), one per phase, each labeled with its meaning:
+- **Phase 1 (onboarding)** — first message per phone. Stats: delivered count, non-delivered breakdown, e2e p50/p95/p99 ms.
+- **Phase 2 (lesson flow)** — second message per phone, sent 120s after phase 1. Same stats.
+
+Call out specifically if any phase has p95 > 5000ms, p99 > 10000ms, any non-`delivered` outcomes, OR any pp-sketch `consecutive-skip` log lines in the window (indicates the 120s `think` between phases was insufficient at this load — phase 2 was misclassified as a duplicate).
+
+Closing line (one sentence): artillery's own `/webhook` enqueue latency is *not* this metric — this is the real user-perceived inbound→outbound delivery time end-to-end.
 
 ## Raw data
 Append fenced code blocks of underlying time-series data, one per chart that would be informative as a visualization. No prose in this section — just the data blocks. Skip any series that is flat at zero. Cap the total `## Raw data` section at 200 lines. Format each block as:
@@ -75,8 +85,9 @@ Append fenced code blocks of underlying time-series data, one per chart that wou
 Suggested series (include only those with non-trivial data):
 1. **Errors by hour (24h)** — columns: `hour_utc, service, severity, count`. One row per (hour, service, severity) combination with non-zero count.
 2. **Errors by day (30d)** — columns: `date, service, count`. One row per (date, service) combination from `month_aggregate`.
-3. **Load-test e2e latency histogram** (only if a `Staging post-merge` run is in the window AND data is non-empty) — columns: `bucket_le_ms, count`. One row per histogram bucket for the `delivered` outcome.
-4. **Load-test outcome breakdown** (only if a `Staging post-merge` run is in the window) — columns: `outcome, count`. One row per outcome with non-zero count.
+3. **Load-test e2e latency histogram, phase 1** (only if `wabot_message_e2e_duration_ms_milliseconds_bucket{load_test="true",test_phase="phase_1",outcome="delivered"}` is non-empty) — columns: `bucket_le_ms, count`. One row per histogram bucket.
+4. **Load-test e2e latency histogram, phase 2** (same condition but `test_phase="phase_2"`) — columns: `bucket_le_ms, count`.
+5. **Load-test outcome breakdown by phase** (if any load-test traffic in window) — columns: `test_phase, outcome, count`.
 ```
 
 Severity rules for the first line:

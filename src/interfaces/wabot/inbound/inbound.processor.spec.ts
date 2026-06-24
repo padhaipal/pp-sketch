@@ -32,6 +32,13 @@ jest.mock('../../../otel/otel', () => ({
 
 jest.mock('../../../otel/metrics', () => ({
   wabotInboundJobDuration: { record: jest.fn() },
+  buildJobAttributes: (outcome: string) => ({ outcome, load_test: 'false' }),
+}));
+
+jest.mock('../../../otel/baggage-keys', () => ({
+  BAGGAGE_LOAD_TEST: 'padhaipal.load_test',
+  BAGGAGE_TEST_PHASE: 'padhaipal.test_phase',
+  PROPAGATED_BAGGAGE_KEYS: ['padhaipal.load_test', 'padhaipal.test_phase'],
 }));
 
 function createAudioJob(

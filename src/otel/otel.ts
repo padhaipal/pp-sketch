@@ -15,7 +15,10 @@ import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { BatchLogRecordProcessor } from '@opentelemetry/sdk-logs';
 import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { NodeSDK } from '@opentelemetry/sdk-node';
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import type { OtelCarrier } from './otel.dto';
+import { BaggageSpanProcessor } from './baggage-span-processor';
+import { PROPAGATED_BAGGAGE_KEYS } from './baggage-keys';
 
 export const tracer = trace.getTracer(process.env.OTEL_SERVICE_NAME ?? 'pp');
 
@@ -33,8 +36,13 @@ export function initOtel(): NodeSDK {
     diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.WARN);
   }
 
+  // BaggageSpanProcessor first so padhaipal.* baggage entries land on each
+  // span as attributes before BatchSpanProcessor batches/exports the span.
   const sdk = new NodeSDK({
-    traceExporter: new OTLPTraceExporter(),
+    spanProcessors: [
+      new BaggageSpanProcessor(PROPAGATED_BAGGAGE_KEYS),
+      new BatchSpanProcessor(new OTLPTraceExporter()),
+    ],
     metricReader: new PeriodicExportingMetricReader({
       exporter: new OTLPMetricExporter(),
     }),
