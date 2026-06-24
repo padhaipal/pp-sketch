@@ -25,7 +25,7 @@ If something is missing, you may issue follow-up Loki queries against `$GRAFANA_
 
 Load-test signal lives in Prometheus: histogram `wabot_message_e2e_duration_ms_milliseconds` (`_bucket` / `_count` / `_sum`), labeled by `outcome` (`delivered` / `inflight-expired` / `whatsapp-error` / `fallback`). Records inbound-msg → outbound-dispatch latency end-to-end. Query via `$GRAFANA_URL/api/datasources/proxy/8/api/v1/query_range`.
 
-Write the digest as **GitHub-flavored Markdown**, to stdout, with no preamble or commentary. Hard ceiling: ~560 words total. Required structure:
+Write the digest as **GitHub-flavored Markdown**, to stdout, with no preamble or commentary. Hard ceiling: ~560 words **of prose**; the `## Raw data` section at the end is exempt from the word cap but is itself capped at 200 lines. Required structure:
 
 ```
 [SEVERITY:OK|WARN|ALERT]
@@ -60,6 +60,23 @@ Output one short paragraph (≤60 words):
 - Run conclusion + total `delivered` count + non-delivered count broken by outcome.
 - e2e p50 / p95 / p99 ms for the `delivered` outcome. Call out specifically if p95 > 5000ms, p99 > 10000ms, or any non-`delivered` outcomes.
 - Closing remark: artillery's own `/webhook` enqueue latency is *not* this metric — this is the real user-perceived inbound→outbound delivery time end-to-end.
+
+## Raw data
+Append fenced code blocks of underlying time-series data, one per chart that would be informative as a visualization. No prose in this section — just the data blocks. Skip any series that is flat at zero. Cap the total `## Raw data` section at 200 lines. Format each block as:
+
+​```
+### <chart title>
+<language: csv>
+<header row>
+<row 1>
+...
+​```
+
+Suggested series (include only those with non-trivial data):
+1. **Errors by hour (24h)** — columns: `hour_utc, service, severity, count`. One row per (hour, service, severity) combination with non-zero count.
+2. **Errors by day (30d)** — columns: `date, service, count`. One row per (date, service) combination from `month_aggregate`.
+3. **Load-test e2e latency histogram** (only if a `Staging post-merge` run is in the window AND data is non-empty) — columns: `bucket_le_ms, count`. One row per histogram bucket for the `delivered` outcome.
+4. **Load-test outcome breakdown** (only if a `Staging post-merge` run is in the window) — columns: `outcome, count`. One row per outcome with non-zero count.
 ```
 
 Severity rules for the first line:
