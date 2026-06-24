@@ -1,5 +1,15 @@
 const mockOtelEmit = jest.fn();
 const mockGetLogger = jest.fn(() => ({ emit: mockOtelEmit }));
+const mockGetBaggage = jest.fn();
+
+jest.mock('@opentelemetry/api', () => ({
+  propagation: {
+    getBaggage: (...a: unknown[]) => mockGetBaggage(...a),
+  },
+  context: {
+    active: () => 'active-ctx',
+  },
+}));
 
 jest.mock('@opentelemetry/api-logs', () => {
   // Mirror the SeverityNumber enum values the production code compares
@@ -62,6 +72,7 @@ import { OtelLogger } from './otel-logger';
 
 beforeEach(() => {
   mockOtelEmit.mockReset();
+  mockGetBaggage.mockReset().mockReturnValue(undefined);
   // The spies on ConsoleLogger.prototype persist for the suite — just clear
   // call history between tests so per-test counts stay clean.
   superLogSpy.mockClear();
@@ -204,5 +215,90 @@ describe('OtelLogger — exception.stacktrace attribute (Nest-style error call)'
     expect(
       mockOtelEmit.mock.calls[0][0].attributes['exception.stacktrace'],
     ).toBeUndefined();
+  });
+});
+
+describe('OtelLogger — baggage attribute attachment', () => {
+  let logger: OtelLogger;
+
+  beforeAll(() => {
+    logger = new OtelLogger();
+  });
+
+  function makeBaggage(entries: Record<string, string>): {
+    getEntry: jest.Mock;
+  } {
+    return {
+      getEntry: jest.fn((key: string) =>
+        key in entries ? { value: entries[key] } : undefined,
+      ),
+    };
+  }
+
+  it('attaches padhaipal.load_test and padhaipal.test_phase when both are set', () => {
+    mockGetBaggage.mockReturnValue(
+      makeBaggage({
+        'padhaipal.load_test': 'true',
+        'padhaipal.test_phase': 'phase_2',
+      }),
+    );
+    logger.log('msg');
+    const attrs = mockOtelEmit.mock.calls[0][0].attributes;
+    expect(attrs['padhaipal.load_test']).toBe('true');
+    expect(attrs['padhaipal.test_phase']).toBe('phase_2');
+  });
+
+  it('omits padhaipal.* attrs entirely when baggage is undefined', () => {
+    mockGetBaggage.mockReturnValue(undefined);
+    logger.log('msg');
+    const attrs = mockOtelEmit.mock.calls[0][0].attributes;
+    expect(Object.keys(attrs)).not.toContain('padhaipal.load_test');
+    expect(Object.keys(attrs)).not.toContain('padhaipal.test_phase');
+  });
+
+  it('skips entries with empty-string value', () => {
+    mockGetBaggage.mockReturnValue(
+      makeBaggage({
+        'padhaipal.load_test': '',
+        'padhaipal.test_phase': 'phase_1',
+      }),
+    );
+    logger.log('msg');
+    const attrs = mockOtelEmit.mock.calls[0][0].attributes;
+    expect(Object.keys(attrs)).not.toContain('padhaipal.load_test');
+    expect(attrs['padhaipal.test_phase']).toBe('phase_1');
+  });
+
+  it('skips entries whose baggage value is not a string (numeric)', () => {
+    mockGetBaggage.mockReturnValue({
+      getEntry: (key: string) =>
+        key === 'padhaipal.load_test'
+          ? { value: 42 as unknown as string }
+          : undefined,
+    });
+    logger.log('msg');
+    const attrs = mockOtelEmit.mock.calls[0][0].attributes;
+    expect(Object.keys(attrs)).not.toContain('padhaipal.load_test');
+  });
+
+  it('coexists with log.context (last optionalParam string)', () => {
+    mockGetBaggage.mockReturnValue(
+      makeBaggage({ 'padhaipal.load_test': 'true' }),
+    );
+    logger.log('msg', 'MyContext');
+    const attrs = mockOtelEmit.mock.calls[0][0].attributes;
+    expect(attrs['padhaipal.load_test']).toBe('true');
+    expect(attrs['log.context']).toBe('MyContext');
+  });
+
+  it('coexists with exception.stacktrace on error()', () => {
+    mockGetBaggage.mockReturnValue(
+      makeBaggage({ 'padhaipal.load_test': 'true' }),
+    );
+    logger.error('boom', 'stack-here', 'Ctx');
+    const attrs = mockOtelEmit.mock.calls[0][0].attributes;
+    expect(attrs['padhaipal.load_test']).toBe('true');
+    expect(attrs['exception.stacktrace']).toBe('stack-here');
+    expect(attrs['log.context']).toBe('Ctx');
   });
 });

@@ -20,4 +20,14 @@ scenarios:
           headers:
             content-type: application/json
             x-hub-signature-256: "{{ signature }}"
+            x-test-phase: phase_1
+          body: "{{ payload }}"
+      - think: 120
+      - function: prepareWebhookFollowUp
+      - post:
+          url: /webhook
+          headers:
+            content-type: application/json
+            x-hub-signature-256: "{{ signature }}"
+            x-test-phase: phase_2
           body: "{{ payload }}"

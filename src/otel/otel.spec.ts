@@ -68,6 +68,18 @@ jest.mock('@opentelemetry/sdk-logs', () => ({
 jest.mock('@opentelemetry/sdk-metrics', () => ({
   PeriodicExportingMetricReader: jest.fn(),
 }));
+jest.mock('@opentelemetry/sdk-trace-base', () => ({
+  BatchSpanProcessor: jest.fn().mockImplementation((exporter: unknown) => ({
+    tag: 'batch',
+    exporter,
+  })),
+}));
+jest.mock('./baggage-span-processor', () => ({
+  BaggageSpanProcessor: jest.fn().mockImplementation((keys: unknown) => ({
+    tag: 'baggage',
+    keys,
+  })),
+}));
 jest.mock('@opentelemetry/auto-instrumentations-node', () => ({
   getNodeAutoInstrumentations: jest.fn(() => []),
 }));

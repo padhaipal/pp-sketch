@@ -15,7 +15,10 @@ import {
   injectCarrier,
   injectCarrierFromContext,
 } from '../../../otel/otel';
-import { wabotInboundJobDuration } from '../../../otel/metrics';
+import {
+  buildJobAttributes,
+  wabotInboundJobDuration,
+} from '../../../otel/metrics';
 import { toLogId } from '../../../otel/pii';
 import { FindMediaByStateTransitionIdResult } from '../../../media-meta-data/media-meta-data.dto';
 import {
@@ -441,7 +444,10 @@ export async function processWabotInboundJob(
     }
     span.setAttribute('pp.outcome', outcome);
     span.end();
-    wabotInboundJobDuration.record(performance.now() - startTime, { outcome });
+    wabotInboundJobDuration.record(
+      performance.now() - startTime,
+      buildJobAttributes(outcome),
+    );
   }
 }
 

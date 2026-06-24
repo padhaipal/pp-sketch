@@ -6,12 +6,30 @@
 const mockHistogram = { record: jest.fn() };
 const mockCreateHistogram = jest.fn(() => mockHistogram);
 const mockGetMeter = jest.fn(() => ({ createHistogram: mockCreateHistogram }));
+const mockGetBaggage = jest.fn();
+const mockContextActive = jest.fn().mockReturnValue('active-ctx');
 
 jest.mock('@opentelemetry/api', () => ({
   metrics: { getMeter: (...args: unknown[]) => mockGetMeter(...args) },
+  propagation: {
+    getBaggage: (...a: unknown[]) => mockGetBaggage(...a),
+  },
+  context: {
+    active: () => mockContextActive(),
+  },
 }));
 
-import { wabotInboundJobDuration } from './metrics';
+import { buildJobAttributes, wabotInboundJobDuration } from './metrics';
+
+function makeBaggage(entries: Record<string, string>): {
+  getEntry: jest.Mock;
+} {
+  return {
+    getEntry: jest.fn((key: string) =>
+      key in entries ? { value: entries[key] } : undefined,
+    ),
+  };
+}
 
 describe('metrics module', () => {
   it('acquires the meter under the "pp" service name', () => {
@@ -47,5 +65,68 @@ describe('metrics module', () => {
 
   it('exports the histogram instance returned by createHistogram', () => {
     expect(wabotInboundJobDuration).toBe(mockHistogram);
+  });
+});
+
+describe('buildJobAttributes', () => {
+  beforeEach(() => {
+    mockGetBaggage.mockReset();
+  });
+
+  it('defaults load_test to "false" when no baggage exists', () => {
+    mockGetBaggage.mockReturnValue(undefined);
+    expect(buildJobAttributes('success')).toEqual({
+      outcome: 'success',
+      load_test: 'false',
+    });
+  });
+
+  it('reads padhaipal.load_test=true from baggage when present', () => {
+    mockGetBaggage.mockReturnValue(
+      makeBaggage({ 'padhaipal.load_test': 'true' }),
+    );
+    expect(buildJobAttributes('success')).toEqual({
+      outcome: 'success',
+      load_test: 'true',
+    });
+  });
+
+  it('includes test_phase when set in baggage', () => {
+    mockGetBaggage.mockReturnValue(
+      makeBaggage({
+        'padhaipal.load_test': 'true',
+        'padhaipal.test_phase': 'phase_2',
+      }),
+    );
+    expect(buildJobAttributes('skipped')).toEqual({
+      outcome: 'skipped',
+      load_test: 'true',
+      test_phase: 'phase_2',
+    });
+  });
+
+  it('omits test_phase when its baggage value is the empty string', () => {
+    mockGetBaggage.mockReturnValue(
+      makeBaggage({
+        'padhaipal.load_test': 'false',
+        'padhaipal.test_phase': '',
+      }),
+    );
+    const attrs = buildJobAttributes('success');
+    expect(attrs.test_phase).toBeUndefined();
+    expect(attrs.load_test).toBe('false');
+  });
+
+  it('preserves each outcome literal exactly', () => {
+    mockGetBaggage.mockReturnValue(undefined);
+    for (const o of ['success', 'skipped', 'error'] as const) {
+      expect(buildJobAttributes(o).outcome).toBe(o);
+    }
+  });
+
+  it('reads from the active OTel context', () => {
+    mockGetBaggage.mockReturnValue(undefined);
+    buildJobAttributes('success');
+    expect(mockGetBaggage).toHaveBeenLastCalledWith('active-ctx');
   });
 });
