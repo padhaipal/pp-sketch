@@ -1,20 +1,44 @@
 config:
   target: "{{ $env.WABOT_STAGING_BASE }}"
   http:
-    timeout: 10
+    timeout: 30
+  # Run artillery across 8 worker processes so a single 2-vCPU GitHub
+  # Actions runner can attempt the high-rate plateaus. Single-process
+  # artillery saturates well below step_1000, much less step_10000.
+  workers: 8
   processor: "../processors/webhook.js"
-  # Baseline run targets ~2 rps sustained — low enough that the current
-  # default BullMQ worker concurrency (1) can keep up, so phase_2 messages
-  # aren't stale-dropped by pp-sketch's 20s timestamp guard. Yesterday's
-  # 5 rps run lost ~28% of phase_2 messages to stale-timestamp. Raise this
-  # once worker concurrency is tuned.
+  # ---------------------------------------------------------------------
+  # Step-ladder capacity test. Each plateau is a 10x arrival-rate jump.
+  # The breakpoint is the highest plateau where ALL of:
+  #   pp_bullmq_queue_depth{state="waiting"} stays ~0
+  #   histogram_quantile(0.95, pp_bullmq_job_dwell_duration_ms ...) < 500 ms
+  #   no PG "too many connections" / "ECONNREFUSED" log lines
+  # User capacity at 1 msg / 30 s cadence = (last-passing arrivalRate) * 30.
+  #
+  # NOTE on artillery feasibility: step_10000 means 10 000 virtual users
+  # spawned per second. A single GitHub Actions runner cannot actually
+  # generate that load — artillery itself saturates around 1-5 k VU/s
+  # depending on CPU. If `scenarios.launched` in the artillery report
+  # tops out well below 10 000 during the step_10000 plateau the SYSTEM
+  # has capacity headroom we can't measure from this rig — move to a
+  # distributed runner to push harder.
+  # ---------------------------------------------------------------------
   phases:
     - name: warmup
       duration: 60
       arrivalRate: 1
-    - name: sustained
-      duration: 240
-      arrivalRate: 2
+    - name: step_10
+      duration: 90
+      arrivalRate: 10
+    - name: step_100
+      duration: 120
+      arrivalRate: 100
+    - name: step_1000
+      duration: 180
+      arrivalRate: 1000
+    - name: step_10000
+      duration: 180
+      arrivalRate: 10000
 
 scenarios:
   - name: webhook
@@ -27,7 +51,17 @@ scenarios:
             x-hub-signature-256: "{{ signature }}"
             x-test-phase: phase_1
           body: "{{ payload }}"
-      - think: 120
+      # Short think between phase_1 and phase_2. The previous 120 s value
+      # exceeded the 25 s wabot consecutive-check TTL so phase_2 took the
+      # non-consecutive lesson-flow path, but at the ladder's high-rate
+      # plateaus a 120 s think pins ~125 s of state per VU in artillery
+      # memory — 10 000 VU/s × 125 s ≈ 1.25 M concurrent VUs, which would
+      # OOM the GHA runner before step_10000 even starts. 2 s keeps each
+      # VU's footprint short so the generator can keep up; phase_2 is
+      # then treated as consecutive (within the 25 s TTL), which is
+      # acceptable for a capacity test (we're measuring throughput, not
+      # lesson-flow code coverage).
+      - think: 2
       - function: prepareWebhookFollowUp
       - post:
           url: /webhook
