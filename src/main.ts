@@ -109,6 +109,10 @@ async function bootstrap() {
         userActivityService,
       );
     },
+    // I/O-bound turn (audio download + STT + DB + outbound send); high
+    // concurrency overlaps the network waits. Per-replica; the PG pool
+    // (extra.max=20) and Postgres max_connections cap effective DB fan-out.
+    { concurrency: 100 },
   );
   wabotInboundWorker.on('failed', (job, err) =>
     logger.error(

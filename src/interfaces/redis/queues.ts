@@ -1,4 +1,4 @@
-import { Queue, Worker, Processor, JobsOptions } from 'bullmq';
+import { Queue, Worker, Processor, JobsOptions, WorkerOptions } from 'bullmq';
 import Redis from 'ioredis';
 import { instrumentQueue, instrumentWorker } from '../../otel/queue-metrics';
 
@@ -107,15 +107,11 @@ export function createQueue(
 export function createWorker<T = any>(
   name: string,
   processor: Processor<T>,
-  defaultJobOptions?: JobsOptions,
+  workerOptions?: Pick<WorkerOptions, 'concurrency' | 'limiter'>,
 ): Worker<T> {
   const worker = new Worker<T>(name, processor, {
     connection,
-    ...(defaultJobOptions
-      ? { defaultJobOptions }
-      : DEFAULT_JOB_OPTIONS[name]
-        ? { defaultJobOptions: DEFAULT_JOB_OPTIONS[name] }
-        : {}),
+    ...workerOptions,
   });
   instrumentWorker(worker, name);
   return worker;

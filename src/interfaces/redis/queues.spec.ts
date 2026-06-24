@@ -128,31 +128,28 @@ describe('createQueue', () => {
 });
 
 describe('createWorker', () => {
-  it("constructs a Worker with name, processor, shared connection, and the queue's default options", () => {
+  it('constructs a Worker with name, processor, and the shared connection', () => {
     const processor = jest.fn();
     createWorker(QUEUE_NAMES.HEYGEN_GENERATE, processor);
     const [name, proc, cfg] = mockWorkerCtor.mock.calls[0];
     expect(name).toBe(QUEUE_NAMES.HEYGEN_GENERATE);
     expect(proc).toBe(processor);
     expect(cfg.connection).toBe(mockRedisInstance);
-    expect(cfg.defaultJobOptions).toEqual(
-      DEFAULT_JOB_OPTIONS[QUEUE_NAMES.HEYGEN_GENERATE],
-    );
   });
 
-  it('honours a caller-supplied defaultJobOptions over the table entry', () => {
+  it('applies caller-supplied worker options (e.g. concurrency)', () => {
     const processor = jest.fn();
-    const override = { attempts: 7 };
-    createWorker(QUEUE_NAMES.HEYGEN_GENERATE, processor, override);
+    createWorker(QUEUE_NAMES.HEYGEN_GENERATE, processor, { concurrency: 4 });
     const cfg = mockWorkerCtor.mock.calls[0][2];
-    expect(cfg.defaultJobOptions).toBe(override);
+    expect(cfg.concurrency).toBe(4);
+    expect(cfg.connection).toBe(mockRedisInstance);
   });
 
-  it('omits defaultJobOptions entirely when neither the table nor the caller provides one', () => {
+  it('passes only the connection when no worker options are supplied', () => {
     const processor = jest.fn();
     createWorker('unknown-worker-queue', processor);
     const cfg = mockWorkerCtor.mock.calls[0][2];
-    expect(cfg).not.toHaveProperty('defaultJobOptions');
+    expect(cfg).not.toHaveProperty('concurrency');
     expect(cfg.connection).toBe(mockRedisInstance);
   });
 });
