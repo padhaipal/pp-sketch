@@ -1,5 +1,6 @@
 import { Queue, Worker, Processor, JobsOptions } from 'bullmq';
 import Redis from 'ioredis';
+import { instrumentQueue, instrumentWorker } from '../../otel/queue-metrics';
 
 export const QUEUE_NAMES = {
   WABOT_INBOUND: 'wabot-inbound',
@@ -95,10 +96,12 @@ export function createQueue(
   name: string,
   defaultJobOptions?: JobsOptions,
 ): Queue {
-  return new Queue(name, {
+  const queue = new Queue(name, {
     connection,
     defaultJobOptions: defaultJobOptions ?? DEFAULT_JOB_OPTIONS[name],
   });
+  instrumentQueue(queue, name);
+  return queue;
 }
 
 export function createWorker<T = any>(
@@ -106,7 +109,7 @@ export function createWorker<T = any>(
   processor: Processor<T>,
   defaultJobOptions?: JobsOptions,
 ): Worker<T> {
-  return new Worker<T>(name, processor, {
+  const worker = new Worker<T>(name, processor, {
     connection,
     ...(defaultJobOptions
       ? { defaultJobOptions }
@@ -114,4 +117,6 @@ export function createWorker<T = any>(
         ? { defaultJobOptions: DEFAULT_JOB_OPTIONS[name] }
         : {}),
   });
+  instrumentWorker(worker, name);
+  return worker;
 }

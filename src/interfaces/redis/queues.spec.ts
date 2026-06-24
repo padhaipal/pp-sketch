@@ -16,12 +16,27 @@ const mockWorkerCtor = jest.fn();
 jest.mock('bullmq', () => ({
   Queue: jest.fn().mockImplementation((...args: unknown[]) => {
     mockQueueCtor(...args);
-    return { __kind: 'Queue', args };
+    // .on is needed for the queue-metrics depth-gauge callback's
+    // getJobCounts call to be invokable; we return a no-op queue stub.
+    return {
+      __kind: 'Queue',
+      args,
+      getJobCounts: jest.fn().mockResolvedValue({}),
+    };
   }),
   Worker: jest.fn().mockImplementation((...args: unknown[]) => {
     mockWorkerCtor(...args);
-    return { __kind: 'Worker', args };
+    // .on is needed because queue-metrics.instrumentWorker subscribes
+    // to 'completed' / 'failed' / 'stalled' events.
+    return { __kind: 'Worker', args, on: jest.fn() };
   }),
+}));
+
+// Mock queue-metrics so that wiring it in doesn't require the OTel meter
+// to be set up at module load.
+jest.mock('../../otel/queue-metrics', () => ({
+  instrumentQueue: jest.fn(),
+  instrumentWorker: jest.fn(),
 }));
 
 process.env.BULLMQ_REDIS_URL = 'redis://test-bullmq:6379';

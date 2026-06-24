@@ -9,9 +9,15 @@ import {
   ROOT_CONTEXT,
 } from '@opentelemetry/api';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
+import {
+  CompositePropagator,
+  W3CBaggagePropagator,
+  W3CTraceContextPropagator,
+} from '@opentelemetry/core';
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-proto';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-proto';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
+import { UndiciInstrumentation } from '@opentelemetry/instrumentation-undici';
 import { BatchLogRecordProcessor } from '@opentelemetry/sdk-logs';
 import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { NodeSDK } from '@opentelemetry/sdk-node';
@@ -36,9 +42,19 @@ export function initOtel(): NodeSDK {
     diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.WARN);
   }
 
+  // CompositePropagator carries W3C baggage (padhaipal.load_test,
+  // padhaipal.test_phase) across HTTP + queue boundaries alongside the
+  // trace context. NodeSDK's default propagator only handles trace
+  // context — without the baggage propagator added explicitly, pp-sketch
+  // would never see the load_test label on its own metrics.
+  const textMapPropagator = new CompositePropagator({
+    propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()],
+  });
+
   // BaggageSpanProcessor first so padhaipal.* baggage entries land on each
   // span as attributes before BatchSpanProcessor batches/exports the span.
   const sdk = new NodeSDK({
+    textMapPropagator,
     spanProcessors: [
       new BaggageSpanProcessor(PROPAGATED_BAGGAGE_KEYS),
       new BatchSpanProcessor(new OTLPTraceExporter()),
@@ -47,7 +63,14 @@ export function initOtel(): NodeSDK {
       exporter: new OTLPMetricExporter(),
     }),
     logRecordProcessor: new BatchLogRecordProcessor(new OTLPLogExporter()),
-    instrumentations: [getNodeAutoInstrumentations()],
+    // UndiciInstrumentation covers Node 18+'s global fetch (used by both
+    // services for cross-process HTTP calls). The default
+    // auto-instrumentation bundle only hooks the legacy http/https
+    // modules, missing all fetch traffic.
+    instrumentations: [
+      getNodeAutoInstrumentations(),
+      new UndiciInstrumentation(),
+    ],
   });
 
   try {
