@@ -69,7 +69,7 @@ When a worker's processJob() throws (or the job is explicitly failed), BullMQ re
 * Returns BullMQ Queue instance.
 * If defaultJobOptions is omitted, uses the queue's DEFAULT_JOB_OPTIONS from (3).
 
-5.) createWorker(name, processor, defaultJobOptions?).
-* Returns BullMQ Worker instance.
-* If defaultJobOptions is omitted, uses the queue's DEFAULT_JOB_OPTIONS from (3).
+5.) createWorker(name, processor, workerOptions?).
+* Returns BullMQ Worker instance using the shared connection.
+* workerOptions is an optional Pick<WorkerOptions,'concurrency'|'limiter'> — e.g. { concurrency: 100 }. Job retry/backoff lives on the queue (createQueue/DEFAULT_JOB_OPTIONS), not the worker.
 * Workers must be started on app bootstrap (see src/main.ts).

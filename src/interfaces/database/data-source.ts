@@ -24,4 +24,9 @@ export const AppDataSource = new DataSource({
   migrations: ['dist/interfaces/database/migrations/*.js'],
   synchronize: false,
   logging: process.env.TYPEORM_LOGGING === 'true',
+  // node-postgres pool size PER REPLICA. With N pp-sketch replicas the total
+  // demand is N*max against Postgres max_connections (currently 350): keep
+  // (replicas * max) well under it, leaving headroom for the dashboard,
+  // migrations, admin, and deploy-time overlap.
+  extra: { max: 20 },
 });
