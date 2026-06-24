@@ -17,6 +17,7 @@ import {
 import { WhatsappPreloadJobDto } from '../../../media-meta-data/media-meta-data.dto';
 import type { OtelCarrier } from '../../../otel/otel.dto';
 import { startChildSpan, injectCarrier } from '../../../otel/otel';
+import { isLoadTestCarrier } from '../../../otel/load-test-context';
 
 const logger = new Logger('HeygenOutboundService');
 const whatsappPreloadQueue = createQueue(QUEUE_NAMES.WHATSAPP_PRELOAD);
@@ -57,6 +58,21 @@ export async function processHeygenGenerateJob(
 
   try {
     const { media_metadata_id, media_type, heygen_params } = job.data;
+
+    // Load-test stub: skip the HeyGen API call (video AND audio paths)
+    // when the propagated OtelCarrier carries `padhaipal.load_test=true`.
+    // Marks the entity as failed with a stub flag so downstream callback
+    // handlers don't wait for a render that will never start. No throw
+    // — BullMQ does not retry a load-test stub.
+    if (isLoadTestCarrier(job.data.otel_carrier)) {
+      // `as any` matches the existing update() shape in this file.
+      await mediaRepo.update(media_metadata_id, {
+        status: 'failed',
+        media_details: { load_test_stub: true },
+      } as any);
+      span.end();
+      return;
+    }
 
     if (media_type === 'video') {
       // Build VideoGenerateRequest

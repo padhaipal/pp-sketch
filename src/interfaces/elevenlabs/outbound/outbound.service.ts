@@ -9,6 +9,7 @@ import { TtsRequest, TtsVoiceSettings } from './outbound.dto';
 import { WhatsappPreloadJobDto } from '../../../media-meta-data/media-meta-data.dto';
 import type { OtelCarrier } from '../../../otel/otel.dto';
 import { startChildSpan, injectCarrier } from '../../../otel/otel';
+import { isLoadTestCarrier } from '../../../otel/load-test-context';
 
 const logger = new Logger('ElevenlabsOutboundService');
 const whatsappPreloadQueue = createQueue(QUEUE_NAMES.WHATSAPP_PRELOAD);
@@ -40,6 +41,23 @@ export async function processElevenlabsGenerateJob(
 
   try {
     const { media_metadata_id, elevenlabs_params } = job.data;
+
+    // Load-test stub: skip the ElevenLabs API call when the propagated
+    // OtelCarrier carries `padhaipal.load_test=true`. Marks the entity
+    // as failed with a stub flag so downstream consumers don't wait
+    // for audio that will never exist. No throw — BullMQ does not retry
+    // a load-test stub.
+    if (isLoadTestCarrier(job.data.otel_carrier)) {
+      // `as any` matches the existing update() shape in this file:
+      // media_details accepts arbitrary JSON keys, but TypeORM's deep
+      // partial type rejects them without the cast.
+      await mediaRepo.update(media_metadata_id, {
+        status: 'failed',
+        media_details: { load_test_stub: true },
+      } as any);
+      span.end();
+      return;
+    }
 
     const voiceId = elevenlabs_params.voice_id ?? ELEVENLABS_VOICE_ID;
 

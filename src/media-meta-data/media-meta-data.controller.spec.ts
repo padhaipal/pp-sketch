@@ -15,9 +15,23 @@ jest.mock('../interfaces/redis/queues', () => ({
 const mockSpanEnd = jest.fn();
 const mockStartRootSpan = jest.fn(() => ({ end: mockSpanEnd }));
 const mockInjectCarrier = jest.fn(() => ({ traceparent: 'tp' }));
+const mockInjectCarrierFromContext = jest.fn(() => ({
+  traceparent: 'tp-with-baggage',
+}));
 jest.mock('../otel/otel', () => ({
   startRootSpan: (...args: unknown[]) => mockStartRootSpan(...args),
   injectCarrier: (...args: unknown[]) => mockInjectCarrier(...args),
+  injectCarrierFromContext: (...args: unknown[]) =>
+    mockInjectCarrierFromContext(...args),
+}));
+
+// generateHeygenMedia / generateElevenlabsMedia now use @opentelemetry/api's
+// context.active() + trace.setSpan() to thread W3C Baggage from the active
+// request context into the outbound carrier. The mocks below are passthrough
+// stubs so the controller code runs without pulling in the real SDK.
+jest.mock('@opentelemetry/api', () => ({
+  context: { active: jest.fn(() => 'active-ctx') },
+  trace: { setSpan: jest.fn((_ctx, span) => ({ wrappedSpan: span })) },
 }));
 
 import { BadRequestException, NotFoundException } from '@nestjs/common';
