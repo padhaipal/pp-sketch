@@ -1,7 +1,12 @@
 config:
   target: "{{ $env.WABOT_STAGING_BASE }}"
   http:
-    timeout: 30
+    # Each failed request waits `timeout` seconds before artillery declares
+    # it dead. The 2026-06-25 run hit step_100 collapse with timeout: 30
+    # — artillery drained ~9.5 min of pending VUs after the last phase,
+    # blowing the 25-min staging.yml job budget. 5 s is well above a
+    # healthy wabot /webhook ack (sub-200 ms) and caps drain at ~1/6th.
+    timeout: 5
   # Run artillery across 8 worker processes so a single 2-vCPU GitHub
   # Actions runner can attempt the high-rate plateaus. Single-process
   # artillery saturates well below step_1000, much less step_10000.
