@@ -40,6 +40,14 @@ jobs:
         run: npm i -g artillery@2
 
       - name: Run load test
+        # Step-level cap so artillery is killed cleanly mid-run instead
+        # of consuming the whole job's 25-min budget. Without this, a
+        # runaway artillery drain (as on 2026-06-25) blocks Render HTML
+        # report / Write job summary / upload-artifact from ever running,
+        # so we lose the very data we need to diagnose the run. Declared
+        # ladder runtime is 10.5 min; 12 min gives 90 s of slack and
+        # still leaves ~3 min for the post-steps under the job cap.
+        timeout-minutes: 12
         env:
           WABOT_STAGING_BASE: ${{ secrets.WABOT_STAGING_BASE }}
           META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
