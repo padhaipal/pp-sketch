@@ -61,7 +61,10 @@ function createAudioJob(
 }
 
 function makeMocks(
-  opts: { isComplete?: boolean; crossedQuota?: boolean } = {},
+  opts: {
+    isComplete?: boolean;
+    activeTime?: { withLatestTurn: number; withoutLatestTurn: number };
+  } = {},
 ) {
   const user = { id: 'user-1', external_id: '+910000000001' };
   const audioEntity = { id: 'audio-entity-1' };
@@ -91,9 +94,11 @@ function makeMocks(
       .mockResolvedValue({ status: 200, body: { delivered: true } }),
   };
   const userActivityService = {
-    didJustCrossDailyActivityThreshold: jest
+    getTodayActiveTime: jest
       .fn()
-      .mockResolvedValue(opts.crossedQuota ?? false),
+      .mockResolvedValue(
+        opts.activeTime ?? { withLatestTurn: 0, withoutLatestTurn: 0 },
+      ),
   };
 
   return {
@@ -626,45 +631,121 @@ describe('processWabotInboundJob — audio existing-user delivery paths', () => 
   });
 });
 
-describe('processWabotInboundJob — daily activity quota', () => {
+describe('processWabotInboundJob — active-minute milestones', () => {
   afterEach(() => {
     jest.clearAllMocks();
   });
 
-  it('does not prepend quota stid when crossedQuota is false', async () => {
-    const mocks = makeMocks({ crossedQuota: false });
+  const MIN = 60_000;
+
+  // stids passed to findMediaByStateTransitionId, in call order.
+  function calledStids(mocks: ReturnType<typeof makeMocks>): string[] {
+    return mocks.mediaMetaDataService.findMediaByStateTransitionId.mock.calls.map(
+      (c: any[]) => c[0],
+    );
+  }
+
+  it('does not prepend a milestone stid when no threshold is crossed', async () => {
+    const mocks = makeMocks({
+      activeTime: { withLatestTurn: 4 * MIN, withoutLatestTurn: 3 * MIN },
+    });
     await runJob(createAudioJob(), mocks);
 
-    const stids =
-      mocks.mediaMetaDataService.findMediaByStateTransitionId.mock.calls.map(
-        (c: any[]) => c[0],
-      );
-    expect(stids).not.toContain('daily-activity-quota-reached');
-    expect(stids[0]).toBe('sid-1');
+    const stids = calledStids(mocks);
+    expect(stids).toEqual(['sid-1']);
   });
 
-  it('prepends quota stid when crossedQuota is true', async () => {
-    const mocks = makeMocks({ crossedQuota: true });
+  it('prepends the 5-minute stid when the latest turn crosses 5 minutes', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        withLatestTurn: 5 * MIN + 1_000,
+        withoutLatestTurn: 5 * MIN - 1_000,
+      },
+    });
     await runJob(createAudioJob(), mocks);
 
-    const stids =
-      mocks.mediaMetaDataService.findMediaByStateTransitionId.mock.calls.map(
-        (c: any[]) => c[0],
-      );
-    expect(stids[0]).toBe('daily-activity-quota-reached');
+    const stids = calledStids(mocks);
+    expect(stids[0]).toBe('threshold-reached-5-active-minutes-today');
     expect(stids).toContain('sid-1');
   });
 
-  it('calls didJustCrossDailyActivityThreshold with user id and 5min threshold', async () => {
-    const mocks = makeMocks({ crossedQuota: false });
+  it('fires when withLatestTurn lands EXACTLY on the threshold (>= not >)', async () => {
+    const mocks = makeMocks({
+      activeTime: { withLatestTurn: 5 * MIN, withoutLatestTurn: 5 * MIN - 1 },
+    });
     await runJob(createAudioJob(), mocks);
 
-    expect(
-      mocks.userActivityService.didJustCrossDailyActivityThreshold,
-    ).toHaveBeenCalledTimes(1);
-    expect(
-      mocks.userActivityService.didJustCrossDailyActivityThreshold,
-    ).toHaveBeenCalledWith({ user_id: 'user-1', threshold_ms: 5 * 60 * 1000 });
+    expect(calledStids(mocks)[0]).toBe(
+      'threshold-reached-5-active-minutes-today',
+    );
+  });
+
+  it('does NOT re-fire on the next turn when withoutLatestTurn EXACTLY equals the threshold (< not <=)', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        withLatestTurn: 5 * MIN + 30_000,
+        withoutLatestTurn: 5 * MIN,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toEqual(['sid-1']);
+  });
+
+  it('emits the matching stid for a mid-list threshold (10 minutes)', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        withLatestTurn: 10 * MIN + 500,
+        withoutLatestTurn: 10 * MIN - 500,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)[0]).toBe(
+      'threshold-reached-10-active-minutes-today',
+    );
+  });
+
+  it('emits the matching stid for the highest threshold (60 minutes)', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        withLatestTurn: 60 * MIN + 500,
+        withoutLatestTurn: 60 * MIN - 500,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)[0]).toBe(
+      'threshold-reached-60-active-minutes-today',
+    );
+  });
+
+  it('emits at most ONE milestone even if the values straddle several thresholds (break after first match)', async () => {
+    // Cannot happen in production (a turn adds <60s of active time) but the
+    // loop must still be safe: only the lowest crossed threshold fires.
+    const mocks = makeMocks({
+      activeTime: { withLatestTurn: 21 * MIN, withoutLatestTurn: 1 * MIN },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    const stids = calledStids(mocks);
+    expect(stids[0]).toBe('threshold-reached-5-active-minutes-today');
+    expect(stids).toEqual([
+      'threshold-reached-5-active-minutes-today',
+      'sid-1',
+    ]);
+  });
+
+  it('calls getTodayActiveTime exactly once with the resolved user id', async () => {
+    const mocks = makeMocks();
+    await runJob(createAudioJob(), mocks);
+
+    expect(mocks.userActivityService.getTodayActiveTime).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(mocks.userActivityService.getTodayActiveTime).toHaveBeenCalledWith(
+      'user-1',
+    );
   });
 });
 

@@ -280,27 +280,35 @@ describe('UserActivityService.getActivityTime — user identification', () => {
   });
 });
 
-describe('UserActivityService.didJustCrossDailyActivityThreshold', () => {
-  // 5 minutes = 300_000 ms
-  const THRESHOLD = 5 * 60 * 1000;
+describe('UserActivityService.getTodayActiveTime', () => {
+  it('returns 0/0 when no messages exist today', async () => {
+    const userRepo = makeUserRepo(jest.fn());
+    const mediaRepo = makeMediaRepo([]);
+    const svc = makeService(userRepo, mediaRepo);
 
-  it('returns false when fewer than 2 messages exist today', async () => {
+    await expect(svc.getTodayActiveTime(UUID_A)).resolves.toEqual({
+      withLatestTurn: 0,
+      withoutLatestTurn: 0,
+    });
+  });
+
+  it('returns 0/0 when only one message exists today (no gaps)', async () => {
     const userRepo = makeUserRepo(jest.fn());
     const mediaRepo = makeMediaRepo([
       { user_id: UUID_A, created_at: new Date() },
     ]);
     const svc = makeService(userRepo, mediaRepo);
 
-    await expect(
-      svc.didJustCrossDailyActivityThreshold({
-        user_id: UUID_A,
-        threshold_ms: THRESHOLD,
-      }),
-    ).resolves.toBe(false);
+    await expect(svc.getTodayActiveTime(UUID_A)).resolves.toEqual({
+      withLatestTurn: 0,
+      withoutLatestTurn: 0,
+    });
   });
 
-  it('returns true when the latest message pushes total over threshold', async () => {
-    // 7 messages spaced 51s apart: 6 gaps × 51s = 306s after (>300s), 5 × 51s = 255s before (≤300s) → just crossed.
+  it('returns active ms including and excluding the latest message', async () => {
+    // 7 messages spaced 51s apart: withLatestTurn = 6 gaps × 51s = 306s,
+    // withoutLatestTurn = 5 gaps × 51s = 255s. A caller checking the 5-min
+    // threshold sees 255_000 < 300_000 <= 306_000 → crossing turn.
     const userRepo = makeUserRepo(jest.fn());
     const now = Date.now();
     const rows = Array.from({ length: 7 }, (_, i) => ({
@@ -310,16 +318,17 @@ describe('UserActivityService.didJustCrossDailyActivityThreshold', () => {
     const mediaRepo = makeMediaRepo(rows);
     const svc = makeService(userRepo, mediaRepo);
 
-    await expect(
-      svc.didJustCrossDailyActivityThreshold({
-        user_id: UUID_A,
-        threshold_ms: THRESHOLD,
-      }),
-    ).resolves.toBe(true);
+    await expect(svc.getTodayActiveTime(UUID_A)).resolves.toEqual({
+      withLatestTurn: 306_000,
+      withoutLatestTurn: 255_000,
+    });
   });
 
-  it('returns false when threshold was already crossed by an earlier message (dedup)', async () => {
-    // 8 messages spaced 51s apart: both before/after exceed threshold.
+  it('returns both values above a crossed threshold on the following turn (caller-side dedup)', async () => {
+    // 8 messages spaced 51s apart: withoutLatestTurn = 306s, withLatestTurn =
+    // 357s — both over the 5-min mark, so a caller's crossing test
+    // (withoutLatestTurn < T) no longer matches. This is what makes the
+    // milestone fire exactly once per day.
     const userRepo = makeUserRepo(jest.fn());
     const now = Date.now();
     const rows = Array.from({ length: 8 }, (_, i) => ({
@@ -329,12 +338,10 @@ describe('UserActivityService.didJustCrossDailyActivityThreshold', () => {
     const mediaRepo = makeMediaRepo(rows);
     const svc = makeService(userRepo, mediaRepo);
 
-    await expect(
-      svc.didJustCrossDailyActivityThreshold({
-        user_id: UUID_A,
-        threshold_ms: THRESHOLD,
-      }),
-    ).resolves.toBe(false);
+    await expect(svc.getTodayActiveTime(UUID_A)).resolves.toEqual({
+      withLatestTurn: 357_000,
+      withoutLatestTurn: 306_000,
+    });
   });
 });
 
@@ -469,9 +476,7 @@ describe('UserActivityService.getActivityTime — boundary conditions', () => {
   });
 });
 
-describe('UserActivityService.didJustCrossDailyActivityThreshold — boundary conditions', () => {
-  const THRESHOLD = 5 * 60 * 1000; // 300_000 ms
-
+describe('UserActivityService.getTodayActiveTime — boundary conditions', () => {
   beforeEach(() => {
     // Fix "now" to the middle of an IST day so all relative timestamps stay
     // within today's IST window.
@@ -481,9 +486,9 @@ describe('UserActivityService.didJustCrossDailyActivityThreshold — boundary co
     jest.useRealTimers();
   });
 
-  it('fires on EXACTLY before === threshold + after > threshold (kills before <= → before <)', async () => {
-    // 7 msgs × 50_000 ms = 6 gaps × 50_000 = 300_000 (== threshold) for "before";
-    // appending an 8th msg with a 59_999 ms gap → after = 359_999 (> threshold).
+  it('returns exact ms values, latest gap of 59_999 ms included (kills gap < 60_000 → <=)', async () => {
+    // 7 msgs at 50_000 ms gaps → withoutLatestTurn = 6 × 50_000 = 300_000;
+    // an 8th msg 59_999 ms later → withLatestTurn = 359_999.
     const now = Date.now();
     const rows: { user_id: string; created_at: Date }[] = [];
     for (let i = 0; i < 7; i++) {
@@ -495,30 +500,31 @@ describe('UserActivityService.didJustCrossDailyActivityThreshold — boundary co
     rows.push({ user_id: UUID_A, created_at: new Date(now) });
     const mediaRepo = makeMediaRepo(rows);
     const svc = makeService(makeUserRepo(jest.fn()), mediaRepo);
-    await expect(
-      svc.didJustCrossDailyActivityThreshold({
-        user_id: UUID_A,
-        threshold_ms: THRESHOLD,
-      }),
-    ).resolves.toBe(true);
+    await expect(svc.getTodayActiveTime(UUID_A)).resolves.toEqual({
+      withLatestTurn: 359_999,
+      withoutLatestTurn: 300_000,
+    });
   });
 
-  it('does NOT fire when after EXACTLY equals threshold (kills after > → after >=)', async () => {
-    // 7 msgs × 50_000 ms gaps → before = 5 × 50_000 = 250_000;
-    // after = 6 × 50_000 = 300_000 (== threshold, not strictly greater).
+  it('a latest gap of EXACTLY 60_000 ms adds nothing — withLatestTurn === withoutLatestTurn', async () => {
+    // 7 msgs at 50_000 ms gaps, then an 8th exactly 60_000 ms later: the last
+    // gap is excluded by the < 60s rule so both values are 300_000. A caller's
+    // crossing test can never fire on a turn that follows a full break.
     const now = Date.now();
-    const rows = Array.from({ length: 7 }, (_, i) => ({
-      user_id: UUID_A,
-      created_at: new Date(now - (6 - i) * 50_000),
-    }));
+    const rows: { user_id: string; created_at: Date }[] = [];
+    for (let i = 0; i < 7; i++) {
+      rows.push({
+        user_id: UUID_A,
+        created_at: new Date(now - 60_000 - (6 - i) * 50_000),
+      });
+    }
+    rows.push({ user_id: UUID_A, created_at: new Date(now) });
     const mediaRepo = makeMediaRepo(rows);
     const svc = makeService(makeUserRepo(jest.fn()), mediaRepo);
-    await expect(
-      svc.didJustCrossDailyActivityThreshold({
-        user_id: UUID_A,
-        threshold_ms: THRESHOLD,
-      }),
-    ).resolves.toBe(false);
+    await expect(svc.getTodayActiveTime(UUID_A)).resolves.toEqual({
+      withLatestTurn: 300_000,
+      withoutLatestTurn: 300_000,
+    });
   });
 
   it("uses IST midnight as the lower bound of today's active window", async () => {
@@ -526,10 +532,7 @@ describe('UserActivityService.didJustCrossDailyActivityThreshold — boundary co
     // Today's IST midnight = 2026-05-15T00:00 IST = 2026-05-14T18:30:00Z UTC.
     const mediaRepo = makeMediaRepo([]);
     const svc = makeService(makeUserRepo(jest.fn()), mediaRepo);
-    await svc.didJustCrossDailyActivityThreshold({
-      user_id: UUID_A,
-      threshold_ms: THRESHOLD,
-    });
+    await svc.getTodayActiveTime(UUID_A);
     const qb = mediaRepo._qb;
     expect(qb.where).toHaveBeenCalledWith('mm.created_at >= :earliestStart', {
       earliestStart: new Date('2026-05-14T18:30:00Z'),
@@ -537,6 +540,16 @@ describe('UserActivityService.didJustCrossDailyActivityThreshold — boundary co
     expect(qb.andWhere).toHaveBeenCalledWith('mm.created_at <= :latestEnd', {
       latestEnd: new Date('2026-05-15T18:00:00Z'),
     });
+  });
+
+  it('queries voice messages for exactly the requested user id', async () => {
+    const mediaRepo = makeMediaRepo([]);
+    const svc = makeService(makeUserRepo(jest.fn()), mediaRepo);
+    await svc.getTodayActiveTime(UUID_A);
+    expect(mediaRepo._qb.where).toHaveBeenCalledWith(
+      'mm.user_id IN (:...userIds)',
+      { userIds: [UUID_A] },
+    );
   });
 });
 
