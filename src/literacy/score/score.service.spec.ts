@@ -276,6 +276,122 @@ describe('ScoreService.gradeAndRecord', () => {
     expect(params[5]).toBeCloseTo(-0.001, 5);
   });
 
+  it('clamps a wrong answer at the -10 floor (never goes below MIN_SCORE)', async () => {
+    // previous = -8 → raw -8 - 3.001 = -11.001 → clamped to -10.
+    const findRows = [
+      {
+        id: 's1',
+        letter_id: 'l-ka',
+        user_id: 'u1',
+        score: -8,
+        user_message_id: 'mm-x',
+        created_at: new Date('2026-04-27T10:00:00Z'),
+      },
+    ];
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(findRows)
+      .mockResolvedValueOnce([{ id: 'l-ka', grapheme: 'क' }])
+      .mockResolvedValueOnce([{ score: -10 }]);
+    const { service } = makeService(query);
+
+    await service.gradeAndRecord({
+      user_id: 'u1',
+      incorrect: 'क',
+      userMessageId: 'mm-1',
+    });
+
+    const params = query.mock.calls[2][1];
+    expect(params[3]).toBe(-10);
+  });
+
+  it('a wrong answer at exactly -10 stays pinned at -10', async () => {
+    const findRows = [
+      {
+        id: 's1',
+        letter_id: 'l-ka',
+        user_id: 'u1',
+        score: -10,
+        user_message_id: 'mm-x',
+        created_at: new Date('2026-04-27T10:00:00Z'),
+      },
+    ];
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(findRows)
+      .mockResolvedValueOnce([{ id: 'l-ka', grapheme: 'क' }])
+      .mockResolvedValueOnce([{ score: -10 }]);
+    const { service } = makeService(query);
+
+    await service.gradeAndRecord({
+      user_id: 'u1',
+      incorrect: 'क',
+      userMessageId: 'mm-1',
+    });
+
+    const params = query.mock.calls[2][1];
+    expect(params[3]).toBe(-10);
+  });
+
+  it('a legacy below-floor score bumps up to exactly -10 on the next interaction (even a correct one)', async () => {
+    // Pre-floor prod data can sit far below -10. previous = -25, correct →
+    // raw -23.99 → clamped to -10. This is why no data migration is needed.
+    const findRows = [
+      {
+        id: 's1',
+        letter_id: 'l-ka',
+        user_id: 'u1',
+        score: -25,
+        user_message_id: 'mm-x',
+        created_at: new Date('2026-04-27T10:00:00Z'),
+      },
+    ];
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(findRows)
+      .mockResolvedValueOnce([{ id: 'l-ka', grapheme: 'क' }])
+      .mockResolvedValueOnce([{ score: -10 }]);
+    const { service } = makeService(query);
+
+    await service.gradeAndRecord({
+      user_id: 'u1',
+      correct: 'क',
+      userMessageId: 'mm-1',
+    });
+
+    const params = query.mock.calls[2][1];
+    expect(params[3]).toBe(-10);
+  });
+
+  it('a correct answer at the floor recovers normally (clamp is a no-op above -10)', async () => {
+    // previous = -10 → -10 + 1.01 = -8.99; the floor must not hold it down.
+    const findRows = [
+      {
+        id: 's1',
+        letter_id: 'l-ka',
+        user_id: 'u1',
+        score: -10,
+        user_message_id: 'mm-x',
+        created_at: new Date('2026-04-27T10:00:00Z'),
+      },
+    ];
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(findRows)
+      .mockResolvedValueOnce([{ id: 'l-ka', grapheme: 'क' }])
+      .mockResolvedValueOnce([{ score: -8.99 }]);
+    const { service } = makeService(query);
+
+    await service.gradeAndRecord({
+      user_id: 'u1',
+      correct: 'क',
+      userMessageId: 'mm-1',
+    });
+
+    const params = query.mock.calls[2][1];
+    expect(params[3]).toBeCloseTo(-8.99, 5);
+  });
+
   it('uses 0 as baseline for new (never-seen) graphemes', async () => {
     // History: empty. New grapheme 'क' is incorrect.
     // base = 0, new = 0 - 3.001 = -3.001
