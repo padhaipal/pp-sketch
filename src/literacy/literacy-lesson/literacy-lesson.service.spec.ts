@@ -775,8 +775,8 @@ describe('LiteracyLessonService.processAnswer — lesson-path age boundaries', (
     nowSpy.mockRestore();
   });
 
-  it('age exactly 60_000 ms → continue (rehydrate), NOT stale-restart (kills >60000 → >=60000)', async () => {
-    const { nowSpy, repo } = stateAt(60_000);
+  it('age exactly 120_000 ms → continue (rehydrate), NOT stale-restart (kills >120000 → >=120000)', async () => {
+    const { nowSpy, repo } = stateAt(120_000);
     const dsQuery = jest.fn().mockResolvedValueOnce([{ id: 'lls-1' }]); // only the INSERT (continue path)
     mockActorGetSnapshot.mockReturnValue(happySnapshot());
     const { svc } = makeService({ repo, dsQuery });
@@ -793,8 +793,8 @@ describe('LiteracyLessonService.processAnswer — lesson-path age boundaries', (
     nowSpy.mockRestore();
   });
 
-  it('age 60_001 ms → stale-restart', async () => {
-    const { nowSpy, repo } = stateAt(60_001);
+  it('age 120_001 ms → stale-restart', async () => {
+    const { nowSpy, repo } = stateAt(120_001);
     const dsQuery = jest
       .fn()
       .mockResolvedValueOnce([freshRow()])

@@ -131,14 +131,14 @@ describe('UserActivityService.getActivityTime — empty inputs', () => {
 });
 
 describe('UserActivityService.getActivityTime — active-ms computation', () => {
-  it('sums gaps strictly below 60 s and excludes longer gaps', async () => {
-    // 5 messages in one window; only the first 30s and last 20s gaps count.
+  it('sums gaps strictly below 120 s and excludes longer gaps', async () => {
+    // 5 messages in one window; the 30s, 80s and 20s gaps count, 200s skips.
     const userA = { id: UUID_A, external_id: '919999990001' };
     const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
     const rows = [
       { user_id: UUID_A, created_at: new Date('2026-04-27T10:00:00Z') },
       { user_id: UUID_A, created_at: new Date('2026-04-27T10:00:30Z') }, // +30s
-      { user_id: UUID_A, created_at: new Date('2026-04-27T10:01:50Z') }, // +80s, skip
+      { user_id: UUID_A, created_at: new Date('2026-04-27T10:01:50Z') }, // +80s
       { user_id: UUID_A, created_at: new Date('2026-04-27T10:05:10Z') }, // +200s, skip
       { user_id: UUID_A, created_at: new Date('2026-04-27T10:05:30Z') }, // +20s
     ];
@@ -150,7 +150,7 @@ describe('UserActivityService.getActivityTime — active-ms computation', () => 
       windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
     });
 
-    expect(out.results[0].windows[0].active_ms).toBe(50_000);
+    expect(out.results[0].windows[0].active_ms).toBe(130_000);
   });
 
   it('coerces string timestamps from the query result into Date objects', async () => {
@@ -426,12 +426,12 @@ describe('UserActivityService.getActivityTime — boundary conditions', () => {
     expect(out.results[0].windows[0].active_ms).toBe(0);
   });
 
-  it('a gap of EXACTLY 59_999 ms is included but EXACTLY 60_000 ms is excluded (kills gap < 60_000 → <=)', async () => {
+  it('a gap of EXACTLY 119_999 ms is included but EXACTLY 120_000 ms is excluded (kills gap < 120_000 → <=)', async () => {
     const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
     const rows = [
       { user_id: UUID_A, created_at: new Date('2026-04-27T10:00:00.000Z') },
-      { user_id: UUID_A, created_at: new Date('2026-04-27T10:00:59.999Z') }, // +59999 ✓
-      { user_id: UUID_A, created_at: new Date('2026-04-27T10:01:59.999Z') }, // +60000 ✗
+      { user_id: UUID_A, created_at: new Date('2026-04-27T10:01:59.999Z') }, // +119999 ✓
+      { user_id: UUID_A, created_at: new Date('2026-04-27T10:03:59.999Z') }, // +120000 ✗
     ];
     const mediaRepo = makeMediaRepo(rows);
     const svc = makeService(userRepo, mediaRepo);
@@ -439,7 +439,7 @@ describe('UserActivityService.getActivityTime — boundary conditions', () => {
       users: [UUID_A],
       windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
     });
-    expect(out.results[0].windows[0].active_ms).toBe(59_999);
+    expect(out.results[0].windows[0].active_ms).toBe(119_999);
   });
 
   it('messages at EXACTLY the window start/end are included (kills t < startMs → <= and t > endMs → >=)', async () => {
@@ -486,36 +486,36 @@ describe('UserActivityService.getTodayActiveTime — boundary conditions', () =>
     jest.useRealTimers();
   });
 
-  it('returns exact ms values, latest gap of 59_999 ms included (kills gap < 60_000 → <=)', async () => {
+  it('returns exact ms values, latest gap of 119_999 ms included (kills gap < 120_000 → <=)', async () => {
     // 7 msgs at 50_000 ms gaps → withoutLatestTurn = 6 × 50_000 = 300_000;
-    // an 8th msg 59_999 ms later → withLatestTurn = 359_999.
+    // an 8th msg 119_999 ms later → withLatestTurn = 419_999.
     const now = Date.now();
     const rows: { user_id: string; created_at: Date }[] = [];
     for (let i = 0; i < 7; i++) {
       rows.push({
         user_id: UUID_A,
-        created_at: new Date(now - 59_999 - (6 - i) * 50_000),
+        created_at: new Date(now - 119_999 - (6 - i) * 50_000),
       });
     }
     rows.push({ user_id: UUID_A, created_at: new Date(now) });
     const mediaRepo = makeMediaRepo(rows);
     const svc = makeService(makeUserRepo(jest.fn()), mediaRepo);
     await expect(svc.getTodayActiveTime(UUID_A)).resolves.toEqual({
-      withLatestTurn: 359_999,
+      withLatestTurn: 419_999,
       withoutLatestTurn: 300_000,
     });
   });
 
-  it('a latest gap of EXACTLY 60_000 ms adds nothing — withLatestTurn === withoutLatestTurn', async () => {
-    // 7 msgs at 50_000 ms gaps, then an 8th exactly 60_000 ms later: the last
-    // gap is excluded by the < 60s rule so both values are 300_000. A caller's
+  it('a latest gap of EXACTLY 120_000 ms adds nothing — withLatestTurn === withoutLatestTurn', async () => {
+    // 7 msgs at 50_000 ms gaps, then an 8th exactly 120_000 ms later: the last
+    // gap is excluded by the < 120s rule so both values are 300_000. A caller's
     // crossing test can never fire on a turn that follows a full break.
     const now = Date.now();
     const rows: { user_id: string; created_at: Date }[] = [];
     for (let i = 0; i < 7; i++) {
       rows.push({
         user_id: UUID_A,
-        created_at: new Date(now - 60_000 - (6 - i) * 50_000),
+        created_at: new Date(now - 120_000 - (6 - i) * 50_000),
       });
     }
     rows.push({ user_id: UUID_A, created_at: new Date(now) });
