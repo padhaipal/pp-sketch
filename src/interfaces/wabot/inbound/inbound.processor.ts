@@ -387,7 +387,7 @@ export async function processWabotInboundJob(
           stateTransitionIds.unshift(
             `threshold-reached-${minutes}-active-minutes-today`,
           );
-          // A single turn adds <60s of active time (ACTIVE_GAP_THRESHOLD_MS)
+          // A single turn adds <120s of active time (ACTIVE_GAP_THRESHOLD_MS)
           // while thresholds are ≥5min apart, so at most one can cross.
           break;
         }

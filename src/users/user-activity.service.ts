@@ -12,7 +12,7 @@ import {
   TimeWindowDto,
 } from './user.dto';
 
-const ACTIVE_GAP_THRESHOLD_MS = 60_000;
+const ACTIVE_GAP_THRESHOLD_MS = 120_000;
 
 interface ParsedWindow {
   start: Date;
@@ -38,8 +38,8 @@ export class UserActivityService {
 
   // Returns ms each user was "active" inside each window. Active ms = sum of
   // gaps between consecutive whatsapp voice messages where both messages fall
-  // inside the window AND the gap is < 60 s. Windows may overlap; each is
-  // computed independently.
+  // inside the window AND the gap is < ACTIVE_GAP_THRESHOLD_MS (120 s).
+  // Windows may overlap; each is computed independently.
   async getActivityTime(
     request: ActivityTimeRequestDto,
   ): Promise<ActivityTimeResponse> {
