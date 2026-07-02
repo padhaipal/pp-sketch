@@ -12,7 +12,7 @@ import {
   TimeWindowDto,
 } from './user.dto';
 
-const ACTIVE_GAP_THRESHOLD_MS = 60_000;
+const ACTIVE_GAP_THRESHOLD_MS = 120_000;
 
 interface ParsedWindow {
   start: Date;
@@ -38,8 +38,8 @@ export class UserActivityService {
 
   // Returns ms each user was "active" inside each window. Active ms = sum of
   // gaps between consecutive whatsapp voice messages where both messages fall
-  // inside the window AND the gap is < 60 s. Windows may overlap; each is
-  // computed independently.
+  // inside the window AND the gap is < ACTIVE_GAP_THRESHOLD_MS (120 s).
+  // Windows may overlap; each is computed independently.
   async getActivityTime(
     request: ActivityTimeRequestDto,
   ): Promise<ActivityTimeResponse> {
@@ -126,14 +126,15 @@ export class UserActivityService {
     return messagesByUser;
   }
 
-  // Returns true iff the most recent whatsapp voice message just pushed the
-  // user's active_ms (since today's IST midnight) over `threshold_ms`. False
-  // if the threshold had already been crossed by an earlier message today, or
-  // not yet crossed. Self-deduplicating: fires exactly once per day per user.
-  async didJustCrossDailyActivityThreshold(args: {
-    user_id: string;
-    threshold_ms: number;
-  }): Promise<boolean> {
+  // Returns the user's active_ms since today's IST midnight, both including
+  // and excluding the most recent whatsapp voice message. Comparing the two
+  // lets a caller detect a threshold crossing caused by the latest turn
+  // (withoutLatestTurn < T && withLatestTurn >= T) exactly once per day.
+  // Values are milliseconds; fewer than 2 messages today → both 0.
+  async getTodayActiveTime(user_id: string): Promise<{
+    withLatestTurn: number;
+    withoutLatestTurn: number;
+  }> {
     const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
     const now = new Date();
     const istNow = new Date(now.getTime() + IST_OFFSET_MS);
@@ -146,14 +147,14 @@ export class UserActivityService {
     );
     const midnight = new Date(istMidnight.getTime() - IST_OFFSET_MS);
 
-    const byUser = await this.fetchVoiceMessages([args.user_id], midnight, now);
-    const msgs = byUser.get(args.user_id) ?? [];
-    if (msgs.length < 2) return false;
+    const byUser = await this.fetchVoiceMessages([user_id], midnight, now);
+    const msgs = byUser.get(user_id) ?? [];
 
     const window: ParsedWindow = { start: midnight, end: now };
-    const after = this.computeActiveMs(msgs, window);
-    const before = this.computeActiveMs(msgs.slice(0, -1), window);
-    return before <= args.threshold_ms && after > args.threshold_ms;
+    return {
+      withLatestTurn: this.computeActiveMs(msgs, window),
+      withoutLatestTurn: this.computeActiveMs(msgs.slice(0, -1), window),
+    };
   }
 
   private computeActiveMs(sortedMsgs: Date[], window: ParsedWindow): number {

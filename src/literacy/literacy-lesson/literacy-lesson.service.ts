@@ -84,7 +84,7 @@ export class LiteracyLessonService {
           if (age > 900_000) {
             startFresh = true;
             lessonPath = 'fresh';
-          } else if (age > 60_000) {
+          } else if (age > 120_000) {
             startFresh = true;
             isStaleRestart = true;
             lessonPath = 'stale-restart';

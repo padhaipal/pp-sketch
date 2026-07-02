@@ -69,16 +69,33 @@ export class UserController {
   @Get('dashboard')
   async dashboard(
     @Query('offset') offsetStr?: string,
+    @Query('referrer') referrer?: string,
   ): Promise<DashboardUserRow[]> {
     const offset = Math.max(0, parseInt(offsetStr || '0', 10) || 0);
     const limit = 100;
 
-    // Find 100 most recently active user IDs
-    const activeUsers = await this.mediaRepo
+    // Find 100 most recently active user IDs. When `referrer` is given, the
+    // filter is applied HERE — before offset/limit — so pagination walks the
+    // filtered set. Matches referrer name or phone as a case-insensitive
+    // substring (mirrors what the Referred-by column displays); the inner
+    // joins implicitly drop users with no referrer.
+    const activeQb = this.mediaRepo
       .createQueryBuilder('mm')
       .select('mm.user_id', 'user_id')
       .addSelect('MAX(mm.created_at)', 'last_active')
-      .where('mm.user_id IS NOT NULL')
+      .where('mm.user_id IS NOT NULL');
+
+    const referrerTerm = referrer?.trim();
+    if (referrerTerm) {
+      activeQb
+        .innerJoin('users', 'u', 'u.id = mm.user_id')
+        .innerJoin('users', 'ref', 'ref.id = u.referrer_user_id')
+        .andWhere('(ref.name ILIKE :q OR ref.external_id ILIKE :q)', {
+          q: `%${referrerTerm}%`,
+        });
+    }
+
+    const activeUsers = await activeQb
       .groupBy('mm.user_id')
       .orderBy('last_active', 'DESC')
       .offset(offset)

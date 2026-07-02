@@ -75,13 +75,19 @@ function buildLetterWhere(
   };
 }
 
+// Floor for a letter's score. Without it repeated wrong answers drive the
+// score arbitrarily negative and recovery takes hundreds of correct answers.
+// Clamped on write only — historical rows below the floor stay untouched and
+// simply jump to MIN_SCORE on the user's next interaction with that letter.
+const MIN_SCORE = -10;
+
 function calculateNewScore(
   _average: number,
   previousScore: number | undefined,
   correct: boolean,
 ): number {
   const base = previousScore ?? 0;
-  return correct ? base + 1.01 : base - 3.001;
+  return Math.max(MIN_SCORE, correct ? base + 1.01 : base - 3.001);
 }
 
 const SEED_SCORES: { grapheme: string; score: number }[] = [

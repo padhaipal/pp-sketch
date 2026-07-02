@@ -29,6 +29,12 @@ import { rearmHailMary } from '../../../notifier/hail-mary.processor';
 
 const logger = new Logger('WabotInboundProcessor');
 
+// Daily active-minute milestones. When the latest turn lifts today's active
+// time over one of these, `threshold-reached-{minutes}-active-minutes-today`
+// is prepended to the outbound state transition ids — at most once per day
+// per threshold (the crossing test only matches the tipping turn).
+const ACTIVE_MINUTE_THRESHOLDS = [5, 10, 15, 20, 25, 30, 45, 60];
+
 type JobOutcome = 'success' | 'skipped' | 'error';
 
 export async function processWabotInboundJob(
@@ -373,13 +379,18 @@ export async function processWabotInboundJob(
         stateTransitionIds.push(...result2.stateTransitionIds);
       }
 
-      const crossedQuota =
-        await userActivityService.didJustCrossDailyActivityThreshold({
-          user_id: user.id,
-          threshold_ms: 5 * 60 * 1000,
-        });
-      if (crossedQuota) {
-        stateTransitionIds.unshift('daily-activity-quota-reached');
+      const { withLatestTurn, withoutLatestTurn } =
+        await userActivityService.getTodayActiveTime(user.id);
+      for (const minutes of ACTIVE_MINUTE_THRESHOLDS) {
+        const thresholdMs = minutes * 60_000;
+        if (withoutLatestTurn < thresholdMs && withLatestTurn >= thresholdMs) {
+          stateTransitionIds.unshift(
+            `threshold-reached-${minutes}-active-minutes-today`,
+          );
+          // A single turn adds <120s of active time (ACTIVE_GAP_THRESHOLD_MS)
+          // while thresholds are ≥5min apart, so at most one can cross.
+          break;
+        }
       }
 
       // 9. Build outbound media
