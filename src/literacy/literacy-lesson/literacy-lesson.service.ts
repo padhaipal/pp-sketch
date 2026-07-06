@@ -282,7 +282,12 @@ export class LiteracyLessonService {
             LIMIT $2
           ),
           recent_rows AS (
-            SELECT word, ROW_NUMBER() OVER (ORDER BY created_at DESC) AS rn
+            -- is_done: xstate writes status 'done' only when the machine
+            -- reaches its 'complete' final state; timed-out/abandoned words
+            -- never get a done row, so they must not count toward progression.
+            SELECT word,
+                   ROW_NUMBER() OVER (ORDER BY created_at DESC) AS rn,
+                   (snapshot->>'status' = 'done') AS is_done
             FROM literacy_lesson_states
             WHERE user_id = $1
             ORDER BY created_at DESC
@@ -312,11 +317,11 @@ export class LiteracyLessonService {
               '[]'::json
             ) AS recent_words,
             COALESCE(
-              (SELECT COUNT(DISTINCT word)::int FROM recent_rows WHERE rn <= $4),
+              (SELECT COUNT(DISTINCT word)::int FROM recent_rows WHERE rn <= $4 AND is_done),
               0
             ) AS unique_in_add_window,
             COALESCE(
-              (SELECT COUNT(DISTINCT word)::int FROM recent_rows),
+              (SELECT COUNT(DISTINCT word)::int FROM recent_rows WHERE is_done),
               0
             ) AS unique_in_keep_window,
             COALESCE((SELECT COUNT(*)::int FROM recent_rows), 0) AS recent_row_count,

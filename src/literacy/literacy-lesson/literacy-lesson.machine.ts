@@ -728,6 +728,10 @@ export const machine = setup({
       },
     },
 
+    // Reaching this final state makes the persisted snapshot's status 'done'.
+    // The word-length progression SQL in literacy-lesson.service.ts
+    // (selectNextWord) matches snapshot->>'status' = 'done' to count a word
+    // as completed — keep in sync if this state or the snapshot shape changes.
     complete: {
       type: 'final',
     },
