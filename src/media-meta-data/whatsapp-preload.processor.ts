@@ -107,11 +107,14 @@ export async function processWhatsappPreloadJob(
       logger.error(`uploadMedia threw for ${media_metadata_id}: ${msg}`);
       const statusMatch = msg.match(/(\d{3})/);
       const status = statusMatch ? parseInt(statusMatch[1]) : 0;
-      if (status >= 400 && status < 500) {
+      // 429 (rate limit) is transient, not a defect in the media — retry
+      // like a 5XX. Marking it failed would permanently kill the media the
+      // moment Meta throttles a burst at the worker's limiter rate.
+      if (status >= 400 && status < 500 && status !== 429) {
         logger.error(`uploadMedia 4XX for ${media_metadata_id}`);
         await mediaRepo.update(media_metadata_id, { status: 'failed' });
       } else {
-        logger.warn(`uploadMedia 5XX for ${media_metadata_id}`);
+        logger.warn(`uploadMedia 5XX/429 for ${media_metadata_id}`);
       }
       span.end();
       throw err;

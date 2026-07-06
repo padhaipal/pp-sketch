@@ -207,8 +207,8 @@ describe('DEFAULT_JOB_OPTIONS — exact per-queue shape', () => {
       removeOnFail: { count: 500 },
     },
     [QUEUE_NAMES.MORNING_UPDATE_SEND]: {
-      attempts: 60,
-      backoff: { type: 'fixed', delay: 1000 },
+      attempts: 10,
+      backoff: { type: 'exponential', delay: 5000 },
       removeOnComplete: true,
       removeOnFail: { count: 5000 },
     },

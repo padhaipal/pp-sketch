@@ -575,6 +575,36 @@ describe('processWhatsappPreloadJob — boundaries', () => {
     },
   );
 
+  it('uploadMedia 429 (rate limit) is transient: retries like 5XX, does NOT mark failed', async () => {
+    const { warn, error } = spyWarnError();
+    const repo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue({ ...baseEntity }),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    });
+    const bucket = makeBucket(
+      jest.fn().mockResolvedValue({
+        buffer: Buffer.from('a'),
+        content_type: 'audio/mp3',
+      }),
+    );
+    const wabot = makeWabot(
+      jest.fn().mockRejectedValue(new Error('uploadMedia failed with 429')),
+    );
+    await expect(
+      processWhatsappPreloadJob(
+        makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-key' }),
+        bucket,
+        wabot,
+        makeCache(jest.fn()),
+        repo,
+      ),
+    ).rejects.toThrow('429');
+    expect(warn).toHaveBeenCalledWith('uploadMedia 5XX/429 for mm-1');
+    expect(repo.update).not.toHaveBeenCalledWith('mm-1', { status: 'failed' });
+    warn.mockRestore();
+    error.mockRestore();
+  });
+
   it('uploadMedia 5XX error (status === 500): does NOT mark failed (kills <500 → <=)', async () => {
     const { warn, error } = spyWarnError();
     const repo = makeRepo({
@@ -597,7 +627,7 @@ describe('processWhatsappPreloadJob — boundaries', () => {
         repo,
       ),
     ).rejects.toThrow('500 boom');
-    expect(warn).toHaveBeenCalledWith('uploadMedia 5XX for mm-1');
+    expect(warn).toHaveBeenCalledWith('uploadMedia 5XX/429 for mm-1');
     // status 500 is NOT 4XX → no failed update
     expect(repo.update).not.toHaveBeenCalled();
     warn.mockRestore();
@@ -628,7 +658,7 @@ describe('processWhatsappPreloadJob — boundaries', () => {
         repo,
       ),
     ).rejects.toThrow('399 weird');
-    expect(warn).toHaveBeenCalledWith('uploadMedia 5XX for mm-1');
+    expect(warn).toHaveBeenCalledWith('uploadMedia 5XX/429 for mm-1');
     expect(repo.update).not.toHaveBeenCalled();
     warn.mockRestore();
   });
