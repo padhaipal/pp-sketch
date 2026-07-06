@@ -213,6 +213,19 @@ describe('evaluate-answer.utils', () => {
       expect(markWord({ correctAnswer: 'णन', studentAnswer: 'नण' })).toBe(true);
     });
 
+    /* -- nasal-sign family: ं ~ ँ ~ ः are interchangeable per position -- */
+    it('treats anusvara ं and chandrabindu ँ as the same family', () => {
+      expect(markWord({ correctAnswer: 'रंग', studentAnswer: 'रँग' })).toBe(
+        true,
+      );
+    });
+
+    it('treats anusvara ं and visarga ः as the same family', () => {
+      expect(markWord({ correctAnswer: 'रंग', studentAnswer: 'रःग' })).toBe(
+        true,
+      );
+    });
+
     it('does NOT treat ण and र as the same family', () => {
       expect(markWord({ correctAnswer: 'णर', studentAnswer: 'रण' })).toBe(
         false,
