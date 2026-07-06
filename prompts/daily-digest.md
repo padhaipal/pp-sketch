@@ -16,12 +16,22 @@ You receive a pre-aggregated JSON file at `/tmp/digest-input.json`. Shape:
   month_aggregate: Loki matrix, daily count_over_time by service × env × severity (30d)
   gh_runs:         array of recent GitHub Actions runs
   gh_prs:          array of currently open PRs
+  loadtest_metrics: pre-fetched Prometheus instant-query results over the window
+                   (each key is a result array, or null if that query failed):
+                   e2e_p50_ms / e2e_p95_ms / e2e_p99_ms (by test_phase, delivered only),
+                   e2e_outcomes (by test_phase × outcome),
+                   wabot_dwell_p95_ms / pp_dwell_p95_ms (by queue_name),
+                   eventloop_util_max (by job), db_op_p95_ms (by db_operation_name)
 }
 ```
 
 Read it with `cat /tmp/digest-input.json | jq …`. The whole file is small enough to read once — start there.
 
-If something is missing, you may issue follow-up Loki queries against `$GRAFANA_URL/api/datasources/proxy/uid/loki/loki/api/v1/...` with `Authorization: Bearer $GRAFANA_API_KEY`. Datasource uids: `loki`, `prometheus` (metrics), `tempo` — address via `/api/datasources/proxy/uid/<uid>/…` (Loki's proxied path repeats `loki`). Loki indexed labels are ONLY `service_name` and `deployment_environment`; severity, log_context etc. are structured metadata — filter via `| label=~"…"` pipe form, NOT in the stream selector. Use sparingly.
+If something is missing, issue follow-up queries via the helper (it injects auth itself — do NOT expand `$GRAFANA_API_KEY` in your own commands, the sandbox blocks it):
+`bash scripts/grafana-query.sh <uid> <api-path> [curl -G args…]`, e.g.
+`bash scripts/grafana-query.sh loki loki/api/v1/query_range --data-urlencode 'query={service_name="pp-sketch"} | severity_text=~"ERROR"' --data-urlencode 'limit=20'`
+`bash scripts/grafana-query.sh prometheus api/v1/query --data-urlencode 'query=up'`
+Datasource uids: `loki`, `prometheus` (metrics), `tempo` (path `api/search`). Loki indexed labels are ONLY `service_name` and `deployment_environment`; severity, log_context etc. are structured metadata — filter via `| label=~"…"` pipe form, NOT in the stream selector. Use sparingly.
 
 Load-test signal lives in Prometheus: histogram `wabot_message_e2e_duration_ms_milliseconds` (`_bucket` / `_count` / `_sum`), labeled by:
   - `outcome` — `success` (pp-sketch accepted the queued message) / `delivered` (WhatsApp send succeeded) / `inflight-expired` / `whatsapp-error` / `fallback`
@@ -74,7 +84,7 @@ At most one sentence on the single most surprising/cross-cutting observation tha
 Skip this section entirely if `gh_runs` contains no `Staging post-merge` workflow run that completed within the window. Otherwise:
 
 1. Identify the most recent such run as a sanity check that load-test traffic should exist in the window. (You do NOT use the run's timestamps to filter metrics — the `load_test="true"` label does that cleanly.)
-2. Query Prometheus (datasource uid=`prometheus`) for `wabot_message_e2e_duration_ms_milliseconds_bucket{load_test="true"}` over the window, grouped by `test_phase` and `outcome`. For each of `test_phase="phase_1"` and `test_phase="phase_2"` separately, compute p50 / p95 / p99 across the `delivered` outcome via `histogram_quantile`, and sum counts of non-`delivered` outcomes. If the metric is absent / 0 samples for either phase, say so plainly for that phase and continue.
+2. Read `.loadtest_metrics` from the input file — it already contains the window's p50/p95/p99 e2e latency per `test_phase` (delivered outcome) and the outcome counts per phase (`e2e_outcomes`). Report those per phase. If a key is null or a phase has no series, say plainly that it was not retrieved / had 0 samples for that phase and continue.
 
 Output two short paragraphs (≤60 words each), one per phase, each labeled with its meaning:
 - **Phase 1 (onboarding)** — first message per phone. Stats: delivered count, non-delivered breakdown, e2e p50/p95/p99 ms.
@@ -82,10 +92,10 @@ Output two short paragraphs (≤60 words each), one per phase, each labeled with
 
 Call out specifically if any phase has p95 > 5000ms, p99 > 10000ms, any non-`delivered` outcomes, OR any pp-sketch `consecutive-skip` log lines in the window (indicates the 120s `think` between phases was insufficient at this load — phase 2 was misclassified as a duplicate). ALSO flag if any pp-sketch `stale-timestamp` log lines appear (`"older than 20s"` text) — those are messages dropped because they waited in a queue for more than 20s.
 
-3. Add a third short paragraph titled **Bottleneck breakdown** (≤80 words) using the per-queue + process-health metrics:
-   - Query `histogram_quantile(0.95, sum by (le, queue_name) (rate(wabot_bullmq_job_dwell_duration_ms_milliseconds_bucket{load_test="true"}[5m])))` and the equivalent for `pp_bullmq_*`. Name the queue with the highest p95 dwell time — that's the bottleneck.
-   - Sample `max_over_time(nodejs_eventloop_utilization_ratio[10m])` per `service_name`. If any service exceeds 0.8, name it as CPU-saturated.
-   - Sample `histogram_quantile(0.95, sum by (le, db_operation_name) (rate(db_client_operation_duration_seconds_bucket[5m])))*1000`. If any operation exceeds 100ms p95, name it.
+3. Add a third short paragraph titled **Bottleneck breakdown** (≤80 words) from the pre-fetched `.loadtest_metrics`:
+   - `wabot_dwell_p95_ms` / `pp_dwell_p95_ms`: name the queue with the highest p95 dwell time — that's the bottleneck.
+   - `eventloop_util_max`: if any job exceeds 0.8, name it as CPU-saturated.
+   - `db_op_p95_ms`: if any operation exceeds 100ms p95, name it.
    - One closing sentence: which single change (worker concurrency / DB index / cache) the data implies. If nothing stands out, say so.
 
 Closing line (one sentence): artillery's own `/webhook` enqueue latency is *not* this metric — this is the real user-perceived inbound→outbound delivery time end-to-end.

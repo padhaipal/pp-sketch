@@ -187,6 +187,52 @@ if [[ "$mode" == "daily" ]]; then
   month_agg=$(require_json "month aggregate" "$month_raw")
 fi
 
+# Load-test metrics prefetch (daily mode only). The digest LLM's sandbox
+# blocks $SECRET expansion in its commands, so it cannot query Prometheus
+# itself — everything its Load-test section needs is pre-fetched here.
+# Load tests run on staging, whose telemetry lives on the STAGING Grafana
+# instance — prefer GRAFANA_STAGING_URL/KEY when set, else fall back to the
+# primary instance. Tolerant: a failed query becomes null (reported as
+# not-retrieved), never aborts the digest.
+lt_url="${GRAFANA_STAGING_URL:-$GRAFANA_URL}"
+lt_url="${lt_url%/}"
+lt_url="${lt_url/#http:/https:}"
+lt_auth_hdr="Authorization: Bearer ${GRAFANA_STAGING_API_KEY:-$GRAFANA_API_KEY}"
+prom_proxy="${lt_url}/api/datasources/proxy/uid/${PROM_DATASOURCE_UID:-prometheus}"
+prom_result() {
+  local q="$1"
+  curl -sSL -G -H "$lt_auth_hdr" \
+    --data-urlencode "query=$q" \
+    --data-urlencode "time=$now_sec" \
+    "${prom_proxy}/api/v1/query" 2>/dev/null \
+    | jq -c 'if .status == "success" then .data.result else null end' 2>/dev/null \
+    || echo null
+}
+
+loadtest_metrics='null'
+if [[ "$mode" == "daily" ]]; then
+  e2e='wabot_message_e2e_duration_ms_milliseconds'
+  loadtest_metrics='{}'
+  for spec in \
+    "e2e_p50_ms;histogram_quantile(0.50, sum by (test_phase, le) (increase(${e2e}_bucket{load_test=\"true\",outcome=\"delivered\"}[${window}])))" \
+    "e2e_p95_ms;histogram_quantile(0.95, sum by (test_phase, le) (increase(${e2e}_bucket{load_test=\"true\",outcome=\"delivered\"}[${window}])))" \
+    "e2e_p99_ms;histogram_quantile(0.99, sum by (test_phase, le) (increase(${e2e}_bucket{load_test=\"true\",outcome=\"delivered\"}[${window}])))" \
+    "e2e_outcomes;sum by (test_phase, outcome) (increase(${e2e}_count{load_test=\"true\"}[${window}]))" \
+    "wabot_dwell_p95_ms;histogram_quantile(0.95, sum by (queue_name, le) (increase(wabot_bullmq_job_dwell_duration_ms_milliseconds_bucket{load_test=\"true\"}[${window}])))" \
+    "pp_dwell_p95_ms;histogram_quantile(0.95, sum by (queue_name, le) (increase(pp_bullmq_job_dwell_duration_ms_milliseconds_bucket{load_test=\"true\"}[${window}])))" \
+    "eventloop_util_max;max by (job) (max_over_time(nodejs_eventloop_utilization_ratio[${window}]))" \
+    "db_op_p95_ms;histogram_quantile(0.95, sum by (db_operation_name, le) (increase(db_client_operation_duration_seconds_bucket[${window}]))) * 1000"
+  do
+    name="${spec%%;*}"
+    q="${spec#*;}"
+    val=$(prom_result "$q")
+    [[ -z "$val" ]] && val='null'
+    loadtest_metrics=$(printf '%s' "$loadtest_metrics" \
+      | jq -c --arg k "$name" --argjson v "$val" '. + {($k): $v}')
+  done
+  echo "loadtest_metrics: $(printf '%s' "$loadtest_metrics" | jq -r 'to_entries | map("\(.key)=\(if .value == null then "null" else (.value | length | tostring) + " series" end)") | join(", ")')" >&2
+fi
+
 # GitHub runs + open PRs (daily mode only)
 gh_runs='null'
 gh_prs='null'
@@ -197,11 +243,12 @@ if [[ "$mode" == "daily" ]] && command -v gh >/dev/null 2>&1; then
 fi
 
 mkdir -p /tmp/digest-staging
-printf '%s' "$primary_compact" > /tmp/digest-staging/primary.json
-printf '%s' "$week_agg"        > /tmp/digest-staging/week.json
-printf '%s' "$month_agg"       > /tmp/digest-staging/month.json
-printf '%s' "$gh_runs"         > /tmp/digest-staging/runs.json
-printf '%s' "$gh_prs"          > /tmp/digest-staging/prs.json
+printf '%s' "$primary_compact"  > /tmp/digest-staging/primary.json
+printf '%s' "$week_agg"         > /tmp/digest-staging/week.json
+printf '%s' "$month_agg"        > /tmp/digest-staging/month.json
+printf '%s' "$gh_runs"          > /tmp/digest-staging/runs.json
+printf '%s' "$gh_prs"           > /tmp/digest-staging/prs.json
+printf '%s' "$loadtest_metrics" > /tmp/digest-staging/loadtest.json
 # Keep the full raw primary as an artifact, but don't put it into the LLM input.
 printf '%s' "$primary"         > /tmp/digest-staging/primary-raw.json
 
@@ -211,6 +258,7 @@ jq -n \
   --slurpfile m  /tmp/digest-staging/month.json \
   --slurpfile r  /tmp/digest-staging/runs.json \
   --slurpfile pr /tmp/digest-staging/prs.json \
+  --slurpfile lt /tmp/digest-staging/loadtest.json \
   --arg mode "$mode" \
   --arg window "$window" \
   --arg user_id "$user_id" \
@@ -218,7 +266,7 @@ jq -n \
   --arg end "$now_ns" \
   '{mode: $mode, window: $window, user_id: $user_id, window_start_ns: $start, window_end_ns: $end,
     primary_logs: $p[0], week_aggregate: $w[0], month_aggregate: $m[0],
-    gh_runs: $r[0], gh_prs: $pr[0]}' \
+    gh_runs: $r[0], gh_prs: $pr[0], loadtest_metrics: $lt[0]}' \
   > /tmp/digest-input.json
 
 printf 'wrote /tmp/digest-input.json (%s bytes, mode=%s, window=%s)\n' \

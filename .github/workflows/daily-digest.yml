@@ -43,6 +43,9 @@ jobs:
         env:
           GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
           GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
+          # Load-test metrics live on the staging Grafana instance
+          GRAFANA_STAGING_URL: ${{ secrets.GRAFANA_STAGING_URL }}
+          GRAFANA_STAGING_API_KEY: ${{ secrets.GRAFANA_STAGING_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           bash scripts/fetch-digest-data.sh daily "${{ inputs.window || '24h' }}"
@@ -59,8 +62,9 @@ jobs:
           INPUT: /tmp/digest-input.json (read it via Bash). Write the digest to stdout. Today is $(date -u +%Y-%m-%d)."
           set +e
           claude -p "$PROMPT" \
-            --allowed-tools 'Bash(cat:*) Bash(jq:*) Bash(curl:*) Bash(grep:*) Read Glob Grep' \
-            --max-turns 40 \
+            --model claude-fable-5 \
+            --allowed-tools 'Bash(cat:*) Bash(jq:*) Bash(curl:*) Bash(grep:*) Bash(bash scripts/grafana-query.sh:*) Read Glob Grep' \
+            --max-turns 100 \
             > /tmp/digest.md 2> /tmp/digest.err
           claude_exit=$?
           set -e
