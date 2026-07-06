@@ -23,7 +23,10 @@ import type { CacheService } from '../interfaces/redis/cache';
 import type { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound.service';
 import type { WabotOutboundService } from '../interfaces/wabot/outbound/outbound.service';
 import type { WhatsappPreloadJobDto } from './media-meta-data.dto';
-import { processWhatsappPreloadJob } from './whatsapp-preload.processor';
+import {
+  processWhatsappPreloadJob,
+  reloadJitterMs,
+} from './whatsapp-preload.processor';
 
 function makeJob(
   data: Partial<WhatsappPreloadJobDto> & {
@@ -316,11 +319,11 @@ describe('processWhatsappPreloadJob — happy path', () => {
     expect(cache.del).toHaveBeenCalledWith(
       'media:stid:क-letter-word-correct-last',
     );
-    // Reload job enqueued with 20d delay.
+    // Reload job enqueued with 20d delay + this media's deterministic jitter.
     expect(mockQueueAdd).toHaveBeenCalledWith(
       'reload-mm-1',
       expect.objectContaining({ media_metadata_id: 'mm-1', reload: true }),
-      { delay: 20 * 24 * 60 * 60 * 1000 },
+      { delay: 20 * 24 * 60 * 60 * 1000 + reloadJitterMs('mm-1') },
     );
   });
 
@@ -699,7 +702,95 @@ describe('processWhatsappPreloadJob — reload enqueue payload', () => {
       reload: true,
     });
     expect(mockQueueAdd.mock.calls[0][2]).toEqual({
-      delay: 20 * 24 * 60 * 60 * 1000,
+      delay: 20 * 24 * 60 * 60 * 1000 + reloadJitterMs('mm-1'),
+    });
+  });
+});
+
+describe('processWhatsappPreloadJob — reload gating (stid-null) + jitter', () => {
+  function setup(state_transition_id: string | null) {
+    const entity = {
+      id: 'mm-1',
+      rolled_back: false,
+      status: 'queued',
+      media_type: 'image',
+      state_transition_id,
+      user_id: null,
+    };
+    const repo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue(entity),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    });
+    const bucket = makeBucket(
+      jest.fn().mockResolvedValue({
+        buffer: Buffer.from('png'),
+        content_type: 'image/png',
+      }),
+    );
+    const wabot = makeWabot(
+      jest.fn().mockResolvedValue({ wa_media_url: 'https://wabot/m/1' }),
+    );
+    return { repo, bucket, wabot };
+  }
+
+  it('stid-null media (one-shot renders like report cards): marks ready but chains NO reload', async () => {
+    const { repo, bucket, wabot } = setup(null);
+
+    await processWhatsappPreloadJob(
+      makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-1', reload: false }),
+      bucket,
+      wabot,
+      makeCache(jest.fn()),
+      repo,
+    );
+
+    // The upload itself still happens and the media still goes ready…
+    expect(repo.update).toHaveBeenCalledWith('mm-1', {
+      wa_media_url: 'https://wabot/m/1',
+      status: 'ready',
+    });
+    // …but nothing is re-chained: unaddressable media is never re-sent.
+    expect(mockQueueAdd).not.toHaveBeenCalled();
+  });
+
+  it('stid-set media (library): reload chained at 20d + per-media jitter', async () => {
+    const { repo, bucket, wabot } = setup('क-letter-word-correct-last');
+
+    await processWhatsappPreloadJob(
+      makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-1', reload: false }),
+      bucket,
+      wabot,
+      makeCache(jest.fn()),
+      repo,
+    );
+
+    expect(mockQueueAdd).toHaveBeenCalledTimes(1);
+    const delay = (mockQueueAdd.mock.calls[0][2] as { delay: number }).delay;
+    expect(delay).toBe(20 * 24 * 60 * 60 * 1000 + reloadJitterMs('mm-1'));
+  });
+
+  describe('reloadJitterMs', () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    it('is deterministic: same media id always maps to the same offset', () => {
+      expect(reloadJitterMs('mm-1')).toBe(reloadJitterMs('mm-1'));
+    });
+
+    it('stays within [0, 24h)', () => {
+      for (const id of ['mm-1', 'a', 'b', 'c', 'long-uuid-4f2c9e81-77aa']) {
+        const j = reloadJitterMs(id);
+        expect(j).toBeGreaterThanOrEqual(0);
+        expect(j).toBeLessThan(DAY_MS);
+      }
+    });
+
+    it('spreads distinct ids to distinct slots (cohort dissolution)', () => {
+      const slots = new Set(
+        Array.from({ length: 50 }, (_, i) => reloadJitterMs(`media-${i}`)),
+      );
+      // 50 ids into 86.4M ms slots — collisions are astronomically unlikely;
+      // a clustered hash would collapse this set.
+      expect(slots.size).toBe(50);
     });
   });
 });
