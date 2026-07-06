@@ -55,8 +55,9 @@ jobs:
           ---
           INPUT: /tmp/digest-input.json (read it via Bash). Write the digest to stdout. Window: ${{ inputs.since }}, user_id: '${{ inputs.user_id }}'."
           claude -p "$PROMPT" \
-            --allowed-tools 'Bash(cat:*) Bash(jq:*) Bash(curl:*) Bash(grep:*) Read Glob Grep' \
-            --max-turns 20 \
+            --model claude-fable-5 \
+            --allowed-tools 'Bash(cat:*) Bash(jq:*) Bash(curl:*) Bash(grep:*) Bash(bash scripts/grafana-query.sh:*) Read Glob Grep' \
+            --max-turns 40 \
             > /tmp/digest.md
           test -s /tmp/digest.md
           head -1 /tmp/digest.md
