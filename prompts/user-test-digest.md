@@ -4,7 +4,7 @@ Tom (or another tester) just finished a user-test session on staging. You receiv
 
 Your job: tell the engineer what to fix before promoting staging → production. Narrate the session from the system's perspective.
 
-You have Bash + Read + Grep access. Follow up with Loki/Tempo queries against `$GRAFANA_URL/api/datasources/proxy/7/loki/api/v1/...` or `/api/datasources/proxy/10/api/search` (Bearer `$GRAFANA_API_KEY`) when needed.
+You have Bash + Read + Grep access. Follow up with Loki/Tempo queries against `$GRAFANA_URL/api/datasources/proxy/uid/loki/loki/api/v1/...` or `/api/datasources/proxy/uid/tempo/api/search` (Bearer `$GRAFANA_API_KEY`) when needed.
 
 Write the digest as **GitHub-flavored Markdown**, to stdout, with no preamble. Required structure:
 

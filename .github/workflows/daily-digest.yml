@@ -60,7 +60,7 @@ jobs:
           set +e
           claude -p "$PROMPT" \
             --allowed-tools 'Bash(cat:*) Bash(jq:*) Bash(curl:*) Bash(grep:*) Read Glob Grep' \
-            --max-turns 20 \
+            --max-turns 40 \
             > /tmp/digest.md 2> /tmp/digest.err
           claude_exit=$?
           set -e
@@ -123,3 +123,23 @@ jobs:
             /tmp/digest.html
             /tmp/digest.err
           retention-days: 30
+
+      # A failed digest must still produce an email — silence reads as "all OK".
+      - name: Notify failure
+        if: failure()
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          DIGEST_RECIPIENTS: ${{ secrets.DIGEST_RECIPIENTS }}
+        run: |
+          recipients_json=$(printf '%s' "$DIGEST_RECIPIENTS" | jq -R 'split(",")')
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body=$(jq -n \
+            --arg from 'noreply@padhaipal.com' \
+            --argjson to "$recipients_json" \
+            --arg subject "[FAILED] PadhaiPal daily digest — $(date -u +%Y-%m-%d)" \
+            --arg html "<p>Digest run failed before an email could be produced: <a href=\"${run_url}\">view run</a></p>" \
+            '{from:$from, to:$to, subject:$subject, html:$html}')
+          curl -fsS -X POST 'https://api.resend.com/emails' \
+            -H "Authorization: Bearer ${RESEND_API_KEY}" \
+            -H 'Content-Type: application/json' \
+            -d "$body"

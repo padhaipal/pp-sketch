@@ -39,8 +39,8 @@ jobs:
 
       - name: Fetch digest input
         env:
-          GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
-          GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
+          GRAFANA_URL: ${{ secrets.GRAFANA_STAGING_URL }}
+          GRAFANA_API_KEY: ${{ secrets.GRAFANA_STAGING_API_KEY }}
         run: |
           bash scripts/fetch-digest-data.sh user-test \
             "${{ inputs.since }}" "${{ inputs.user_id }}"
@@ -48,8 +48,8 @@ jobs:
       - name: Summarize with Claude
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
-          GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
+          GRAFANA_URL: ${{ secrets.GRAFANA_STAGING_URL }}
+          GRAFANA_API_KEY: ${{ secrets.GRAFANA_STAGING_API_KEY }}
         run: |
           PROMPT="$(cat prompts/user-test-digest.md)
           ---

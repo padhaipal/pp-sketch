@@ -21,14 +21,14 @@ You receive a pre-aggregated JSON file at `/tmp/digest-input.json`. Shape:
 
 Read it with `cat /tmp/digest-input.json | jq …`. The whole file is small enough to read once — start there.
 
-If something is missing, you may issue follow-up Loki queries against `$GRAFANA_URL/api/datasources/proxy/7/loki/api/v1/...` with `Authorization: Bearer $GRAFANA_API_KEY`. Datasource ids: 7 = Loki, 8 = Prometheus (metrics), 10 = Tempo. Loki indexed labels are ONLY `service_name` and `deployment_environment`; severity, log_context etc. are structured metadata — filter via `| label=~"…"` pipe form, NOT in the stream selector. Use sparingly.
+If something is missing, you may issue follow-up Loki queries against `$GRAFANA_URL/api/datasources/proxy/uid/loki/loki/api/v1/...` with `Authorization: Bearer $GRAFANA_API_KEY`. Datasource uids: `loki`, `prometheus` (metrics), `tempo` — address via `/api/datasources/proxy/uid/<uid>/…` (Loki's proxied path repeats `loki`). Loki indexed labels are ONLY `service_name` and `deployment_environment`; severity, log_context etc. are structured metadata — filter via `| label=~"…"` pipe form, NOT in the stream selector. Use sparingly.
 
 Load-test signal lives in Prometheus: histogram `wabot_message_e2e_duration_ms_milliseconds` (`_bucket` / `_count` / `_sum`), labeled by:
   - `outcome` — `success` (pp-sketch accepted the queued message) / `delivered` (WhatsApp send succeeded) / `inflight-expired` / `whatsapp-error` / `fallback`
   - `load_test` — `"true"` for synthetic artillery traffic, `"false"` for real traffic. Label is ALWAYS present.
   - `test_phase` — `"phase_1"` (first message per phone, exercises onboarding) / `"phase_2"` (second message per phone, exercises lesson flow). Only set on `load_test="true"` series.
 
-Records inbound-msg → outbound-dispatch latency end-to-end. Query via `$GRAFANA_URL/api/datasources/proxy/8/api/v1/query_range`.
+Records inbound-msg → outbound-dispatch latency end-to-end. Query via `$GRAFANA_URL/api/datasources/proxy/uid/prometheus/api/v1/query_range`.
 
 pp-sketch records a parallel histogram `pp_wabot_inbound_job_duration_ms_milliseconds` for pp-internal stage latency (BullMQ dequeue → job completion) with the same `load_test` / `test_phase` labels plus its own `outcome` set (`success` / `skipped` / `error`).
 
@@ -74,7 +74,7 @@ At most one sentence on the single most surprising/cross-cutting observation tha
 Skip this section entirely if `gh_runs` contains no `Staging post-merge` workflow run that completed within the window. Otherwise:
 
 1. Identify the most recent such run as a sanity check that load-test traffic should exist in the window. (You do NOT use the run's timestamps to filter metrics — the `load_test="true"` label does that cleanly.)
-2. Query Prometheus (datasource id=8) for `wabot_message_e2e_duration_ms_milliseconds_bucket{load_test="true"}` over the window, grouped by `test_phase` and `outcome`. For each of `test_phase="phase_1"` and `test_phase="phase_2"` separately, compute p50 / p95 / p99 across the `delivered` outcome via `histogram_quantile`, and sum counts of non-`delivered` outcomes. If the metric is absent / 0 samples for either phase, say so plainly for that phase and continue.
+2. Query Prometheus (datasource uid=`prometheus`) for `wabot_message_e2e_duration_ms_milliseconds_bucket{load_test="true"}` over the window, grouped by `test_phase` and `outcome`. For each of `test_phase="phase_1"` and `test_phase="phase_2"` separately, compute p50 / p95 / p99 across the `delivered` outcome via `histogram_quantile`, and sum counts of non-`delivered` outcomes. If the metric is absent / 0 samples for either phase, say so plainly for that phase and continue.
 
 Output two short paragraphs (≤60 words each), one per phase, each labeled with its meaning:
 - **Phase 1 (onboarding)** — first message per phone. Stats: delivered count, non-delivered breakdown, e2e p50/p95/p99 ms.

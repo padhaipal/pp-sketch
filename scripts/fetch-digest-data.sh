@@ -42,12 +42,12 @@ fi
 
 auth_hdr="Authorization: Bearer ${GRAFANA_API_KEY}"
 
-# Loki datasource id. Viewer-role service-account tokens can query through the
-# proxy but can't list /api/datasources, so we hardcode the id we already
-# discovered (override via env if it ever moves).
-loki_ds_id="${LOKI_DATASOURCE_ID:-7}"
-loki_proxy="${grafana_url}/api/datasources/proxy/${loki_ds_id}/loki/api/v1"
-echo "Using Loki datasource id=${loki_ds_id} via ${loki_proxy}" >&2
+# Loki datasource uid. Self-hosted otel-lgtm provisions stable uids
+# (loki/prometheus/tempo) on every instance, so uid-addressing works for both
+# prod and staging (override via env if it ever moves).
+loki_ds_uid="${LOKI_DATASOURCE_UID:-loki}"
+loki_proxy="${grafana_url}/api/datasources/proxy/uid/${loki_ds_uid}/loki/api/v1"
+echo "Using Loki datasource uid=${loki_ds_uid} via ${loki_proxy}" >&2
 
 # Body separator used by curl to write http status on its own line
 SEP='__HTTP_STATUS__'
@@ -101,14 +101,21 @@ if [[ -n "$user_id" ]]; then
 fi
 primary_raw=$(loki_query_range "$primary_query" "$start_ns" "$now_ns" 5000)
 primary=$(require_json "primary loki query" "$primary_raw")
-echo "primary: status=$(printf '%s' "$primary" | jq -r '.status // "n/a"') streams=$(printf '%s' "$primary" | jq -r '.data.result | length') sample=$(printf '%s' "$primary" | jq -rc '.data.result[0].stream // {}' 2>/dev/null | head -c 200)" >&2
+primary_status=$(printf '%s' "$primary" | jq -r '.status // "error"')
+if [[ "$primary_status" != "success" ]]; then
+  echo "ERROR: primary loki query returned status=${primary_status}. Body (first 500B):" >&2
+  printf '%s' "$primary" | head -c 500 >&2
+  echo >&2
+  exit 1
+fi
+echo "primary: status=${primary_status} streams=$(printf '%s' "$primary" | jq -r '.data.result | length') sample=$(printf '%s' "$primary" | jq -rc '.data.result[0].stream // {}' 2>/dev/null | head -c 200)" >&2
 
 # Pre-aggregate primary logs so Claude doesn't have to digest raw multi-MB JSON.
 #   summary: counts by service × env × severity
 #   clusters: groups by (service, env, severity, first 80 chars of message),
 #             with count + up to 3 sample lines per cluster, sorted by count desc.
 primary_compact=$(printf '%s' "$primary" | jq -c '
-  .data.result as $streams
+  (.data.result // []) as $streams
   | {
       total_streams: ($streams | length),
       total_lines: ([$streams[].values | length] | add // 0),
