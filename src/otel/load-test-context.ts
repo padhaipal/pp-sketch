@@ -17,3 +17,14 @@ export function isLoadTestCarrier(carrier: OtelCarrier | undefined): boolean {
   const baggage = propagation.getBaggage(ctx);
   return baggage?.getEntry(BAGGAGE_LOAD_TEST)?.value === 'true';
 }
+
+// Prefix gate: is this external id (E.164 phone) a synthetic load-test user?
+// Same predicate wabot applies to its outbound stubs. Lives here (not in
+// stt/) because it gates any WhatsApp-boundary call, not just STT.
+export function isLoadTestUser(userExternalId: string | undefined): boolean {
+  const prefix = process.env.LOAD_TEST_PHONE_PREFIX;
+  if (!prefix || prefix.length === 0) return false;
+  return (
+    typeof userExternalId === 'string' && userExternalId.startsWith(prefix)
+  );
+}
