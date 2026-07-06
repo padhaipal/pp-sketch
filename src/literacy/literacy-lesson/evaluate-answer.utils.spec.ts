@@ -426,13 +426,46 @@ describe('evaluate-answer.utils', () => {
       );
     });
 
-    /* -- bare matra (cCount === 0) edge case -- */
-    it('returns false for a bare matra correct without a hardcode (e.g. ृ vs ृ)', () => {
-      // Exposes that markLetter cannot handle the trivial self-match for
-      // a matra-only correctAnswer that lacks a hardcoded entry.
-      expect(markLetter({ correctAnswer: 'ृ', studentAnswer: 'ृ' })).toBe(
-        false,
-      );
+    /* -- bare matra (cCount === 0): family vowels and vowel-hardcode mirrors -- */
+    it.each([
+      // family-equivalent vowel
+      ['ा', 'अ'],
+      ['े', 'ऐ'],
+      ['ै', 'ए'],
+      ['ो', 'औ'],
+      ['ौ', 'ओ'],
+      // mirrors of the independent vowel's hardcodes
+      ['ो', 'ओह'],
+      ['ो', 'आओ'],
+      ['ौ', 'ओह'],
+      ['ै', 'है'],
+      ['ै', 'हाय'],
+      ['े', 'ऐसे'],
+      // family-transitive mirrors (े ~ ऐ family)
+      ['े', 'है'],
+      ['े', 'हाय'],
+      ['े', 'आए'],
+      ['ै', 'ऐसे'],
+      // anusvara
+      ['ं', 'अं'],
+      ['ं', 'आं'],
+      ['ं', 'हं'],
+    ])('accepts bare-matra pair correct=%s student=%s', (c, s) => {
+      expect(markLetter({ correctAnswer: c, studentAnswer: s })).toBe(true);
+    });
+
+    it('accepts a bare matra echoed exactly (e.g. ृ vs ृ)', () => {
+      expect(markLetter({ correctAnswer: 'ृ', studentAnswer: 'ृ' })).toBe(true);
+    });
+
+    it.each([
+      ['ि', 'ए'], // cross-family vowel stays rejected
+      ['ो', 'आ'],
+      ['ै', 'ओ'],
+      ['ं', 'अ'], // bare अ is not accepted for anusvara
+      ['ी', 'ि'], // bare-matra echo is exact-only, not family-wide
+    ])('still rejects bare-matra pair correct=%s student=%s', (c, s) => {
+      expect(markLetter({ correctAnswer: c, studentAnswer: s })).toBe(false);
     });
   });
 

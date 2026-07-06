@@ -589,6 +589,44 @@ class EvaluateAnswer {
       if (cleanedCorrectAnswer === 'व' && cleaned === 'वाह') return true;
       if (cleanedCorrectAnswer === 'भ' && cleaned === 'भाव') return true;
 
+      // Standalone-matra correct answers have cCount === 0 and fall through
+      // the phoneme/conjunct routing below, so family equivalence never runs
+      // for them — only these hardcodes can accept an answer.
+
+      // Family-equivalent vowel (markWord already accepts these pairs).
+      if (cleanedCorrectAnswer === 'ा' && cleaned === 'अ') return true;
+      if (cleanedCorrectAnswer === 'े' && cleaned === 'ऐ') return true;
+      if (cleanedCorrectAnswer === 'ै' && cleaned === 'ए') return true;
+      if (cleanedCorrectAnswer === 'ो' && cleaned === 'औ') return true;
+      if (cleanedCorrectAnswer === 'ौ' && cleaned === 'ओ') return true;
+
+      // Mirrors of the independent vowel's hardcodes above (a matra in
+      // isolation is pronounced the same as its vowel).
+      if (cleanedCorrectAnswer === 'ो' && cleaned === 'ओह') return true;
+      if (cleanedCorrectAnswer === 'ो' && cleaned === 'आओ') return true;
+      if (cleanedCorrectAnswer === 'ौ' && cleaned === 'ओह') return true;
+      if (cleanedCorrectAnswer === 'ै' && cleaned === 'है') return true;
+      if (cleanedCorrectAnswer === 'ै' && cleaned === 'हाय') return true;
+      if (cleanedCorrectAnswer === 'े' && cleaned === 'ऐसे') return true;
+
+      // Family-transitive mirrors (े and ै share the ए/ऐ family row).
+      if (cleanedCorrectAnswer === 'े' && cleaned === 'है') return true;
+      if (cleanedCorrectAnswer === 'े' && cleaned === 'हाय') return true;
+      if (cleanedCorrectAnswer === 'े' && cleaned === 'आए') return true;
+      if (cleanedCorrectAnswer === 'ै' && cleaned === 'ऐसे') return true;
+
+      // Anusvara: without these no answer can ever be accepted for 'ं'.
+      if (cleanedCorrectAnswer === 'ं' && cleaned === 'अं') return true;
+      if (cleanedCorrectAnswer === 'ं' && cleaned === 'आं') return true;
+      if (cleanedCorrectAnswer === 'ं' && cleaned === 'हं') return true;
+
+      // Bare-matra echo: cCount === 0 skips markPhoneme's exact-match path.
+      if (
+        VOWEL_MATRA_SET.has(cleanedCorrectAnswer) &&
+        cleaned === cleanedCorrectAnswer
+      )
+        return true;
+
       if (cCount === 1) {
         return this.markPhoneme(cleanedCorrectAnswer, cleaned);
       } else if (cCount === 2) {
