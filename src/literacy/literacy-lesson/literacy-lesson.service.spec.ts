@@ -1480,3 +1480,144 @@ describe('LiteracyLessonService — reviewed-vs-baseline scoring sign (L403/L406
     expect(word).toBe('सूरज');
   });
 });
+
+// ─── selectNextWord SQL — timed-out words must not count toward progression ──
+//
+// Regression guard for the word-length timeout bug: a user could time out on
+// a word (leaving rows but never completing it), get a fresh word, time out
+// again, and after 3 such words the old query counted 3 unique words in the
+// add window and promoted them to longer words they never read. The fix
+// counts a word in the progression windows only when it has a row whose
+// xstate snapshot reached status 'done' (the machine's `complete` final
+// state). dataSource.query is mocked here, so these tests assert the query
+// shape directly — if the snapshot format or the machine's final state ever
+// changes, update the SQL and these assertions together.
+
+describe('LiteracyLessonService — selectNextWord SQL (timeout progression regression)', () => {
+  async function capturedSql(): Promise<string> {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue(null);
+    mockActorGetSnapshot.mockReturnValue(happySnapshot());
+    const dsQuery = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          letter_scores: [],
+          recent_words: [],
+          unique_in_add_window: 0,
+          unique_in_keep_window: 0,
+          recent_row_count: 0,
+          distinct_word_count: 0,
+        },
+      ])
+      .mockResolvedValueOnce([{ id: 'lls-1' }]);
+    const { svc } = makeService({ repo, dsQuery });
+    await svc.processAnswer({ user, user_message_id: 'mm-1' });
+    // First round-trip is selectNextWord's single query.
+    return (dsQuery.mock.calls[0][0] as string).replace(/\s+/g, ' ');
+  }
+
+  it('derives is_done from the xstate snapshot final-state status', async () => {
+    const sql = await capturedSql();
+    expect(sql).toContain("(snapshot->>'status' = 'done') AS is_done");
+  });
+
+  it('add window counts only completed words', async () => {
+    const sql = await capturedSql();
+    expect(sql).toContain(
+      'COUNT(DISTINCT word)::int FROM recent_rows WHERE rn <= $4 AND is_done',
+    );
+  });
+
+  it('keep window counts only completed words', async () => {
+    const sql = await capturedSql();
+    expect(sql).toContain(
+      'COUNT(DISTINCT word)::int FROM recent_rows WHERE is_done',
+    );
+  });
+
+  it('recent_row_count still counts ALL rows — the new-user gate must see timed-out attempts', async () => {
+    const sql = await capturedSql();
+    expect(sql).toContain(
+      'COUNT(*)::int FROM recent_rows), 0) AS recent_row_count',
+    );
+  });
+
+  it('recent-word exclusion list is NOT completion-filtered — a timed-out word must not repeat immediately', async () => {
+    const sql = await capturedSql();
+    const cte = sql.slice(
+      sql.indexOf('recent_distinct_words AS ('),
+      sql.indexOf('recent_rows AS ('),
+    );
+    expect(cte.length).toBeGreaterThan(0);
+    expect(cte).not.toContain('done');
+  });
+});
+
+// ─── word-length decisions on timeout-shaped histories ──────────────────────
+//
+// Exact max-length assertions (via the pp.lesson.word.max_length span
+// attribute) for the DB-row shapes the fixed query now produces.
+
+describe('LiteracyLessonService — word-length decisions on timeout-shaped histories', () => {
+  function expectMaxLength(len: number) {
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.word.max_length',
+      len,
+    ]);
+  }
+
+  it('serial timeouts: window full of rows but zero completed words → length regresses', async () => {
+    // Pre-fix a 3-timed-out-word history returned unique_in_add_window: 3
+    // and promoted the user; post-fix the query returns 0 completed words.
+    await selectedWord(
+      freshRow({
+        distinct_word_count: 5,
+        recent_row_count: 8,
+        recent_words: ['कमल'], // len 3
+        unique_in_add_window: 0,
+        unique_in_keep_window: 0,
+      }),
+    );
+    expectMaxLength(2);
+  });
+
+  it('serial timeouts at the floor: regression never goes below 2', async () => {
+    await selectedWord(
+      freshRow({
+        distinct_word_count: 5,
+        recent_row_count: 8,
+        recent_words: ['अब'], // len 2, already at floor
+        unique_in_add_window: 0,
+        unique_in_keep_window: 0,
+      }),
+    );
+    expectMaxLength(2);
+  });
+
+  it('3 completed words inside the add window → length increases by exactly 1', async () => {
+    await selectedWord(
+      freshRow({
+        distinct_word_count: 5,
+        recent_row_count: 8,
+        recent_words: ['कमल'], // len 3
+        unique_in_add_window: 3,
+        unique_in_keep_window: 3,
+      }),
+    );
+    expectMaxLength(4);
+  });
+
+  it('completions only in the keep window (recent timeouts after older completions) → length holds', async () => {
+    await selectedWord(
+      freshRow({
+        distinct_word_count: 5,
+        recent_row_count: 15,
+        recent_words: ['कमल'], // len 3
+        unique_in_add_window: 1,
+        unique_in_keep_window: 3,
+      }),
+    );
+    expectMaxLength(3);
+  });
+});
