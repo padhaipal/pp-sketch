@@ -16,9 +16,7 @@ import {
   createQueue,
   createWorker,
   QUEUE_NAMES,
-  queueRedisConnection,
 } from './interfaces/redis/queues';
-import { Worker } from 'bullmq';
 import { processWabotInboundJob } from './interfaces/wabot/inbound/inbound.processor';
 import { processHeygenInboundJob } from './interfaces/heygen/inbound/inbound.processor';
 import { processHeygenGenerateJob } from './interfaces/heygen/outbound/outbound.service';
@@ -144,6 +142,10 @@ async function bootstrap() {
     await processHeygenInboundJob(job, mediaBucket, mediaRepo);
   });
 
+  // I/O-bound (S3 get + wabot→Meta upload, ~0.9s real / ~0.3s stubbed).
+  // Media uploads do NOT count against the WhatsApp message-throughput
+  // budget; the 30/s limiter sizes to what wabot's single instance
+  // comfortably proxies. Concurrency ≈ rate × ~0.9s upload latency.
   createWorker<WhatsappPreloadJobDto>(
     QUEUE_NAMES.WHATSAPP_PRELOAD,
     async (job) => {
@@ -154,6 +156,10 @@ async function bootstrap() {
         cacheService,
         mediaRepo,
       );
+    },
+    {
+      concurrency: 32,
+      limiter: { max: 30, duration: 1000 },
     },
   );
 
@@ -182,14 +188,20 @@ async function bootstrap() {
     logger.error(`worker(${QUEUE_NAMES.NOTIFIER}) ERROR ${err.message}`),
   );
 
-  const notifierSendWorker = new Worker<NotifierSendJobData>(
+  // createWorker (not raw Worker) so instrumentWorker emits pp.bullmq.*
+  // metrics — the raw construction left this queue invisible in Prometheus.
+  // HIGH-tier sizing (WhatsApp 1,000 mps): ~3 messages per notification job,
+  // limiter 100 jobs/s ≈ 300 mps; the binding constraint at this rate is
+  // wabot's single instance, not Meta. Concurrency ≈ rate × ~2.5s job
+  // latency (sequential per-item Graph calls).
+  const notifierSendWorker = createWorker<NotifierSendJobData>(
     QUEUE_NAMES.NOTIFIER_SEND,
     async (job) => {
       await processNotifierSendJob(job, wabotOutbound);
     },
     {
-      connection: queueRedisConnection,
-      limiter: { max: 2, duration: 1000 },
+      concurrency: 256,
+      limiter: { max: 100, duration: 1000 },
     },
   );
   notifierSendWorker.on('failed', (job, err) =>
@@ -225,7 +237,12 @@ async function bootstrap() {
     logger.error(`worker(${QUEUE_NAMES.MORNING_UPDATE}) ERROR ${err.message}`),
   );
 
-  const morningUpdateSendWorker = new Worker<MorningUpdateSendJobData>(
+  // createWorker for pp.bullmq.* metrics (was a raw Worker — invisible in
+  // Prometheus, which is how the Jul-3 requeue storm went unmetered).
+  // HIGH-tier sizing: limiter 100 jobs/s ≈ 300 mps of sends; the binding
+  // constraint is CPU — ~0.2s sharp render/job caps ~120/s on 24 vCPU.
+  // Concurrency ≈ rate × ~1.7s job latency (queries + render + send).
+  const morningUpdateSendWorker = createWorker<MorningUpdateSendJobData>(
     QUEUE_NAMES.MORNING_UPDATE_SEND,
     async (job) => {
       await processMorningUpdateSendJob(
@@ -237,8 +254,8 @@ async function bootstrap() {
       );
     },
     {
-      connection: queueRedisConnection,
-      concurrency: 4,
+      concurrency: 128,
+      limiter: { max: 100, duration: 1000 },
     },
   );
   morningUpdateSendWorker.on('failed', (job, err) =>
@@ -252,6 +269,8 @@ async function bootstrap() {
     ),
   );
 
+  // Arrivals self-spread (each job fires 23h55m after that user's own last
+  // message) so there is no herd; 32 just absorbs coincidental bursts.
   const hailMaryWorker = createWorker<HailMaryJobData>(
     QUEUE_NAMES.HAIL_MARY,
     async (job) => {
@@ -264,6 +283,7 @@ async function bootstrap() {
         wabotOutbound,
       );
     },
+    { concurrency: 32 },
   );
   hailMaryWorker.on('failed', (job, err) =>
     logger.error(

@@ -69,11 +69,13 @@ export const DEFAULT_JOB_OPTIONS: Record<string, JobsOptions> = {
     removeOnComplete: true,
     removeOnFail: { count: 500 },
   },
-  // Per-user job. Worker requeues itself with a 1 s delay when the report card
-  // is still rendering — high attempt count tolerates this and WhatsApp 130429.
+  // Per-user job. Worker requeues itself (throw) while the report card
+  // preload is still in flight — exponential backoff covers ~43 min of
+  // waiting in 10 attempts (gaps 5s, 10s, 20s, … 1280s) instead of the
+  // old 60×1s spin that produced error-log storms and gave up at 60s.
   [QUEUE_NAMES.MORNING_UPDATE_SEND]: {
-    attempts: 60,
-    backoff: { type: 'fixed', delay: 1000 },
+    attempts: 10,
+    backoff: { type: 'exponential', delay: 5000 },
     removeOnComplete: true,
     removeOnFail: { count: 5000 },
   },
