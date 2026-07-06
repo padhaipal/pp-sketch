@@ -181,6 +181,34 @@ describe('MediaMetaDataService.createWhatsappAudioMedia', () => {
     expect(out.s3_key).toBe('s3/key');
   });
 
+  it('passes the owner external_id to wabot downloadMedia (load-test prefix gate)', async () => {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue(null);
+    repo.save.mockImplementation(async (e) => e);
+    const wabot = {
+      downloadMedia: jest.fn().mockResolvedValue({
+        stream: makeAsyncStream(Buffer.from('audio')),
+        content_type: 'audio/mpeg',
+      }),
+    };
+    const bucket = { stream: jest.fn().mockResolvedValue('s3/key') };
+    const sarvam = { run: jest.fn().mockResolvedValue({ id: 'stt-1' }) };
+    const azure = { run: jest.fn().mockResolvedValue({ id: 'stt-2' }) };
+    const { service } = makeService({ repo, wabot, bucket, sarvam, azure });
+
+    await service.createWhatsappAudioMedia({
+      wa_media_url: 'https://wa/m/1',
+      user: { id: 'u1', external_id: '911000123456' } as never,
+      otel_carrier: carrier,
+    });
+
+    expect(wabot.downloadMedia).toHaveBeenCalledWith(
+      'https://wa/m/1',
+      carrier,
+      '911000123456',
+    );
+  });
+
   it('marks entity failed and rethrows when S3 upload fails', async () => {
     const repo = makeRepo();
     repo.findOneBy.mockResolvedValue(null);

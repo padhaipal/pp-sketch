@@ -210,6 +210,22 @@ describe('WabotOutboundService.downloadMedia', () => {
     expect(out.content_type).toBe('application/octet-stream');
   });
 
+  it('includes user_external_id in the POST body when provided', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      fakeResponse({
+        status: 200,
+        body: {},
+        headers: { 'content-type': 'audio/ogg' },
+      }),
+    );
+    const svc = new WabotOutboundService();
+    await svc.downloadMedia('https://cdn/v.mp4', carrier, '911000123456');
+    const [, init] = (global.fetch as jest.Mock).mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.user_external_id).toBe('911000123456');
+    expect(body.media_url).toBe('https://cdn/v.mp4');
+  });
+
   it('throws on 4XX (and records exception)', async () => {
     global.fetch = jest.fn().mockResolvedValue(fakeResponse({ status: 404 }));
     const svc = new WabotOutboundService();
@@ -274,6 +290,25 @@ describe('WabotOutboundService.uploadMedia', () => {
       0xde, 0xad, 0xbe, 0xef,
     ]);
     expect(mockSpanEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('appends &user= to the query when user_external_id is provided', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      fakeResponse({
+        status: 200,
+        json: { wa_media_url: 'https://wabot.test/m/u' },
+      }),
+    );
+    const svc = new WabotOutboundService();
+    await svc.uploadMedia(
+      Buffer.from([0]),
+      'image/png',
+      'image',
+      carrier,
+      '911000123456',
+    );
+    const [url] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(url).toContain('&user=911000123456');
   });
 
   it('throws on 4XX after reading the response text for the log', async () => {

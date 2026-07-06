@@ -151,6 +151,7 @@ export class MediaMetaDataService {
       await this.wabotOutbound.downloadMedia(
         validated.wa_media_url,
         validated.otel_carrier,
+        userExternalId,
       );
 
     // Buffer the stream so we can fan it out

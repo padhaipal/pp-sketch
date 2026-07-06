@@ -131,6 +131,9 @@ export class WabotOutboundService {
   async downloadMedia(
     media_url: string,
     otel_carrier: OtelCarrier,
+    // Owner of the media when user-scoped; wabot stubs the real WhatsApp
+    // fetch for load-test users (prefix gate).
+    user_external_id?: string,
   ): Promise<{ stream: NodeJS.ReadableStream; content_type: string }> {
     return tracer.startActiveSpan(
       'wabot.outbound.downloadMedia',
@@ -146,6 +149,7 @@ export class WabotOutboundService {
             },
             body: JSON.stringify({
               media_url,
+              user_external_id,
               otel: { carrier: otel_carrier },
             }),
           });
@@ -190,6 +194,10 @@ export class WabotOutboundService {
     content_type: string,
     media_type: string,
     otel_carrier: OtelCarrier,
+    // Owner of the media when user-scoped (report-card preloads); absent for
+    // library media. wabot stubs the real upload for load-test users. Body is
+    // raw bytes, so this rides the query string like `otel`.
+    user_external_id?: string,
   ): Promise<{ wa_media_url: string }> {
     return tracer.startActiveSpan(
       'wabot.outbound.uploadMedia',
@@ -199,7 +207,10 @@ export class WabotOutboundService {
 
         try {
           const otelParam = encodeURIComponent(JSON.stringify(otel_carrier));
-          const url = `${this.baseUrl}/uploadMedia?otel=${otelParam}`;
+          const userParam = user_external_id
+            ? `&user=${encodeURIComponent(user_external_id)}`
+            : '';
+          const url = `${this.baseUrl}/uploadMedia?otel=${otelParam}${userParam}`;
           const ab = new ArrayBuffer(data.byteLength);
           new Uint8Array(ab).set(data);
           let response: Response;

@@ -17,13 +17,9 @@ import {
 
 const STUB_TRANSCRIPT = '<load-test stub transcript>';
 
-export function isLoadTestUser(userExternalId: string | undefined): boolean {
-  const prefix = process.env.LOAD_TEST_PHONE_PREFIX;
-  if (!prefix || prefix.length === 0) return false;
-  return (
-    typeof userExternalId === 'string' && userExternalId.startsWith(prefix)
-  );
-}
+// Moved to otel/load-test-context.ts (it gates any WhatsApp-boundary call,
+// not just STT); re-exported here so existing importers keep working.
+export { isLoadTestUser } from '../../otel/load-test-context';
 
 export async function loadTestDelay(): Promise<void> {
   const ms = 200 + Math.floor(Math.random() * 200);

@@ -705,3 +705,99 @@ describe('processWhatsappPreloadJob — cache invalidation key', () => {
     expect(cacheDel).toHaveBeenCalledWith('media:stid:कमल-start-word-initial');
   });
 });
+
+describe('processWhatsappPreloadJob — owner external_id pass-through', () => {
+  function setup(opts: { user_id?: string | null; managerQuery?: jest.Mock }) {
+    const entity = {
+      id: 'mm-1',
+      rolled_back: false,
+      status: 'queued',
+      media_type: 'image',
+      state_transition_id: null,
+      user_id: opts.user_id ?? null,
+    };
+    const managerQuery =
+      opts.managerQuery ??
+      jest.fn().mockResolvedValue([{ external_id: '911000123456' }]);
+    const repo = {
+      findOneBy: jest.fn().mockResolvedValue(entity),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      manager: { query: managerQuery },
+    } as unknown as Repository<MediaMetaDataEntity>;
+    const bucket = makeBucket(
+      jest.fn().mockResolvedValue({
+        buffer: Buffer.from('png'),
+        content_type: 'image/png',
+      }),
+    );
+    const upload = jest
+      .fn()
+      .mockResolvedValue({ wa_media_url: 'https://wabot/m/1' });
+    return { repo, bucket, upload, managerQuery };
+  }
+
+  it('user-scoped media: resolves the owner and passes external_id to uploadMedia', async () => {
+    const { repo, bucket, upload, managerQuery } = setup({ user_id: 'u-1' });
+
+    await processWhatsappPreloadJob(
+      makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-1', reload: false }),
+      bucket,
+      makeWabot(upload),
+      makeCache(jest.fn()),
+      repo,
+    );
+
+    expect(managerQuery).toHaveBeenCalledWith(expect.any(String), ['u-1']);
+    expect(upload).toHaveBeenCalledWith(
+      Buffer.from('png'),
+      'image/png',
+      'image',
+      { traceparent: 'tp' },
+      '911000123456',
+    );
+  });
+
+  it('library media (user_id null): skips the lookup and passes undefined', async () => {
+    const { repo, bucket, upload, managerQuery } = setup({ user_id: null });
+
+    await processWhatsappPreloadJob(
+      makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-1', reload: false }),
+      bucket,
+      makeWabot(upload),
+      makeCache(jest.fn()),
+      repo,
+    );
+
+    expect(managerQuery).not.toHaveBeenCalled();
+    expect(upload).toHaveBeenCalledWith(
+      Buffer.from('png'),
+      'image/png',
+      'image',
+      { traceparent: 'tp' },
+      undefined,
+    );
+  });
+
+  it('owner lookup failure: degrades to undefined (real upload) instead of throwing', async () => {
+    const { repo, bucket, upload } = setup({
+      user_id: 'u-1',
+      managerQuery: jest.fn().mockRejectedValue(new Error('pg down')),
+    });
+
+    await processWhatsappPreloadJob(
+      makeJob({ media_metadata_id: 'mm-1', s3_key: 's3-1', reload: false }),
+      bucket,
+      makeWabot(upload),
+      makeCache(jest.fn()),
+      repo,
+    );
+
+    expect(upload).toHaveBeenCalledWith(
+      Buffer.from('png'),
+      'image/png',
+      'image',
+      { traceparent: 'tp' },
+      undefined,
+    );
+  });
+});

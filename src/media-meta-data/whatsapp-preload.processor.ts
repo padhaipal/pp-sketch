@@ -73,6 +73,24 @@ export async function processWhatsappPreloadJob(
     // 4. Determine WhatsApp media type
     const media_type = entity.media_type;
 
+    // 4b. Resolve the owner's external id for user-scoped media so wabot can
+    // prefix-gate its load-test stub (library media has no user → real
+    // upload). Lookup failure degrades to a real upload, never a crash.
+    let user_external_id: string | undefined;
+    if (entity.user_id) {
+      try {
+        const rows: { external_id: string }[] = await mediaRepo.manager.query(
+          `SELECT external_id FROM users WHERE id = $1`,
+          [entity.user_id],
+        );
+        user_external_id = rows[0]?.external_id;
+      } catch (err) {
+        logger.warn(
+          `owner lookup failed for ${media_metadata_id}: ${(err as Error).message}`,
+        );
+      }
+    }
+
     // 5. Upload to WhatsApp
     let wa_media_url: string;
     try {
@@ -81,6 +99,7 @@ export async function processWhatsappPreloadJob(
         content_type,
         media_type,
         injectCarrier(span),
+        user_external_id,
       );
       wa_media_url = result.wa_media_url;
     } catch (err) {
