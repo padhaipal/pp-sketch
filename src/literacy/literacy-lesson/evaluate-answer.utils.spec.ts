@@ -206,21 +206,27 @@ describe('evaluate-answer.utils', () => {
       });
     });
 
-    /* -- ण / न / र families: ण equates to both न and र, but न and र do
-       not transitively equate (FAMILIES has ['ण','न'] and ['ण','र'] as
-       separate rows). -- */
+    /* -- ण / न / र / ल families: ण equates to न, and ल equates to र,
+       but the groups do not transitively equate (FAMILIES has ['ण','न']
+       and ['ल','र'] as separate rows). -- */
     it('treats ण and न as the same family', () => {
       expect(markWord({ correctAnswer: 'णन', studentAnswer: 'नण' })).toBe(true);
     });
 
-    it('treats ण and र as the same family', () => {
-      expect(markWord({ correctAnswer: 'णर', studentAnswer: 'रण' })).toBe(true);
+    it('does NOT treat ण and र as the same family', () => {
+      expect(markWord({ correctAnswer: 'णर', studentAnswer: 'रण' })).toBe(
+        false,
+      );
     });
 
     it('does NOT treat न and र as the same family', () => {
       expect(markWord({ correctAnswer: 'नर', studentAnswer: 'रन' })).toBe(
         false,
       );
+    });
+
+    it('treats ल and र as the same family', () => {
+      expect(markWord({ correctAnswer: 'लर', studentAnswer: 'रल' })).toBe(true);
     });
   });
 
