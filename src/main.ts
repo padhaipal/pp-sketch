@@ -22,6 +22,7 @@ import { processHeygenInboundJob } from './interfaces/heygen/inbound/inbound.pro
 import { processHeygenGenerateJob } from './interfaces/heygen/outbound/outbound.service';
 import { processElevenlabsGenerateJob } from './interfaces/elevenlabs/outbound/outbound.service';
 import { processWhatsappPreloadJob } from './media-meta-data/whatsapp-preload.processor';
+import { processMediaReloadSweepJob } from './media-meta-data/media-reload-sweep.processor';
 import {
   processNotifierCronJob,
   processNotifierSendJob,
@@ -155,6 +156,7 @@ async function bootstrap() {
         wabotOutbound,
         cacheService,
         mediaRepo,
+        mediaMetaDataService,
       );
     },
     {
@@ -294,7 +296,34 @@ async function bootstrap() {
     logger.error(`worker(${QUEUE_NAMES.HAIL_MARY}) ERROR ${err.message}`),
   );
 
-  logger.log('BullMQ workers started for all 10 queues');
+  // Media reload sweep: hourly DB scan replacing the old per-media chained
+  // reload jobs. Re-uploads media whose WhatsApp id is >20 days old (ids
+  // expire ~30d) and rescues rows stranded mid-first-upload.
+  const mediaReloadSweepQueue = createQueue(QUEUE_NAMES.MEDIA_RELOAD_SWEEP);
+  await mediaReloadSweepQueue.add(
+    'media-reload-sweep-cron',
+    {},
+    { repeat: { pattern: '0 * * * *' } },
+  );
+
+  const mediaReloadSweepWorker = createWorker(
+    QUEUE_NAMES.MEDIA_RELOAD_SWEEP,
+    async (job) => {
+      await processMediaReloadSweepJob(job, dataSource);
+    },
+  );
+  mediaReloadSweepWorker.on('failed', (job, err) =>
+    logger.error(
+      `worker(${QUEUE_NAMES.MEDIA_RELOAD_SWEEP}) FAILED job id=${job?.id} err=${err.message}`,
+    ),
+  );
+  mediaReloadSweepWorker.on('error', (err) =>
+    logger.error(
+      `worker(${QUEUE_NAMES.MEDIA_RELOAD_SWEEP}) ERROR ${err.message}`,
+    ),
+  );
+
+  logger.log('BullMQ workers started for all 11 queues');
 
   await app.listen(process.env.PORT ?? 3000);
   logger.log(`Application listening on port ${process.env.PORT ?? 3000}`);
