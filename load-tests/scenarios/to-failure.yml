@@ -1,0 +1,76 @@
+config:
+  target: '{{ $env.WABOT_STAGING_BASE }}'
+  http:
+    timeout: 5
+  processor: '../processors/webhook.js'
+  # ---------------------------------------------------------------------
+  # Test-to-failure ladder (capacity discovery), 2026-07-07.
+  #
+  # Purpose: find the collapse point of the current topology so replica
+  # count can be sized deliberately. The regression ladder (load-test.yml)
+  # stops at step_90 (180 webhooks/s) by design; prior evidence puts the
+  # ceiling somewhere in 100–200 webhooks/s (~123/s sustained observed
+  # 2026-06-26 before artillery's connection pool saturated).
+  #
+  # Each VU fires phase_1 + phase_2, so webhook rate = 2 × arrivalRate.
+  # Capacity = last PASSING plateau, judged live in Grafana against:
+  #   - error rate > 1% or any 5XX burst        → fail
+  #   - wabot e2e p95 > 5 s                     → fail
+  #   - pp_bullmq_queue_depth rising through an
+  #     entire plateau (arrival > drain)        → fail
+  #   - artillery ETIMEDOUT spike               → fail
+  # simultaneous-users = last-passing-arrivalRate × 30 (one message per
+  # ~30 s per active user).
+  #
+  # 120 s plateaus: queue depth / dwell-p95 converge in ~30 s, so each
+  # plateau gives ~90 s of steady-state signal. Declared runtime:
+  # 30 + 6×120 = 750 s = 12.5 min (+~40 s VU drain-out).
+  # The staging.yml artillery step must allow ≥16 min for this file.
+  # ---------------------------------------------------------------------
+  phases:
+    - name: warmup
+      duration: 30
+      arrivalRate: 5
+    - name: step_60
+      duration: 120
+      arrivalRate: 60 # 120 webhooks/s — known comfortable
+    - name: step_90
+      duration: 120
+      arrivalRate: 90 # 180 webhooks/s — last plateau of the regression ladder
+    - name: step_110
+      duration: 120
+      arrivalRate: 110 # 220 webhooks/s — above all prior passing evidence
+    - name: step_135
+      duration: 120
+      arrivalRate: 135 # 270 webhooks/s
+    - name: step_165
+      duration: 120
+      arrivalRate: 165 # 330 webhooks/s
+    - name: step_200
+      duration: 120
+      arrivalRate: 200 # 400 webhooks/s — expected collapse plateau
+
+scenarios:
+  - name: webhook
+    flow:
+      - function: prepareWebhook
+      - post:
+          url: /webhook
+          headers:
+            content-type: application/json
+            x-hub-signature-256: '{{ signature }}'
+            x-test-phase: phase_1
+          body: '{{ payload }}'
+      # 30 s think between phase_1 and phase_2 — above wabot's 25 s
+      # consecutive-check TTL so phase_2 exercises the lesson-flow path.
+      # At 200 VU/s × ~35 s VU lifetime ≈ 7 000 concurrent VUs, still
+      # within one runner's memory budget.
+      - think: 30
+      - function: prepareWebhookFollowUp
+      - post:
+          url: /webhook
+          headers:
+            content-type: application/json
+            x-hub-signature-256: '{{ signature }}'
+            x-test-phase: phase_2
+          body: '{{ payload }}'
