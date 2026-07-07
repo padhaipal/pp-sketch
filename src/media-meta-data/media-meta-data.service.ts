@@ -43,6 +43,7 @@ import {
   assertValidMediaType,
   assertValidMediaSource,
   assertValidMediaStatus,
+  type MediaStatus,
 } from './media-meta-data.dto';
 
 // Feature flag check (OpenFeature)
@@ -695,7 +696,11 @@ export class MediaMetaDataService {
         otel_carrier: validated.otel_carrier,
       } as WhatsappPreloadJobDto);
     } catch (err) {
-      entity.status = 'failed';
+      // Enqueue failure is transient (Redis blip), not a defect in the
+      // media — the file is already in S3. Leave it 'queued' so the
+      // media-reload-sweep rescues it within ~6h; 'failed' is reserved
+      // for permanent rejection.
+      entity.status = 'queued';
       await this.mediaRepo.save(entity);
       throw err;
     }
@@ -902,7 +907,9 @@ export class MediaMetaDataService {
           this.logger.warn(
             `uploadStaticMedia[${i}]: enqueue failed: ${(err as Error).message}`,
           );
-          entity.status = 'failed';
+          // Transient enqueue failure, file already in S3 — stay 'queued'
+          // so the media-reload-sweep rescues it within ~6h.
+          entity.status = 'queued';
           await this.mediaRepo.save(entity);
           results.push({
             index: i,
@@ -938,5 +945,27 @@ export class MediaMetaDataService {
     };
 
     return { results, summary };
+  }
+
+  // Records a WhatsApp-confirmed upload. wa_uploaded_at is written in the
+  // same UPDATE as wa_media_url so the stamp can never disagree with the
+  // url — the media-reload-sweep relies on it to decide what is overdue.
+  // markReady=false on reloads: those only refresh the url.
+  async recordWhatsappUpload(
+    id: string,
+    wa_media_url: string,
+    markReady: boolean,
+  ): Promise<void> {
+    await this.mediaRepo.update(id, {
+      wa_media_url,
+      wa_uploaded_at: new Date(),
+      ...(markReady ? { status: 'ready' as MediaStatus } : {}),
+    });
+  }
+
+  // Permanent rejection (e.g. WhatsApp 4XX on upload). 'failed' rows are
+  // never retried by the media-reload-sweep.
+  async markMediaFailed(id: string): Promise<void> {
+    await this.mediaRepo.update(id, { status: 'failed' });
   }
 }

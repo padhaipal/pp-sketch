@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { Repository } from 'typeorm';
@@ -7,23 +6,11 @@ import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS } from '../interfaces/redis/cache.dto';
 import { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound.service';
 import { WabotOutboundService } from '../interfaces/wabot/outbound/outbound.service';
-import { createQueue, QUEUE_NAMES } from '../interfaces/redis/queues';
+import type { MediaMetaDataService } from './media-meta-data.service';
 import { WhatsappPreloadJobDto } from './media-meta-data.dto';
 import { startChildSpan, injectCarrier } from '../otel/otel';
 
 const logger = new Logger('WhatsappPreloadProcessor');
-const whatsappPreloadQueue = createQueue(QUEUE_NAMES.WHATSAPP_PRELOAD);
-
-// Deterministic per-media offset (0–24h) added to the 20-day reload delay so
-// media uploaded in the same burst (bulk static uploads, gen batches) doesn't
-// reload in one thundering cohort every cycle. Hash beats Math.random(): the
-// same media always lands in the same slot, so the spread is uniform, stable
-// across retries, and assertable in tests.
-export function reloadJitterMs(mediaMetadataId: string): number {
-  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
-  const h = createHash('sha256').update(mediaMetadataId).digest();
-  return h.readUInt32BE(0) % TWENTY_FOUR_HOURS_MS;
-}
 
 export async function processWhatsappPreloadJob(
   job: Job<WhatsappPreloadJobDto>,
@@ -31,6 +18,7 @@ export async function processWhatsappPreloadJob(
   wabotOutbound: WabotOutboundService,
   cacheService: CacheService,
   mediaRepo: Repository<MediaMetaDataEntity>,
+  mediaMetaDataService: MediaMetaDataService,
 ): Promise<void> {
   const span = startChildSpan(
     'whatsapp-preload-processor',
@@ -124,7 +112,7 @@ export async function processWhatsappPreloadJob(
       // moment Meta throttles a burst at the worker's limiter rate.
       if (status >= 400 && status < 500 && status !== 429) {
         logger.error(`uploadMedia 4XX for ${media_metadata_id}`);
-        await mediaRepo.update(media_metadata_id, { status: 'failed' });
+        await mediaMetaDataService.markMediaFailed(media_metadata_id);
       } else {
         logger.warn(`uploadMedia 5XX/429 for ${media_metadata_id}`);
       }
@@ -132,57 +120,21 @@ export async function processWhatsappPreloadJob(
       throw err;
     }
 
-    // 6. Update entity
-    if (reload) {
-      await mediaRepo.update(media_metadata_id, { wa_media_url });
-    } else {
-      await mediaRepo.update(media_metadata_id, {
-        wa_media_url,
-        status: 'ready',
-      });
-    }
+    // 6. Update entity. Stamps wa_uploaded_at with the url in one write;
+    // reloads only refresh the url. Re-upload scheduling is owned by the
+    // media-reload-sweep cron (DB-scan), not chained jobs — a lost job can
+    // no longer strand media forever.
+    await mediaMetaDataService.recordWhatsappUpload(
+      media_metadata_id,
+      wa_media_url,
+      !reload,
+    );
 
     // 7. Invalidate cache
     if (entity.state_transition_id) {
       await cacheService.del(
         CACHE_KEYS.mediaByStateTransitionId(entity.state_transition_id),
       );
-    }
-
-    // 8. Enqueue reload job (~20 days) — library media only. Media without a
-    // state_transition_id is unaddressable (nothing resolves media except by
-    // stid), so it can never be re-sent and a fresh WhatsApp id is useless:
-    // one-shot renders like morning-update report cards expire naturally
-    // instead of reloading every 20 days forever.
-    if (entity.state_transition_id) {
-      const TWENTY_DAYS_MS = 20 * 24 * 60 * 60 * 1000;
-      let reloadEnqueued = false;
-      let delay = 1000;
-      const startTime = Date.now();
-      while (!reloadEnqueued) {
-        try {
-          await whatsappPreloadQueue.add(
-            `reload-${media_metadata_id}`,
-            {
-              media_metadata_id,
-              s3_key,
-              reload: true,
-              otel_carrier: injectCarrier(span),
-            },
-            { delay: TWENTY_DAYS_MS + reloadJitterMs(media_metadata_id) },
-          );
-          reloadEnqueued = true;
-        } catch {
-          if (Date.now() - startTime > 10_000) {
-            logger.error(
-              `Failed to enqueue reload for ${media_metadata_id} — media will expire`,
-            );
-            break;
-          }
-          await new Promise((r) => setTimeout(r, delay));
-          delay = Math.min(delay * 2, 10_000);
-        }
-      }
     }
 
     span.end();

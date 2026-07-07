@@ -14,6 +14,7 @@ export const QUEUE_NAMES = {
   MORNING_UPDATE_SEND: 'morning-update-send',
   HAIL_MARY: 'hail-mary',
   MIRROR: 'mirror',
+  MEDIA_RELOAD_SWEEP: 'media-reload-sweep',
 } as const;
 
 const connection = new Redis(process.env.BULLMQ_REDIS_URL!, {
@@ -88,6 +89,13 @@ export const DEFAULT_JOB_OPTIONS: Record<string, JobsOptions> = {
   // retry; next-day trigger is the retry path. Singleton jobId is set by the
   // service, not here.
   [QUEUE_NAMES.MIRROR]: {
+    attempts: 1,
+    removeOnComplete: true,
+    removeOnFail: { count: 500 },
+  },
+  // Hourly DB scan that re-uploads overdue/stranded media. attempts:1 —
+  // the next hourly run is the retry path (same philosophy as mirror).
+  [QUEUE_NAMES.MEDIA_RELOAD_SWEEP]: {
     attempts: 1,
     removeOnComplete: true,
     removeOnFail: { count: 500 },
