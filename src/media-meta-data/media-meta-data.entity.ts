@@ -77,6 +77,13 @@ export class MediaMetaDataEntity {
   @Column({ type: 'boolean', default: false })
   rolled_back: boolean;
 
+  // When WhatsApp last confirmed an upload of this media. Written in the
+  // same UPDATE as wa_media_url so the two can never disagree. NULL means
+  // "never uploaded / age unknown" — the media-reload-sweep treats NULL as
+  // overdue and re-uploads first.
+  @Column({ type: 'timestamptz', nullable: true })
+  wa_uploaded_at: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;
 }
