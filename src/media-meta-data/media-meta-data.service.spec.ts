@@ -845,7 +845,7 @@ describe('MediaMetaDataService.createRenderedImageMedia', () => {
     expect(failedSave).toBeDefined();
   });
 
-  it('marks entity failed when preload queue add fails', async () => {
+  it('keeps entity queued (sweep rescue) and rethrows when preload queue add fails', async () => {
     const repo = makeRepo();
     repo.save.mockImplementation(async (e) => e);
     const bucket = {
@@ -865,6 +865,17 @@ describe('MediaMetaDataService.createRenderedImageMedia', () => {
         otel_carrier: carrier,
       }),
     ).rejects.toThrow('queue down');
+
+    // Transient enqueue failure: row must stay 'queued' for the sweep,
+    // never be poisoned to 'failed'.
+    const failedSave = repo.save.mock.calls.find(
+      (c) => (c[0] as { status: string }).status === 'failed',
+    );
+    expect(failedSave).toBeUndefined();
+    const queuedSave = repo.save.mock.calls.find(
+      (c) => (c[0] as { status: string }).status === 'queued',
+    );
+    expect(queuedSave).toBeDefined();
   });
 });
 
@@ -1047,7 +1058,7 @@ describe('MediaMetaDataService.uploadStaticMedia', () => {
     expect(out.results[0].status).toBe('failed');
   });
 
-  it('non-text item — queue add failure marks entity failed and records as failure result', async () => {
+  it('non-text item — queue add failure keeps entity queued (sweep rescue) and records as failure result', async () => {
     const repo = makeRepo();
     repo.findOne.mockResolvedValue(null);
     repo.save.mockImplementation(async (e) => ({ ...e }));
@@ -1073,11 +1084,17 @@ describe('MediaMetaDataService.uploadStaticMedia', () => {
     );
 
     expect(out.results[0].status).toBe('failed');
-    // entity.status was set to 'failed' on a save
+    // Transient enqueue failure must NOT poison the row: it stays 'queued'
+    // so the media-reload-sweep rescues it. 'failed' is reserved for
+    // permanent rejection.
     const failedSave = repo.save.mock.calls.find(
       (c) => (c[0] as { status: string }).status === 'failed',
     );
-    expect(failedSave).toBeDefined();
+    expect(failedSave).toBeUndefined();
+    const queuedSave = repo.save.mock.calls.find(
+      (c) => (c[0] as { status: string }).status === 'queued',
+    );
+    expect(queuedSave).toBeDefined();
   });
 });
 
@@ -1783,7 +1800,7 @@ describe('uploadStaticMedia — log messages + dedup-failed reuse paths', () => 
     warn.mockRestore();
   });
 
-  it('warns with the per-item index when the preload enqueue fails (marks row failed)', async () => {
+  it('warns with the per-item index when the preload enqueue fails (row stays queued for sweep rescue)', async () => {
     const { warn } = spyLogger();
     const repo = makeRepo();
     repo.findOne.mockResolvedValue(null);
@@ -1805,11 +1822,16 @@ describe('uploadStaticMedia — log messages + dedup-failed reuse paths', () => 
       ),
     );
     expect(out.summary.failed).toBe(1);
-    // entity.status was set to 'failed' on a save call
+    // Transient enqueue failure: entity stays 'queued' (sweep rescue),
+    // never 'failed'.
     const failedSave = repo.save.mock.calls.find(
       (c) => (c[0] as { status: string }).status === 'failed',
     );
-    expect(failedSave).toBeDefined();
+    expect(failedSave).toBeUndefined();
+    const queuedSave = repo.save.mock.calls.find(
+      (c) => (c[0] as { status: string }).status === 'queued',
+    );
+    expect(queuedSave).toBeDefined();
     warn.mockRestore();
   });
 
@@ -2165,5 +2187,59 @@ describe('createElevenlabsMedia — conditional spreads + queue payload', () => 
     expect(repo.update).toHaveBeenCalledWith(['mm-1', 'mm-2'], {
       status: 'queued',
     });
+  });
+});
+
+describe('MediaMetaDataService.recordWhatsappUpload / markMediaFailed', () => {
+  it('recordWhatsappUpload(markReady=true): writes url + wa_uploaded_at + status=ready in ONE update', async () => {
+    const repo = makeRepo();
+    const { service } = makeService({ repo });
+
+    await service.recordWhatsappUpload('mm-1', 'https://wa/m1', true);
+
+    expect(repo.update).toHaveBeenCalledTimes(1);
+    expect(repo.update).toHaveBeenCalledWith('mm-1', {
+      wa_media_url: 'https://wa/m1',
+      wa_uploaded_at: expect.any(Date),
+      status: 'ready',
+    });
+  });
+
+  it('recordWhatsappUpload(markReady=false): refreshes url + stamp WITHOUT touching status', async () => {
+    const repo = makeRepo();
+    const { service } = makeService({ repo });
+
+    await service.recordWhatsappUpload('mm-1', 'https://wa/m2', false);
+
+    expect(repo.update).toHaveBeenCalledTimes(1);
+    expect(repo.update).toHaveBeenCalledWith('mm-1', {
+      wa_media_url: 'https://wa/m2',
+      wa_uploaded_at: expect.any(Date),
+    });
+    expect(repo.update.mock.calls[0][1]).not.toHaveProperty('status');
+  });
+
+  it('recordWhatsappUpload stamps a current timestamp (the sweep depends on it)', async () => {
+    const repo = makeRepo();
+    const { service } = makeService({ repo });
+    const before = Date.now();
+
+    await service.recordWhatsappUpload('mm-1', 'https://wa/m1', true);
+
+    const stamp = (
+      repo.update.mock.calls[0][1] as { wa_uploaded_at: Date }
+    ).wa_uploaded_at.getTime();
+    expect(stamp).toBeGreaterThanOrEqual(before);
+    expect(stamp).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('markMediaFailed: sets status=failed and nothing else', async () => {
+    const repo = makeRepo();
+    const { service } = makeService({ repo });
+
+    await service.markMediaFailed('mm-1');
+
+    expect(repo.update).toHaveBeenCalledTimes(1);
+    expect(repo.update).toHaveBeenCalledWith('mm-1', { status: 'failed' });
   });
 });

@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddWaUploadedAtToMediaMetadata1783439975047
-  implements MigrationInterface
-{
+export class AddWaUploadedAtToMediaMetadata1783439975047 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     // Nullable, no default: metadata-only change, no table rewrite. NULL on
     // existing rows deliberately means "upload age unknown — overdue"; the
