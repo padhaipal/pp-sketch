@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { Repository } from 'typeorm';
@@ -12,6 +13,17 @@ import { startChildSpan, injectCarrier } from '../otel/otel';
 
 const logger = new Logger('WhatsappPreloadProcessor');
 const whatsappPreloadQueue = createQueue(QUEUE_NAMES.WHATSAPP_PRELOAD);
+
+// Deterministic per-media offset (0–24h) added to the 20-day reload delay so
+// media uploaded in the same burst (bulk static uploads, gen batches) doesn't
+// reload in one thundering cohort every cycle. Hash beats Math.random(): the
+// same media always lands in the same slot, so the spread is uniform, stable
+// across retries, and assertable in tests.
+export function reloadJitterMs(mediaMetadataId: string): number {
+  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+  const h = createHash('sha256').update(mediaMetadataId).digest();
+  return h.readUInt32BE(0) % TWENTY_FOUR_HOURS_MS;
+}
 
 export async function processWhatsappPreloadJob(
   job: Job<WhatsappPreloadJobDto>,
@@ -137,33 +149,39 @@ export async function processWhatsappPreloadJob(
       );
     }
 
-    // 8. Enqueue reload job (20 days)
-    const TWENTY_DAYS_MS = 20 * 24 * 60 * 60 * 1000;
-    let reloadEnqueued = false;
-    let delay = 1000;
-    const startTime = Date.now();
-    while (!reloadEnqueued) {
-      try {
-        await whatsappPreloadQueue.add(
-          `reload-${media_metadata_id}`,
-          {
-            media_metadata_id,
-            s3_key,
-            reload: true,
-            otel_carrier: injectCarrier(span),
-          },
-          { delay: TWENTY_DAYS_MS },
-        );
-        reloadEnqueued = true;
-      } catch {
-        if (Date.now() - startTime > 10_000) {
-          logger.error(
-            `Failed to enqueue reload for ${media_metadata_id} — media will expire`,
+    // 8. Enqueue reload job (~20 days) — library media only. Media without a
+    // state_transition_id is unaddressable (nothing resolves media except by
+    // stid), so it can never be re-sent and a fresh WhatsApp id is useless:
+    // one-shot renders like morning-update report cards expire naturally
+    // instead of reloading every 20 days forever.
+    if (entity.state_transition_id) {
+      const TWENTY_DAYS_MS = 20 * 24 * 60 * 60 * 1000;
+      let reloadEnqueued = false;
+      let delay = 1000;
+      const startTime = Date.now();
+      while (!reloadEnqueued) {
+        try {
+          await whatsappPreloadQueue.add(
+            `reload-${media_metadata_id}`,
+            {
+              media_metadata_id,
+              s3_key,
+              reload: true,
+              otel_carrier: injectCarrier(span),
+            },
+            { delay: TWENTY_DAYS_MS + reloadJitterMs(media_metadata_id) },
           );
-          break;
+          reloadEnqueued = true;
+        } catch {
+          if (Date.now() - startTime > 10_000) {
+            logger.error(
+              `Failed to enqueue reload for ${media_metadata_id} — media will expire`,
+            );
+            break;
+          }
+          await new Promise((r) => setTimeout(r, delay));
+          delay = Math.min(delay * 2, 10_000);
         }
-        await new Promise((r) => setTimeout(r, delay));
-        delay = Math.min(delay * 2, 10_000);
       }
     }
 
