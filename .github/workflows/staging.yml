@@ -4,6 +4,16 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Ladder to run (load-test = regression, to-failure = capacity discovery)'
+        type: choice
+        options: [load-test, to-failure]
+        default: load-test
+      skip_deploy_wait:
+        description: 'Skip the 10-min Railway deploy wait (staging already up to date)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -15,7 +25,8 @@ concurrency:
 jobs:
   staging:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 10-min deploy wait + up to 18-min to-failure ladder + post-steps.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -24,6 +35,7 @@ jobs:
           node-version: '22'
 
       - name: Wait for Railway staging deploy
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_deploy_wait) }}
         run: sleep 600
 
       - name: Health check pp-sketch
@@ -41,23 +53,28 @@ jobs:
 
       - name: Run load test
         # Step-level cap so artillery is killed cleanly mid-run instead
-        # of consuming the whole job's 25-min budget. Without this, a
-        # runaway artillery drain (as on 2026-06-25) blocks Render HTML
-        # report / Write job summary / upload-artifact from ever running,
-        # so we lose the very data we need to diagnose the run. Declared
-        # ladder runtime is 10.5 min; 12 min gives 90 s of slack and
-        # still leaves ~3 min for the post-steps under the job cap.
-        timeout-minutes: 12
+        # of consuming the whole job budget. Without this, a runaway
+        # artillery drain (as on 2026-06-25) blocks Render HTML report /
+        # Write job summary / upload-artifact from ever running, so we
+        # lose the very data we need to diagnose the run. Sized for the
+        # longest ladder (to-failure: 12.5 min declared + drain-out);
+        # the regression ladder (10.5 min) fits with more slack.
+        timeout-minutes: 18
         env:
           WABOT_STAGING_BASE: ${{ secrets.WABOT_STAGING_BASE }}
           META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
           WHATSAPP_BUSINESS_ACCOUNT_ID: ${{ secrets.WHATSAPP_BUSINESS_ACCOUNT_ID }}
           WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}
           LOAD_TEST_PHONE_PREFIX: '911000'
+          # Spread VU generation across the runner's cores; the collapse
+          # plateaus (330–400 signed webhooks/s) can otherwise bottleneck
+          # in artillery itself rather than in staging.
+          WORKERS: '4'
+          SCENARIO: ${{ inputs.scenario || 'load-test' }}
         run: |
           artillery run \
             --output report.json \
-            load-tests/scenarios/load-test.yml
+            "load-tests/scenarios/${SCENARIO}.yml"
 
       - name: Render HTML report
         if: always()
