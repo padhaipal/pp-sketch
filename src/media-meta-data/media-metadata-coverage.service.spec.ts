@@ -69,10 +69,9 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
     ]);
     expect(out.letters).toEqual(['क', 'ख']);
     expect(out.words).toEqual(['word1', 'word2']);
-    // Row ordering: '_', the fixed sentence prefix, then letters, then words.
+    // Row ordering: '_', then letters, then words.
     expect(out.rows.map((r) => r.prefix)).toEqual([
       '_',
-      'sentence',
       'क',
       'ख',
       'word1',
@@ -80,17 +79,19 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
     ]);
   });
 
-  it('tracks the sentence-lesson suffixes and the fixed sentence prefix', async () => {
+  it('tracks the per-word sentence drill suffix but NOT the fixed-prefix sentence stids', async () => {
     const aggregateRows = [
-      {
-        state_transition_id: 'sentence-sentence-complete-correct-first',
-        media_type: 'audio',
-        active: '2',
-      },
       {
         state_transition_id: 'word1-sentence-word-drillWord',
         media_type: 'audio',
         active: '1',
+      },
+      // Fixed-prefix sentence stid: lives in pp-dashboard's NON_LESSON_STIDS
+      // list, must NOT surface a 'sentence' row here.
+      {
+        state_transition_id: 'sentence-sentence-complete-correct-first',
+        media_type: 'audio',
+        active: '2',
       },
     ];
     const letterRows = [{ grapheme: 'क' }];
@@ -102,22 +103,18 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
 
     const out = await svc.getCoverage();
 
+    expect(out.suffixes).toContain('sentence-word-drillWord');
     for (const suffix of [
       'start-sentence-initial',
       'sentence-complete-correct-first',
       'sentence-complete-correct-retry',
       'sentence-complete-maxErrors',
-      'sentence-word-drillWord',
       'word-sentence-correct-retrySentence',
     ]) {
-      expect(out.suffixes).toContain(suffix);
+      expect(out.suffixes).not.toContain(suffix);
     }
 
-    const sentenceRow = out.rows.find((r) => r.prefix === 'sentence')!;
-    const correctFirstIdx = out.suffixes.indexOf(
-      'sentence-complete-correct-first',
-    );
-    expect(sentenceRow.counts[correctFirstIdx].audio).toBe(2);
+    expect(out.rows.find((r) => r.prefix === 'sentence')).toBeUndefined();
 
     const word1Row = out.rows.find((r) => r.prefix === 'word1')!;
     const drillIdx = out.suffixes.indexOf('sentence-word-drillWord');
@@ -176,8 +173,8 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
 
     const out = await svc.getCoverage();
 
-    // 1 generic + 1 sentence + 1 letter + 2 words = 5
-    expect(out.rows).toHaveLength(5);
+    // 1 generic + 1 letter + 2 words = 4
+    expect(out.rows).toHaveLength(4);
     for (const row of out.rows) {
       for (const counts of row.counts) {
         expect(counts).toEqual({

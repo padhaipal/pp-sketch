@@ -42,17 +42,15 @@ const SUFFIXES = [
   'letterNoImage-word-correct-first-last',
   'letterNoImage-word-correct-retry-last',
   'letterNoImage-word-wrong-last',
-  'sentence-complete-correct-first',
-  'sentence-complete-correct-retry',
-  'sentence-complete-maxErrors',
+  // Per-word drill entry from the sentence layer ({word}-sentence-word-…).
+  // The fixed-prefix sentence-* stids are deliberately NOT in this grid —
+  // they are hardcoded in pp-dashboard's NON_LESSON_STIDS list instead.
   'sentence-word-drillWord',
-  'start-sentence-initial',
   'start-word-initial',
   'word-complete-correct-first',
   'word-complete-correct-retry',
   'word-complete-maxErrors',
   'word-routeWrongLetter-drillLetters',
-  'word-sentence-correct-retrySentence',
   'word-word-endMatra-first',
   'word-word-endMatra-retry',
   'word-word-insertion-first',
@@ -120,15 +118,7 @@ export class MediaMetadataCoverageService {
     );
     const letters = letterRows.map((r) => r.grapheme);
 
-    // 'sentence' is the fixed prefix of the sentence-lesson stids — sentence
-    // prompts are generated at runtime, so their non-text media is seeded
-    // under this literal prefix rather than per-sentence.
-    const orderedPrefixes: string[] = [
-      '_',
-      'sentence',
-      ...letters,
-      ...this.wordList,
-    ];
+    const orderedPrefixes: string[] = ['_', ...letters, ...this.wordList];
 
     const rows: MediaMetadataCoverageRow[] = orderedPrefixes.map((prefix) => {
       const bySuffix = byPrefix.get(prefix);
