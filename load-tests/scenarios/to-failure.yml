@@ -2,6 +2,19 @@ config:
   target: '{{ $env.WABOT_STAGING_BASE }}'
   http:
     timeout: 5
+    # Shared connection pool (per worker process). Without this, artillery
+    # opens one TCP connection per VU; with think:30 each VU holds its
+    # socket open, so step_60 alone accumulates ~2,000+ concurrent
+    # connections — which latched Railway's edge on 2026-07-08 (total
+    # inbound blackout at ~75 s in, zero responses for the rest of the run,
+    # recovered the instant the flood stopped; Meta-originated webhooks were
+    # blocked too, so the cutoff was service-wide, not per-source-IP).
+    # Real WhatsApp traffic arrives over a handful of reused connections
+    # from Meta's relays, so a small shared pool is also the more faithful
+    # model. 125 × WORKERS=4 = 500 sockets max; healthy in-flight at the
+    # top plateau is ~40 (400 req/s × ~0.1 s), so this only binds when
+    # staging is already failing the plateau anyway.
+    pool: 125
   processor: '../processors/webhook.js'
   # ---------------------------------------------------------------------
   # Test-to-failure ladder (capacity discovery), 2026-07-07.
