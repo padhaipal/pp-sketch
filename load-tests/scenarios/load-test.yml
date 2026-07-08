@@ -46,8 +46,11 @@ config:
         # actually created its ~495 VUs.
         - expression: 'vusers.created > 400'
           strict: true
-  ensure:
-    maxErrorRate: 0
+  # NOTE: no legacy `config.ensure` block here — when both forms exist,
+  # artillery runs ONLY the legacy checks and silently ignores
+  # plugins.ensure thresholds/conditions (observed on run 28962096800:
+  # "Checks:" listed just maxErrorRate). Error-rate coverage comes from
+  # the vusers.failed == 0 condition above.
   phases:
     - name: warmup
       duration: 15
