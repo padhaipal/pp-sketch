@@ -1353,12 +1353,30 @@ describe('markSentence', () => {
     expect(markSentence({ words: ['नल'], transcripts: [''] })).toBe(false);
   });
 
-  it('ignores the tilde transcript separator token', () => {
-    // A combined transcript can reach markSentence via the fallback path;
-    // the tilde must never count as a word.
+  it('treats the tilde engine-join as a hard seam on the fallback path', () => {
+    // 'नल ~ घर' means engine A said नल and engine B said घर — neither engine
+    // heard the whole ordered sentence, so this must NOT pass.
     expect(
       markSentence({ words: ['नल', 'घर'], transcripts: ['नल ~ घर'] }),
+    ).toBe(false);
+    // Both words within one engine's segment still pass.
+    expect(
+      markSentence({ words: ['नल', 'घर'], transcripts: ['नल घर ~ नल'] }),
     ).toBe(true);
+  });
+
+  it('accepts an STT-split multi-syllable word via a two-token window (अमरस → "अमर रस")', () => {
+    expect(
+      markSentence({
+        words: ['नल', 'अमरस', 'घर'],
+        transcripts: ['नल अमर रस घर'],
+      }),
+    ).toBe(true);
+    // The window only fires when the single token failed — normal words are
+    // unaffected and the pair cannot steal the next expected word's token.
+    expect(markSentence({ words: ['नल', 'घर'], transcripts: ['नल घर'] })).toBe(
+      true,
+    );
   });
 });
 
@@ -1419,6 +1437,15 @@ describe('rankWorstWord', () => {
         transcripts: ['नल घर', 'घर कमल'],
       }),
     ).toBe('नल'); // all words found → tie at 1 → earliest
+  });
+
+  it('an STT-split reading of a hardcoded word counts as fully correct (अमरस as "अमर रस")', () => {
+    expect(
+      rankWorstWord({
+        words: ['अमरस', 'घर'],
+        transcripts: ['अमर रस'],
+      }),
+    ).toBe('घर');
   });
 
   it('ignores punctuation when scoring', () => {

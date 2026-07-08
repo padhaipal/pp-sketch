@@ -129,25 +129,31 @@ export const machine = setup({
   id: 'literacy-lesson',
   initial: 'start',
 
-  context: ({ input }) => ({
-    word: input.word,
-    sentence: input.sentence ?? null,
-    sentenceErrors: 0,
-    wrongLetters: [],
-    wordErrors: 0,
-    imageErrors: 0,
-    letterErrors: 0,
-    letterImageErrors: 0,
-    letterNoImageErrors: 0,
-    answer: input.sentence ? input.sentence.join(' ') : input.word,
-    answerCorrect: null,
-    stateTransitionId: input.sentence
-      ? 'sentence-start-sentence-initial'
-      : `${input.word}-start-word-initial`,
-    userMessageId: input.userMessageId,
-    pendingCorrect: [],
-    pendingIncorrect: [],
-  }),
+  context: ({ input }) => {
+    // Normalize once: an empty sentence array is a word lesson everywhere
+    // (context, answer, stid, and the start router must all agree).
+    const sentence =
+      input.sentence && input.sentence.length > 0 ? input.sentence : null;
+    return {
+      word: input.word,
+      sentence,
+      sentenceErrors: 0,
+      wrongLetters: [],
+      wordErrors: 0,
+      imageErrors: 0,
+      letterErrors: 0,
+      letterImageErrors: 0,
+      letterNoImageErrors: 0,
+      answer: sentence ? sentence.join(' ') : input.word,
+      answerCorrect: null,
+      stateTransitionId: sentence
+        ? 'sentence-start-sentence-initial'
+        : `${input.word}-start-word-initial`,
+      userMessageId: input.userMessageId,
+      pendingCorrect: [],
+      pendingIncorrect: [],
+    };
+  },
 
   states: {
     // Pure router so a lesson can begin at either level. Guards use `!= null`

@@ -1181,9 +1181,17 @@ describe('machine — start router', () => {
     a.stop();
   });
 
-  it('routes to `word` when input.sentence is an empty array', () => {
+  it('routes to `word` when input.sentence is an empty array — fully as a word lesson', () => {
     const a = makeActor({ word: 'कमल', userMessageId: 'mm-1', sentence: [] });
-    expect(a.snap().value).toBe('word');
+    const snap = a.snap();
+    expect(snap.value).toBe('word');
+    expect(snap.context.sentence).toBeNull();
+    expect(snap.context.answer).toBe('कमल');
+    expect(snap.context.stateTransitionId).toBe('कमल-start-word-initial');
+    // Word-state twins must never fire for this lesson.
+    mockMarkWord.mockReturnValue(true);
+    a.send({ type: 'ANSWER', studentAnswer: 'कमल' });
+    expect(a.snap().value).toBe('complete');
     a.stop();
   });
 });

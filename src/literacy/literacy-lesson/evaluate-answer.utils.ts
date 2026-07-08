@@ -680,27 +680,49 @@ class EvaluateAnswer {
   // later expected word, because every token only ever tests the next
   // unmatched expected word. Each comparison goes through markWord, so
   // phoneme-family equivalence and the transcription hardcodes apply per
-  // word. Transcripts are checked individually (never the concatenation of
-  // two engines' outputs) so words straddling the seam between engines cannot
-  // fake an in-order match.
+  // word. Transcripts are checked individually, and each transcript is
+  // additionally split at the '~' engine-join token (the fallback path hands
+  // us the combined string), so words straddling the seam between two
+  // engines' outputs can never fake an in-order match.
   static markSentence({ words, transcripts }: SentenceArgs): boolean {
     if (words.length === 0) {
       console.error('markSentence: words is empty');
       return false;
     }
     for (const transcript of transcripts) {
-      let matched = 0;
-      for (const token of this.tokenize(transcript)) {
-        if (
-          this.markWord({
-            correctAnswer: words[matched],
-            studentAnswer: token,
-          })
-        ) {
-          matched++;
-          if (matched === words.length) return true;
-        }
+      for (const segment of transcript.split('~')) {
+        if (this.matchesInOrder(words, this.tokenize(segment))) return true;
       }
+    }
+    return false;
+  }
+
+  private static matchesInOrder(words: string[], tokens: string[]): boolean {
+    let matched = 0;
+    for (let i = 0; i < tokens.length; i++) {
+      if (
+        this.markWord({
+          correctAnswer: words[matched],
+          studentAnswer: tokens[i],
+        })
+      ) {
+        matched++;
+      } else if (
+        i + 1 < tokens.length &&
+        this.markWord({
+          correctAnswer: words[matched],
+          studentAnswer: `${tokens[i]} ${tokens[i + 1]}`,
+        })
+      ) {
+        // The STT engines split some multi-syllable words in two ("अमर रस"
+        // for अमरस) and markWord's .includes() hardcodes only fire on the
+        // joined pair — so before giving up on a token, try it joined with
+        // its successor. Only fires when the single token failed, so it can
+        // never steal a match a later expected word needed.
+        matched++;
+        i++;
+      }
+      if (matched === words.length) return true;
     }
     return false;
   }
@@ -734,22 +756,23 @@ class EvaluateAnswer {
 
   // Loop over the words of the correct answer and return the one with the
   // lowest matching score against the student answer. A word markWord accepts
-  // anywhere in any transcript scores a full 1 (phoneme-family matches and
-  // the transcription hardcodes count as correct); otherwise the word scores
-  // its best family-aware character overlap with any single token. Ties go to
-  // the earliest word in the sentence.
+  // against the whole transcript scores a full 1 — exactly word-lesson
+  // acceptance semantics, so phoneme families, split-word .includes()
+  // hardcodes ("अमर रस" for अमरस) and the rest all count as correct.
+  // Otherwise the word scores its best family-aware character overlap with
+  // any single token. Ties go to the earliest word in the sentence.
   static rankWorstWord({ words, transcripts }: SentenceArgs): string {
     let worstWord = words[0];
     let worstScore = Infinity;
     for (const word of words) {
       const wordChars = Array.from(this.clean(word));
       let bestScore = 0;
-      outer: for (const transcript of transcripts) {
+      for (const transcript of transcripts) {
+        if (this.markWord({ correctAnswer: word, studentAnswer: transcript })) {
+          bestScore = 1;
+          break;
+        }
         for (const token of this.tokenize(transcript)) {
-          if (this.markWord({ correctAnswer: word, studentAnswer: token })) {
-            bestScore = 1;
-            break outer;
-          }
           const score = this.alignScore(
             wordChars,
             Array.from(this.clean(token)),
