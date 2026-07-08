@@ -1,5 +1,3 @@
-import { identifyCharacterStatus } from './identify-character-status.utils';
-
 /* ───────── constants ───────── */
 const CONSONANT_SET = new Set(
   'अआइईउऊऋॠऌॡएऐओऔकखगघङचछजझञटठडढणतथदधनपफबभमयरलवशषसहabcdefghijklmnopqrstuvwxyz'.split(
@@ -659,14 +657,32 @@ class EvaluateAnswer {
     return word === correctAnswer;
   }
 
+  // Splits an utterance into candidate word tokens. Punctuation — Devanagari
+  // danda/double danda, Latin sentence punctuation, quotes, brackets, dashes
+  // — separates tokens exactly like whitespace, so "घर।नल" and "dog." both
+  // tokenize cleanly. clean() strips punctuation attached to a token anyway;
+  // splitting additionally rescues word pairs glued together by punctuation
+  // with no space. Newlines/tabs fall under \s.
+  private static tokenize(utterance: string): string[] {
+    return utterance
+      .split(/[\s।॥,.!?;:'"“”‘’()[\]{}\-–—~]+/u)
+      .filter((t) => t.length > 0);
+  }
+
   // A sentence is correct when a single transcript contains every expected
-  // word in order. Matching is an order-preserving subsequence walk, so extra
-  // words before, between, or after the sentence are ignored ("the sentence
-  // reads as follows <sentence> end of sentence" passes). Each word
-  // comparison goes through markWord, so phoneme-family equivalence and the
-  // transcription hardcodes apply per word. Transcripts are checked
-  // individually (never the concatenation of two engines' outputs) so words
-  // straddling the seam between engines cannot fake an in-order match.
+  // word in order. Matching is an order-preserving subsequence walk, so any
+  // extra material before, between, or after the expected words is ignored:
+  // "the sentence reads as follows <sentence> end of sentence" passes, and so
+  // do cumulative build-ups like "the bird sang. the bird sang a sentence.
+  // the bird sang a sentence to the dog" (the walk simply skips tokens that
+  // don't match the next expected word). Greedy matching is safe here:
+  // matching an expected word at its earliest opportunity can never block a
+  // later expected word, because every token only ever tests the next
+  // unmatched expected word. Each comparison goes through markWord, so
+  // phoneme-family equivalence and the transcription hardcodes apply per
+  // word. Transcripts are checked individually (never the concatenation of
+  // two engines' outputs) so words straddling the seam between engines cannot
+  // fake an in-order match.
   static markSentence({ words, transcripts }: SentenceArgs): boolean {
     if (words.length === 0) {
       console.error('markSentence: words is empty');
@@ -674,11 +690,11 @@ class EvaluateAnswer {
     }
     for (const transcript of transcripts) {
       let matched = 0;
-      for (const transcriptWord of transcript.trim().split(/\s+/)) {
+      for (const token of this.tokenize(transcript)) {
         if (
           this.markWord({
             correctAnswer: words[matched],
-            studentAnswer: transcriptWord,
+            studentAnswer: token,
           })
         ) {
           matched++;
@@ -689,24 +705,57 @@ class EvaluateAnswer {
     return false;
   }
 
+  // Best positional overlap between an expected word and one token, as a
+  // fraction of the expected word's graphemes. Graphemes count as matching
+  // when identical or in the same phoneme family, and every relative shift of
+  // the token against the word is tried so a dropped or inserted grapheme
+  // only costs the positions it displaces.
+  private static alignScore(wordChars: string[], tokenChars: string[]): number {
+    if (wordChars.length === 0) return 0;
+    let best = 0;
+    for (
+      let shift = -(wordChars.length - 1);
+      shift < tokenChars.length;
+      shift++
+    ) {
+      let matches = 0;
+      for (let i = 0; i < wordChars.length; i++) {
+        const t = tokenChars[i + shift];
+        if (
+          t !== undefined &&
+          (t === wordChars[i] || sameFamily(wordChars[i], t))
+        )
+          matches++;
+      }
+      if (matches > best) best = matches;
+    }
+    return best / wordChars.length;
+  }
+
   // Loop over the words of the correct answer and return the one with the
-  // lowest matching score against the student answer: for each expected word
-  // take its best per-transcript character match (fraction of its unique
-  // characters found in place), then pick the minimum. Ties go to the
-  // earliest word in the sentence.
+  // lowest matching score against the student answer. A word markWord accepts
+  // anywhere in any transcript scores a full 1 (phoneme-family matches and
+  // the transcription hardcodes count as correct); otherwise the word scores
+  // its best family-aware character overlap with any single token. Ties go to
+  // the earliest word in the sentence.
   static rankWorstWord({ words, transcripts }: SentenceArgs): string {
     let worstWord = words[0];
     let worstScore = Infinity;
     for (const word of words) {
+      const wordChars = Array.from(this.clean(word));
       let bestScore = 0;
-      for (const transcript of transcripts) {
-        const { correctChars, incorrectChars } = identifyCharacterStatus({
-          correctAnswer: word,
-          studentAnswer: transcript,
-        });
-        const total = correctChars.length + incorrectChars.length;
-        const score = total === 0 ? 0 : correctChars.length / total;
-        if (score > bestScore) bestScore = score;
+      outer: for (const transcript of transcripts) {
+        for (const token of this.tokenize(transcript)) {
+          if (this.markWord({ correctAnswer: word, studentAnswer: token })) {
+            bestScore = 1;
+            break outer;
+          }
+          const score = this.alignScore(
+            wordChars,
+            Array.from(this.clean(token)),
+          );
+          if (score > bestScore) bestScore = score;
+        }
       }
       if (bestScore < worstScore) {
         worstScore = bestScore;

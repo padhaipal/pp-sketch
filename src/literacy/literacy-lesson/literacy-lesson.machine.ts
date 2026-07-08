@@ -899,7 +899,7 @@ export const machine = setup({
 
     // Reaching this final state makes the persisted snapshot's status 'done'.
     // The lesson-level progression SQL in literacy-lesson.service.ts
-    // (selectNextLesson) matches snapshot->>'status' = 'done' to count a
+    // (selectNextString) matches snapshot->>'status' = 'done' to count a
     // lesson as completed — keep in sync if this state or the snapshot shape
     // changes.
     complete: {

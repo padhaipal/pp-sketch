@@ -33,26 +33,40 @@ const NEW_USER_THRESHOLD = 3;
 const SENTENCE_LEVEL_THRESHOLD = 7;
 const MAX_LESSON_LEVEL = 12;
 // Joins the per-engine STT transcripts for the word-lesson evaluators. The
-// token is stripped by their clean() step so it can never match anything,
+// tilde is stripped by their clean() step so it can never match anything,
 // but it stops the tail of one engine's transcript and the head of the
-// other's from jointly forming a correct answer. Sentence evaluation ignores
-// the combined string entirely and works on the per-engine transcripts.
-const TRANSCRIPT_JOIN = ' | ';
+// other's from jointly forming a correct answer. Deliberately NOT '|', which
+// reads like the Devanagari danda (।) and could plausibly appear in a
+// transcript; a tilde never occurs naturally in Hindi STT output. Sentence
+// evaluation ignores the combined string entirely and works on the
+// per-engine transcripts.
+const TRANSCRIPT_JOIN = ' ~ ';
 
-interface NextLesson {
+interface NextString {
   word: string;
   sentence: string[] | null;
 }
 
+// Splits a persisted `word` column value into its component words. Sentences
+// are stored space-joined today, but tolerate full paragraph punctuation
+// (danda, double danda, commas, Latin stops, quotes, dashes) so a future
+// punctuated paragraph still round-trips into clean words for recency
+// exclusion and level derivation.
+function splitLessonWords(stored: string): string[] {
+  return stored
+    .split(/[\s।॥,.!?;:'"“”‘’()[\]{}\-–—~]+/u)
+    .filter((w) => w.length > 0);
+}
+
 // Lesson level of a persisted `word` column value: grapheme count for a
-// single word, 7 + log2(word count) for a space-joined sentence (the inverse
-// of the 2^(level − 7) sizing rule).
+// single word, 7 + log2(word count) for a stored sentence (the inverse of
+// the 2^(level − 7) sizing rule).
 function lessonLevel(stored: string): number {
-  const parts = stored.split(' ');
+  const parts = splitLessonWords(stored);
   if (parts.length > 1) {
     return SENTENCE_LEVEL_THRESHOLD + Math.ceil(Math.log2(parts.length));
   }
-  return Array.from(stored).length;
+  return Array.from(parts[0] ?? stored).length;
 }
 
 @Injectable()
@@ -127,7 +141,7 @@ export class LiteracyLessonService {
 
         if (startFresh) {
           // 5. Start a new lesson
-          const lesson = await this.selectNextLesson(validated.user.id);
+          const lesson = await this.selectNextString(validated.user.id);
           const actor = createActor(machine, {
             input: {
               word: lesson.word,
@@ -183,7 +197,7 @@ export class LiteracyLessonService {
         // For a sentence lesson the word column always holds the full
         // space-joined sentence (even mid-drill, when context.word is the
         // drilled word) — recency exclusion and lesson-level derivation in
-        // selectNextLesson read it back.
+        // selectNextString read it back.
         const persistedWord: string = snapshot.context.sentence?.length
           ? snapshot.context.sentence.join(' ')
           : snapshot.context.word;
@@ -311,8 +325,8 @@ export class LiteracyLessonService {
     );
   }
 
-  private async selectNextLesson(userId: string): Promise<NextLesson> {
-    return tracer.startActiveSpan('literacy.selectNextLesson', async (span) => {
+  private async selectNextString(userId: string): Promise<NextString> {
+    return tracer.startActiveSpan('literacy.selectNextString', async (span) => {
       span.setAttribute('pp.user.id', userId);
       try {
         // Single DB round-trip
@@ -401,8 +415,9 @@ export class LiteracyLessonService {
         }
 
         // Exclude recent words. A stored sentence lesson contributes each of
-        // its component words to the exclusion set.
-        const recentSet = new Set(recentWords.flatMap((w) => w.split(' ')));
+        // its component words to the exclusion set (punctuation-tolerant so a
+        // future punctuated paragraph still excludes its clean words).
+        const recentSet = new Set(recentWords.flatMap(splitLessonWords));
         let candidates = this.wordList.filter((w) => !recentSet.has(w));
 
         // Determine max lesson level (grapheme length for words; sentence
@@ -416,7 +431,7 @@ export class LiteracyLessonService {
         } else {
           if (recentWords.length === 0) {
             this.logger.warn(
-              `selectNextLesson: distinct_word_count=${distinctWordCount} but recent_words is empty for user ${userId}; falling back to min word length`,
+              `selectNextString: distinct_word_count=${distinctWordCount} but recent_words is empty for user ${userId}; falling back to min word length`,
             );
             maxLength = MIN_WORD_LENGTH_FLOOR;
           } else {
@@ -448,7 +463,7 @@ export class LiteracyLessonService {
             // Not enough non-recent words — top up ignoring recency rather
             // than shrinking the sentence.
             this.logger.warn(
-              `selectNextLesson: only ${picked.length}/${wordCount} non-recent words available for user ${userId} — topping up ignoring recency`,
+              `selectNextString: only ${picked.length}/${wordCount} non-recent words available for user ${userId} — topping up ignoring recency`,
             );
             const pickedSet = new Set(picked);
             const fallbackPool = this.wordList.filter((w) => !pickedSet.has(w));
@@ -461,7 +476,7 @@ export class LiteracyLessonService {
           span.setAttribute('pp.lesson.word.count', picked.length);
           span.setAttribute('pp.lesson.word.selected', picked.join(' '));
           this.logger.log(
-            `selectNextLesson: sentence selected=${picked.join(' ')} level=${String(maxLength)} words=${String(picked.length)}`,
+            `selectNextString: sentence selected=${picked.join(' ')} level=${String(maxLength)} words=${String(picked.length)}`,
           );
           return { word: '', sentence: picked };
         }
@@ -514,14 +529,14 @@ export class LiteracyLessonService {
 
         if (unknownGraphemes.size > 0) {
           this.logger.warn(
-            `selectNextLesson: ${unknownGraphemes.size} unknown grapheme(s) for user ${userId}: [${Array.from(unknownGraphemes).join(', ')}]`,
+            `selectNextString: ${unknownGraphemes.size} unknown grapheme(s) for user ${userId}: [${Array.from(unknownGraphemes).join(', ')}]`,
           );
         }
 
         // Safety fallback
         if (scored.length === 0) {
           this.logger.warn(
-            'selectNextLesson: no candidates after filtering — falling back to random two-letter word',
+            'selectNextString: no candidates after filtering — falling back to random two-letter word',
           );
           const twoLetterWords = this.wordList.filter(
             (w) => Array.from(w).length === 2,
@@ -573,7 +588,7 @@ export class LiteracyLessonService {
         span.setAttribute('pp.lesson.word.top_5', topFive);
 
         this.logger.log(
-          `selectNextLesson: selected=${selected} max_length=${String(maxLength)} baseline=${baseline.toFixed(3)} reviewed=${String(reviewedScores.length)} unique_in_add_window=${String(uniqueInAddWindow)} unique_in_keep_window=${String(uniqueInKeepWindow)} candidates=${String(scored.length)} top5=[${topFive}]`,
+          `selectNextString: selected=${selected} max_length=${String(maxLength)} baseline=${baseline.toFixed(3)} reviewed=${String(reviewedScores.length)} unique_in_add_window=${String(uniqueInAddWindow)} unique_in_keep_window=${String(uniqueInKeepWindow)} candidates=${String(scored.length)} top5=[${topFive}]`,
         );
         return { word: selected, sentence: null };
       } catch (err) {

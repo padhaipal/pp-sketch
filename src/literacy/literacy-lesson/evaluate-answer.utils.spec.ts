@@ -2,6 +2,8 @@ import {
   markWord,
   markImage,
   markLetter,
+  markSentence,
+  rankWorstWord,
   detectInsertion,
   detectIncorrectEndMatra,
   detectIncorrectMiddleMatra,
@@ -1226,5 +1228,205 @@ describe('evaluate-answer.utils', () => {
         markWord({ correctAnswer: 'zzzzzzzzzz', studentAnswer: student }),
       ).toBe(false);
     });
+  });
+});
+
+/* ───────── markSentence ───────── */
+describe('markSentence', () => {
+  const WORDS = ['नल', 'घर', 'कमल'];
+
+  it('accepts an exact in-order reading', () => {
+    expect(markSentence({ words: WORDS, transcripts: ['नल घर कमल'] })).toBe(
+      true,
+    );
+  });
+
+  it('accepts extra words before and after the sentence (framing junk)', () => {
+    expect(
+      markSentence({
+        words: ['the', 'bird', 'sang', 'a', 'sentence', 'to', 'the', 'dog'],
+        transcripts: [
+          'The sentence is the bird sang a sentence to the dog. That is the end of the sentence.',
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts a cumulative build-up reading (false starts repeated)', () => {
+    expect(
+      markSentence({
+        words: ['the', 'bird', 'sang', 'a', 'sentence', 'to', 'the', 'dog'],
+        transcripts: [
+          'The bird sang. The bird sang a sentence. The bird sang a sentence to the dog.',
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts a Hindi cumulative build-up with danda punctuation', () => {
+    expect(
+      markSentence({
+        words: WORDS,
+        transcripts: ['नल। नल घर। नल घर कमल।'],
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts extra words interleaved between sentence words', () => {
+    expect(
+      markSentence({
+        words: WORDS,
+        transcripts: ['नल फिर घर उसके बाद कमल'],
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects an out-of-order reading', () => {
+    expect(markSentence({ words: WORDS, transcripts: ['घर नल कमल'] })).toBe(
+      false,
+    );
+  });
+
+  it('rejects a reading with a word missing', () => {
+    expect(markSentence({ words: WORDS, transcripts: ['नल कमल'] })).toBe(false);
+  });
+
+  it('never matches across the seam of two engine transcripts', () => {
+    // Each engine alone lacks the full ordered sentence.
+    expect(
+      markSentence({ words: ['नल', 'घर'], transcripts: ['नल', 'घर'] }),
+    ).toBe(false);
+  });
+
+  it('passes when any single transcript contains the full ordered sentence', () => {
+    expect(
+      markSentence({
+        words: ['नल', 'घर'],
+        transcripts: ['घर नल', 'कुछ नल घर ठीक'],
+      }),
+    ).toBe(true);
+  });
+
+  it('applies phoneme-family equivalence per word (ण for न, ठ for ट)', () => {
+    expect(markSentence({ words: ['नल', 'टब'], transcripts: ['णल ठब'] })).toBe(
+      true,
+    );
+  });
+
+  it('applies the markWord transcription hardcodes per word (एक ↔ 1)', () => {
+    expect(markSentence({ words: ['एक', 'घर'], transcripts: ['1 घर'] })).toBe(
+      true,
+    );
+  });
+
+  it('splits tokens glued together by punctuation with no space', () => {
+    expect(markSentence({ words: ['नल', 'घर'], transcripts: ['नल।घर'] })).toBe(
+      true,
+    );
+  });
+
+  it('tolerates commas, quotes and double danda around words', () => {
+    expect(
+      markSentence({
+        words: WORDS,
+        transcripts: ['"नल", घर॥ कमल!'],
+      }),
+    ).toBe(true);
+  });
+
+  it('requires a repeated expected word to actually be repeated', () => {
+    expect(markSentence({ words: ['नल', 'नल'], transcripts: ['नल'] })).toBe(
+      false,
+    );
+    expect(markSentence({ words: ['नल', 'नल'], transcripts: ['नल नल'] })).toBe(
+      true,
+    );
+  });
+
+  it('returns false for an empty word list or empty transcripts', () => {
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    expect(markSentence({ words: [], transcripts: ['नल'] })).toBe(false);
+    consoleError.mockRestore();
+    expect(markSentence({ words: ['नल'], transcripts: [] })).toBe(false);
+    expect(markSentence({ words: ['नल'], transcripts: [''] })).toBe(false);
+  });
+
+  it('ignores the tilde transcript separator token', () => {
+    // A combined transcript can reach markSentence via the fallback path;
+    // the tilde must never count as a word.
+    expect(
+      markSentence({ words: ['नल', 'घर'], transcripts: ['नल ~ घर'] }),
+    ).toBe(true);
+  });
+});
+
+/* ───────── rankWorstWord ───────── */
+describe('rankWorstWord', () => {
+  it('returns the word that is completely absent from the answer', () => {
+    expect(
+      rankWorstWord({
+        words: ['नल', 'घर', 'कमल'],
+        transcripts: ['नल कमल'],
+      }),
+    ).toBe('घर');
+  });
+
+  it('a family-equivalent reading counts as fully correct (ण for न)', () => {
+    // नल was read as णल (same family) — घर is the truly missing word.
+    expect(
+      rankWorstWord({
+        words: ['नल', 'घर'],
+        transcripts: ['णल'],
+      }),
+    ).toBe('घर');
+  });
+
+  it('a hardcode-equivalent reading counts as fully correct (एक as 1)', () => {
+    expect(
+      rankWorstWord({
+        words: ['एक', 'घर'],
+        transcripts: ['1'],
+      }),
+    ).toBe('घर');
+  });
+
+  it('ranks a partially-wrong word above a fully-wrong word', () => {
+    // कमल read as कम (2/3 graphemes) beats घर read as nothing similar (0).
+    expect(
+      rankWorstWord({
+        words: ['कमल', 'घर'],
+        transcripts: ['कम टटट'],
+      }),
+    ).toBe('घर');
+  });
+
+  it('ties go to the earliest word in the sentence', () => {
+    expect(
+      rankWorstWord({
+        words: ['नल', 'घर'],
+        transcripts: ['टटट'],
+      }),
+    ).toBe('नल');
+  });
+
+  it('scores across all transcripts, taking each word’s best', () => {
+    // घर appears only in the second engine's transcript.
+    expect(
+      rankWorstWord({
+        words: ['नल', 'घर', 'कमल'],
+        transcripts: ['नल घर', 'घर कमल'],
+      }),
+    ).toBe('नल'); // all words found → tie at 1 → earliest
+  });
+
+  it('ignores punctuation when scoring', () => {
+    expect(
+      rankWorstWord({
+        words: ['नल', 'घर', 'कमल'],
+        transcripts: ['नल। कमल!'],
+      }),
+    ).toBe('घर');
   });
 });
