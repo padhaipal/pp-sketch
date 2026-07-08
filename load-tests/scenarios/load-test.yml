@@ -2,54 +2,59 @@ config:
   target: '{{ $env.WABOT_STAGING_BASE }}'
   http:
     timeout: 5
-    # Shared connection pool (per worker process) — same rationale as
-    # to-failure.yml: one-socket-per-VU + think:30 piles up thousands of
-    # concurrent connections and latched Railway's edge on 2026-07-08
-    # (service-wide inbound blackout). Meta delivers webhooks over a few
-    # reused connections, so a small pool is also the truer load model.
+    # Shared connection pool (per worker process). One-socket-per-VU +
+    # think:30 piles up concurrent connections and latched Railway's edge
+    # on 2026-07-08 (service-wide inbound blackout). Meta delivers webhooks
+    # over a few reused connections, so a small pool is also the truer
+    # load model.
     pool: 125
   processor: '../processors/webhook.js'
   # ---------------------------------------------------------------------
-  # Capacity-pinning ladder. The 10x ladder from #23 / #24 bracketed
-  # capacity between step_10 (20 webhooks/s, clean) and step_100 (200
-  # webhooks/s, collapsed) — too coarse to land on a number.
-  # 2026-06-26 run sustained ~123 webhooks/s through the broken plateaus
-  # before artillery's connection pool was saturated by timeouts, so the
-  # actual ceiling is somewhere in 100–200 webhooks/s.
+  # Post-merge production-assurance gate (2026-07-08 redesign).
   #
-  # This ladder samples that band at ~30 webhooks/s resolution. Each VU
-  # fires phase_1 + phase_2, so combined webhook rate is 2 × arrivalRate.
-  # The "last passing plateau" defines sustained user capacity:
+  # This is NOT a capacity ladder any more — capacity discovery lives in
+  # to-failure.yml (dispatch manually). Ceiling was measured 2026-07-08:
+  # ingest >1,200 webhooks/s clean; end-to-end pipeline ~390-450 msgs/s
+  # (10 replicas) / ~120-150 msgs/s (2 replicas), PostgreSQL-bound.
   #
-  #   simultaneous-users = last-passing-arrivalRate * 30 s
+  # This gate proves every merge still serves the BUSINESS TARGET:
+  # 1,000 DAU with 100 simultaneous users. 100 simultaneous users at one
+  # message per ~30 s = 3.3 msgs/s. arrivalRate 2 with the two-phase flow
+  # sustains 4 webhooks/s ≈ 120 simultaneous users ≈ 2,900 DAU-equivalent
+  # — the target plus ~20% margin.
   #
-  # because each real user sends roughly one message per 30 s.
+  # HARD PASS/FAIL (ensure plugin): artillery exits non-zero when a
+  # strict check fails, the workflow run goes red, and the daily digest
+  # (which reads gh_runs conclusions) leads with the failure. Thresholds
+  # are calibrated ~5-20x above healthy baseline (ack p95 measured
+  # 25-116 ms across 2026-07-08 runs), so they trip on genuine
+  # degradation, not noise.
   #
-  # Plateaus are 120 s — long enough that pp_bullmq_queue_depth /
-  # dwell-p95 reach steady state (typical convergence ~30 s) AND short
-  # enough that the whole ladder fits inside the 12-min step timeout
-  # added in #24 (so artillery exits naturally and report.json is
-  # written). Total declared runtime: 30 + 5*120 = 630 s = 10.5 min.
+  # Runtime: 15 s warmup + 240 s plateau + ~35 s drain ≈ 5 min.
   # ---------------------------------------------------------------------
+  plugins:
+    ensure:
+      thresholds:
+        - 'http.response_time.p95': 500
+        - 'http.response_time.p99': 1500
+      conditions:
+        # Any webhook that errored or timed out fails the gate outright.
+        - expression: 'vusers.failed == 0'
+          strict: true
+        # Guard against a silently-empty run passing (DNS failure, wrong
+        # target, artillery bug): the 240 s plateau at 2 VU/s must have
+        # actually created its ~495 VUs.
+        - expression: 'vusers.created > 400'
+          strict: true
+  ensure:
+    maxErrorRate: 0
   phases:
     - name: warmup
-      duration: 30
-      arrivalRate: 5
-    - name: step_30
-      duration: 120
-      arrivalRate: 30 # 60 webhooks/s — confirmed safe
-    - name: step_50
-      duration: 120
-      arrivalRate: 50 # 100 webhooks/s — comfortable headroom
-    - name: step_60
-      duration: 120
-      arrivalRate: 60 # 120 webhooks/s — at observed sustained rate
-    - name: step_75
-      duration: 120
-      arrivalRate: 75 # 150 webhooks/s — first danger plateau
-    - name: step_90
-      duration: 120
-      arrivalRate: 90 # 180 webhooks/s — just below known-broken 200
+      duration: 15
+      arrivalRate: 1
+    - name: target_load
+      duration: 240
+      arrivalRate: 2 # 4 webhooks/s sustained ≈ 120 simultaneous users
 
 scenarios:
   - name: webhook
@@ -62,12 +67,8 @@ scenarios:
             x-hub-signature-256: '{{ signature }}'
             x-test-phase: phase_1
           body: '{{ payload }}'
-      # 30 s think between phase_1 and phase_2. Above wabot's 25 s
-      # consecutive-check TTL so phase_2 takes the non-consecutive
-      # lesson-flow path (more realistic than the prior `think: 2` which
-      # short-circuited that branch). At 90 VU/s × ~35 s VU lifetime ≈
-      # 3 150 concurrent VUs — well within artillery memory budget on
-      # one GHA runner, so the previous `workers: 8` is not needed.
+      # 30 s think between phase_1 and phase_2 — above wabot's 25 s
+      # consecutive-check TTL so phase_2 exercises the lesson-flow path.
       - think: 30
       - function: prepareWebhookFollowUp
       - post:
