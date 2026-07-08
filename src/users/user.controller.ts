@@ -24,6 +24,7 @@ import { toLogId } from '../otel/pii';
 import {
   LoginDto,
   PatchUserDto,
+  DashboardSummaryResponse,
   DashboardUserRow,
   UserMediaResponse,
   ScoreRow,
@@ -64,6 +65,13 @@ export class UserController {
     @Body() body: ActivityTimeRequestDto,
   ): Promise<ActivityTimeResponse> {
     return this.userActivityService.getActivityTime(body);
+  }
+
+  // Declared before the ':id/*' routes so 'dashboard' is never captured as an
+  // id. Cached inside the service — see getDashboardSummary.
+  @Get('dashboard/summary')
+  async dashboardSummary(): Promise<DashboardSummaryResponse> {
+    return this.userActivityService.getDashboardSummary();
   }
 
   @Get('dashboard')
