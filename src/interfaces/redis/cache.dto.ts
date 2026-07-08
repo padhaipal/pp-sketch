@@ -1,6 +1,7 @@
 export const CACHE_TTL = {
   USER: 3600,
   MEDIA_BY_STATE_TRANSITION: 86400,
+  DASHBOARD_SUMMARY: 900,
 } as const;
 
 export const CACHE_KEYS = {
@@ -8,4 +9,5 @@ export const CACHE_KEYS = {
   userByExternalId: (externalId: string) => `user:ext:${externalId}`,
   mediaByStateTransitionId: (stateTransitionId: string) =>
     `media:stid:${stateTransitionId}`,
+  dashboardSummary: () => `dashboard:summary`,
 } as const;
