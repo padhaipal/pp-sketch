@@ -1,5 +1,5 @@
 config:
-  target: "{{ $env.WABOT_STAGING_BASE }}"
+  target: '{{ $env.WABOT_STAGING_BASE }}'
   http:
     timeout: 5
     # Shared connection pool (per worker process) — same rationale as
@@ -8,7 +8,7 @@ config:
     # (service-wide inbound blackout). Meta delivers webhooks over a few
     # reused connections, so a small pool is also the truer load model.
     pool: 125
-  processor: "../processors/webhook.js"
+  processor: '../processors/webhook.js'
   # ---------------------------------------------------------------------
   # Capacity-pinning ladder. The 10x ladder from #23 / #24 bracketed
   # capacity between step_10 (20 webhooks/s, clean) and step_100 (200
@@ -59,9 +59,9 @@ scenarios:
           url: /webhook
           headers:
             content-type: application/json
-            x-hub-signature-256: "{{ signature }}"
+            x-hub-signature-256: '{{ signature }}'
             x-test-phase: phase_1
-          body: "{{ payload }}"
+          body: '{{ payload }}'
       # 30 s think between phase_1 and phase_2. Above wabot's 25 s
       # consecutive-check TTL so phase_2 takes the non-consecutive
       # lesson-flow path (more realistic than the prior `think: 2` which
@@ -74,6 +74,6 @@ scenarios:
           url: /webhook
           headers:
             content-type: application/json
-            x-hub-signature-256: "{{ signature }}"
+            x-hub-signature-256: '{{ signature }}'
             x-test-phase: phase_2
-          body: "{{ payload }}"
+          body: '{{ payload }}'
