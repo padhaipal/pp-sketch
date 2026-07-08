@@ -145,6 +145,10 @@ async function buildUserMedia(
             await mediaMetaDataService.findMediaByStateTransitionId(stid);
           appendMediaItems(media, lessonMedia);
         }
+        // Runtime-generated sentence prompt has no media row — send as text.
+        if (lessonResult.sentenceText) {
+          media.push({ type: 'text', body: lessonResult.sentenceText });
+        }
         span.setAttribute('notifier.lesson.status', 'ok');
       } catch (err) {
         span.setAttribute('notifier.lesson.status', 'failed');

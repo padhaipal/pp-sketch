@@ -1,3 +1,5 @@
+import { identifyCharacterStatus } from './identify-character-status.utils';
+
 /* ───────── constants ───────── */
 const CONSONANT_SET = new Set(
   'अआइईउऊऋॠऌॡएऐओऔकखगघङचछजझञटठडढणतथदधनपफबभमयरलवशषसहabcdefghijklmnopqrstuvwxyz'.split(
@@ -58,6 +60,7 @@ const MATRA_TO_VOWEL: Record<string, string> = {
 };
 
 type MarkArgs = { correctAnswer: string; studentAnswer: string };
+type SentenceArgs = { words: string[]; transcripts: string[] };
 
 /* ───────── utility class ───────── */
 class EvaluateAnswer {
@@ -656,6 +659,63 @@ class EvaluateAnswer {
     return word === correctAnswer;
   }
 
+  // A sentence is correct when a single transcript contains every expected
+  // word in order. Matching is an order-preserving subsequence walk, so extra
+  // words before, between, or after the sentence are ignored ("the sentence
+  // reads as follows <sentence> end of sentence" passes). Each word
+  // comparison goes through markWord, so phoneme-family equivalence and the
+  // transcription hardcodes apply per word. Transcripts are checked
+  // individually (never the concatenation of two engines' outputs) so words
+  // straddling the seam between engines cannot fake an in-order match.
+  static markSentence({ words, transcripts }: SentenceArgs): boolean {
+    if (words.length === 0) {
+      console.error('markSentence: words is empty');
+      return false;
+    }
+    for (const transcript of transcripts) {
+      let matched = 0;
+      for (const transcriptWord of transcript.trim().split(/\s+/)) {
+        if (
+          this.markWord({
+            correctAnswer: words[matched],
+            studentAnswer: transcriptWord,
+          })
+        ) {
+          matched++;
+          if (matched === words.length) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Loop over the words of the correct answer and return the one with the
+  // lowest matching score against the student answer: for each expected word
+  // take its best per-transcript character match (fraction of its unique
+  // characters found in place), then pick the minimum. Ties go to the
+  // earliest word in the sentence.
+  static rankWorstWord({ words, transcripts }: SentenceArgs): string {
+    let worstWord = words[0];
+    let worstScore = Infinity;
+    for (const word of words) {
+      let bestScore = 0;
+      for (const transcript of transcripts) {
+        const { correctChars, incorrectChars } = identifyCharacterStatus({
+          correctAnswer: word,
+          studentAnswer: transcript,
+        });
+        const total = correctChars.length + incorrectChars.length;
+        const score = total === 0 ? 0 : correctChars.length / total;
+        if (score > bestScore) bestScore = score;
+      }
+      if (bestScore < worstScore) {
+        worstScore = bestScore;
+        worstWord = word;
+      }
+    }
+    return worstWord;
+  }
+
   static detectIncorrectEndMatra({
     correctAnswer,
     studentAnswer,
@@ -716,8 +776,12 @@ class EvaluateAnswer {
   }
 }
 
-export type { MarkArgs };
+export type { MarkArgs, SentenceArgs };
 export const markWord = (args: MarkArgs) => EvaluateAnswer.markWord(args);
+export const markSentence = (args: SentenceArgs) =>
+  EvaluateAnswer.markSentence(args);
+export const rankWorstWord = (args: SentenceArgs) =>
+  EvaluateAnswer.rankWorstWord(args);
 export const markImage = (args: MarkArgs) => EvaluateAnswer.markImage(args);
 export const markLetter = (args: MarkArgs) => EvaluateAnswer.markLetter(args);
 export const detectInsertion = (args: MarkArgs) =>
