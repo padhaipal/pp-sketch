@@ -120,6 +120,27 @@ export interface DashboardUserRow {
   activity: ActivityDay[];
 }
 
+// GET /users/dashboard/summary — one row per IST day from the earliest record
+// in the DB through today (today is a partial day). All-user aggregates:
+//   users_over_5min — distinct users whose active_ms that IST day > 5 min
+//   active_ms       — total active ms across all users that IST day
+//   letters_learnt  — total (user, letter) pairs in the "learnt" bin as of the
+//                     END of that day (a stock, not a flow — it can go down
+//                     when a child regresses). Increments are day-over-day
+//                     deltas, computed by the client.
+// Activity uses the canonical UserActivityService gap rule; learnt uses the
+// getLetterBins rule (last > seed AND n >= 4 AND min <= seed - 4).
+export interface DashboardSummaryDay {
+  date: string; // IST YYYY-MM-DD
+  users_over_5min: number;
+  active_ms: number;
+  letters_learnt: number;
+}
+
+export interface DashboardSummaryResponse {
+  daily: DashboardSummaryDay[];
+}
+
 // GET /users/:id/metrics — headline numbers for the user page. All computed at
 // read time (no stored columns): days_since_signup from users.created_at;
 // active-minute figures from the canonical UserActivityService logic, bucketed

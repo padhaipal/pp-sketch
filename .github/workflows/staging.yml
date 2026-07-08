@@ -52,6 +52,7 @@ jobs:
         run: npm i -g artillery@2
 
       - name: Run load test
+        id: artillery
         # Step-level cap so artillery is killed cleanly mid-run instead
         # of consuming the whole job budget. Without this, a runaway
         # artillery drain (as on 2026-06-25) blocks Render HTML report /
@@ -101,7 +102,12 @@ jobs:
           TOM_PHONE_E164: ${{ secrets.TOM_PHONE_E164 }}
         run: |
           P95=$(node -e "try { const r = require('./report.json').aggregate.summaries['http.response_time']; console.log(r.p95 ?? 'n/a'); } catch { console.log('n/a'); }")
-          MSG="Staging ${GITHUB_SHA:0:7} - load test complete (p95=${P95}ms, run=${GITHUB_RUN_ID})"
+          RESULT="${{ steps.artillery.outcome }}"
+          case "$RESULT" in
+            success) LABEL="PASS" ;;
+            *)       LABEL="FAILED ($RESULT)" ;;
+          esac
+          MSG="Staging ${GITHUB_SHA:0:7} - load-test gate ${LABEL} (p95=${P95}ms, run=${GITHUB_RUN_ID})"
           BODY=$(jq -nc \
             --arg uid "$TOM_PHONE_E164" \
             --arg msg "$MSG" \

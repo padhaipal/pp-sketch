@@ -281,6 +281,18 @@ describe('UserActivityService.getActivityTime — user identification', () => {
 });
 
 describe('UserActivityService.getTodayActiveTime', () => {
+  beforeEach(() => {
+    // Pin "now" to midday IST. These fixtures place messages a few minutes
+    // in the past relative to now; with real time, a CI run in the first
+    // minutes after IST midnight puts those messages on yesterday's side
+    // of the boundary and the expected totals drop (observed: gate run at
+    // 00:05 IST, 2026-07-09).
+    jest.useFakeTimers().setSystemTime(new Date('2026-05-15T06:30:00Z'));
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('returns 0/0 when no messages exist today', async () => {
     const userRepo = makeUserRepo(jest.fn());
     const mediaRepo = makeMediaRepo([]);

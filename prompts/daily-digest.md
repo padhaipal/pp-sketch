@@ -81,7 +81,14 @@ ONE short paragraph (not two). Combine week + month deltas. State only the anoma
 At most one sentence on the single most surprising/cross-cutting observation that the sections above wouldn't make obvious. Skip if nothing.
 
 ## Load test
-Skip this section entirely if `gh_runs` contains no `Staging post-merge` workflow run that completed within the window. Otherwise:
+FIRST, regardless of anything else in this prompt: if `gh_runs` contains ANY `Staging post-merge` run in the window whose `conclusion` is not `success`, open the ENTIRE digest (above the Errors section) with an alert block:
+
+> ## 🚨 Load-test gate FAILED
+> Run <databaseId> on `<headBranch>` concluded `<conclusion>` — https://github.com/padhaipal/pp-sketch/actions/runs/<databaseId>
+
+The post-merge workflow enforces hard pass/fail thresholds (artillery ensure plugin: ack p95 < 500 ms, p99 < 1500 ms, zero failed webhooks at the 1,000-DAU / 100-simultaneous-user target load), so a non-success conclusion means the merge degraded the serving path or staging is unhealthy — it is the single most important line of the digest.
+
+Skip the rest of this section entirely if `gh_runs` contains no `Staging post-merge` workflow run that completed within the window. Otherwise:
 
 1. Identify the most recent such run as a sanity check that load-test traffic should exist in the window. (You do NOT use the run's timestamps to filter metrics — the `load_test="true"` label does that cleanly.)
 2. Read `.loadtest_metrics` from the input file — it already contains the window's p50/p95/p99 e2e latency per `test_phase` (delivered outcome) and the outcome counts per phase (`e2e_outcomes`). Report those per phase. If a key is null or a phase has no series, say plainly that it was not retrieved / had 0 samples for that phase and continue.
