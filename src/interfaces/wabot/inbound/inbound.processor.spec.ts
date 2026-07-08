@@ -1648,3 +1648,53 @@ describe('processWabotInboundJob — handleSendResult logging (onboarding + audi
     );
   });
 });
+
+describe('processWabotInboundJob — sentence text rendering', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('appends the runtime-generated sentence as a trailing text message', async () => {
+    const mocks = makeMocks();
+    mocks.literacyLessonService.processAnswer.mockResolvedValue({
+      stateTransitionIds: ['sentence-start-sentence-initial'],
+      isComplete: false,
+      sentenceText: 'नल घर कमल',
+    });
+    await runJob(createAudioJob(), mocks);
+    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
+    expect(media[media.length - 1]).toEqual({
+      type: 'text',
+      body: 'नल घर कमल',
+    });
+  });
+
+  it('uses the fresh lesson’s sentenceText when the first lesson completes', async () => {
+    const mocks = makeMocks();
+    mocks.literacyLessonService.processAnswer
+      .mockResolvedValueOnce({
+        stateTransitionIds: ['कमल-word-complete-correct-first'],
+        isComplete: true,
+      })
+      .mockResolvedValueOnce({
+        stateTransitionIds: ['sentence-start-sentence-initial'],
+        isComplete: false,
+        sentenceText: 'अब सूरज',
+      });
+    await runJob(createAudioJob(), mocks);
+    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
+    expect(media[media.length - 1]).toEqual({
+      type: 'text',
+      body: 'अब सूरज',
+    });
+  });
+
+  it('appends no text message when no sentence is in play', async () => {
+    const mocks = makeMocks();
+    await runJob(createAudioJob(), mocks);
+    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
+    expect(
+      media.filter((m: { type: string }) => m.type === 'text'),
+    ).toHaveLength(0);
+  });
+});

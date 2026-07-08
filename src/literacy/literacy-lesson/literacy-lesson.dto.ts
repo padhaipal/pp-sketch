@@ -26,6 +26,11 @@ export interface ProcessAnswerOptions {
 export interface ProcessAnswerResult {
   stateTransitionIds: string[];
   isComplete: boolean;
+  // Set when the next prompt for the student is a sentence (fresh sentence
+  // lesson or a retry after a word drill). Sentences are generated at
+  // runtime, so unlike words their text cannot come from pre-generated
+  // media_metadata rows — the caller must render this as a text message.
+  sentenceText?: string;
 }
 
 export function validateProcessAnswerOptions(

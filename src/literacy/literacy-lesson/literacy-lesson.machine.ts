@@ -3,6 +3,8 @@ import {
   markWord,
   markLetter,
   markImage,
+  markSentence,
+  rankWorstWord,
   detectIncorrectEndMatra,
   detectIncorrectMiddleMatra,
   detectInsertion,
@@ -19,6 +21,9 @@ export const STALE_LESSON_RESTART_STATE_TRANSITION_ID = 'stale-lesson-restart';
 
 interface Context {
   word: string;
+  // Words of the sentence in display order; null for a plain word lesson.
+  sentence: string[] | null;
+  sentenceErrors: number;
   wrongLetters: string[];
   wordErrors: number;
   imageErrors: number;
@@ -44,7 +49,19 @@ function normalizeKeys(keys: CounterKey | CounterKey[]): CounterKey[] {
 type Events = {
   type: 'ANSWER';
   studentAnswer: string;
+  // Per-STT-engine transcripts. Sentence matching must never run over the
+  // concatenation of two engines' outputs (the seam can fake an in-order
+  // match), so sentence guards evaluate each transcript individually.
+  studentTranscripts?: string[];
 };
+
+// Sentence guards fall back to the combined answer when per-engine
+// transcripts are absent (e.g. a snapshot driven by an older caller).
+function transcriptsOf(event: Events): string[] {
+  return event.studentTranscripts && event.studentTranscripts.length > 0
+    ? event.studentTranscripts
+    : [event.studentAnswer];
+}
 
 const NO_IMAGE_LETTERS = new Set(['ञ', 'ण']);
 
@@ -54,7 +71,11 @@ export const machine = setup({
   types: {
     context: {} as Context,
     events: {} as Events,
-    input: {} as { word: string; userMessageId: string },
+    input: {} as {
+      word: string;
+      userMessageId: string;
+      sentence?: string[];
+    },
   },
 
   guards: {
@@ -106,25 +127,141 @@ export const machine = setup({
   },
 }).createMachine({
   id: 'literacy-lesson',
-  initial: 'word',
+  initial: 'start',
 
-  context: ({ input }) => ({
-    word: input.word,
-    wrongLetters: [],
-    wordErrors: 0,
-    imageErrors: 0,
-    letterErrors: 0,
-    letterImageErrors: 0,
-    letterNoImageErrors: 0,
-    answer: input.word,
-    answerCorrect: null,
-    stateTransitionId: `${input.word}-start-word-initial`,
-    userMessageId: input.userMessageId,
-    pendingCorrect: [],
-    pendingIncorrect: [],
-  }),
+  context: ({ input }) => {
+    // Normalize once: an empty sentence array is a word lesson everywhere
+    // (context, answer, stid, and the start router must all agree).
+    const sentence =
+      input.sentence && input.sentence.length > 0 ? input.sentence : null;
+    return {
+      word: input.word,
+      sentence,
+      sentenceErrors: 0,
+      wrongLetters: [],
+      wordErrors: 0,
+      imageErrors: 0,
+      letterErrors: 0,
+      letterImageErrors: 0,
+      letterNoImageErrors: 0,
+      answer: sentence ? sentence.join(' ') : input.word,
+      answerCorrect: null,
+      stateTransitionId: sentence
+        ? 'sentence-start-sentence-initial'
+        : `${input.word}-start-word-initial`,
+      userMessageId: input.userMessageId,
+      pendingCorrect: [],
+      pendingIncorrect: [],
+    };
+  },
 
   states: {
+    // Pure router so a lesson can begin at either level. Guards use `!= null`
+    // (not a strict null check) because snapshots persisted before the
+    // sentence layer rehydrate with `sentence: undefined`.
+    start: {
+      always: [
+        {
+          guard: ({ context }) =>
+            context.sentence != null && context.sentence.length > 0,
+          target: 'sentence',
+        },
+        {
+          target: 'word',
+        },
+      ],
+    },
+
+    sentence: {
+      entry: [
+        assign({ answer: ({ context }) => (context.sentence ?? []).join(' ') }),
+      ],
+      on: {
+        ANSWER: [
+          // Student read the whole sentence correctly on the first attempt,
+          // mark every letter of every word as correct.
+          {
+            guard: and([
+              ({ context, event }) =>
+                markSentence({
+                  words: context.sentence ?? [],
+                  transcripts: transcriptsOf(event),
+                }),
+              ({ context }) => context.sentenceErrors === 0,
+            ]),
+            target: 'complete',
+            actions: [
+              { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
+              assign({
+                stateTransitionId: () =>
+                  'sentence-sentence-complete-correct-first',
+              }),
+              assign({
+                pendingCorrect: ({ context }) =>
+                  Array.from((context.sentence ?? []).join('')),
+              }),
+            ],
+          },
+          // Student read the whole sentence correctly on the retry,
+          // mark every letter of every word as correct.
+          {
+            guard: ({ context, event }) =>
+              markSentence({
+                words: context.sentence ?? [],
+                transcripts: transcriptsOf(event),
+              }),
+            target: 'complete',
+            actions: [
+              { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
+              assign({
+                stateTransitionId: () =>
+                  'sentence-sentence-complete-correct-retry',
+              }),
+              assign({
+                pendingCorrect: ({ context }) =>
+                  Array.from((context.sentence ?? []).join('')),
+              }),
+            ],
+          },
+          // Second failed attempt at the sentence, move on to the next lesson.
+          {
+            guard: ({ context }) => context.sentenceErrors >= 1,
+            target: 'complete',
+            actions: [
+              { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
+              assign({
+                stateTransitionId: () => 'sentence-sentence-complete-maxErrors',
+              }),
+            ],
+          },
+          // First failed attempt: drill the worst-read word through the
+          // existing word lesson, then come back for the retry.
+          {
+            target: 'word',
+            actions: [
+              { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
+              { type: 'increment', params: { keys: 'sentenceErrors' } },
+              assign({
+                word: ({ context, event }) =>
+                  rankWorstWord({
+                    words: context.sentence ?? [],
+                    transcripts: transcriptsOf(event),
+                  }),
+              }),
+              assign({
+                stateTransitionId: ({ context }) =>
+                  `${context.word}-sentence-word-drillWord`,
+              }),
+            ],
+          },
+        ],
+      },
+    },
+
     word: {
       entry: [
         assign({
@@ -134,6 +271,44 @@ export const machine = setup({
       ],
       on: {
         ANSWER: [
+          // (Sentence drill) student got the drilled word correct on the first
+          // try — mark its letters correct and return for the sentence retry.
+          {
+            guard: and([
+              { type: 'checkAnswer', params: { fn: markWord } },
+              ({ context }) => context.sentence != null,
+              ({ context }) => context.wordErrors === 0,
+            ]),
+            target: 'sentence',
+            actions: [
+              { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
+              assign({
+                stateTransitionId: () =>
+                  'sentence-word-sentence-correct-retrySentence',
+              }),
+              assign({
+                pendingCorrect: ({ context }) => Array.from(context.word),
+              }),
+            ],
+          },
+          // (Sentence drill) student got the drilled word correct on a
+          // subsequent try — return for the sentence retry, no score change.
+          {
+            guard: and([
+              { type: 'checkAnswer', params: { fn: markWord } },
+              ({ context }) => context.sentence != null,
+            ]),
+            target: 'sentence',
+            actions: [
+              { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
+              assign({
+                stateTransitionId: () =>
+                  'sentence-word-sentence-correct-retrySentence',
+              }),
+            ],
+          },
           // Student got the word correct on the first try, mark all letters in the word as correct.
           {
             guard: and([
@@ -729,9 +904,10 @@ export const machine = setup({
     },
 
     // Reaching this final state makes the persisted snapshot's status 'done'.
-    // The word-length progression SQL in literacy-lesson.service.ts
-    // (selectNextWord) matches snapshot->>'status' = 'done' to count a word
-    // as completed — keep in sync if this state or the snapshot shape changes.
+    // The lesson-level progression SQL in literacy-lesson.service.ts
+    // (selectNextString) matches snapshot->>'status' = 'done' to count a
+    // lesson as completed — keep in sync if this state or the snapshot shape
+    // changes.
     complete: {
       type: 'final',
     },

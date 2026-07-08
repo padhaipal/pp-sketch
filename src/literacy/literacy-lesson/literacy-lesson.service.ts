@@ -26,6 +26,48 @@ const SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME = 15;
 const MIN_UNIQUE_WORDS_FOR_PROGRESS = 3;
 const MIN_WORD_LENGTH_FLOOR = 2;
 const NEW_USER_THRESHOLD = 3;
+// Above this lesson level the student gets sentences instead of single words:
+// level 8 → 2 words, 9 → 4, 10 → 8 … (2^(level − 7)), clamped at level 12
+// (32 words) so ten sentences' worth of recency exclusions can never exhaust
+// the ~517-word list.
+const SENTENCE_LEVEL_THRESHOLD = 7;
+const MAX_LESSON_LEVEL = 12;
+// Joins the per-engine STT transcripts for the word-lesson evaluators. The
+// tilde is stripped by their clean() step so it can never match anything,
+// but it stops the tail of one engine's transcript and the head of the
+// other's from jointly forming a correct answer. Deliberately NOT '|', which
+// reads like the Devanagari danda (।) and could plausibly appear in a
+// transcript; a tilde never occurs naturally in Hindi STT output. Sentence
+// evaluation ignores the combined string entirely and works on the
+// per-engine transcripts.
+const TRANSCRIPT_JOIN = ' ~ ';
+
+interface NextString {
+  word: string;
+  sentence: string[] | null;
+}
+
+// Splits a persisted `word` column value into its component words. Sentences
+// are stored space-joined today, but tolerate full paragraph punctuation
+// (danda, double danda, commas, Latin stops, quotes, dashes) so a future
+// punctuated paragraph still round-trips into clean words for recency
+// exclusion and level derivation.
+function splitLessonWords(stored: string): string[] {
+  return stored
+    .split(/[\s।॥,.!?;:'"“”‘’()[\]{}\-–—~]+/u)
+    .filter((w) => w.length > 0);
+}
+
+// Lesson level of a persisted `word` column value: grapheme count for a
+// single word, 7 + log2(word count) for a stored sentence (the inverse of
+// the 2^(level − 7) sizing rule).
+function lessonLevel(stored: string): number {
+  const parts = splitLessonWords(stored);
+  if (parts.length > 1) {
+    return SENTENCE_LEVEL_THRESHOLD + Math.ceil(Math.log2(parts.length));
+  }
+  return Array.from(parts[0] ?? stored).length;
+}
 
 @Injectable()
 export class LiteracyLessonService {
@@ -59,10 +101,10 @@ export class LiteracyLessonService {
 
         // 2. Build combined transcript
         let combinedTranscript: string | undefined;
+        let transcriptTexts: string[] | undefined;
         if (validated.transcripts && validated.transcripts.length > 0) {
-          combinedTranscript = validated.transcripts
-            .map((t) => t.text ?? '')
-            .join(' ');
+          transcriptTexts = validated.transcripts.map((t) => t.text ?? '');
+          combinedTranscript = transcriptTexts.join(TRANSCRIPT_JOIN);
         }
 
         // 3. Find current state
@@ -99,9 +141,13 @@ export class LiteracyLessonService {
 
         if (startFresh) {
           // 5. Start a new lesson
-          const word = await this.selectNextWord(validated.user.id);
+          const lesson = await this.selectNextString(validated.user.id);
           const actor = createActor(machine, {
-            input: { word, userMessageId: validated.user_message_id },
+            input: {
+              word: lesson.word,
+              sentence: lesson.sentence ?? undefined,
+              userMessageId: validated.user_message_id,
+            },
           });
           actor.start();
 
@@ -132,6 +178,7 @@ export class LiteracyLessonService {
           actor.send({
             type: 'ANSWER',
             studentAnswer: combinedTranscript,
+            studentTranscripts: transcriptTexts,
           });
 
           snapshot = actor.getSnapshot();
@@ -147,6 +194,13 @@ export class LiteracyLessonService {
         const answer: string | null = snapshot.context.answer ?? null;
         const answerCorrect: boolean | null =
           snapshot.context.answerCorrect ?? null;
+        // For a sentence lesson the word column always holds the full
+        // space-joined sentence (even mid-drill, when context.word is the
+        // drilled word) — recency exclusion and lesson-level derivation in
+        // selectNextString read it back.
+        const persistedWord: string = snapshot.context.sentence?.length
+          ? snapshot.context.sentence.join(' ')
+          : snapshot.context.word;
         const rows: unknown[] = await this.dataSource.query(
           `INSERT INTO literacy_lesson_states (user_id, user_message_id, word, answer, answer_correct, snapshot, created_at)
            SELECT $1, $2, $3, $4, $5, $6, now()
@@ -156,7 +210,7 @@ export class LiteracyLessonService {
           [
             validated.user.id,
             validated.user_message_id,
-            snapshot.context.word,
+            persistedWord,
             answer,
             answerCorrect,
             JSON.stringify(snapshot),
@@ -210,9 +264,21 @@ export class LiteracyLessonService {
           span.setAttribute('pp.lesson.word', snapshotContext.word);
         }
 
+        // The next prompt is the sentence itself (fresh sentence lesson or a
+        // retry after a word drill). Its text is generated at runtime, so the
+        // caller must send it as a text message — see ProcessAnswerResult.
+        const sentenceText: string | undefined =
+          snapshot.value === 'sentence' && snapshot.context.sentence?.length
+            ? snapshot.context.sentence.join(' ')
+            : undefined;
+        if (sentenceText !== undefined) {
+          span.setAttribute('pp.lesson.sentence', sentenceText);
+        }
+
         return {
           stateTransitionIds,
           isComplete,
+          sentenceText,
         };
       } catch (err) {
         span.setStatus({
@@ -259,8 +325,8 @@ export class LiteracyLessonService {
     );
   }
 
-  private async selectNextWord(userId: string): Promise<string> {
-    return tracer.startActiveSpan('literacy.selectNextWord', async (span) => {
+  private async selectNextString(userId: string): Promise<NextString> {
+    return tracer.startActiveSpan('literacy.selectNextString', async (span) => {
       span.setAttribute('pp.user.id', userId);
       try {
         // Single DB round-trip
@@ -348,11 +414,14 @@ export class LiteracyLessonService {
           scoreMap.set(ls.grapheme, ls.score);
         }
 
-        // Exclude recent words
-        const recentSet = new Set(recentWords);
+        // Exclude recent words. A stored sentence lesson contributes each of
+        // its component words to the exclusion set (punctuation-tolerant so a
+        // future punctuated paragraph still excludes its clean words).
+        const recentSet = new Set(recentWords.flatMap(splitLessonWords));
         let candidates = this.wordList.filter((w) => !recentSet.has(w));
 
-        // Determine max word length
+        // Determine max lesson level (grapheme length for words; sentence
+        // levels start above SENTENCE_LEVEL_THRESHOLD)
         let maxLength: number;
         if (
           distinctWordCount < NEW_USER_THRESHOLD ||
@@ -362,22 +431,55 @@ export class LiteracyLessonService {
         } else {
           if (recentWords.length === 0) {
             this.logger.warn(
-              `selectNextWord: distinct_word_count=${distinctWordCount} but recent_words is empty for user ${userId}; falling back to min word length`,
+              `selectNextString: distinct_word_count=${distinctWordCount} but recent_words is empty for user ${userId}; falling back to min word length`,
             );
             maxLength = MIN_WORD_LENGTH_FLOOR;
           } else {
-            const mostRecentWordLen = Array.from(recentWords[0]).length;
+            const mostRecentLevel = lessonLevel(recentWords[0]);
             if (uniqueInAddWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
-              maxLength = mostRecentWordLen + 1;
+              maxLength = mostRecentLevel + 1;
             } else if (uniqueInKeepWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
-              maxLength = mostRecentWordLen;
+              maxLength = mostRecentLevel;
             } else {
-              maxLength = mostRecentWordLen - 1;
+              maxLength = mostRecentLevel - 1;
             }
           }
         }
         maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR);
+        maxLength = Math.min(maxLength, MAX_LESSON_LEVEL);
         span.setAttribute('pp.lesson.word.max_length', maxLength);
+
+        // Sentence lesson: 2^(level − 7) random words. Only the recency
+        // filter applies — deliberately no pressure toward weak letters.
+        if (maxLength > SENTENCE_LEVEL_THRESHOLD) {
+          const wordCount = Math.pow(2, maxLength - SENTENCE_LEVEL_THRESHOLD);
+          const pool = [...candidates];
+          const picked: string[] = [];
+          while (picked.length < wordCount && pool.length > 0) {
+            const idx = Math.floor(Math.random() * pool.length);
+            picked.push(pool.splice(idx, 1)[0]);
+          }
+          if (picked.length < wordCount) {
+            // Not enough non-recent words — top up ignoring recency rather
+            // than shrinking the sentence.
+            this.logger.warn(
+              `selectNextString: only ${picked.length}/${wordCount} non-recent words available for user ${userId} — topping up ignoring recency`,
+            );
+            const pickedSet = new Set(picked);
+            const fallbackPool = this.wordList.filter((w) => !pickedSet.has(w));
+            while (picked.length < wordCount && fallbackPool.length > 0) {
+              const idx = Math.floor(Math.random() * fallbackPool.length);
+              picked.push(fallbackPool.splice(idx, 1)[0]);
+            }
+          }
+          span.setAttribute('pp.lesson.word.selection', 'sentence-random');
+          span.setAttribute('pp.lesson.word.count', picked.length);
+          span.setAttribute('pp.lesson.word.selected', picked.join(' '));
+          this.logger.log(
+            `selectNextString: sentence selected=${picked.join(' ')} level=${String(maxLength)} words=${String(picked.length)}`,
+          );
+          return { word: '', sentence: picked };
+        }
 
         // Filter by length
         candidates = candidates.filter(
@@ -427,14 +529,14 @@ export class LiteracyLessonService {
 
         if (unknownGraphemes.size > 0) {
           this.logger.warn(
-            `selectNextWord: ${unknownGraphemes.size} unknown grapheme(s) for user ${userId}: [${Array.from(unknownGraphemes).join(', ')}]`,
+            `selectNextString: ${unknownGraphemes.size} unknown grapheme(s) for user ${userId}: [${Array.from(unknownGraphemes).join(', ')}]`,
           );
         }
 
         // Safety fallback
         if (scored.length === 0) {
           this.logger.warn(
-            'selectNextWord: no candidates after filtering — falling back to random two-letter word',
+            'selectNextString: no candidates after filtering — falling back to random two-letter word',
           );
           const twoLetterWords = this.wordList.filter(
             (w) => Array.from(w).length === 2,
@@ -446,7 +548,7 @@ export class LiteracyLessonService {
             'fallback-random-two-letter',
           );
           span.setAttribute('pp.lesson.word.selected', fallbackWord);
-          return fallbackWord;
+          return { word: fallbackWord, sentence: null };
         }
 
         // Tie-break: minimum score → longest grapheme count → random.
@@ -486,9 +588,9 @@ export class LiteracyLessonService {
         span.setAttribute('pp.lesson.word.top_5', topFive);
 
         this.logger.log(
-          `selectNextWord: selected=${selected} max_length=${String(maxLength)} baseline=${baseline.toFixed(3)} reviewed=${String(reviewedScores.length)} unique_in_add_window=${String(uniqueInAddWindow)} unique_in_keep_window=${String(uniqueInKeepWindow)} candidates=${String(scored.length)} top5=[${topFive}]`,
+          `selectNextString: selected=${selected} max_length=${String(maxLength)} baseline=${baseline.toFixed(3)} reviewed=${String(reviewedScores.length)} unique_in_add_window=${String(uniqueInAddWindow)} unique_in_keep_window=${String(uniqueInKeepWindow)} candidates=${String(scored.length)} top5=[${topFive}]`,
         );
-        return selected;
+        return { word: selected, sentence: null };
       } catch (err) {
         span.setStatus({
           code: SpanStatusCode.ERROR,

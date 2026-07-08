@@ -58,6 +58,7 @@ const MATRA_TO_VOWEL: Record<string, string> = {
 };
 
 type MarkArgs = { correctAnswer: string; studentAnswer: string };
+type SentenceArgs = { words: string[]; transcripts: string[] };
 
 /* ───────── utility class ───────── */
 class EvaluateAnswer {
@@ -656,6 +657,137 @@ class EvaluateAnswer {
     return word === correctAnswer;
   }
 
+  // Splits an utterance into candidate word tokens. Punctuation — Devanagari
+  // danda/double danda, Latin sentence punctuation, quotes, brackets, dashes
+  // — separates tokens exactly like whitespace, so "घर।नल" and "dog." both
+  // tokenize cleanly. clean() strips punctuation attached to a token anyway;
+  // splitting additionally rescues word pairs glued together by punctuation
+  // with no space. Newlines/tabs fall under \s.
+  private static tokenize(utterance: string): string[] {
+    return utterance
+      .split(/[\s।॥,.!?;:'"“”‘’()[\]{}\-–—~]+/u)
+      .filter((t) => t.length > 0);
+  }
+
+  // A sentence is correct when a single transcript contains every expected
+  // word in order. Matching is an order-preserving subsequence walk, so any
+  // extra material before, between, or after the expected words is ignored:
+  // "the sentence reads as follows <sentence> end of sentence" passes, and so
+  // do cumulative build-ups like "the bird sang. the bird sang a sentence.
+  // the bird sang a sentence to the dog" (the walk simply skips tokens that
+  // don't match the next expected word). Greedy matching is safe here:
+  // matching an expected word at its earliest opportunity can never block a
+  // later expected word, because every token only ever tests the next
+  // unmatched expected word. Each comparison goes through markWord, so
+  // phoneme-family equivalence and the transcription hardcodes apply per
+  // word. Transcripts are checked individually, and each transcript is
+  // additionally split at the '~' engine-join token (the fallback path hands
+  // us the combined string), so words straddling the seam between two
+  // engines' outputs can never fake an in-order match.
+  static markSentence({ words, transcripts }: SentenceArgs): boolean {
+    if (words.length === 0) {
+      console.error('markSentence: words is empty');
+      return false;
+    }
+    for (const transcript of transcripts) {
+      for (const segment of transcript.split('~')) {
+        if (this.matchesInOrder(words, this.tokenize(segment))) return true;
+      }
+    }
+    return false;
+  }
+
+  private static matchesInOrder(words: string[], tokens: string[]): boolean {
+    let matched = 0;
+    for (let i = 0; i < tokens.length; i++) {
+      if (
+        this.markWord({
+          correctAnswer: words[matched],
+          studentAnswer: tokens[i],
+        })
+      ) {
+        matched++;
+      } else if (
+        i + 1 < tokens.length &&
+        this.markWord({
+          correctAnswer: words[matched],
+          studentAnswer: `${tokens[i]} ${tokens[i + 1]}`,
+        })
+      ) {
+        // The STT engines split some multi-syllable words in two ("अमर रस"
+        // for अमरस) and markWord's .includes() hardcodes only fire on the
+        // joined pair — so before giving up on a token, try it joined with
+        // its successor. Only fires when the single token failed, so it can
+        // never steal a match a later expected word needed.
+        matched++;
+        i++;
+      }
+      if (matched === words.length) return true;
+    }
+    return false;
+  }
+
+  // Best positional overlap between an expected word and one token, as a
+  // fraction of the expected word's graphemes. Graphemes count as matching
+  // when identical or in the same phoneme family, and every relative shift of
+  // the token against the word is tried so a dropped or inserted grapheme
+  // only costs the positions it displaces.
+  private static alignScore(wordChars: string[], tokenChars: string[]): number {
+    if (wordChars.length === 0) return 0;
+    let best = 0;
+    for (
+      let shift = -(wordChars.length - 1);
+      shift < tokenChars.length;
+      shift++
+    ) {
+      let matches = 0;
+      for (let i = 0; i < wordChars.length; i++) {
+        const t = tokenChars[i + shift];
+        if (
+          t !== undefined &&
+          (t === wordChars[i] || sameFamily(wordChars[i], t))
+        )
+          matches++;
+      }
+      if (matches > best) best = matches;
+    }
+    return best / wordChars.length;
+  }
+
+  // Loop over the words of the correct answer and return the one with the
+  // lowest matching score against the student answer. A word markWord accepts
+  // against the whole transcript scores a full 1 — exactly word-lesson
+  // acceptance semantics, so phoneme families, split-word .includes()
+  // hardcodes ("अमर रस" for अमरस) and the rest all count as correct.
+  // Otherwise the word scores its best family-aware character overlap with
+  // any single token. Ties go to the earliest word in the sentence.
+  static rankWorstWord({ words, transcripts }: SentenceArgs): string {
+    let worstWord = words[0];
+    let worstScore = Infinity;
+    for (const word of words) {
+      const wordChars = Array.from(this.clean(word));
+      let bestScore = 0;
+      for (const transcript of transcripts) {
+        if (this.markWord({ correctAnswer: word, studentAnswer: transcript })) {
+          bestScore = 1;
+          break;
+        }
+        for (const token of this.tokenize(transcript)) {
+          const score = this.alignScore(
+            wordChars,
+            Array.from(this.clean(token)),
+          );
+          if (score > bestScore) bestScore = score;
+        }
+      }
+      if (bestScore < worstScore) {
+        worstScore = bestScore;
+        worstWord = word;
+      }
+    }
+    return worstWord;
+  }
+
   static detectIncorrectEndMatra({
     correctAnswer,
     studentAnswer,
@@ -716,8 +848,12 @@ class EvaluateAnswer {
   }
 }
 
-export type { MarkArgs };
+export type { MarkArgs, SentenceArgs };
 export const markWord = (args: MarkArgs) => EvaluateAnswer.markWord(args);
+export const markSentence = (args: SentenceArgs) =>
+  EvaluateAnswer.markSentence(args);
+export const rankWorstWord = (args: SentenceArgs) =>
+  EvaluateAnswer.rankWorstWord(args);
 export const markImage = (args: MarkArgs) => EvaluateAnswer.markImage(args);
 export const markLetter = (args: MarkArgs) => EvaluateAnswer.markLetter(args);
 export const detectInsertion = (args: MarkArgs) =>

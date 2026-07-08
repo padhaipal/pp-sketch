@@ -6,6 +6,8 @@
 const mockMarkWord = jest.fn();
 const mockMarkLetter = jest.fn();
 const mockMarkImage = jest.fn();
+const mockMarkSentence = jest.fn();
+const mockRankWorstWord = jest.fn();
 const mockDetectIncorrectEndMatra = jest.fn();
 const mockDetectIncorrectMiddleMatra = jest.fn();
 const mockDetectInsertion = jest.fn();
@@ -13,6 +15,8 @@ jest.mock('./evaluate-answer.utils', () => ({
   markWord: (...args: unknown[]) => mockMarkWord(...args),
   markLetter: (...args: unknown[]) => mockMarkLetter(...args),
   markImage: (...args: unknown[]) => mockMarkImage(...args),
+  markSentence: (...args: unknown[]) => mockMarkSentence(...args),
+  rankWorstWord: (...args: unknown[]) => mockRankWorstWord(...args),
   detectIncorrectEndMatra: (...args: unknown[]) =>
     mockDetectIncorrectEndMatra(...args),
   detectIncorrectMiddleMatra: (...args: unknown[]) =>
@@ -37,7 +41,11 @@ type Snapshot = ReturnType<
 >;
 
 interface ActorHandle {
-  send: (event: { type: 'ANSWER'; studentAnswer: string }) => void;
+  send: (event: {
+    type: 'ANSWER';
+    studentAnswer: string;
+    studentTranscripts?: string[];
+  }) => void;
   snap: () => Snapshot;
   stop: () => void;
 }
@@ -45,6 +53,7 @@ interface ActorHandle {
 function makeActor(input: {
   word: string;
   userMessageId: string;
+  sentence?: string[];
 }): ActorHandle {
   const actor = createActor(machine, { input });
   actor.start();
@@ -59,6 +68,8 @@ function allMarksFalse(): void {
   mockMarkWord.mockReturnValue(false);
   mockMarkLetter.mockReturnValue(false);
   mockMarkImage.mockReturnValue(false);
+  mockMarkSentence.mockReturnValue(false);
+  mockRankWorstWord.mockReturnValue('');
   mockDetectIncorrectEndMatra.mockReturnValue(false);
   mockDetectIncorrectMiddleMatra.mockReturnValue(false);
   mockDetectInsertion.mockReturnValue(false);
@@ -68,6 +79,8 @@ beforeEach(() => {
   mockMarkWord.mockReset();
   mockMarkLetter.mockReset();
   mockMarkImage.mockReset();
+  mockMarkSentence.mockReset();
+  mockRankWorstWord.mockReset();
   mockDetectIncorrectEndMatra.mockReset();
   mockDetectIncorrectMiddleMatra.mockReset();
   mockDetectInsertion.mockReset();
@@ -1129,5 +1142,256 @@ describe('machine — routing + constants', () => {
     expect(STALE_LESSON_RESTART_STATE_TRANSITION_ID).toBe(
       'stale-lesson-restart',
     );
+  });
+});
+
+// ─── sentence layer ──────────────────────────────────────────────────────────
+
+const SENTENCE = ['नल', 'घर'];
+
+function makeSentenceActor(sentence: string[] = SENTENCE): ActorHandle {
+  return makeActor({ word: '', userMessageId: 'mm-1', sentence });
+}
+
+describe('machine — start router', () => {
+  it('routes to `sentence` when input.sentence is set, with the fixed initial stid', () => {
+    const a = makeSentenceActor();
+    const snap = a.snap();
+    expect(snap.value).toBe('sentence');
+    expect(snap.context.stateTransitionId).toBe(
+      'sentence-start-sentence-initial',
+    );
+    expect(snap.context.sentence).toEqual(SENTENCE);
+    expect(snap.context.sentenceErrors).toBe(0);
+    a.stop();
+  });
+
+  it('sentence entry arms answer with the space-joined sentence', () => {
+    const a = makeSentenceActor();
+    expect(a.snap().context.answer).toBe('नल घर');
+    a.stop();
+  });
+
+  it('routes to `word` when input.sentence is absent (word lessons unchanged)', () => {
+    const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
+    const snap = a.snap();
+    expect(snap.value).toBe('word');
+    expect(snap.context.sentence).toBeNull();
+    expect(snap.context.stateTransitionId).toBe('कमल-start-word-initial');
+    a.stop();
+  });
+
+  it('routes to `word` when input.sentence is an empty array — fully as a word lesson', () => {
+    const a = makeActor({ word: 'कमल', userMessageId: 'mm-1', sentence: [] });
+    const snap = a.snap();
+    expect(snap.value).toBe('word');
+    expect(snap.context.sentence).toBeNull();
+    expect(snap.context.answer).toBe('कमल');
+    expect(snap.context.stateTransitionId).toBe('कमल-start-word-initial');
+    // Word-state twins must never fire for this lesson.
+    mockMarkWord.mockReturnValue(true);
+    a.send({ type: 'ANSWER', studentAnswer: 'कमल' });
+    expect(a.snap().value).toBe('complete');
+    a.stop();
+  });
+});
+
+describe('machine — sentence state', () => {
+  it('correct on the first attempt → complete + correct-first stid + every letter of every word pendingCorrect', () => {
+    mockMarkSentence.mockReturnValue(true);
+    const a = makeSentenceActor();
+    a.send(ANSWER('नल घर'));
+    const snap = a.snap();
+    expect(snap.value).toBe('complete');
+    expect(snap.status).toBe('done');
+    expect(snap.context.answerCorrect).toBe(true);
+    expect(snap.context.stateTransitionId).toBe(
+      'sentence-sentence-complete-correct-first',
+    );
+    expect(snap.context.pendingCorrect).toEqual(['न', 'ल', 'घ', 'र']);
+    expect(snap.context.pendingIncorrect).toEqual([]);
+    a.stop();
+  });
+
+  it('passes context.sentence and the per-engine transcripts to markSentence', () => {
+    mockMarkSentence.mockReturnValue(true);
+    const a = makeSentenceActor();
+    a.send({
+      type: 'ANSWER',
+      studentAnswer: 'नल ~ घर',
+      studentTranscripts: ['नल', 'घर'],
+    });
+    expect(mockMarkSentence).toHaveBeenCalledWith({
+      words: SENTENCE,
+      transcripts: ['नल', 'घर'],
+    });
+    a.stop();
+  });
+
+  it('falls back to [studentAnswer] when the event carries no studentTranscripts', () => {
+    mockMarkSentence.mockReturnValue(true);
+    const a = makeSentenceActor();
+    a.send(ANSWER('नल घर'));
+    expect(mockMarkSentence).toHaveBeenCalledWith({
+      words: SENTENCE,
+      transcripts: ['नल घर'],
+    });
+    a.stop();
+  });
+
+  it('wrong on the first attempt → drills the word rankWorstWord picked', () => {
+    mockRankWorstWord.mockReturnValue('घर');
+    const a = makeSentenceActor();
+    a.send({
+      type: 'ANSWER',
+      studentAnswer: 'नल',
+      studentTranscripts: ['नल'],
+    });
+    const snap = a.snap();
+    expect(snap.value).toBe('word');
+    expect(snap.context.word).toBe('घर');
+    expect(snap.context.answer).toBe('घर'); // word entry re-arms answer
+    expect(snap.context.sentenceErrors).toBe(1);
+    expect(snap.context.answerCorrect).toBe(false);
+    expect(snap.context.stateTransitionId).toBe('घर-sentence-word-drillWord');
+    expect(mockRankWorstWord).toHaveBeenCalledWith({
+      words: SENTENCE,
+      transcripts: ['नल'],
+    });
+    a.stop();
+  });
+
+  it('wrong on the second attempt → complete + maxErrors stid, no score change', () => {
+    mockRankWorstWord.mockReturnValue('घर');
+    const a = makeSentenceActor();
+    a.send(ANSWER('wrong')); // attempt 1 → drill
+    mockMarkWord.mockReturnValue(true);
+    a.send(ANSWER('घर')); // drill passed → back to sentence
+    mockMarkWord.mockReturnValue(false);
+    a.send(ANSWER('wrong again')); // attempt 2
+    const snap = a.snap();
+    expect(snap.value).toBe('complete');
+    expect(snap.status).toBe('done');
+    expect(snap.context.answerCorrect).toBe(false);
+    expect(snap.context.stateTransitionId).toBe(
+      'sentence-sentence-complete-maxErrors',
+    );
+    expect(snap.context.pendingCorrect).toEqual([]);
+    expect(snap.context.pendingIncorrect).toEqual([]);
+    a.stop();
+  });
+
+  it('correct on the retry → complete + correct-retry stid + every letter pendingCorrect', () => {
+    mockRankWorstWord.mockReturnValue('नल');
+    const a = makeSentenceActor();
+    a.send(ANSWER('wrong')); // attempt 1 → drill नल
+    mockMarkWord.mockReturnValue(true);
+    a.send(ANSWER('नल')); // drill passed → back to sentence
+    mockMarkSentence.mockReturnValue(true);
+    a.send(ANSWER('नल घर')); // attempt 2 correct
+    const snap = a.snap();
+    expect(snap.value).toBe('complete');
+    expect(snap.context.answerCorrect).toBe(true);
+    expect(snap.context.stateTransitionId).toBe(
+      'sentence-sentence-complete-correct-retry',
+    );
+    expect(snap.context.pendingCorrect).toEqual(['न', 'ल', 'घ', 'र']);
+    a.stop();
+  });
+
+  it('re-entering sentence after the drill re-arms answer with the full sentence', () => {
+    mockRankWorstWord.mockReturnValue('घर');
+    const a = makeSentenceActor();
+    a.send(ANSWER('wrong'));
+    expect(a.snap().context.answer).toBe('घर');
+    mockMarkWord.mockReturnValue(true);
+    a.send(ANSWER('घर'));
+    expect(a.snap().value).toBe('sentence');
+    expect(a.snap().context.answer).toBe('नल घर');
+    a.stop();
+  });
+});
+
+describe('machine — word drill inside a sentence', () => {
+  function driveToDrill(drillWord: string): ActorHandle {
+    mockRankWorstWord.mockReturnValue(drillWord);
+    const a = makeSentenceActor();
+    a.send(ANSWER('wrong'));
+    expect(a.snap().value).toBe('word');
+    return a;
+  }
+
+  it('drilled word correct on the first try → back to sentence, letters scored, retrySentence stid', () => {
+    const a = driveToDrill('घर');
+    mockMarkWord.mockReturnValue(true);
+    a.send(ANSWER('घर'));
+    const snap = a.snap();
+    expect(snap.value).toBe('sentence');
+    expect(snap.context.answerCorrect).toBe(true);
+    expect(snap.context.stateTransitionId).toBe(
+      'sentence-word-sentence-correct-retrySentence',
+    );
+    expect(snap.context.pendingCorrect).toEqual(['घ', 'र']);
+    a.stop();
+  });
+
+  it('drilled word correct on a later try → back to sentence, NO letters scored', () => {
+    const a = driveToDrill('घर');
+    mockDetectIncorrectEndMatra.mockReturnValue(true);
+    a.send(ANSWER('घरा')); // endMatra keeps the drill in word, wordErrors → 1
+    mockDetectIncorrectEndMatra.mockReturnValue(false);
+    mockMarkWord.mockReturnValue(true);
+    a.send(ANSWER('घर'));
+    const snap = a.snap();
+    expect(snap.value).toBe('sentence');
+    expect(snap.context.stateTransitionId).toBe(
+      'sentence-word-sentence-correct-retrySentence',
+    );
+    expect(snap.context.pendingCorrect).toEqual([]);
+    a.stop();
+  });
+
+  it('drill failing out (3 word errors) → complete via the normal maxErrors path', () => {
+    const a = driveToDrill('घर');
+    mockDetectIncorrectEndMatra.mockReturnValue(true);
+    a.send(ANSWER('घरा')); // wordErrors 1
+    a.send(ANSWER('घरा')); // wordErrors 2
+    mockDetectIncorrectEndMatra.mockReturnValue(false);
+    a.send(ANSWER('still wrong')); // wordErrors >= 2 → complete
+    const snap = a.snap();
+    expect(snap.value).toBe('complete');
+    expect(snap.status).toBe('done');
+    expect(snap.context.answerCorrect).toBe(false);
+    expect(snap.context.stateTransitionId).toBe('घर-word-complete-maxErrors');
+    a.stop();
+  });
+
+  it('drill can descend into the letter loop and still return to the sentence', () => {
+    const a = driveToDrill('नल');
+    mockIdentifyCharacterStatus.mockReturnValue({
+      correctChars: ['ल'],
+      incorrectChars: ['न'],
+    });
+    a.send(ANSWER('wrong')); // word → routeWrongLetter → letter (न has an image)
+    expect(a.snap().value).toBe('letter');
+    mockMarkLetter.mockReturnValue(true);
+    a.send(ANSWER('न')); // last wrong letter → back to word
+    expect(a.snap().value).toBe('word');
+    mockMarkWord.mockReturnValue(true);
+    a.send(ANSWER('नल')); // word retry correct → sentence (not complete)
+    expect(a.snap().value).toBe('sentence');
+    a.stop();
+  });
+
+  it('a plain word lesson still completes (twins never fire without a sentence)', () => {
+    mockMarkWord.mockReturnValue(true);
+    const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
+    a.send(ANSWER('कमल'));
+    const snap = a.snap();
+    expect(snap.value).toBe('complete');
+    expect(snap.context.stateTransitionId).toBe(
+      'कमल-word-complete-correct-first',
+    );
+    a.stop();
   });
 });

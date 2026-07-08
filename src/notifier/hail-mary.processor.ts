@@ -156,6 +156,10 @@ export async function processHailMaryJob(
             );
           }
         }
+        // Runtime-generated sentence prompt has no media row — send as text.
+        if (lessonResult.sentenceText) {
+          media.push({ type: 'text', body: lessonResult.sentenceText });
+        }
       } catch (err) {
         logger.warn(
           `hail-mary: processAnswer failed for user ${toLogId(job.data.user_external_id)}: ${(err as Error).message}`,

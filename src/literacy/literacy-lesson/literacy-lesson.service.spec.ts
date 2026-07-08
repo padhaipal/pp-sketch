@@ -288,7 +288,10 @@ describe('LiteracyLessonService.processAnswer — continue (rehydrate)', () => {
 
     expect(mockActorSend).toHaveBeenCalledWith({
       type: 'ANSWER',
-      studentAnswer: 'कम कमल', // joined by space
+      // Engines are joined with ' ~ ' so their seam can never form an answer;
+      // the per-engine texts travel separately for sentence evaluation.
+      studentAnswer: 'कम ~ कमल',
+      studentTranscripts: ['कम', 'कमल'],
     });
     expect(out.isComplete).toBe(true);
     expect(out.stateTransitionIds).toEqual(['कमल-word-complete-correct-first']);
@@ -308,7 +311,7 @@ describe('LiteracyLessonService.processAnswer — continue (rehydrate)', () => {
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('joins multiple transcript rows with a space (default if .text is null)', async () => {
+  it('joins multiple transcript rows with the tilde separator (default if .text is null)', async () => {
     const repo = makeRepo();
     repo.findOne.mockResolvedValue({
       created_at: new Date(),
@@ -327,7 +330,7 @@ describe('LiteracyLessonService.processAnswer — continue (rehydrate)', () => {
       ] as never,
     });
 
-    expect(mockActorSend.mock.calls[0][0].studentAnswer).toBe(' कमल');
+    expect(mockActorSend.mock.calls[0][0].studentAnswer).toBe(' ~ कमल');
   });
 });
 
@@ -1126,7 +1129,7 @@ describe('LiteracyLessonService — span telemetry', () => {
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     const names = mockTracerStartActiveSpan.mock.calls.map((c) => c[0]);
     expect(names).toContain('literacy.processAnswer');
-    expect(names).toContain('literacy.selectNextWord');
+    expect(names).toContain('literacy.selectNextString');
   });
 
   it('does NOT tag pp.lesson.word when the snapshot word is not a string', async () => {
@@ -1288,7 +1291,7 @@ describe('LiteracyLessonService — log messages', () => {
     const { svc } = freshStart(freshRow({ distinct_word_count: 0 }));
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('selectNextWord: selected=अब'),
+      expect.stringContaining('selectNextString: selected=अब'),
     );
     logSpy.mockRestore();
   });
@@ -1619,5 +1622,244 @@ describe('LiteracyLessonService — word-length decisions on timeout-shaped hist
       }),
     );
     expectMaxLength(3);
+  });
+});
+
+// ─── sentence lessons (selectNextString level > 7) ───────────────────────────
+
+// Drives a fresh start with `row` from the selectNextString query and returns
+// { out, input, dsQuery } where `input` is what createActor was seeded with.
+async function freshSentenceStart(
+  row: Record<string, unknown>,
+  snapshot: unknown = happySnapshot(),
+): Promise<{
+  out: {
+    stateTransitionIds: string[];
+    isComplete: boolean;
+    sentenceText?: string;
+  };
+  input: { word: string; sentence?: string[]; userMessageId: string };
+  dsQuery: jest.Mock;
+}> {
+  xstateMock.createActor.mockClear();
+  const dsQuery = jest
+    .fn()
+    .mockResolvedValueOnce([row]) // selectNextString
+    .mockResolvedValueOnce([{ id: 'lls-1' }]); // INSERT
+  mockActorGetSnapshot.mockReturnValue(snapshot);
+  const repo = makeRepo();
+  repo.findOne.mockResolvedValue(null);
+  const { svc } = makeService({ repo, dsQuery });
+  const out = await svc.processAnswer({ user, user_message_id: 'mm-1' });
+  const input = xstateMock.createActor.mock.calls[0][1].input as {
+    word: string;
+    sentence?: string[];
+    userMessageId: string;
+  };
+  return { out, input, dsQuery };
+}
+
+// Progression prerequisites so the level derives from recent_words[0].
+const progressed = (over: Record<string, unknown>) =>
+  freshRow({
+    distinct_word_count: 10,
+    recent_row_count: 15,
+    unique_in_add_window: 0,
+    unique_in_keep_window: 3, // keep the current level
+    ...over,
+  });
+
+describe('LiteracyLessonService.selectNextString — sentence branch', () => {
+  it('level 8 (7-grapheme word + progression) → a 2-word sentence from the list', async () => {
+    const { input } = await freshSentenceStart(
+      progressed({
+        recent_words: ['चौकीदार'], // 7 graphemes → level 7, +1 → 8
+        unique_in_add_window: 3,
+      }),
+    );
+    expect(input.word).toBe('');
+    expect(input.sentence).toHaveLength(2);
+    for (const w of input.sentence!) {
+      expect(TEST_WORD_LIST).toContain(w);
+    }
+    expect(new Set(input.sentence).size).toBe(2); // distinct words
+  });
+
+  it('derives the level from a stored sentence (2 words = 8, +1 → 9 → 4 words)', async () => {
+    const { input } = await freshSentenceStart(
+      progressed({
+        recent_words: ['अब कमल'],
+        unique_in_add_window: 3,
+      }),
+    );
+    expect(input.sentence).toHaveLength(4);
+  });
+
+  it('handles punctuation inside a stored sentence for both level and recency', async () => {
+    const { input } = await freshSentenceStart(
+      progressed({
+        recent_words: ['अब, कमल।'], // still 2 words → level 8; keep → 2-word sentence
+      }),
+    );
+    expect(input.sentence).toHaveLength(2);
+    // Recency exclusion must see the clean words despite the punctuation.
+    expect(input.sentence).not.toContain('अब');
+    expect(input.sentence).not.toContain('कमल');
+  });
+
+  it('excludes every word used by recent sentences from the new pick', async () => {
+    const { input } = await freshSentenceStart(
+      progressed({
+        recent_words: ['दीवार किताब', 'सूरज पानी'],
+      }),
+    );
+    // level of 'दीवार किताब' = 8 → keep → 2 words from the 3 not recently used.
+    expect(input.sentence).toHaveLength(2);
+    for (const w of input.sentence!) {
+      expect(['अब', 'कमल', 'खाना']).toContain(w);
+    }
+  });
+
+  it('clamps the level at 12 (kills level+1 running away)', async () => {
+    const thirtyTwo = Array.from({ length: 32 }, (_, i) => `w${i}`).join(' ');
+    await freshSentenceStart(
+      progressed({
+        recent_words: [thirtyTwo], // level 12
+        unique_in_add_window: 3, // wants 13 → clamped
+      }),
+    );
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.word.max_length',
+      12,
+    ]);
+  });
+
+  it('tops up ignoring recency when the non-recent pool is too small, and warns', async () => {
+    const warnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    const { input } = await freshSentenceStart(
+      progressed({
+        // 4 words → level 9 → needs 4; only 3 of 7 list words are non-recent.
+        recent_words: ['कमल पानी खाना अब'],
+      }),
+    );
+    expect(input.sentence).toHaveLength(4);
+    expect(new Set(input.sentence).size).toBe(4);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('topping up ignoring recency'),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('stays a word lesson at level 7 and below', async () => {
+    const { input } = await freshSentenceStart(
+      progressed({
+        recent_words: ['दीवार'], // 5 graphemes, keep → level 5
+      }),
+    );
+    expect(input.sentence).toBeUndefined();
+    expect(input.word).not.toBe('');
+  });
+});
+
+describe('LiteracyLessonService.processAnswer — sentence persistence + result', () => {
+  const sentenceSnapshot = (value: string) =>
+    happySnapshot({
+      value,
+      context: {
+        word: '',
+        sentence: ['अब', 'कमल'],
+        pendingCorrect: [],
+        pendingIncorrect: [],
+        answer: 'अब कमल',
+        answerCorrect: null,
+        stateTransitionId: 'sentence-start-sentence-initial',
+      },
+    });
+
+  it('persists the space-joined sentence in the word column', async () => {
+    const { dsQuery } = await freshSentenceStart(
+      progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
+      sentenceSnapshot('sentence'),
+    );
+    const insertParams = dsQuery.mock.calls[1][1] as unknown[];
+    expect(insertParams[2]).toBe('अब कमल');
+  });
+
+  it('returns sentenceText when the machine sits in the sentence state', async () => {
+    const { out } = await freshSentenceStart(
+      progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
+      sentenceSnapshot('sentence'),
+    );
+    expect(out.sentenceText).toBe('अब कमल');
+  });
+
+  it('returns no sentenceText while a word is being drilled', async () => {
+    const { out } = await freshSentenceStart(
+      progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
+      sentenceSnapshot('word'),
+    );
+    expect(out.sentenceText).toBeUndefined();
+  });
+
+  it('returns no sentenceText for a plain word lesson', async () => {
+    const { out } = await freshSentenceStart(freshRow());
+    expect(out.sentenceText).toBeUndefined();
+  });
+});
+
+describe('LiteracyLessonService — sentence observability (kills literal mutants)', () => {
+  it('logs the sentence selection summary with words joined by spaces', async () => {
+    const logSpy = jest
+      .spyOn(Logger.prototype, 'log')
+      .mockImplementation(() => undefined);
+    const { input } = await freshSentenceStart(
+      progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
+    );
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `selectNextString: sentence selected=${input.sentence!.join(' ')} level=8 words=2`,
+      ),
+    );
+    logSpy.mockRestore();
+  });
+
+  it('tags the sentence selection span attributes', async () => {
+    const { input } = await freshSentenceStart(
+      progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
+    );
+    const calls = mockSpanSetAttribute.mock.calls;
+    expect(calls).toContainEqual([
+      'pp.lesson.word.selection',
+      'sentence-random',
+    ]);
+    expect(calls).toContainEqual(['pp.lesson.word.count', 2]);
+    expect(calls).toContainEqual([
+      'pp.lesson.word.selected',
+      input.sentence!.join(' '),
+    ]);
+  });
+
+  it('tags pp.lesson.sentence when the result carries sentenceText', async () => {
+    await freshSentenceStart(
+      progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
+      happySnapshot({
+        value: 'sentence',
+        context: {
+          word: '',
+          sentence: ['अब', 'कमल'],
+          pendingCorrect: [],
+          pendingIncorrect: [],
+          answer: 'अब कमल',
+          answerCorrect: null,
+          stateTransitionId: 'sentence-start-sentence-initial',
+        },
+      }),
+    );
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.sentence',
+      'अब कमल',
+    ]);
   });
 });

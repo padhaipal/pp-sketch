@@ -240,6 +240,15 @@ export async function processWabotInboundJob(
               appendMediaItems(onboardingMedia, lessonMedia);
               onboardingStids.push(stid);
             }
+            // Sentence text is generated at runtime — no media row exists
+            // for it, so it is sent as a plain text message after the
+            // pre-generated prompt media.
+            if (lessonResult.sentenceText) {
+              onboardingMedia.push({
+                type: 'text',
+                body: lessonResult.sentenceText,
+              });
+            }
           } catch (err) {
             logger.warn(
               `Failed to start first lesson for new user ${toLogId(user.external_id)}: ${(err as Error).message}`,
@@ -369,6 +378,7 @@ export async function processWabotInboundJob(
         user_message_id: userMessageId,
       });
       const stateTransitionIds: string[] = [...result1.stateTransitionIds];
+      let sentenceText = result1.sentenceText;
 
       // If lesson complete, start fresh
       if (result1.isComplete) {
@@ -377,6 +387,7 @@ export async function processWabotInboundJob(
           user_message_id: userMessageId,
         });
         stateTransitionIds.push(...result2.stateTransitionIds);
+        sentenceText = result2.sentenceText;
       }
 
       const { withLatestTurn, withoutLatestTurn } =
@@ -400,6 +411,14 @@ export async function processWabotInboundJob(
         const media =
           await mediaMetaDataService.findMediaByStateTransitionId(stid);
         appendMediaItems(outboundMedia, media);
+      }
+
+      // Sentence text is generated at runtime — no media row exists for it,
+      // so it is sent as a plain text message after the pre-generated prompt
+      // media. At most one of result1/result2 carries it (a snapshot sitting
+      // in the sentence state is never complete).
+      if (sentenceText) {
+        outboundMedia.push({ type: 'text', body: sentenceText });
       }
 
       // 10. Send outbound

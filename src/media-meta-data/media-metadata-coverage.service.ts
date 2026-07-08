@@ -42,6 +42,10 @@ const SUFFIXES = [
   'letterNoImage-word-correct-first-last',
   'letterNoImage-word-correct-retry-last',
   'letterNoImage-word-wrong-last',
+  // Per-word drill entry from the sentence layer ({word}-sentence-word-…).
+  // The fixed-prefix sentence-* stids are deliberately NOT in this grid —
+  // they are hardcoded in pp-dashboard's NON_LESSON_STIDS list instead.
+  'sentence-word-drillWord',
   'start-word-initial',
   'word-complete-correct-first',
   'word-complete-correct-retry',

@@ -79,6 +79,48 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
     ]);
   });
 
+  it('tracks the per-word sentence drill suffix but NOT the fixed-prefix sentence stids', async () => {
+    const aggregateRows = [
+      {
+        state_transition_id: 'word1-sentence-word-drillWord',
+        media_type: 'audio',
+        active: '1',
+      },
+      // Fixed-prefix sentence stid: lives in pp-dashboard's NON_LESSON_STIDS
+      // list, must NOT surface a 'sentence' row here.
+      {
+        state_transition_id: 'sentence-sentence-complete-correct-first',
+        media_type: 'audio',
+        active: '2',
+      },
+    ];
+    const letterRows = [{ grapheme: 'क' }];
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(aggregateRows)
+      .mockResolvedValueOnce(letterRows);
+    const svc = new MediaMetadataCoverageService(makeDataSource(query));
+
+    const out = await svc.getCoverage();
+
+    expect(out.suffixes).toContain('sentence-word-drillWord');
+    for (const suffix of [
+      'start-sentence-initial',
+      'sentence-complete-correct-first',
+      'sentence-complete-correct-retry',
+      'sentence-complete-maxErrors',
+      'word-sentence-correct-retrySentence',
+    ]) {
+      expect(out.suffixes).not.toContain(suffix);
+    }
+
+    expect(out.rows.find((r) => r.prefix === 'sentence')).toBeUndefined();
+
+    const word1Row = out.rows.find((r) => r.prefix === 'word1')!;
+    const drillIdx = out.suffixes.indexOf('sentence-word-drillWord');
+    expect(word1Row.counts[drillIdx].audio).toBe(1);
+  });
+
   it('produces the expected counts in the matching suffix column and zeroes elsewhere', async () => {
     const aggregateRows = [
       {
