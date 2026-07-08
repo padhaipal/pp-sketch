@@ -9,10 +9,24 @@ import {
   ActivityTimeResponse,
   ActivityTimeUserResult,
   ActivityTimeWindowResult,
+  DashboardSummaryDay,
+  DashboardSummaryResponse,
   TimeWindowDto,
 } from './user.dto';
+import { CacheService } from '../interfaces/redis/cache';
+import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
+import {
+  addDays,
+  istDateIso,
+  istMidnightUtc,
+} from '../notifier/report-card/report-card.utils';
 
 const ACTIVE_GAP_THRESHOLD_MS = 120_000;
+const FIVE_MIN_MS = 5 * 60 * 1000;
+// SQL fragment: IST calendar date of a timestamptz. IST is a fixed +5:30 (no
+// DST) so a plain interval add matches the JS helpers in report-card.utils.
+const IST_DATE_SQL = (col: string) =>
+  `((${col} AT TIME ZONE 'UTC') + interval '330 minutes')::date`;
 
 interface ParsedWindow {
   start: Date;
@@ -34,7 +48,155 @@ export class UserActivityService {
     @InjectRepository(MediaMetaDataEntity)
     private readonly mediaRepo: Repository<MediaMetaDataEntity>,
     private readonly userService: UserService,
+    private readonly cacheService: CacheService,
   ) {}
+
+  // All-user daily aggregates for the dashboard summary charts: one row per
+  // IST day from the earliest record in the DB through today. Heavy full-table
+  // scans, so the result is cached (past days are immutable; only today
+  // drifts). Definitions mirror the per-user endpoints exactly:
+  //   - active_ms / users_over_5min: computeActiveMs gap rule, expressed in
+  //     SQL (gap between consecutive voice messages of the same user, both in
+  //     the same IST day, 0 < gap < ACTIVE_GAP_THRESHOLD_MS)
+  //   - letters_learnt: getLetterBins "learnt" bin evaluated as of each score
+  //     event, so the stock rises the day the rule is first met and falls the
+  //     day a regression breaks it
+  async getDashboardSummary(): Promise<DashboardSummaryResponse> {
+    const cacheKey = CACHE_KEYS.dashboardSummary();
+    const cached =
+      await this.cacheService.get<DashboardSummaryResponse>(cacheKey);
+    if (cached) return cached;
+
+    const manager = this.mediaRepo.manager;
+
+    const [minRows, activityRows, letterRows] = await Promise.all([
+      manager.query<{ min_at: Date | null }[]>(
+        `SELECT LEAST(
+           (SELECT MIN(created_at) FROM users),
+           (SELECT MIN(created_at) FROM media_metadata)
+         ) AS min_at`,
+      ),
+      manager.query<
+        { date: string; users_over_5min: number; active_ms: string }[]
+      >(
+        `WITH msgs AS (
+           SELECT user_id, created_at,
+                  LAG(created_at) OVER (
+                    PARTITION BY user_id ORDER BY created_at
+                  ) AS prev_created_at
+           FROM media_metadata
+           WHERE user_id IS NOT NULL
+             AND source = 'whatsapp'
+             AND media_type = 'audio'
+             AND rolled_back = false
+         ),
+         gaps AS (
+           SELECT user_id,
+                  ${IST_DATE_SQL('created_at')} AS ist_date,
+                  ${IST_DATE_SQL('prev_created_at')} AS prev_ist_date,
+                  EXTRACT(EPOCH FROM (created_at - prev_created_at)) * 1000
+                    AS gap_ms
+           FROM msgs
+         ),
+         per_user_day AS (
+           SELECT user_id, ist_date,
+                  COALESCE(SUM(gap_ms) FILTER (
+                    WHERE gap_ms > 0 AND gap_ms < $1
+                      AND prev_ist_date = ist_date
+                  ), 0) AS active_ms
+           FROM gaps
+           GROUP BY user_id, ist_date
+         )
+         SELECT ist_date::text AS date,
+                COUNT(*) FILTER (WHERE active_ms > $2)::int
+                  AS users_over_5min,
+                ROUND(SUM(active_ms)) AS active_ms
+         FROM per_user_day
+         GROUP BY ist_date
+         ORDER BY ist_date`,
+        [ACTIVE_GAP_THRESHOLD_MS, FIVE_MIN_MS],
+      ),
+      manager.query<{ date: string; learnt_delta: number }[]>(
+        `WITH events AS (
+           SELECT s.user_id, s.letter_id, s.score, s.created_at,
+                  MAX(s.score) FILTER (WHERE s.user_message_id IS NULL)
+                    OVER w AS seed_so_far,
+                  COUNT(*) OVER w AS n_so_far,
+                  MIN(s.score) OVER w AS min_so_far
+           FROM scores s
+           WINDOW w AS (
+             PARTITION BY s.user_id, s.letter_id
+             ORDER BY s.created_at
+             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+           )
+         ),
+         states AS (
+           SELECT user_id, letter_id, created_at,
+                  (seed_so_far IS NOT NULL
+                   AND n_so_far >= 4
+                   AND score > seed_so_far
+                   AND min_so_far <= seed_so_far - 4) AS learnt
+           FROM events
+         ),
+         transitions AS (
+           SELECT created_at, learnt,
+                  LAG(learnt, 1, false) OVER (
+                    PARTITION BY user_id, letter_id ORDER BY created_at
+                  ) AS prev_learnt
+           FROM states
+         )
+         SELECT ${IST_DATE_SQL('created_at')}::text AS date,
+                SUM(CASE WHEN learnt AND NOT prev_learnt THEN 1
+                         WHEN prev_learnt AND NOT learnt THEN -1
+                         ELSE 0 END)::int AS learnt_delta
+         FROM transitions
+         WHERE learnt IS DISTINCT FROM prev_learnt
+         GROUP BY 1
+         ORDER BY 1`,
+      ),
+    ]);
+
+    const minAt = minRows[0]?.min_at ? new Date(minRows[0].min_at) : null;
+    if (minAt === null) {
+      const empty: DashboardSummaryResponse = { daily: [] };
+      return empty;
+    }
+
+    const activityByDate = new Map(activityRows.map((r) => [r.date, r]));
+    const learntDeltaByDate = new Map(
+      letterRows.map((r) => [r.date, Number(r.learnt_delta)]),
+    );
+
+    // Continuous IST-day series from the earliest record through today
+    // (today is partial). letters_learnt is a running stock; the others are
+    // per-day flows.
+    const daily: DashboardSummaryDay[] = [];
+    const todayMid = istMidnightUtc(new Date());
+    let lettersStock = 0;
+    for (
+      let dayMid = istMidnightUtc(minAt);
+      dayMid.getTime() <= todayMid.getTime();
+      dayMid = addDays(dayMid, 1)
+    ) {
+      const date = istDateIso(dayMid);
+      const activity = activityByDate.get(date);
+      lettersStock += learntDeltaByDate.get(date) ?? 0;
+      daily.push({
+        date,
+        users_over_5min: activity ? Number(activity.users_over_5min) : 0,
+        active_ms: activity ? Number(activity.active_ms) : 0,
+        letters_learnt: lettersStock,
+      });
+    }
+
+    const response: DashboardSummaryResponse = { daily };
+    await this.cacheService.set(
+      cacheKey,
+      response,
+      CACHE_TTL.DASHBOARD_SUMMARY,
+    );
+    return response;
+  }
 
   // Returns ms each user was "active" inside each window. Active ms = sum of
   // gaps between consecutive whatsapp voice messages where both messages fall
