@@ -2,6 +2,12 @@ config:
   target: "{{ $env.WABOT_STAGING_BASE }}"
   http:
     timeout: 5
+    # Shared connection pool (per worker process) — same rationale as
+    # to-failure.yml: one-socket-per-VU + think:30 piles up thousands of
+    # concurrent connections and latched Railway's edge on 2026-07-08
+    # (service-wide inbound blackout). Meta delivers webhooks over a few
+    # reused connections, so a small pool is also the truer load model.
+    pool: 125
   processor: "../processors/webhook.js"
   # ---------------------------------------------------------------------
   # Capacity-pinning ladder. The 10x ladder from #23 / #24 bracketed
