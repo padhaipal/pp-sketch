@@ -42,6 +42,12 @@ export class LiteracyLessonStateEntity {
   @Column({ type: 'jsonb' })
   snapshot: Record<string, unknown>;
 
+  // Difficulty cap this lesson was selected at. Nullable: historical rows and
+  // in-flight lessons at deploy time are null and self-heal on the next fresh
+  // selection (selectNextString reads the most recent non-null value).
+  @Column({ type: 'smallint', nullable: true })
+  level: number | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;
 }

@@ -26,6 +26,18 @@ const SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME = 15;
 const MIN_UNIQUE_WORDS_FOR_PROGRESS = 3;
 const MIN_WORD_LENGTH_FLOOR = 2;
 const NEW_USER_THRESHOLD = 3;
+// Fast-find accelerator: a student cruising through recent words jumps the
+// cap by +3 instead of +1 so they reach their real level in fewer lessons.
+// A first-try-correct word costs exactly 2 rows (its selection row + its
+// 'done' row — see MIN complete-word:row ratio of 2), so "3 distinct
+// completed words in the last 6 rows" is only reachable when the last three
+// lessons were all completed first try. The 2-row / 4-row conditions catch a
+// perfect first (or first-two) start, when the new-user gate would otherwise
+// pin the student at level 2.
+const LEVEL_BOOST_WINDOW = 6;
+const LEVEL_BOOST_INCREMENT = 3;
+const FIRST_WORD_ROW_COUNT = 2;
+const SECOND_WORD_ROW_COUNT = 4;
 // Above this lesson level the student gets sentences instead of single words:
 // level 8 → 2 words, 9 → 4, 10 → 8 … (2^(level − 7)), clamped at level 12
 // (32 words) so ten sentences' worth of recency exclusions can never exhaust
@@ -45,6 +57,10 @@ const TRANSCRIPT_JOIN = ' ~ ';
 interface NextString {
   word: string;
   sentence: string[] | null;
+  // Difficulty cap this lesson was selected at, persisted so the next
+  // selection ratchets from the stored value instead of re-deriving from the
+  // last word's length (which could never climb).
+  level: number;
 }
 
 // Splits a persisted `word` column value into its component words. Sentences
@@ -138,10 +154,16 @@ export class LiteracyLessonService {
         span.setAttribute('pp.lesson.path', lessonPath);
 
         let snapshot: LessonSnapshot;
+        // Difficulty cap written onto this row: freshly computed for a new
+        // lesson, carried forward from the current lesson's row on continue.
+        // Null only for a continue against a pre-migration row that never had
+        // a level — self-heals on the next fresh selection.
+        let selectedLevel: number | null;
 
         if (startFresh) {
           // 5. Start a new lesson
           const lesson = await this.selectNextString(validated.user.id);
+          selectedLevel = lesson.level;
           const actor = createActor(machine, {
             input: {
               word: lesson.word,
@@ -154,6 +176,7 @@ export class LiteracyLessonService {
           snapshot = actor.getSnapshot();
           actor.stop();
         } else {
+          selectedLevel = currentState!.level ?? null;
           // 6. Rehydrate and run
           if (combinedTranscript === undefined) {
             throw new BadRequestException(
@@ -202,8 +225,8 @@ export class LiteracyLessonService {
           ? snapshot.context.sentence.join(' ')
           : snapshot.context.word;
         const rows: unknown[] = await this.dataSource.query(
-          `INSERT INTO literacy_lesson_states (user_id, user_message_id, word, answer, answer_correct, snapshot, created_at)
-           SELECT $1, $2, $3, $4, $5, $6, now()
+          `INSERT INTO literacy_lesson_states (user_id, user_message_id, word, answer, answer_correct, snapshot, level, created_at)
+           SELECT $1, $2, $3, $4, $5, $6, $7, now()
            FROM media_metadata m
            WHERE m.id = $2 AND m.rolled_back = false
            RETURNING *`,
@@ -214,6 +237,7 @@ export class LiteracyLessonService {
             answer,
             answerCorrect,
             JSON.stringify(snapshot),
+            selectedLevel,
           ],
         );
 
@@ -335,8 +359,13 @@ export class LiteracyLessonService {
           recent_words: string[];
           unique_in_add_window: number;
           unique_in_keep_window: number;
+          unique_in_boost_window: number;
           recent_row_count: number;
           distinct_word_count: number;
+          // Cap of the most recent row that HAS a stored level. Null when
+          // every row is null (post-migration cold state) — the caller then
+          // derives the base from the most recent word's length.
+          prev_level: number | null;
         }
         const rows: SelectNextWordRow[] = await this.dataSource.query(
           `WITH recent_distinct_words AS (
@@ -390,13 +419,22 @@ export class LiteracyLessonService {
               (SELECT COUNT(DISTINCT word)::int FROM recent_rows WHERE is_done),
               0
             ) AS unique_in_keep_window,
+            COALESCE(
+              (SELECT COUNT(DISTINCT word)::int FROM recent_rows WHERE rn <= $5 AND is_done),
+              0
+            ) AS unique_in_boost_window,
             COALESCE((SELECT COUNT(*)::int FROM recent_rows), 0) AS recent_row_count,
-            COALESCE((SELECT count FROM distinct_word_count), 0) AS distinct_word_count`,
+            COALESCE((SELECT count FROM distinct_word_count), 0) AS distinct_word_count,
+            (SELECT s.level FROM literacy_lesson_states s
+              WHERE s.user_id = $1 AND s.level IS NOT NULL
+              ORDER BY s.created_at DESC
+              LIMIT 1) AS prev_level`,
           [
             userId,
             RECENT_WORDS_TO_EXCLUDE,
             SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME,
             SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH,
+            LEVEL_BOOST_WINDOW,
           ],
         );
 
@@ -405,8 +443,16 @@ export class LiteracyLessonService {
         const recentWords = data.recent_words;
         const uniqueInAddWindow = Number(data.unique_in_add_window);
         const uniqueInKeepWindow = Number(data.unique_in_keep_window);
+        const uniqueInBoostWindow = Number(data.unique_in_boost_window);
         const recentRowCount = Number(data.recent_row_count);
         const distinctWordCount = Number(data.distinct_word_count);
+        // Ratchet base: the last stored cap, or (cold state) the most recent
+        // word's own level. recentWords[0] is the most recent row's word
+        // because recent_distinct_words orders by MAX(created_at) DESC.
+        const prevLevel =
+          data.prev_level === null || data.prev_level === undefined
+            ? null
+            : Number(data.prev_level);
 
         // Build score map
         const scoreMap = new Map<string, number>();
@@ -420,34 +466,49 @@ export class LiteracyLessonService {
         const recentSet = new Set(recentWords.flatMap(splitLessonWords));
         let candidates = this.wordList.filter((w) => !recentSet.has(w));
 
-        // Determine max lesson level (grapheme length for words; sentence
-        // levels start above SENTENCE_LEVEL_THRESHOLD)
+        // Determine max lesson level. The base is the stored cap (ratchet),
+        // falling back to the most recent word's own level only when no row
+        // has a stored level yet (post-migration cold state). recentWords is
+        // empty only at a user's very first selection, where the accelerator
+        // can't fire and the new-user gate forces the floor — so `base` is
+        // never read against an empty history.
+        const base = prevLevel ?? lessonLevel(recentWords[0] ?? '');
+
+        // Fast-find accelerator (+3), checked BEFORE the new-user gate so a
+        // strong start escapes the level-2 floor: three distinct completed
+        // words in the last 6 rows, OR a perfect first word (1 done, 2 rows
+        // ever), OR a perfect first two words (2 done, 4 rows ever).
+        const accelerate =
+          uniqueInBoostWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS ||
+          (uniqueInKeepWindow >= 1 &&
+            recentRowCount === FIRST_WORD_ROW_COUNT) ||
+          (uniqueInKeepWindow >= 2 && recentRowCount === SECOND_WORD_ROW_COUNT);
+
         let maxLength: number;
-        if (
+        if (accelerate) {
+          maxLength = base + LEVEL_BOOST_INCREMENT;
+        } else if (
           distinctWordCount < NEW_USER_THRESHOLD ||
           recentRowCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH
         ) {
           maxLength = MIN_WORD_LENGTH_FLOOR;
+        } else if (recentWords.length === 0) {
+          this.logger.warn(
+            `selectNextString: distinct_word_count=${distinctWordCount} but recent_words is empty for user ${userId}; falling back to min word length`,
+          );
+          maxLength = MIN_WORD_LENGTH_FLOOR;
+        } else if (uniqueInAddWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
+          maxLength = base + 1;
+        } else if (uniqueInKeepWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
+          maxLength = base;
         } else {
-          if (recentWords.length === 0) {
-            this.logger.warn(
-              `selectNextString: distinct_word_count=${distinctWordCount} but recent_words is empty for user ${userId}; falling back to min word length`,
-            );
-            maxLength = MIN_WORD_LENGTH_FLOOR;
-          } else {
-            const mostRecentLevel = lessonLevel(recentWords[0]);
-            if (uniqueInAddWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
-              maxLength = mostRecentLevel + 1;
-            } else if (uniqueInKeepWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
-              maxLength = mostRecentLevel;
-            } else {
-              maxLength = mostRecentLevel - 1;
-            }
-          }
+          maxLength = base - 1;
         }
         maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR);
         maxLength = Math.min(maxLength, MAX_LESSON_LEVEL);
         span.setAttribute('pp.lesson.word.max_length', maxLength);
+        span.setAttribute('pp.lesson.word.prev_level', prevLevel ?? -1);
+        span.setAttribute('pp.lesson.word.accelerated', accelerate);
 
         // Sentence lesson: 2^(level − 7) random words. Only the recency
         // filter applies — deliberately no pressure toward weak letters.
@@ -478,7 +539,7 @@ export class LiteracyLessonService {
           this.logger.log(
             `selectNextString: sentence selected=${picked.join(' ')} level=${String(maxLength)} words=${String(picked.length)}`,
           );
-          return { word: '', sentence: picked };
+          return { word: '', sentence: picked, level: maxLength };
         }
 
         // Filter by length
@@ -548,7 +609,7 @@ export class LiteracyLessonService {
             'fallback-random-two-letter',
           );
           span.setAttribute('pp.lesson.word.selected', fallbackWord);
-          return { word: fallbackWord, sentence: null };
+          return { word: fallbackWord, sentence: null, level: maxLength };
         }
 
         // Tie-break: minimum score → longest grapheme count → random.
@@ -590,7 +651,7 @@ export class LiteracyLessonService {
         this.logger.log(
           `selectNextString: selected=${selected} max_length=${String(maxLength)} baseline=${baseline.toFixed(3)} reviewed=${String(reviewedScores.length)} unique_in_add_window=${String(uniqueInAddWindow)} unique_in_keep_window=${String(uniqueInKeepWindow)} candidates=${String(scored.length)} top5=[${topFive}]`,
         );
-        return { word: selected, sentence: null };
+        return { word: selected, sentence: null, level: maxLength };
       } catch (err) {
         span.setStatus({
           code: SpanStatusCode.ERROR,
