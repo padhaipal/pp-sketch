@@ -97,7 +97,7 @@ export class MirrorProcessor {
       stagingCreds.bucket,
     );
     this.logger.log(
-      `mirror.bucket.complete copied=${bucketStats.copied} deleted=${bucketStats.deleted}`,
+      `mirror.bucket.complete copied=${bucketStats.copied} skipped=${bucketStats.skipped} deleted=${bucketStats.deleted}`,
     );
 
     // ── Step 6: post-mirror.sql ─────────────────────────────────────────────
@@ -107,7 +107,7 @@ export class MirrorProcessor {
 
     // ── Step 7: success log ────────────────────────────────────────────────
     this.logger.log(
-      `mirror.success ${jobLabel} pg_major=${versions.prod_major} migrations_prod=${migrations.prod_count} objects_copied=${bucketStats.copied} objects_deleted=${bucketStats.deleted}`,
+      `mirror.success ${jobLabel} pg_major=${versions.prod_major} migrations_prod=${migrations.prod_count} objects_copied=${bucketStats.copied} objects_skipped=${bucketStats.skipped} objects_deleted=${bucketStats.deleted}`,
     );
   }
 
@@ -180,12 +180,29 @@ export class MirrorProcessor {
     prodBucket: string,
     stagingS3: S3Client,
     stagingBucket: string,
-  ): Promise<{ copied: number; deleted: number }> {
+  ): Promise<{ copied: number; skipped: number; deleted: number }> {
     const prodKeys = await listAllKeys(prodS3, prodBucket);
     const prodKeySet = new Set(prodKeys.map((k) => k.Key!));
 
+    // Incremental copy: media objects are immutable once written (keys are
+    // content ids; nothing rewrites an existing key), so a key that already
+    // exists on staging with the same byte size is already mirrored. The
+    // previous full re-copy streamed EVERY prod object through this
+    // container daily — at bucket scale that was gigabytes of billed
+    // Railway egress per day for objects that never change.
+    const stagingBefore = await listAllKeys(stagingS3, stagingBucket);
+    const stagingSizeByKey = new Map(
+      stagingBefore.map((o) => [o.Key!, o.Size]),
+    );
+
     let copied = 0;
-    const queue = [...prodKeys];
+    let skipped = 0;
+    const queue = prodKeys.filter((obj) => {
+      const same =
+        obj.Key !== undefined && stagingSizeByKey.get(obj.Key) === obj.Size;
+      if (same) skipped++;
+      return !same;
+    });
     const workers: Promise<void>[] = [];
     for (let i = 0; i < COPY_PARALLELISM; i++) {
       workers.push(
@@ -207,8 +224,7 @@ export class MirrorProcessor {
     }
     await Promise.all(workers);
 
-    const stagingKeys = await listAllKeys(stagingS3, stagingBucket);
-    const toDelete = stagingKeys
+    const toDelete = stagingBefore
       .map((o) => o.Key!)
       .filter((k) => !prodKeySet.has(k));
 
@@ -224,7 +240,7 @@ export class MirrorProcessor {
       deleted += batch.length;
     }
 
-    return { copied, deleted };
+    return { copied, skipped, deleted };
   }
 
   private async copyOne(
