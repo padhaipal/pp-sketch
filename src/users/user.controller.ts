@@ -291,6 +291,7 @@ export class UserController {
         'ls.answer',
         'ls.answer_correct',
         'ls.snapshot',
+        'ls.level',
       ])
       .where('ls.user_message_id IN (:...mediaIds)', { mediaIds })
       .orderBy('ls.created_at', 'ASC')
@@ -305,6 +306,7 @@ export class UserController {
         answer_correct: boolean | null;
         starting_state: string | null;
         final_state: string | null;
+        level: number | null;
       }
     >();
     for (const ls of lessonStates) {
@@ -328,6 +330,7 @@ export class UserController {
         answer_correct: ls.answer_correct,
         starting_state: startingState,
         final_state: finalState,
+        level: ls.level,
       });
     }
 
@@ -405,6 +408,7 @@ export class UserController {
           answer_correct: lesson?.answer_correct ?? null,
           score_changes: scoreChangeMap.get(m.id) ?? [],
           final_state: lesson?.final_state ?? null,
+          level: lesson?.level ?? null,
         };
       }),
     };

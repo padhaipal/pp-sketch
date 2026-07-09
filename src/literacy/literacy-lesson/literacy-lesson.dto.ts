@@ -14,6 +14,7 @@ export interface LiteracyLessonState {
   answer: string | null;
   answer_correct: boolean | null;
   snapshot: LessonSnapshot;
+  level: number | null;
   created_at: Date;
 }
 
