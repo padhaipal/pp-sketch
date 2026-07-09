@@ -2,7 +2,11 @@ name: Mirror prod → staging
 
 on:
   schedule:
-    - cron: '30 7 * * *' # 07:30 UTC = 13:00 IST daily
+    # Weekly (was daily): even with the incremental bucket copy, each run
+    # still does a full pg_dump | pg_restore over public endpoints —
+    # billed egress plus a CPU/RAM/volume churn spike on staging.
+    # 23:30 UTC Sunday = 05:00 IST Monday.
+    - cron: '30 23 * * 0'
   workflow_dispatch:
 
 permissions:
