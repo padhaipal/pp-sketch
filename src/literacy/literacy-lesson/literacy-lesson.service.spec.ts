@@ -726,8 +726,10 @@ function freshRow(over: Record<string, unknown> = {}): Record<string, unknown> {
     recent_words: [],
     unique_in_add_window: 0,
     unique_in_keep_window: 0,
+    unique_in_boost_window: 0,
     recent_row_count: 0,
     distinct_word_count: 0,
+    prev_level: null,
     ...over,
   };
 }
@@ -1861,5 +1863,303 @@ describe('LiteracyLessonService — sentence observability (kills literal mutant
       'pp.lesson.sentence',
       'अब कमल',
     ]);
+  });
+});
+
+// ─── persisted difficulty cap (level) + fast-find accelerator ────────────────
+
+// Runs one fresh selection with `over` merged into a non-gated base fixture
+// (distinct/rows high enough to skip the new-user gate unless the test lowers
+// them) and returns the computed cap (via the max_length span) and the level
+// written to the INSERT (param index 6).
+async function runLevel(
+  over: Record<string, unknown>,
+): Promise<{ maxLength: number; levelParam: unknown; accelerated: unknown }> {
+  const { svc, dsQuery } = freshStart(
+    freshRow({ recent_row_count: 20, distinct_word_count: 20, ...over }),
+  );
+  await svc.processAnswer({ user, user_message_id: 'mm-1' });
+  const calls = mockSpanSetAttribute.mock.calls;
+  const maxLength = calls.find((c) => c[0] === 'pp.lesson.word.max_length')![1];
+  const accelerated = calls.find(
+    (c) => c[0] === 'pp.lesson.word.accelerated',
+  )![1];
+  const insertParams = dsQuery.mock.calls[1][1] as unknown[];
+  return {
+    maxLength: maxLength as number,
+    levelParam: insertParams[6],
+    accelerated,
+  };
+}
+
+describe('LiteracyLessonService — difficulty cap ratchet', () => {
+  it('holds at the stored level when the keep-window is satisfied', async () => {
+    const { maxLength, levelParam } = await runLevel({
+      prev_level: 8,
+      recent_words: ['अब'],
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(8);
+    expect(levelParam).toBe(8); // fresh path persists the computed cap
+  });
+
+  it('increases by 1 from the stored level when the add-window is satisfied', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 8,
+      recent_words: ['अब'],
+      unique_in_add_window: 3,
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(9);
+  });
+
+  it('decreases by 1 from the stored level when neither window is satisfied', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 8,
+      recent_words: ['अब'],
+      unique_in_add_window: 0,
+      unique_in_keep_window: 0,
+    });
+    expect(maxLength).toBe(7);
+  });
+
+  it('does NOT drag the cap down to the last word length (the staging bug)', async () => {
+    // Stored cap 8, most recent word is 2 graphemes; keep-window holds → 8,
+    // never 2. This is the regression the whole change fixes.
+    const { maxLength } = await runLevel({
+      prev_level: 8,
+      recent_words: ['अब'], // 2 graphemes
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(8);
+  });
+
+  it('reads the stored cap in preference to word length even when they disagree wildly', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 6,
+      recent_words: ['दीवार'], // 5 graphemes
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(6);
+  });
+
+  it('clamps an increase at the 12 ceiling', async () => {
+    const { maxLength, levelParam } = await runLevel({
+      prev_level: 12,
+      recent_words: ['अब'],
+      unique_in_add_window: 3,
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(12);
+    expect(levelParam).toBe(12);
+  });
+
+  it('clamps a decrease at the floor of 2', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 2,
+      recent_words: ['अब'],
+      unique_in_add_window: 0,
+      unique_in_keep_window: 0,
+    });
+    expect(maxLength).toBe(2);
+  });
+
+  it('emits prev_level and accelerated span attributes', async () => {
+    const { accelerated } = await runLevel({
+      prev_level: 8,
+      recent_words: ['अब'],
+      unique_in_keep_window: 3,
+    });
+    expect(accelerated).toBe(false);
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.word.prev_level',
+      8,
+    ]);
+  });
+});
+
+describe('LiteracyLessonService — cap cold-start (all levels null)', () => {
+  it('derives the base from the most recent single word length', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: null,
+      recent_words: ['दीवार'], // 5 graphemes
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(5);
+  });
+
+  it('derives the base from the word COUNT when the recent row is a sentence', async () => {
+    // 'अब कमल' = 2 words → level 7 + ceil(log2 2) = 8; keep-window holds → 8.
+    const { maxLength, levelParam } = await runLevel({
+      prev_level: null,
+      recent_words: ['अब कमल'],
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(8);
+    expect(levelParam).toBe(8);
+  });
+
+  it('tolerates punctuation in the sentence when deriving the cold-start base', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: null,
+      recent_words: ['अब, कमल। पानी'], // 3 words → 7 + ceil(log2 3) = 9
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(9);
+  });
+
+  it('emits prev_level = -1 on the span when there is no stored level', async () => {
+    await runLevel({
+      prev_level: null,
+      recent_words: ['दीवार'],
+      unique_in_keep_window: 3,
+    });
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.word.prev_level',
+      -1,
+    ]);
+  });
+});
+
+describe('LiteracyLessonService — fast-find accelerator (+3)', () => {
+  it('boosts by 3 when 3 distinct words completed in the last 6 rows', async () => {
+    const { maxLength, accelerated } = await runLevel({
+      prev_level: 5,
+      recent_words: ['अब'],
+      unique_in_boost_window: 3,
+    });
+    expect(maxLength).toBe(8);
+    expect(accelerated).toBe(true);
+  });
+
+  it('boost overrides the new-user gate on a perfect first word (2 rows, 1 done)', async () => {
+    const { maxLength, accelerated } = await runLevel({
+      prev_level: 2,
+      recent_words: ['अब'],
+      recent_row_count: 2, // would otherwise trip the < 8 gate → level 2
+      distinct_word_count: 1, // and the < 3 gate
+      unique_in_keep_window: 1,
+    });
+    expect(maxLength).toBe(5);
+    expect(accelerated).toBe(true);
+  });
+
+  it('cold-start perfect-first-word boost derives base from word length then +3', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: null,
+      recent_words: ['अब'], // base 2
+      recent_row_count: 2,
+      distinct_word_count: 1,
+      unique_in_keep_window: 1,
+    });
+    expect(maxLength).toBe(5);
+  });
+
+  it('boosts on a perfect first two words (4 rows, 2 done)', async () => {
+    const { maxLength, accelerated } = await runLevel({
+      prev_level: 5,
+      recent_words: ['अब'],
+      recent_row_count: 4,
+      distinct_word_count: 2,
+      unique_in_keep_window: 2,
+    });
+    expect(maxLength).toBe(8);
+    expect(accelerated).toBe(true);
+  });
+
+  it('does NOT boost the 2-row case when no word was completed (0 done)', async () => {
+    // First word attempted but not completed → gate applies → floor 2.
+    const { maxLength, accelerated } = await runLevel({
+      prev_level: 2,
+      recent_words: ['अब'],
+      recent_row_count: 2,
+      distinct_word_count: 1,
+      unique_in_keep_window: 0, // nothing done
+    });
+    expect(accelerated).toBe(false);
+    expect(maxLength).toBe(2);
+  });
+
+  it('requires EXACTLY 2 rows for the first-word boost (3 rows does not qualify)', async () => {
+    // 3 rows, 1 done, thin history → new-user gate → 2 (no boost).
+    const { maxLength, accelerated } = await runLevel({
+      prev_level: 2,
+      recent_words: ['अब'],
+      recent_row_count: 3,
+      distinct_word_count: 1,
+      unique_in_keep_window: 1,
+    });
+    expect(accelerated).toBe(false);
+    expect(maxLength).toBe(2);
+  });
+
+  it('requires EXACTLY 4 rows for the first-two-words boost (8 rows does not qualify)', async () => {
+    // 8 rows, keep=2 (<3), no add, no boost → normal ladder decrements.
+    const { maxLength, accelerated } = await runLevel({
+      prev_level: 8,
+      recent_words: ['अब'],
+      recent_row_count: 8,
+      distinct_word_count: 8,
+      unique_in_keep_window: 2,
+    });
+    expect(accelerated).toBe(false);
+    expect(maxLength).toBe(7); // base - 1
+  });
+
+  it('does not boost when only 2 words completed in the last 6 rows (drilled history)', async () => {
+    // A drilled recent history fits only 2 distinct done words in 6 rows.
+    const { maxLength, accelerated } = await runLevel({
+      prev_level: 8,
+      recent_words: ['अब'],
+      unique_in_boost_window: 2,
+      unique_in_add_window: 0,
+      unique_in_keep_window: 2,
+    });
+    expect(accelerated).toBe(false);
+    expect(maxLength).toBe(7);
+  });
+
+  it('clamps a boost at the 12 ceiling', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 11,
+      recent_words: ['अब'],
+      unique_in_boost_window: 3,
+    });
+    expect(maxLength).toBe(12);
+  });
+});
+
+describe('LiteracyLessonService — level persistence on the continue path', () => {
+  function continueState(level: number | undefined) {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue({
+      created_at: new Date(), // age ~0 → continue (rehydrate)
+      snapshot: { status: 'active', context: { word: 'कमल' } },
+      level,
+    });
+    mockActorGetSnapshot.mockReturnValue(happySnapshot());
+    const dsQuery = jest.fn().mockResolvedValueOnce([{ id: 'lls-1' }]); // INSERT only
+    return { ...makeService({ repo, dsQuery }), dsQuery };
+  }
+
+  it('carries the current lesson level forward without re-running selection', async () => {
+    const { svc, dsQuery } = continueState(9);
+    await svc.processAnswer({
+      user,
+      user_message_id: 'mm-1',
+      transcripts: [{ id: 't1', text: 'कमल' }] as never,
+    });
+    expect(dsQuery).toHaveBeenCalledTimes(1); // no selectNextString query
+    expect((dsQuery.mock.calls[0][1] as unknown[])[6]).toBe(9);
+  });
+
+  it('writes null when continuing a pre-migration row that has no level', async () => {
+    const { svc, dsQuery } = continueState(undefined);
+    await svc.processAnswer({
+      user,
+      user_message_id: 'mm-1',
+      transcripts: [{ id: 't1', text: 'कमल' }] as never,
+    });
+    expect((dsQuery.mock.calls[0][1] as unknown[])[6]).toBeNull();
   });
 });
