@@ -358,6 +358,7 @@ describe('UserController.userMedia', () => {
         answer: 'ma',
         answer_correct: true,
         snapshot: { context: { stateTransitionId: 'lesson-A-B-C' } },
+        level: 2,
       },
       // Two states with same user_message_id — second is the "start fresh" dup and should be ignored.
       {
@@ -366,6 +367,7 @@ describe('UserController.userMedia', () => {
         answer: 'ma',
         answer_correct: true,
         snapshot: {},
+        level: 3,
       },
       {
         user_message_id: 'm2',
@@ -373,6 +375,7 @@ describe('UserController.userMedia', () => {
         answer: 'next',
         answer_correct: true,
         snapshot: {},
+        level: 9, // dup row — must be ignored in favour of the first (level 3)
       },
       {
         user_message_id: 'm3',
@@ -380,6 +383,7 @@ describe('UserController.userMedia', () => {
         answer: 'pa',
         answer_correct: false,
         snapshot: { context: { stateTransitionId: 'short' } }, // <3 parts → no transition split
+        level: null, // pre-migration row → surfaces as null
       },
     ];
     const scoreRows = [
@@ -427,19 +431,22 @@ describe('UserController.userMedia', () => {
     expect(m1.starting_state).toBe('A');
     expect(m1.final_state).toBe('B');
     expect(m1.answer).toBe('mama'); // first row → uses lesson.word
+    expect(m1.level).toBe(2);
     expect(m1.score_changes).toEqual([
       { grapheme: 'क', score: 2, prev_score: 0 },
     ]);
-    // m2 keeps the FIRST lesson row only (word='mama', answer='ma')
+    // m2 keeps the FIRST lesson row only (word='mama', answer='ma', level=3)
     const m2 = out.media.find((m) => m.id === 'm2')!;
     expect(m2.word).toBe('mama');
     // m2 same word as m1 → uses prevAnswer ('ma')
     expect(m2.answer).toBe('ma');
+    expect(m2.level).toBe(3); // first row's level, not the ignored dup's 9
     // m3 different word → uses lesson.word ('papa'); short transitionId → states null
     const m3 = out.media.find((m) => m.id === 'm3')!;
     expect(m3.word).toBe('papa');
     expect(m3.starting_state).toBeNull();
     expect(m3.answer).toBe('papa');
+    expect(m3.level).toBeNull(); // pre-migration row surfaces as null
   });
 });
 
@@ -946,6 +953,7 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
       'ls.answer',
       'ls.answer_correct',
       'ls.snapshot',
+      'ls.level',
     ]);
     expect(lessonQB.where).toHaveBeenCalledWith(
       'ls.user_message_id IN (:...mediaIds)',
