@@ -4,7 +4,7 @@ Tom (or another tester) just finished a user-test session on staging. You receiv
 
 Your job: tell the engineer what to fix before promoting staging → production. Narrate the session from the system's perspective.
 
-You have Bash + Read + Grep access. Follow up with Loki/Tempo queries via the helper (it injects auth itself — do NOT expand `$GRAFANA_API_KEY` in your own commands, the sandbox blocks it): `bash scripts/grafana-query.sh loki loki/api/v1/query_range --data-urlencode 'query=…'` or `bash scripts/grafana-query.sh tempo api/search --data-urlencode 'q=…'`.
+You have Bash + Read + Grep access. Follow up with Loki/Tempo queries via the helper (it injects auth itself — do NOT expand `$GRAFANA_API_KEY` in your own commands, the sandbox blocks it): `bash scripts/grafana-query.sh grafanacloud-logs loki/api/v1/query_range --data-urlencode 'query=…'` or `bash scripts/grafana-query.sh grafanacloud-traces api/search --data-urlencode 'q=…'`.
 
 Write the digest as **GitHub-flavored Markdown**, to stdout, with no preamble. Required structure:
 
