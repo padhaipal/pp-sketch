@@ -10,7 +10,7 @@
 # commands) never need to expand secrets in their own command lines.
 set -euo pipefail
 
-uid="${1:?datasource uid required (loki|prometheus|tempo)}"
+uid="${1:?datasource uid required (grafanacloud-logs|grafanacloud-prom|grafanacloud-traces; self-hosted: loki|prometheus|tempo)}"
 path="${2:?api path required, e.g. api/v1/query}"
 shift 2
 

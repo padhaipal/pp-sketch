@@ -42,10 +42,10 @@ fi
 
 auth_hdr="Authorization: Bearer ${GRAFANA_API_KEY}"
 
-# Loki datasource uid. Self-hosted otel-lgtm provisions stable uids
-# (loki/prometheus/tempo) on every instance, so uid-addressing works for both
-# prod and staging (override via env if it ever moves).
-loki_ds_uid="${LOKI_DATASOURCE_UID:-loki}"
+# Loki datasource uid. Defaults to Grafana Cloud's provisioned uid
+# (2026-07-13 cutover); override via env when pointing at a self-hosted
+# otel-lgtm instance (which provisions loki/prometheus/tempo).
+loki_ds_uid="${LOKI_DATASOURCE_UID:-grafanacloud-logs}"
 loki_proxy="${grafana_url}/api/datasources/proxy/uid/${loki_ds_uid}/loki/api/v1"
 echo "Using Loki datasource uid=${loki_ds_uid} via ${loki_proxy}" >&2
 
@@ -198,7 +198,7 @@ lt_url="${GRAFANA_STAGING_URL:-$GRAFANA_URL}"
 lt_url="${lt_url%/}"
 lt_url="${lt_url/#http:/https:}"
 lt_auth_hdr="Authorization: Bearer ${GRAFANA_STAGING_API_KEY:-$GRAFANA_API_KEY}"
-prom_proxy="${lt_url}/api/datasources/proxy/uid/${PROM_DATASOURCE_UID:-prometheus}"
+prom_proxy="${lt_url}/api/datasources/proxy/uid/${PROM_DATASOURCE_UID:-grafanacloud-prom}"
 prom_result() {
   local q="$1"
   curl -sSL -G -H "$lt_auth_hdr" \
