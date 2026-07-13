@@ -130,7 +130,7 @@ describe('meter registration (module load)', () => {
         advice: { explicitBucketBoundaries: number[] };
       }
     ).advice.explicitBucketBoundaries;
-    expect(buckets[0]).toBe(5);
+    expect(buckets[0]).toBe(10);
     expect(buckets[buckets.length - 1]).toBe(60000);
     for (let i = 1; i < buckets.length; i++) {
       expect(buckets[i]).toBeGreaterThan(buckets[i - 1]);

@@ -57,9 +57,10 @@ describe('metrics module', () => {
     for (let i = 1; i < buckets.length; i++) {
       expect(buckets[i]).toBeGreaterThan(buckets[i - 1]);
     }
-    // Range sanity: spans from low-ms to a minute. Dropping the high end
-    // would silently lump everything >10s into the +Inf bucket.
-    expect(buckets[0]).toBeLessThanOrEqual(10);
+    // Range sanity: spans from double-digit ms (healthy p50 territory,
+    // post series-diet) to a minute. Dropping the high end would silently
+    // lump everything >10s into the +Inf bucket.
+    expect(buckets[0]).toBeLessThanOrEqual(50);
     expect(buckets[buckets.length - 1]).toBeGreaterThanOrEqual(30_000);
   });
 

@@ -25,8 +25,12 @@ import { BAGGAGE_LOAD_TEST, BAGGAGE_TEST_PHASE } from './baggage-keys';
 
 const meter = metrics.getMeter('pp.bullmq');
 
+// Slimmed 13 → 8 boundaries (2026-07-13 series diet): with ~11 queues x
+// dwell+work histograms, every extra boundary costs ~22 series. Kept the
+// decision points that queries actually use (sub-100ms healthy, ~1s busy,
+// 5s SLO-adjacent, 20s+ pathological).
 const HISTOGRAM_BUCKETS_MS: readonly number[] = [
-  5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000, 60000,
+  10, 50, 100, 500, 1000, 5000, 20000, 60000,
 ] as const;
 
 export const dwellHistogram = meter.createHistogram(

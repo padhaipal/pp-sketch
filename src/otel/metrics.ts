@@ -27,9 +27,11 @@ export const wabotInboundJobDuration = meter.createHistogram(
       'Milliseconds pp-sketch spent handling a wabot-inbound BullMQ job, from dequeue to completion.',
     unit: 'ms',
     advice: {
+      // Slimmed 19 → 10 boundaries (2026-07-13 series diet); dense
+      // sub-second resolution kept where the healthy baseline lives
+      // (measured p95 ~850 ms), sparse in the pathological tail.
       explicitBucketBoundaries: [
-        5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000,
-        15000, 20000, 25000, 30000, 60000,
+        50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000, 60000,
       ],
     },
   },
