@@ -140,7 +140,9 @@ export function initOtel(): NodeSDK {
   // replicas writing one series id silently corrupt every counter.
   const serviceInstanceId =
     process.env.SERVICE_INSTANCE_ID ??
-    `${process.env.OTEL_SERVICE_NAME ?? 'pp-sketch'}-${process.env.ENV ?? 'development'}`;
+    `${process.env.OTEL_SERVICE_NAME ?? 'pp-sketch'}-${
+      process.env.ENV ?? process.env.RAILWAY_ENVIRONMENT_NAME ?? 'development'
+    }`;
   if (!process.env.OTEL_RESOURCE_ATTRIBUTES?.includes('service.instance.id=')) {
     process.env.OTEL_RESOURCE_ATTRIBUTES = [
       process.env.OTEL_RESOURCE_ATTRIBUTES,
