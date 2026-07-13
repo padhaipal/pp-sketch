@@ -67,6 +67,8 @@ jest.mock('@opentelemetry/sdk-logs', () => ({
 }));
 jest.mock('@opentelemetry/sdk-metrics', () => ({
   PeriodicExportingMetricReader: jest.fn(),
+  AggregationType: { DROP: 0, EXPLICIT_BUCKET_HISTOGRAM: 1 },
+  createAllowListAttributesProcessor: jest.fn(() => 'allow-list-processor'),
 }));
 jest.mock('@opentelemetry/sdk-trace-base', () => ({
   BatchSpanProcessor: jest.fn().mockImplementation((exporter: unknown) => ({
@@ -356,5 +358,85 @@ describe('initOtel', () => {
       expect.stringMatching(/OTel SDK failed to shutdown.*drain fail/),
     );
     expect(process.exitCode).toBe(1);
+  });
+});
+
+// ─── series-diet config: metrics flag, views, instance identity ──────────────
+
+describe('initOtel — metrics flag, views, service.instance.id', () => {
+  let prevEnv: NodeJS.ProcessEnv;
+  let processOnceSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    prevEnv = { ...process.env };
+    processOnceSpy = jest
+      .spyOn(process, 'once')
+      .mockImplementation(() => process);
+    mockSdkStart.mockReturnValue(undefined);
+    mockNodeSdkCtor.mockClear();
+  });
+
+  afterEach(() => {
+    process.env = prevEnv;
+    processOnceSpy.mockRestore();
+  });
+
+  function sdkConfig(): Record<string, unknown> {
+    return mockNodeSdkCtor.mock.calls[0][0] as Record<string, unknown>;
+  }
+
+  it('OTEL_METRICS_EXPORTER=none → no metricReader and no views', () => {
+    process.env.OTEL_METRICS_EXPORTER = 'none';
+    initOtel();
+    expect(sdkConfig().metricReader).toBeUndefined();
+    expect(sdkConfig().views).toBeUndefined();
+  });
+
+  it('default → metricReader present and the cardinality views wired in', () => {
+    delete process.env.OTEL_METRICS_EXPORTER;
+    initOtel();
+    expect(sdkConfig().metricReader).toBeDefined();
+    const views = sdkConfig().views as {
+      instrumentName: string;
+      aggregation?: { type: number };
+    }[];
+    const byName = Object.fromEntries(views.map((v) => [v.instrumentName, v]));
+    // Drops (never queried anywhere):
+    expect(byName['v8js.gc.duration'].aggregation).toEqual({ type: 0 });
+    expect(byName['v8js.memory.heap.space.available_size'].aggregation).toEqual(
+      { type: 0 },
+    );
+    // Kept-but-slimmed: pp keeps http.client.* (per-dependency latency is
+    // the incident-diagnosis signal) with explicit slim boundaries.
+    expect(byName['http.client.duration'].aggregation?.type).toBe(1);
+    expect(byName['db.client.operation.duration'].aggregation?.type).toBe(1);
+  });
+
+  it('appends an env-qualified service.instance.id to OTEL_RESOURCE_ATTRIBUTES', () => {
+    delete process.env.OTEL_RESOURCE_ATTRIBUTES;
+    delete process.env.SERVICE_INSTANCE_ID;
+    process.env.OTEL_SERVICE_NAME = 'pp-sketch';
+    process.env.ENV = 'staging';
+    initOtel();
+    expect(process.env.OTEL_RESOURCE_ATTRIBUTES).toBe(
+      'service.instance.id=pp-sketch-staging',
+    );
+  });
+
+  it('SERVICE_INSTANCE_ID override wins and merges with existing attributes', () => {
+    process.env.OTEL_RESOURCE_ATTRIBUTES = 'foo=bar';
+    process.env.SERVICE_INSTANCE_ID = 'replica-7';
+    initOtel();
+    expect(process.env.OTEL_RESOURCE_ATTRIBUTES).toBe(
+      'foo=bar,service.instance.id=replica-7',
+    );
+  });
+
+  it('does not duplicate service.instance.id when the operator already set one', () => {
+    process.env.OTEL_RESOURCE_ATTRIBUTES = 'service.instance.id=custom';
+    initOtel();
+    expect(process.env.OTEL_RESOURCE_ATTRIBUTES).toBe(
+      'service.instance.id=custom',
+    );
   });
 });
