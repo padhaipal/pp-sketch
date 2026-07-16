@@ -1671,87 +1671,78 @@ const progressed = (over: Record<string, unknown>) =>
     ...over,
   });
 
-describe('LiteracyLessonService.selectNextString — sentence branch', () => {
-  it('level 8 (7-grapheme word + progression) → a 2-word sentence from the list', async () => {
+// The sentence branch (maxLength > 7) is TEMPORARILY unreachable: the clamp
+// sits at MAX_LESSON_LEVEL = 7 so half-finished sentence functionality never
+// triggers in production. These tests pin the cap — every history that used
+// to produce a sentence must now produce a word lesson at level 7. The
+// original sentence-branch tests live in git history (pre-cap) and come back
+// with the 12 ceiling.
+describe('LiteracyLessonService.selectNextString — temporary level-7 cap (no sentences)', () => {
+  it('a would-be level 8 (7-grapheme word + progression) stays a WORD lesson clamped at 7', async () => {
     const { input } = await freshSentenceStart(
       progressed({
-        recent_words: ['चौकीदार'], // 7 graphemes → level 7, +1 → 8
+        recent_words: ['चौकीदार'], // 7 graphemes → level 7, +1 → wants 8
         unique_in_add_window: 3,
       }),
     );
-    expect(input.word).toBe('');
-    expect(input.sentence).toHaveLength(2);
-    for (const w of input.sentence!) {
-      expect(TEST_WORD_LIST).toContain(w);
-    }
-    expect(new Set(input.sentence).size).toBe(2); // distinct words
+    expect(input.sentence).toBeUndefined();
+    expect(input.word).not.toBe('');
+    expect(TEST_WORD_LIST).toContain(input.word);
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.word.max_length',
+      7,
+    ]);
   });
 
-  it('derives the level from a stored sentence (2 words = 8, +1 → 9 → 4 words)', async () => {
+  it('a stored sentence in history (level 8 derivation) still yields a word lesson clamped at 7', async () => {
     const { input } = await freshSentenceStart(
       progressed({
-        recent_words: ['अब कमल'],
+        recent_words: ['अब कमल'], // 2 words → derives 8, +1 → wants 9
         unique_in_add_window: 3,
       }),
     );
-    expect(input.sentence).toHaveLength(4);
+    expect(input.sentence).toBeUndefined();
+    expect(input.word).not.toBe('');
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.word.max_length',
+      7,
+    ]);
   });
 
-  it('handles punctuation inside a stored sentence for both level and recency', async () => {
+  it('a deep history (32-word stored sentence, would-be level 12) is also clamped at 7', async () => {
+    const thirtyTwo = Array.from({ length: 32 }, (_, i) => `w${i}`).join(' ');
     const { input } = await freshSentenceStart(
       progressed({
-        recent_words: ['अब, कमल।'], // still 2 words → level 8; keep → 2-word sentence
+        recent_words: [thirtyTwo], // derives 12
+        unique_in_add_window: 3,
       }),
     );
-    expect(input.sentence).toHaveLength(2);
-    // Recency exclusion must see the clean words despite the punctuation.
-    expect(input.sentence).not.toContain('अब');
-    expect(input.sentence).not.toContain('कमल');
+    expect(input.sentence).toBeUndefined();
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.word.max_length',
+      7,
+    ]);
   });
 
-  it('excludes every word used by recent sentences from the new pick', async () => {
+  it('recency exclusion still sees each word inside a stored sentence (word path)', async () => {
     const { input } = await freshSentenceStart(
       progressed({
         recent_words: ['दीवार किताब', 'सूरज पानी'],
       }),
     );
-    // level of 'दीवार किताब' = 8 → keep → 2 words from the 3 not recently used.
-    expect(input.sentence).toHaveLength(2);
-    for (const w of input.sentence!) {
-      expect(['अब', 'कमल', 'खाना']).toContain(w);
-    }
+    expect(input.sentence).toBeUndefined();
+    // The word pick must avoid every word of both stored sentences.
+    expect(['अब', 'कमल', 'खाना']).toContain(input.word);
   });
 
-  it('clamps the level at 12 (kills level+1 running away)', async () => {
-    const thirtyTwo = Array.from({ length: 32 }, (_, i) => `w${i}`).join(' ');
-    await freshSentenceStart(
-      progressed({
-        recent_words: [thirtyTwo], // level 12
-        unique_in_add_window: 3, // wants 13 → clamped
-      }),
-    );
-    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
-      'pp.lesson.word.max_length',
-      12,
-    ]);
-  });
-
-  it('tops up ignoring recency when the non-recent pool is too small, and warns', async () => {
-    const warnSpy = jest
-      .spyOn(Logger.prototype, 'warn')
-      .mockImplementation(() => undefined);
+  it('punctuation inside a stored sentence does not defeat recency exclusion (word path)', async () => {
     const { input } = await freshSentenceStart(
       progressed({
-        // 4 words → level 9 → needs 4; only 3 of 7 list words are non-recent.
-        recent_words: ['कमल पानी खाना अब'],
+        recent_words: ['दीवार, किताब। सूरज पानी!'],
       }),
     );
-    expect(input.sentence).toHaveLength(4);
-    expect(new Set(input.sentence).size).toBe(4);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('topping up ignoring recency'),
-    );
-    warnSpy.mockRestore();
+    expect(input.sentence).toBeUndefined();
+    expect(['अब', 'कमल', 'खाना']).toContain(input.word);
   });
 
   it('stays a word lesson at level 7 and below', async () => {
@@ -1812,34 +1803,17 @@ describe('LiteracyLessonService.processAnswer — sentence persistence + result'
 });
 
 describe('LiteracyLessonService — sentence observability (kills literal mutants)', () => {
-  it('logs the sentence selection summary with words joined by spaces', async () => {
-    const logSpy = jest
-      .spyOn(Logger.prototype, 'log')
-      .mockImplementation(() => undefined);
-    const { input } = await freshSentenceStart(
+  // The sentence-selection log/span tests are gone with the temporary level-7
+  // cap (the branch is unreachable from the selector) — restore them from git
+  // history alongside the 12 ceiling. Machine-driven sentence states are
+  // still live (snapshot resume), so the result-side tag keeps its test.
+  it('never tags a sentence selection while the level-7 cap holds', async () => {
+    await freshSentenceStart(
       progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
     );
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        `selectNextString: sentence selected=${input.sentence!.join(' ')} level=8 words=2`,
-      ),
-    );
-    logSpy.mockRestore();
-  });
-
-  it('tags the sentence selection span attributes', async () => {
-    const { input } = await freshSentenceStart(
-      progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
-    );
-    const calls = mockSpanSetAttribute.mock.calls;
-    expect(calls).toContainEqual([
+    expect(mockSpanSetAttribute.mock.calls).not.toContainEqual([
       'pp.lesson.word.selection',
       'sentence-random',
-    ]);
-    expect(calls).toContainEqual(['pp.lesson.word.count', 2]);
-    expect(calls).toContainEqual([
-      'pp.lesson.word.selected',
-      input.sentence!.join(' '),
     ]);
   });
 
@@ -1895,22 +1869,22 @@ async function runLevel(
 describe('LiteracyLessonService — difficulty cap ratchet', () => {
   it('holds at the stored level when the keep-window is satisfied', async () => {
     const { maxLength, levelParam } = await runLevel({
-      prev_level: 8,
+      prev_level: 6,
       recent_words: ['अब'],
       unique_in_keep_window: 3,
     });
-    expect(maxLength).toBe(8);
-    expect(levelParam).toBe(8); // fresh path persists the computed cap
+    expect(maxLength).toBe(6);
+    expect(levelParam).toBe(6); // fresh path persists the computed cap
   });
 
   it('increases by 1 from the stored level when the add-window is satisfied', async () => {
     const { maxLength } = await runLevel({
-      prev_level: 8,
+      prev_level: 5,
       recent_words: ['अब'],
       unique_in_add_window: 3,
       unique_in_keep_window: 3,
     });
-    expect(maxLength).toBe(9);
+    expect(maxLength).toBe(6);
   });
 
   it('decreases by 1 from the stored level when neither window is satisfied', async () => {
@@ -1924,14 +1898,14 @@ describe('LiteracyLessonService — difficulty cap ratchet', () => {
   });
 
   it('does NOT drag the cap down to the last word length (the staging bug)', async () => {
-    // Stored cap 8, most recent word is 2 graphemes; keep-window holds → 8,
+    // Stored cap 6, most recent word is 2 graphemes; keep-window holds → 6,
     // never 2. This is the regression the whole change fixes.
     const { maxLength } = await runLevel({
-      prev_level: 8,
+      prev_level: 6,
       recent_words: ['अब'], // 2 graphemes
       unique_in_keep_window: 3,
     });
-    expect(maxLength).toBe(8);
+    expect(maxLength).toBe(6);
   });
 
   it('reads the stored cap in preference to word length even when they disagree wildly', async () => {
@@ -1943,15 +1917,26 @@ describe('LiteracyLessonService — difficulty cap ratchet', () => {
     expect(maxLength).toBe(6);
   });
 
-  it('clamps an increase at the 12 ceiling', async () => {
+  it('clamps an increase at the temporary 7 ceiling (sentence flow stays off)', async () => {
+    const { maxLength, levelParam } = await runLevel({
+      prev_level: 7,
+      recent_words: ['अब'],
+      unique_in_add_window: 3, // wants 8 → clamped
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(7);
+    expect(levelParam).toBe(7);
+  });
+
+  it('clamps a stored above-ceiling level (pre-cap ratchet state) back to 7', async () => {
+    // Users who ratcheted past 7 before the cap landed must come back down.
     const { maxLength, levelParam } = await runLevel({
       prev_level: 12,
       recent_words: ['अब'],
-      unique_in_add_window: 3,
       unique_in_keep_window: 3,
     });
-    expect(maxLength).toBe(12);
-    expect(levelParam).toBe(12);
+    expect(maxLength).toBe(7);
+    expect(levelParam).toBe(7);
   });
 
   it('clamps a decrease at the floor of 2', async () => {
@@ -1989,23 +1974,25 @@ describe('LiteracyLessonService — cap cold-start (all levels null)', () => {
   });
 
   it('derives the base from the word COUNT when the recent row is a sentence', async () => {
-    // 'अब कमल' = 2 words → level 7 + ceil(log2 2) = 8; keep-window holds → 8.
+    // 'अब कमल' = 2 words → level 7 + ceil(log2 2) = 8; keep-window holds → 8,
+    // then the temporary 7 ceiling clamps it.
     const { maxLength, levelParam } = await runLevel({
       prev_level: null,
       recent_words: ['अब कमल'],
       unique_in_keep_window: 3,
     });
-    expect(maxLength).toBe(8);
-    expect(levelParam).toBe(8);
+    expect(maxLength).toBe(7);
+    expect(levelParam).toBe(7);
   });
 
   it('tolerates punctuation in the sentence when deriving the cold-start base', async () => {
     const { maxLength } = await runLevel({
       prev_level: null,
-      recent_words: ['अब, कमल। पानी'], // 3 words → 7 + ceil(log2 3) = 9
+      // 3 words → 7 + ceil(log2 3) = 9 → clamped to the temporary 7 ceiling.
+      recent_words: ['अब, कमल। पानी'],
       unique_in_keep_window: 3,
     });
-    expect(maxLength).toBe(9);
+    expect(maxLength).toBe(7);
   });
 
   it('emits prev_level = -1 on the span when there is no stored level', async () => {
@@ -2023,12 +2010,14 @@ describe('LiteracyLessonService — cap cold-start (all levels null)', () => {
 
 describe('LiteracyLessonService — fast-find accelerator (+3)', () => {
   it('boosts by 3 when 3 distinct words completed in the last 6 rows', async () => {
+    // base 3 + 3 = 6 sits below the 7 ceiling so this pins the increment
+    // itself, not the clamp.
     const { maxLength, accelerated } = await runLevel({
-      prev_level: 5,
+      prev_level: 3,
       recent_words: ['अब'],
       unique_in_boost_window: 3,
     });
-    expect(maxLength).toBe(8);
+    expect(maxLength).toBe(6);
     expect(accelerated).toBe(true);
   });
 
@@ -2057,13 +2046,13 @@ describe('LiteracyLessonService — fast-find accelerator (+3)', () => {
 
   it('boosts on a perfect first two words (4 rows, 2 done)', async () => {
     const { maxLength, accelerated } = await runLevel({
-      prev_level: 5,
+      prev_level: 3,
       recent_words: ['अब'],
       recent_row_count: 4,
       distinct_word_count: 2,
       unique_in_keep_window: 2,
     });
-    expect(maxLength).toBe(8);
+    expect(maxLength).toBe(6);
     expect(accelerated).toBe(true);
   });
 
@@ -2119,13 +2108,13 @@ describe('LiteracyLessonService — fast-find accelerator (+3)', () => {
     expect(maxLength).toBe(7);
   });
 
-  it('clamps a boost at the 12 ceiling', async () => {
+  it('clamps a boost at the temporary 7 ceiling', async () => {
     const { maxLength } = await runLevel({
-      prev_level: 11,
+      prev_level: 6, // +3 wants 9 → clamped
       recent_words: ['अब'],
       unique_in_boost_window: 3,
     });
-    expect(maxLength).toBe(12);
+    expect(maxLength).toBe(7);
   });
 });
 
