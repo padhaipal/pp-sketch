@@ -4,6 +4,8 @@ import type { Job } from 'bullmq';
 import type { DataSource, Repository } from 'typeorm';
 import { createQueue, QUEUE_NAMES } from '../interfaces/redis/queues';
 import type { OutboundMediaItem } from '../interfaces/wabot/outbound/outbound.dto';
+import type { OutboundMessageService } from '../outbound-messages/outbound-message.service';
+import type { OutboundSentItem } from '../outbound-messages/outbound-message.dto';
 import type { WabotOutboundService } from '../interfaces/wabot/outbound/outbound.service';
 import type { MediaMetaDataService } from '../media-meta-data/media-meta-data.service';
 import { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
@@ -22,6 +24,10 @@ export interface MorningUpdateSendJobData {
   // Pre-resolved media to send before the per-user report card image. Mirrors
   // evening-reminder's "intro media first, custom payload second" pattern.
   media: OutboundMediaItem[];
+  // Entity-backed intro items for the outbound_messages audit log; recorded
+  // by the send worker only after a successful delivery. Optional so jobs
+  // enqueued before this field existed still process.
+  intro_records?: OutboundSentItem[];
   // OTel carrier so the worker can stitch its span back to the cron span.
   otel_carrier: Record<string, string>;
 }
@@ -31,31 +37,50 @@ export interface MorningUpdateSendJobData {
 // decides whether to abort or surface as an error).
 export async function resolveMorningUpdateIntroMedia(
   mediaMetaDataService: MediaMetaDataService,
-): Promise<OutboundMediaItem[] | null> {
+): Promise<{
+  items: OutboundMediaItem[];
+  records: OutboundSentItem[];
+} | null> {
   const introMedia = await mediaMetaDataService.findMediaByStateTransitionId(
     'morning_notification_message',
   );
   const introVideo = introMedia.video;
   const introImage = introMedia.image;
   if (introVideo) {
-    return [
-      {
-        type: 'video',
-        url: introVideo.wa_media_url!,
-        mime_type: (introVideo.media_details as { mime_type?: string } | null)
-          ?.mime_type,
-      },
-    ];
+    return {
+      items: [
+        {
+          type: 'video',
+          url: introVideo.wa_media_url!,
+          mime_type: (introVideo.media_details as { mime_type?: string } | null)
+            ?.mime_type,
+        },
+      ],
+      records: [
+        {
+          media_metadata_id: introVideo.id,
+          state_transition_id: 'morning_notification_message',
+        },
+      ],
+    };
   }
   if (introImage) {
-    return [
-      {
-        type: 'image',
-        url: introImage.wa_media_url!,
-        mime_type: (introImage.media_details as { mime_type?: string } | null)
-          ?.mime_type,
-      },
-    ];
+    return {
+      items: [
+        {
+          type: 'image',
+          url: introImage.wa_media_url!,
+          mime_type: (introImage.media_details as { mime_type?: string } | null)
+            ?.mime_type,
+        },
+      ],
+      records: [
+        {
+          media_metadata_id: introImage.id,
+          state_transition_id: 'morning_notification_message',
+        },
+      ],
+    };
   }
   return null;
 }
@@ -66,6 +91,7 @@ export async function enqueueMorningUpdateSend(args: {
   user_id: string;
   user_external_id: string;
   intro_media: OutboundMediaItem[];
+  intro_records: OutboundSentItem[];
   otel_carrier: Record<string, string>;
 }): Promise<string> {
   const sendQueue = createQueue(QUEUE_NAMES.MORNING_UPDATE_SEND);
@@ -73,6 +99,7 @@ export async function enqueueMorningUpdateSend(args: {
     user_id: args.user_id,
     user_external_id: args.user_external_id,
     media: args.intro_media,
+    intro_records: args.intro_records,
     otel_carrier: args.otel_carrier,
   };
   const job = await sendQueue.add('morning-update-send', data);
@@ -104,7 +131,8 @@ export async function triggerMorningUpdateForUser(
       const job_id = await enqueueMorningUpdateSend({
         user_id: user.id,
         user_external_id: user.external_id,
-        intro_media: introItems,
+        intro_media: introItems.items,
+        intro_records: introItems.records,
         otel_carrier: injectCarrier(span),
       });
       span.setAttribute(
@@ -178,7 +206,8 @@ export async function processMorningUpdateCronJob(
         await enqueueMorningUpdateSend({
           user_id: u.user_id,
           user_external_id: u.external_id,
-          intro_media: introItems,
+          intro_media: introItems.items,
+          intro_records: introItems.records,
           otel_carrier,
         });
       }
@@ -212,6 +241,7 @@ export async function processMorningUpdateSendJob(
   mediaMetaDataService: MediaMetaDataService,
   mediaRepo: Repository<MediaMetaDataEntity>,
   wabotOutbound: WabotOutboundService,
+  outboundMessages: OutboundMessageService,
 ): Promise<void> {
   const span = startChildSpan('morning-update.send', job.data.otel_carrier);
   span.setAttribute('bullmq.job.id', String(job.id));
@@ -308,6 +338,18 @@ export async function processMorningUpdateSendJob(
     logger.log(
       `Morning-update delivered to user ${toLogId(job.data.user_external_id)}`,
     );
+    // Referral-link text is not entity-backed → not audit-logged.
+    await outboundMessages.recordSent({
+      user_id: job.data.user_id,
+      trigger: 'morning-update',
+      items: [
+        ...(job.data.intro_records ?? []),
+        {
+          media_metadata_id: imageEntity.id,
+          state_transition_id: imageEntity.state_transition_id ?? null,
+        },
+      ],
+    });
   } catch (err) {
     if (err instanceof RequeueRequestedError) {
       span.setAttribute('morning_update.requeue', true);

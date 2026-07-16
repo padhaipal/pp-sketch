@@ -618,7 +618,8 @@ describe('MediaMetaDataService.markRolledBack', () => {
       const m = {
         query: jest
           .fn()
-          .mockResolvedValueOnce([[], 1]) // UPDATE
+          .mockResolvedValueOnce([[], 1]) // UPDATE media_metadata
+          .mockResolvedValueOnce([[], 0]) // UPDATE outbound_messages (audit flip)
           .mockResolvedValueOnce([{ sql: 'DELETE FROM x WHERE y = $1' }]) // FK stmts
           .mockResolvedValueOnce(undefined), // delete via FK
       };
@@ -659,6 +660,7 @@ describe('MediaMetaDataService.markRolledBack', () => {
         query: jest
           .fn()
           .mockResolvedValueOnce([[], 1])
+          .mockResolvedValueOnce([[], 0])
           .mockResolvedValueOnce([]),
       });
     });
@@ -688,6 +690,7 @@ describe('MediaMetaDataService.markRolledBack', () => {
         query: jest
           .fn()
           .mockResolvedValueOnce([[], 1])
+          .mockResolvedValueOnce([[], 0])
           .mockResolvedValueOnce([]),
       });
     });
@@ -1116,7 +1119,8 @@ describe('markRolledBack — exact SQL + params + cache keys', () => {
     repo.findOneBy.mockResolvedValue(opts.entity ?? null);
     const txQuery = jest
       .fn()
-      .mockResolvedValueOnce([[], opts.updateAffected ?? 1]) // UPDATE
+      .mockResolvedValueOnce([[], opts.updateAffected ?? 1]) // UPDATE media_metadata
+      .mockResolvedValueOnce([[], 0]) // UPDATE outbound_messages (audit flip)
       .mockResolvedValueOnce(opts.fkRows ?? []); // format() SELECT
     for (const _ of opts.fkRows ?? []) {
       txQuery.mockResolvedValueOnce(undefined); // each FK delete
@@ -1177,7 +1181,13 @@ describe('markRolledBack — exact SQL + params + cache keys', () => {
       fkRows: [],
     });
     await service.markRolledBack('mm-1');
-    const select = txQuery.mock.calls[1][0] as string;
+    // calls[1] is the outbound_messages audit flip; the discovery SELECT
+    // moved to calls[2].
+    expect(txQuery.mock.calls[1]).toEqual([
+      "UPDATE outbound_messages SET status = 'rolled_back' WHERE user_message_id = $1",
+      ['mm-1'],
+    ]);
+    const select = txQuery.mock.calls[2][0] as string;
     expect(select).toContain('FROM pg_constraint con');
     expect(select).toContain('JOIN pg_attribute att');
     expect(select).toContain("con.confrelid = 'media_metadata'::regclass");
@@ -1186,6 +1196,8 @@ describe('markRolledBack — exact SQL + params + cache keys', () => {
     expect(select).toContain(
       "format('DELETE FROM %s WHERE %I = $1', con.conrelid::regclass, att.attname)",
     );
+    // Audit rows are never deleted — the sweep must exclude outbound_messages.
+    expect(select).toContain("con.conrelid <> 'outbound_messages'::regclass");
   });
 
   it('executes every discovered FK-cleanup statement with [mediaId]', async () => {
@@ -1199,11 +1211,11 @@ describe('markRolledBack — exact SQL + params + cache keys', () => {
       ],
     });
     await service.markRolledBack('mm-1');
-    expect(txQuery.mock.calls[2]).toEqual([
+    expect(txQuery.mock.calls[3]).toEqual([
       'DELETE FROM scores WHERE user_message_id = $1',
       ['mm-1'],
     ]);
-    expect(txQuery.mock.calls[3]).toEqual([
+    expect(txQuery.mock.calls[4]).toEqual([
       'DELETE FROM literacy_lesson_states WHERE user_message_id = $1',
       ['mm-1'],
     ]);

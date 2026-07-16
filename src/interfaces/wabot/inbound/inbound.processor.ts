@@ -26,6 +26,8 @@ import {
   AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID,
 } from '../../../literacy/literacy-lesson/literacy-lesson.machine';
 import { rearmHailMary } from '../../../notifier/hail-mary.processor';
+import { OutboundMessageService } from '../../../outbound-messages/outbound-message.service';
+import type { OutboundSentItem } from '../../../outbound-messages/outbound-message.dto';
 
 const logger = new Logger('WabotInboundProcessor');
 
@@ -44,6 +46,7 @@ export async function processWabotInboundJob(
   literacyLessonService: LiteracyLessonService,
   wabotOutbound: WabotOutboundService,
   userActivityService: UserActivityService,
+  outboundMessages: OutboundMessageService,
 ): Promise<void> {
   const payload = job.data;
 
@@ -206,13 +209,19 @@ export async function processWabotInboundJob(
         // Build outbound media: welcome + first lesson
         const onboardingMedia: OutboundMediaItem[] = [];
         const onboardingStids: string[] = [];
+        const onboardingRecords: OutboundSentItem[] = [];
 
         try {
           const welcomeMedia =
             await mediaMetaDataService.findMediaByStateTransitionId(
               WELCOME_MESSAGE_STATE_TRANSITION_ID,
             );
-          appendMediaItems(onboardingMedia, welcomeMedia);
+          appendMediaItems(
+            onboardingMedia,
+            welcomeMedia,
+            onboardingRecords,
+            WELCOME_MESSAGE_STATE_TRANSITION_ID,
+          );
           onboardingStids.push(WELCOME_MESSAGE_STATE_TRANSITION_ID);
         } catch (err) {
           logger.warn(
@@ -237,7 +246,12 @@ export async function processWabotInboundJob(
             for (const stid of lessonResult.stateTransitionIds) {
               const lessonMedia =
                 await mediaMetaDataService.findMediaByStateTransitionId(stid);
-              appendMediaItems(onboardingMedia, lessonMedia);
+              appendMediaItems(
+                onboardingMedia,
+                lessonMedia,
+                onboardingRecords,
+                stid,
+              );
               onboardingStids.push(stid);
             }
             // Sentence text is generated at runtime — no media row exists
@@ -269,6 +283,16 @@ export async function processWabotInboundJob(
               otel_carrier: injectCarrierFromContext(ctx),
             });
             handleSendResult(result, 'new-user-onboarding');
+            if (result.status >= 200 && result.status < 300) {
+              // Referral link + sentence text are not entity-backed and are
+              // NOT audit-logged until sentences become media entities.
+              await outboundMessages.recordSent({
+                user_id: user.id,
+                user_message_id: userMessageId ?? null,
+                trigger: 'new-user-onboarding',
+                items: onboardingRecords,
+              });
+            }
           } catch (err) {
             logger.warn(
               `Failed to send new-user onboarding: ${(err as Error).message}`,
@@ -406,11 +430,12 @@ export async function processWabotInboundJob(
 
       // 9. Build outbound media
       const outboundMedia: OutboundMediaItem[] = [];
+      const sentRecords: OutboundSentItem[] = [];
 
       for (const stid of stateTransitionIds) {
         const media =
           await mediaMetaDataService.findMediaByStateTransitionId(stid);
-        appendMediaItems(outboundMedia, media);
+        appendMediaItems(outboundMedia, media, sentRecords, stid);
       }
 
       // Sentence text is generated at runtime — no media row exists for it,
@@ -429,6 +454,19 @@ export async function processWabotInboundJob(
         media: outboundMedia,
         otel_carrier: injectCarrierFromContext(ctx),
       });
+
+      // Audit rows are written BEFORE the delivered check so a rolled-back
+      // send still finds them to flip (markRolledBack updates by
+      // user_message_id). Dynamic sentence text is not entity-backed and is
+      // not logged until sentences become media entities.
+      if (sendResult.status >= 200 && sendResult.status < 300) {
+        await outboundMessages.recordSent({
+          user_id: user.id,
+          user_message_id: userMessageId,
+          trigger: 'inbound-reply',
+          items: sentRecords,
+        });
+      }
 
       if (sendResult.status >= 200 && sendResult.status < 300) {
         if (sendResult.body.delivered) {
@@ -484,6 +522,8 @@ export async function processWabotInboundJob(
 function appendMediaItems(
   items: OutboundMediaItem[],
   media: FindMediaByStateTransitionIdResult,
+  records?: OutboundSentItem[],
+  stateTransitionId?: string,
 ): void {
   for (const type of ['video', 'audio', 'image', 'sticker', 'text'] as const) {
     const entity = media[type];
@@ -494,6 +534,12 @@ function appendMediaItems(
       const mime_type = (entity.media_details as { mime_type?: string } | null)
         ?.mime_type;
       items.push({ type, url: entity.wa_media_url!, mime_type });
+    }
+    if (records) {
+      records.push({
+        media_metadata_id: entity.id,
+        state_transition_id: stateTransitionId ?? null,
+      });
     }
   }
 }

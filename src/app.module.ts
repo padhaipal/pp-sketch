@@ -16,6 +16,7 @@ import { WabotInboundController } from './interfaces/wabot/inbound/inbound.contr
 import { HeygenInboundController } from './interfaces/heygen/inbound/inbound.controller';
 import { CacheService } from './interfaces/redis/cache';
 import { MirrorModule } from './mirror/mirror.module';
+import { OutboundMessageModule } from './outbound-messages/outbound-message.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { MirrorModule } from './mirror/mirror.module';
     ReportCardModule,
     MorningUpdateModule,
     MirrorModule.register(),
+    OutboundMessageModule,
   ],
   controllers: [
     AppController,
