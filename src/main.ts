@@ -18,6 +18,7 @@ import {
   QUEUE_NAMES,
 } from './interfaces/redis/queues';
 import { processWabotInboundJob } from './interfaces/wabot/inbound/inbound.processor';
+import { OutboundMessageService } from './outbound-messages/outbound-message.service';
 import { processHeygenInboundJob } from './interfaces/heygen/inbound/inbound.processor';
 import { processHeygenGenerateJob } from './interfaces/heygen/outbound/outbound.service';
 import { processElevenlabsGenerateJob } from './interfaces/elevenlabs/outbound/outbound.service';
@@ -94,6 +95,7 @@ async function bootstrap() {
   const wabotOutbound = app.get(WabotOutboundService);
   const mediaBucket = app.get(MediaBucketService);
   const cacheService = app.get(CacheService);
+  const outboundMessageService = app.get(OutboundMessageService);
 
   // BullMQ workers
   const wabotInboundWorker = createWorker<MessageJobDto>(
@@ -106,6 +108,7 @@ async function bootstrap() {
         literacyLessonService,
         wabotOutbound,
         userActivityService,
+        outboundMessageService,
       );
     },
     // I/O-bound turn (audio download + STT + DB + outbound send); high
@@ -199,7 +202,7 @@ async function bootstrap() {
   const notifierSendWorker = createWorker<NotifierSendJobData>(
     QUEUE_NAMES.NOTIFIER_SEND,
     async (job) => {
-      await processNotifierSendJob(job, wabotOutbound);
+      await processNotifierSendJob(job, wabotOutbound, outboundMessageService);
     },
     {
       concurrency: 256,
@@ -253,6 +256,7 @@ async function bootstrap() {
         mediaMetaDataService,
         mediaRepo,
         wabotOutbound,
+        outboundMessageService,
       );
     },
     {
@@ -283,6 +287,7 @@ async function bootstrap() {
         mediaMetaDataService,
         literacyLessonService,
         wabotOutbound,
+        outboundMessageService,
       );
     },
     { concurrency: 32 },

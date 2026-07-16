@@ -12,6 +12,8 @@ import { tracer, injectCarrier } from '../otel/otel';
 import type { OtelCarrier } from '../otel/otel.dto';
 import { toLogId } from '../otel/pii';
 import type { UserService } from '../users/user.service';
+import type { OutboundMessageService } from '../outbound-messages/outbound-message.service';
+import type { OutboundSentItem } from '../outbound-messages/outbound-message.dto';
 
 const logger = new Logger('HailMaryProcessor');
 
@@ -47,6 +49,7 @@ export async function processHailMaryJob(
   mediaMetaDataService: MediaMetaDataService,
   literacyLessonService: LiteracyLessonService,
   wabotOutbound: WabotOutboundService,
+  outboundMessages: OutboundMessageService,
 ): Promise<void> {
   return tracer.startActiveSpan('hail-mary.send', async (span) => {
     span.setAttribute('bullmq.job.id', String(job.id));
@@ -125,6 +128,7 @@ export async function processHailMaryJob(
 
       // Build media — tolerant: each step in own try/catch; never abort.
       const media: OutboundMediaItem[] = [];
+      const records: OutboundSentItem[] = [];
 
       try {
         const hailMaryMedia =
@@ -132,7 +136,12 @@ export async function processHailMaryJob(
             HAIL_MARY_STATE_TRANSITION_ID,
           );
         if (hailMaryMedia.video) {
-          appendMediaItems(media, { video: hailMaryMedia.video });
+          appendMediaItems(
+            media,
+            { video: hailMaryMedia.video },
+            records,
+            HAIL_MARY_STATE_TRANSITION_ID,
+          );
         }
       } catch (err) {
         logger.warn(
@@ -149,7 +158,7 @@ export async function processHailMaryJob(
           try {
             const lessonMedia =
               await mediaMetaDataService.findMediaByStateTransitionId(stid);
-            appendMediaItems(media, lessonMedia);
+            appendMediaItems(media, lessonMedia, records, stid);
           } catch (err) {
             logger.warn(
               `hail-mary: fetch lesson stid="${stid}" media failed: ${(err as Error).message}`,
@@ -184,6 +193,14 @@ export async function processHailMaryJob(
       logger.log(
         `hail-mary: sent to user ${toLogId(job.data.user_external_id)} status=${result.status}`,
       );
+      if (result.status >= 200 && result.status < 300) {
+        await outboundMessages.recordSent({
+          user_id: job.data.user_id,
+          user_message_id: latest.id,
+          trigger: 'hail-mary',
+          items: records,
+        });
+      }
     } catch (err) {
       span.setStatus({
         code: SpanStatusCode.ERROR,
@@ -200,6 +217,8 @@ export async function processHailMaryJob(
 function appendMediaItems(
   items: OutboundMediaItem[],
   media: FindMediaByStateTransitionIdResult,
+  records?: OutboundSentItem[],
+  stateTransitionId?: string,
 ): void {
   for (const type of ['video', 'audio', 'image', 'sticker', 'text'] as const) {
     const entity = media[type];
@@ -210,6 +229,12 @@ function appendMediaItems(
       const mime_type = (entity.media_details as { mime_type?: string } | null)
         ?.mime_type;
       items.push({ type, url: entity.wa_media_url!, mime_type });
+    }
+    if (records) {
+      records.push({
+        media_metadata_id: entity.id,
+        state_transition_id: stateTransitionId ?? null,
+      });
     }
   }
 }

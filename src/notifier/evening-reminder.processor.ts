@@ -12,12 +12,19 @@ import { tracer } from '../otel/otel';
 import { toLogId } from '../otel/pii';
 import type { User } from '../users/user.dto';
 import { getActiveUsers, type ActiveUser } from './notifier.utils';
+import type { OutboundMessageService } from '../outbound-messages/outbound-message.service';
+import type { OutboundSentItem } from '../outbound-messages/outbound-message.dto';
 
 const logger = new Logger('NotifierProcessor');
 
 export interface NotifierSendJobData {
   user_external_id: string;
+  user_id: string;
+  user_message_id: string;
   media: OutboundMediaItem[];
+  // Entity-backed items for the outbound_messages audit log, recorded by the
+  // send worker only after a successful delivery.
+  records: OutboundSentItem[];
 }
 
 export async function processNotifierCronJob(
@@ -49,14 +56,15 @@ export async function processNotifierCronJob(
         return;
       }
 
-      const videoUrls: { wa_media_url: string }[] = await dataSource.query(
-        `SELECT wa_media_url
+      const videoUrls: { id: string; wa_media_url: string }[] =
+        await dataSource.query(
+          `SELECT id, wa_media_url
          FROM media_metadata
          WHERE state_transition_id = 'evening_notification_message'
            AND media_type = 'video'
            AND status = 'ready'
            AND wa_media_url IS NOT NULL`,
-      );
+        );
       span.setAttribute('notifier.videos.count', videoUrls.length);
 
       if (videoUrls.length === 0) {
@@ -67,7 +75,7 @@ export async function processNotifierCronJob(
         return;
       }
 
-      const notificationVideoUrls = videoUrls.map((r) => r.wa_media_url);
+      const notificationVideos = videoUrls;
 
       // Sort by 24-hour expiry ascending (soonest-expiring first).
       // Expiry = last_message_at + 24h, so sorting by last_message_at ascending is equivalent.
@@ -80,23 +88,26 @@ export async function processNotifierCronJob(
       const sendQueue = createQueue(QUEUE_NAMES.NOTIFIER_SEND);
 
       for (const activeUser of activeUsers) {
-        const media = await buildUserMedia(
+        const { media, records } = await buildUserMedia(
           activeUser,
-          notificationVideoUrls,
+          notificationVideos,
           literacyLessonService,
           mediaMetaDataService,
         );
 
         const jobData: NotifierSendJobData = {
           user_external_id: activeUser.external_id,
+          user_id: activeUser.user_id,
+          user_message_id: activeUser.last_message_id,
           media,
+          records,
         };
         await sendQueue.add('send-notification', jobData);
       }
 
       span.setAttribute('notifier.enqueued.count', activeUsers.length);
       logger.log(
-        `Enqueued ${String(activeUsers.length)} notification-send jobs from ${String(notificationVideoUrls.length)} video(s).`,
+        `Enqueued ${String(activeUsers.length)} notification-send jobs from ${String(notificationVideos.length)} video(s).`,
       );
     } catch (err) {
       span.setStatus({
@@ -113,10 +124,10 @@ export async function processNotifierCronJob(
 
 async function buildUserMedia(
   activeUser: ActiveUser,
-  notificationVideoUrls: string[],
+  notificationVideos: { id: string; wa_media_url: string }[],
   literacyLessonService: LiteracyLessonService,
   mediaMetaDataService: MediaMetaDataService,
-): Promise<OutboundMediaItem[]> {
+): Promise<{ media: OutboundMediaItem[]; records: OutboundSentItem[] }> {
   return tracer.startActiveSpan('notifier.buildUserMedia', async (span) => {
     span.setAttribute(
       'notifier.user.external_id_hash',
@@ -124,12 +135,17 @@ async function buildUserMedia(
     );
     try {
       const media: OutboundMediaItem[] = [];
+      const records: OutboundSentItem[] = [];
 
-      const randomUrl =
-        notificationVideoUrls[
-          Math.floor(Math.random() * notificationVideoUrls.length)
+      const chosenVideo =
+        notificationVideos[
+          Math.floor(Math.random() * notificationVideos.length)
         ];
-      media.push({ type: 'video', url: randomUrl });
+      media.push({ type: 'video', url: chosenVideo.wa_media_url });
+      records.push({
+        media_metadata_id: chosenVideo.id,
+        state_transition_id: 'evening_notification_message',
+      });
 
       try {
         const lessonResult = await literacyLessonService.processAnswer({
@@ -143,9 +159,11 @@ async function buildUserMedia(
         for (const stid of lessonResult.stateTransitionIds) {
           const lessonMedia =
             await mediaMetaDataService.findMediaByStateTransitionId(stid);
-          appendMediaItems(media, lessonMedia);
+          appendMediaItems(media, lessonMedia, records, stid);
         }
         // Runtime-generated sentence prompt has no media row — send as text.
+        // (Not entity-backed → not audit-logged until sentences become
+        // media entities.)
         if (lessonResult.sentenceText) {
           media.push({ type: 'text', body: lessonResult.sentenceText });
         }
@@ -159,7 +177,7 @@ async function buildUserMedia(
       }
 
       span.setAttribute('notifier.media.count', media.length);
-      return media;
+      return { media, records };
     } catch (err) {
       span.setStatus({
         code: SpanStatusCode.ERROR,
@@ -176,6 +194,8 @@ async function buildUserMedia(
 function appendMediaItems(
   items: OutboundMediaItem[],
   media: FindMediaByStateTransitionIdResult,
+  records?: OutboundSentItem[],
+  stateTransitionId?: string,
 ): void {
   for (const type of ['video', 'audio', 'image', 'sticker', 'text'] as const) {
     const entity = media[type];
@@ -187,12 +207,19 @@ function appendMediaItems(
         ?.mime_type;
       items.push({ type, url: entity.wa_media_url!, mime_type });
     }
+    if (records) {
+      records.push({
+        media_metadata_id: entity.id,
+        state_transition_id: stateTransitionId ?? null,
+      });
+    }
   }
 }
 
 export async function processNotifierSendJob(
   job: Job<NotifierSendJobData>,
   wabotOutbound: WabotOutboundService,
+  outboundMessages: OutboundMessageService,
 ): Promise<void> {
   return tracer.startActiveSpan('notifier.send', async (span) => {
     const { user_external_id, media } = job.data;
@@ -233,6 +260,12 @@ export async function processNotifierSendJob(
       }
 
       logger.log(`Notification delivered to user ${toLogId(user_external_id)}`);
+      await outboundMessages.recordSent({
+        user_id: job.data.user_id,
+        user_message_id: job.data.user_message_id,
+        trigger: 'evening-reminder',
+        items: job.data.records ?? [],
+      });
     } catch (err) {
       span.setStatus({
         code: SpanStatusCode.ERROR,

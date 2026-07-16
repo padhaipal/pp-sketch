@@ -534,6 +534,17 @@ export class MediaMetaDataService {
         throw new NotFoundException('Media metadata not found');
       }
 
+      // Audit log: outbound_messages is deliberately EXCLUDED from the
+      // generic FK sweep below (its rows are never deleted — user data).
+      // Instead the rollback is recorded on them, atomically with the media
+      // flag. Convention deviation (cross-entity write inside this
+      // transaction) mirrors user.service.ts's hard-delete: atomicity wins
+      // over module boundaries.
+      await manager.query(
+        `UPDATE outbound_messages SET status = 'rolled_back' WHERE user_message_id = $1`,
+        [mediaId],
+      );
+
       // Identifier escaping done by PG via format() — %s for regclass keeps
       // search-path-correct schema qualification; %I quotes the column name.
       const fkStmts: { sql: string }[] = await manager.query(
@@ -543,6 +554,7 @@ export class MediaMetaDataService {
            ON att.attrelid = con.conrelid AND att.attnum = ANY(con.conkey)
          WHERE con.confrelid = 'media_metadata'::regclass
            AND con.contype = 'f'
+           AND con.conrelid <> 'outbound_messages'::regclass
            AND EXISTS (
              SELECT 1 FROM pg_attribute pa
              WHERE pa.attrelid = con.confrelid

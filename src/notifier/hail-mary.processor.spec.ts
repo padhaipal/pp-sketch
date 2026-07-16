@@ -95,6 +95,11 @@ beforeEach(() => {
   mockCreateQueue.mockClear();
 });
 
+// Minimal OutboundMessageService stub — recordSent never throws by design.
+function outboundMock() {
+  return { recordSent: jest.fn().mockResolvedValue(undefined) } as never;
+}
+
 describe('rearmHailMary', () => {
   it('removes the prior job and re-adds with stable jobId + 23h55 delay', async () => {
     await rearmHailMary({
@@ -123,6 +128,7 @@ describe('processHailMaryJob — early exits', () => {
       makeMedia(jest.fn()),
       makeLesson(jest.fn()),
       makeWabot(jest.fn()),
+      outboundMock(),
     );
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'hail_mary.skip_reason',
@@ -144,6 +150,7 @@ describe('processHailMaryJob — early exits', () => {
       makeMedia(jest.fn()),
       makeLesson(jest.fn()),
       makeWabot(jest.fn()),
+      outboundMock(),
     );
 
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
@@ -170,6 +177,7 @@ describe('processHailMaryJob — early exits', () => {
       makeMedia(jest.fn()),
       makeLesson(jest.fn()),
       makeWabot(jest.fn()),
+      outboundMock(),
     );
 
     expect(mockQueueAdd).toHaveBeenCalled();
@@ -190,6 +198,7 @@ describe('processHailMaryJob — early exits', () => {
       makeMedia(jest.fn()),
       makeLesson(jest.fn()),
       makeWabot(jest.fn()),
+      outboundMock(),
     );
 
     // remove/add only called for the queue introspection above, not for rearm.
@@ -213,6 +222,7 @@ describe('processHailMaryJob — early exits', () => {
       makeMedia(jest.fn()),
       makeLesson(jest.fn()),
       makeWabot(jest.fn()),
+      outboundMock(),
     );
 
     expect(mockQueueAdd).not.toHaveBeenCalled();
@@ -231,6 +241,7 @@ describe('processHailMaryJob — early exits', () => {
       makeMedia(jest.fn()),
       makeLesson(jest.fn()),
       makeWabot(jest.fn()),
+      outboundMock(),
     );
 
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
@@ -251,6 +262,7 @@ describe('processHailMaryJob — early exits', () => {
       makeMedia(jest.fn()),
       makeLesson(jest.fn()),
       makeWabot(jest.fn()),
+      outboundMock(),
     );
 
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
@@ -292,6 +304,7 @@ describe('processHailMaryJob — happy + media tolerance', () => {
       media,
       lesson,
       wabot,
+      outboundMock(),
     );
 
     expect(wabot.sendMessage).toHaveBeenCalledTimes(1);
@@ -322,6 +335,7 @@ describe('processHailMaryJob — happy + media tolerance', () => {
       makeMedia(findMedia),
       lesson,
       wabot,
+      outboundMock(),
     );
 
     // No media at all → skip; no send
@@ -356,6 +370,7 @@ describe('processHailMaryJob — happy + media tolerance', () => {
       media,
       lesson,
       wabot,
+      outboundMock(),
     );
 
     expect(wabot.sendMessage).toHaveBeenCalledTimes(1);
@@ -385,6 +400,7 @@ describe('processHailMaryJob — happy + media tolerance', () => {
         media,
         lesson,
         wabot,
+        outboundMock(),
       ),
     ).rejects.toThrow('wabot down');
 
@@ -466,6 +482,7 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
       {} as unknown as MediaMetaDataService,
       {} as unknown as LiteracyLessonService,
       {} as unknown as WabotOutboundService,
+      outboundMock(),
     );
     expect(tracerMock2.tracer.startActiveSpan).toHaveBeenCalledWith(
       'hail-mary.send',
@@ -491,6 +508,7 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
       {} as unknown as MediaMetaDataService,
       {} as unknown as LiteracyLessonService,
       {} as unknown as WabotOutboundService,
+      outboundMock(),
     );
     const sql = query.mock.calls[0][0] as string;
     expect(sql).toContain('FROM media_metadata');
@@ -511,6 +529,7 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
       {} as unknown as MediaMetaDataService,
       {} as unknown as LiteracyLessonService,
       {} as unknown as WabotOutboundService,
+      outboundMock(),
     );
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'hail_mary.skip_reason',
@@ -536,6 +555,7 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
       {} as unknown as MediaMetaDataService,
       {} as unknown as LiteracyLessonService,
       {} as unknown as WabotOutboundService,
+      outboundMock(),
     );
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'hail_mary.skip_reason',
@@ -557,6 +577,7 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
       {} as unknown as MediaMetaDataService,
       {} as unknown as LiteracyLessonService,
       {} as unknown as WabotOutboundService,
+      outboundMock(),
     );
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'hail_mary.skip_reason',
@@ -577,6 +598,7 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
       {} as unknown as MediaMetaDataService,
       {} as unknown as LiteracyLessonService,
       {} as unknown as WabotOutboundService,
+      outboundMock(),
     );
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'hail_mary.skip_reason',
@@ -605,6 +627,7 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
         processAnswer: jest.fn().mockResolvedValue({ stateTransitionIds: [] }),
       } as unknown as LiteracyLessonService,
       {} as unknown as WabotOutboundService,
+      outboundMock(),
     );
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'hail_mary.skip_reason',
@@ -639,6 +662,7 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
         processAnswer: jest.fn().mockResolvedValue({ stateTransitionIds: [] }),
       } as unknown as LiteracyLessonService,
       { sendMessage } as unknown as WabotOutboundService,
+      outboundMock(),
     );
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -676,6 +700,7 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
         processAnswer: jest.fn().mockResolvedValue({ stateTransitionIds: [] }),
       } as unknown as LiteracyLessonService,
       { sendMessage: jest.fn() } as unknown as WabotOutboundService,
+      outboundMock(),
     );
     // The first call to findMediaByStateTransitionId is the hail-mary stid.
     expect(findMediaByStateTransitionId).toHaveBeenCalledWith('hail-mary');

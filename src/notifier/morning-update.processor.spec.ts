@@ -100,6 +100,11 @@ beforeEach(() => {
   mockCreateQueue.mockClear();
 });
 
+// Minimal OutboundMessageService stub — recordSent never throws by design.
+function outboundMock() {
+  return { recordSent: jest.fn().mockResolvedValue(undefined) } as never;
+}
+
 describe('resolveMorningUpdateIntroMedia', () => {
   it('prefers video when both video and image are present', async () => {
     const svc = makeMedia(
@@ -117,8 +122,14 @@ describe('resolveMorningUpdateIntroMedia', () => {
 
     const out = await resolveMorningUpdateIntroMedia(svc);
 
-    expect(out).toEqual([
+    expect(out?.items).toEqual([
       { type: 'video', url: 'https://v', mime_type: 'video/mp4' },
+    ]);
+    expect(out?.records).toEqual([
+      {
+        media_metadata_id: undefined,
+        state_transition_id: 'morning_notification_message',
+      },
     ]);
   });
 
@@ -134,7 +145,7 @@ describe('resolveMorningUpdateIntroMedia', () => {
 
     const out = await resolveMorningUpdateIntroMedia(svc);
 
-    expect(out).toEqual([
+    expect(out?.items).toEqual([
       { type: 'image', url: 'https://i', mime_type: 'image/png' },
     ]);
   });
@@ -151,7 +162,7 @@ describe('resolveMorningUpdateIntroMedia', () => {
       }),
     );
     const out = await resolveMorningUpdateIntroMedia(svc);
-    expect(out).toEqual([
+    expect(out?.items).toEqual([
       { type: 'image', url: 'https://i', mime_type: undefined },
     ]);
   });
@@ -380,6 +391,7 @@ describe('processMorningUpdateSendJob', () => {
       mediaSvc,
       mediaRepo,
       wabot,
+      outboundMock(),
     );
 
     expect(wabot.sendNotification).toHaveBeenCalledTimes(1);
@@ -411,6 +423,7 @@ describe('processMorningUpdateSendJob', () => {
         mediaSvc,
         makeMediaRepo(jest.fn()),
         makeWabot(jest.fn()),
+        outboundMock(),
       ),
     ).rejects.toThrow(/requeue:.*just created/);
 
@@ -444,6 +457,7 @@ describe('processMorningUpdateSendJob', () => {
         mediaSvc,
         mediaRepo,
         makeWabot(jest.fn()),
+        outboundMock(),
       ),
     ).rejects.toThrow(/requeue/);
   });
@@ -464,6 +478,7 @@ describe('processMorningUpdateSendJob', () => {
       makeMedia(jest.fn(), { createRenderedImageMedia: jest.fn() }),
       mediaRepo,
       wabot,
+      outboundMock(),
     );
 
     expect(wabot.sendNotification).not.toHaveBeenCalled();
@@ -493,6 +508,7 @@ describe('processMorningUpdateSendJob', () => {
         makeMedia(jest.fn(), { createRenderedImageMedia: jest.fn() }),
         mediaRepo,
         makeWabot(jest.fn()),
+        outboundMock(),
       ),
     ).rejects.toThrow(/requeue: report card status=queued/);
   });
@@ -517,6 +533,7 @@ describe('processMorningUpdateSendJob', () => {
         makeMedia(jest.fn(), { createRenderedImageMedia: jest.fn() }),
         mediaRepo,
         makeWabot(jest.fn()),
+        outboundMock(),
       ),
     ).rejects.toThrow(/requeue/);
   });
@@ -548,6 +565,7 @@ describe('processMorningUpdateSendJob', () => {
         makeMedia(jest.fn(), { createRenderedImageMedia: jest.fn() }),
         mediaRepo,
         wabot,
+        outboundMock(),
       ),
     ).rejects.toThrow('WhatsApp rate-limit (130429)');
   });
@@ -578,6 +596,7 @@ describe('processMorningUpdateSendJob', () => {
       makeMedia(jest.fn(), { createRenderedImageMedia: jest.fn() }),
       mediaRepo,
       wabot,
+      outboundMock(),
     );
 
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
@@ -611,6 +630,7 @@ describe('processMorningUpdateSendJob', () => {
         makeMedia(jest.fn(), { createRenderedImageMedia: jest.fn() }),
         mediaRepo,
         wabot,
+        outboundMock(),
       ),
     ).rejects.toThrow('Morning-update failed');
   });
@@ -878,6 +898,7 @@ describe('processMorningUpdateSendJob — child span + error_code branches + ski
       {} as unknown as MediaMetaDataService,
       mediaRepo,
       wabot,
+      outboundMock(),
     );
     expect(mockStartChildSpan).toHaveBeenCalledWith('morning-update.send', {
       traceparent: 'tp',
@@ -907,6 +928,7 @@ describe('processMorningUpdateSendJob — child span + error_code branches + ski
         {} as unknown as MediaMetaDataService,
         mediaRepo,
         wabot,
+        outboundMock(),
       ),
     ).rejects.toThrow(/WhatsApp rate-limit \(130429\)/);
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
@@ -939,6 +961,7 @@ describe('processMorningUpdateSendJob — child span + error_code branches + ski
         {} as unknown as MediaMetaDataService,
         mediaRepo,
         wabot,
+        outboundMock(),
       ),
     ).resolves.toBeUndefined();
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
@@ -970,6 +993,7 @@ describe('processMorningUpdateSendJob — child span + error_code branches + ski
       {} as unknown as MediaMetaDataService,
       mediaRepo,
       wabot,
+      outboundMock(),
     );
     const payload = sendNotification.mock.calls[0][0] as {
       user_external_id: string;
@@ -1005,6 +1029,7 @@ describe('processMorningUpdateSendJob — child span + error_code branches + ski
       {} as unknown as MediaMetaDataService,
       mediaRepo,
       wabot,
+      outboundMock(),
     );
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'morning_update.skip_reason',

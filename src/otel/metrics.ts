@@ -72,3 +72,15 @@ export const drillWordMediaCreateFailure = meter.createCounter(
       'Failed attempts to auto-create a drill-word text media row (final=true when the retry budget was exhausted).',
   },
 );
+
+// Counts failed writes to the outbound_messages audit log (recordSent never
+// throws — delivery proceeds, but the audit trail has a hole). A non-zero
+// rate means "what did we send this user" queries are incomplete for the
+// affected window.
+export const outboundRecordFailure = meter.createCounter(
+  'pp.outbound.record_failure_total',
+  {
+    description:
+      'Failed outbound_messages audit-log writes (delivery unaffected; audit trail has a hole).',
+  },
+);
