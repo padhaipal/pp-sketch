@@ -18,7 +18,7 @@ jest.mock('../interfaces/redis/queues', () => ({
   },
 }));
 
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import type { DataSource, Repository } from 'typeorm';
 import { MediaMetaDataService } from './media-meta-data.service';
 import type { MediaMetaDataEntity } from './media-meta-data.entity';
@@ -2241,5 +2241,262 @@ describe('MediaMetaDataService.recordWhatsappUpload / markMediaFailed', () => {
 
     expect(repo.update).toHaveBeenCalledTimes(1);
     expect(repo.update).toHaveBeenCalledWith('mm-1', { status: 'failed' });
+  });
+});
+
+// ─── drill-word auto-create on lookup miss ───────────────────────────────────
+
+describe('findMediaByStateTransitionId — drill-word auto-create', () => {
+  const STID = 'पीला-sentence-word-drillWord';
+
+  function makeCache(cached: unknown = null) {
+    return {
+      get: jest.fn().mockResolvedValue(cached),
+      set: jest.fn().mockResolvedValue(undefined),
+      del: jest.fn(),
+    };
+  }
+
+  // Routes dsQuery by SQL shape: lookup SELECT, INSERT..ON CONFLICT, re-SELECT.
+  function routedQuery(handlers: {
+    lookup?: unknown[];
+    insert?: () => unknown[] | Promise<unknown[]>;
+    reselect?: unknown[];
+  }) {
+    return jest.fn((sql: string) => {
+      if (sql.includes('INSERT INTO media_metadata')) {
+        return Promise.resolve(handlers.insert ? handlers.insert() : []);
+      }
+      if (
+        sql.includes("source = 'drill-word-auto'") &&
+        sql.includes('SELECT')
+      ) {
+        return Promise.resolve(handlers.reselect ?? []);
+      }
+      return Promise.resolve(handlers.lookup ?? []);
+    });
+  }
+
+  const createdRow = {
+    id: 'gen-uuid',
+    media_type: 'text',
+    source: 'drill-word-auto',
+    status: 'ready',
+    text: 'पीला',
+    state_transition_id: STID,
+  };
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+  });
+
+  it('auto-creates the text row on a miss and returns + caches it', async () => {
+    const cache = makeCache();
+    const dsQuery = routedQuery({ lookup: [], insert: () => [createdRow] });
+    const { service } = makeService({ cache, dsQuery });
+
+    const out = await service.findMediaByStateTransitionId(STID);
+
+    expect(out.text).toEqual(createdRow);
+    const insertCall = dsQuery.mock.calls.find(([sql]) =>
+      sql.includes('INSERT INTO media_metadata'),
+    )!;
+    expect(insertCall[0]).toContain(
+      "ON CONFLICT (state_transition_id) WHERE source = 'drill-word-auto' DO NOTHING",
+    );
+    expect(insertCall[1]).toEqual(['gen-uuid', 'पीला', STID]);
+    // Non-empty result → cached, including the synthesized row.
+    expect(cache.set).toHaveBeenCalledWith(
+      expect.stringContaining(STID),
+      expect.objectContaining({ text: createdRow }),
+      expect.anything(),
+    );
+  });
+
+  it('does NOT warn "no media found" when the row was auto-created', async () => {
+    const warnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    const dsQuery = routedQuery({ lookup: [], insert: () => [createdRow] });
+    const { service } = makeService({ cache: makeCache(), dsQuery });
+
+    await service.findMediaByStateTransitionId(STID);
+
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('no media found'),
+    );
+  });
+
+  it('lost race: ON CONFLICT returns no row → re-selects the winner', async () => {
+    const winner = { ...createdRow, id: 'winner-row' };
+    const dsQuery = routedQuery({
+      lookup: [],
+      insert: () => [],
+      reselect: [winner],
+    });
+    const { service } = makeService({ cache: makeCache(), dsQuery });
+
+    const out = await service.findMediaByStateTransitionId(STID);
+
+    expect(out.text).toEqual(winner);
+  });
+
+  it('a seeded exact-match text row wins — no INSERT happens', async () => {
+    const seeded = {
+      id: 'seeded-1',
+      media_type: 'text',
+      state_transition_id: STID,
+    };
+    const dsQuery = routedQuery({ lookup: [seeded] });
+    const { service } = makeService({ cache: makeCache(), dsQuery });
+
+    const out = await service.findMediaByStateTransitionId(STID);
+
+    expect(out.text?.id).toBe('seeded-1');
+    expect(dsQuery.mock.calls.some(([sql]) => sql.includes('INSERT'))).toBe(
+      false,
+    );
+  });
+
+  it('a seeded generic text row wins — no INSERT happens', async () => {
+    const generic = {
+      id: 'generic-text-1',
+      media_type: 'text',
+      state_transition_id: '_-sentence-word-drillWord',
+    };
+    const dsQuery = routedQuery({ lookup: [generic] });
+    const { service } = makeService({ cache: makeCache(), dsQuery });
+
+    const out = await service.findMediaByStateTransitionId(STID);
+
+    expect(out.text?.id).toBe('generic-text-1');
+    expect(dsQuery.mock.calls.some(([sql]) => sql.includes('INSERT'))).toBe(
+      false,
+    );
+  });
+
+  it('creates the text row even when other media types exist (generic voice note)', async () => {
+    const genericAudio = {
+      id: 'generic-audio-1',
+      media_type: 'audio',
+      state_transition_id: '_-sentence-word-drillWord',
+    };
+    const dsQuery = routedQuery({
+      lookup: [genericAudio],
+      insert: () => [createdRow],
+    });
+    const { service } = makeService({ cache: makeCache(), dsQuery });
+
+    const out = await service.findMediaByStateTransitionId(STID);
+
+    expect(out.audio?.id).toBe('generic-audio-1');
+    expect(out.text).toEqual(createdRow);
+  });
+
+  it.each([
+    ['_-sentence-word-drillWord', 'generic key itself'],
+    ['sentence-sentence-word-drillWord', 'fixed sentence prefix'],
+    ['sentence-start-sentence-initial', 'non-matching fixed stid'],
+    ['पीला-sentence-word-drillWordX', 'suffix mismatch'],
+    ['पीला-word-routeWrongLetter-drillLetters', 'letter drill stid'],
+  ])('never auto-creates for %s (%s)', async (stid) => {
+    const warnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    const dsQuery = routedQuery({ lookup: [] });
+    const { service } = makeService({ cache: makeCache(), dsQuery });
+
+    const out = await service.findMediaByStateTransitionId(stid);
+
+    expect(out.text).toBeUndefined();
+    expect(dsQuery.mock.calls.some(([sql]) => sql.includes('INSERT'))).toBe(
+      false,
+    );
+    // Still the plain miss path → warns as before.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('no media found'),
+    );
+  });
+
+  it('a cached result short-circuits before any auto-create', async () => {
+    const dsQuery = jest.fn();
+    const { service } = makeService({
+      cache: makeCache({ text: { id: 'cached-text' } }),
+      dsQuery,
+    });
+
+    const out = await service.findMediaByStateTransitionId(STID);
+
+    expect(out.text?.id).toBe('cached-text');
+    expect(dsQuery).not.toHaveBeenCalled();
+  });
+
+  it('retries after a transient failure and warns about DB pressure', async () => {
+    jest.useFakeTimers();
+    const warnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    let calls = 0;
+    const dsQuery = routedQuery({
+      lookup: [],
+      insert: () => {
+        calls++;
+        if (calls === 1) throw new Error('db hiccup');
+        return [createdRow];
+      },
+    });
+    const { service } = makeService({ cache: makeCache(), dsQuery });
+
+    const pending = service.findMediaByStateTransitionId(STID);
+    await jest.advanceTimersByTimeAsync(5_000); // covers the ~1s±25% first delay
+    const out = await pending;
+
+    expect(out.text).toEqual(createdRow);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('succeeded after 2 attempts'),
+    );
+  });
+
+  it('exhausts the retry budget on persistent failure and rethrows', async () => {
+    jest.useFakeTimers();
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const errorSpy = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+    let inserts = 0;
+    const dsQuery = routedQuery({
+      lookup: [],
+      insert: () => {
+        inserts++;
+        throw new Error('db down');
+      },
+    });
+    const { service } = makeService({ cache: makeCache(), dsQuery });
+
+    const pending = service.findMediaByStateTransitionId(STID);
+    const assertion = expect(pending).rejects.toThrow('db down');
+    await jest.advanceTimersByTimeAsync(40_000); // walks every backoff delay
+    await assertion;
+
+    expect(inserts).toBe(5); // initial + 4 retries, then gives up
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('drill-word auto-create FAILED after 5 attempts'),
+    );
+  });
+
+  it('throws when the conflict row cannot be re-selected (index/data drift)', async () => {
+    jest.useFakeTimers();
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const dsQuery = routedQuery({ lookup: [], insert: () => [], reselect: [] });
+    const { service } = makeService({ cache: makeCache(), dsQuery });
+
+    const pending = service.findMediaByStateTransitionId(STID);
+    const assertion = expect(pending).rejects.toThrow(
+      'conflict but no existing row found',
+    );
+    await jest.advanceTimersByTimeAsync(40_000);
+    await assertion;
   });
 });

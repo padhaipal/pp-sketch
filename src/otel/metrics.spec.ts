@@ -5,7 +5,12 @@
 
 const mockHistogram = { record: jest.fn() };
 const mockCreateHistogram = jest.fn(() => mockHistogram);
-const mockGetMeter = jest.fn(() => ({ createHistogram: mockCreateHistogram }));
+const mockCounter = { add: jest.fn() };
+const mockCreateCounter = jest.fn(() => mockCounter);
+const mockGetMeter = jest.fn(() => ({
+  createHistogram: mockCreateHistogram,
+  createCounter: mockCreateCounter,
+}));
 const mockGetBaggage = jest.fn();
 const mockContextActive = jest.fn().mockReturnValue('active-ctx');
 
