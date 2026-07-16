@@ -31,7 +31,18 @@ jest.mock('../otel/otel', () => ({
 // stubs so the controller code runs without pulling in the real SDK.
 jest.mock('@opentelemetry/api', () => ({
   context: { active: jest.fn(() => 'active-ctx') },
-  trace: { setSpan: jest.fn((_ctx, span) => ({ wrappedSpan: span })) },
+  trace: {
+    setSpan: jest.fn((_ctx, span) => ({ wrappedSpan: span })),
+    getActiveSpan: jest.fn(() => undefined),
+  },
+  // media-meta-data.service transitively imports otel/metrics.ts, whose
+  // module-load setup calls metrics.getMeter(...).createHistogram/Counter.
+  metrics: {
+    getMeter: jest.fn(() => ({
+      createHistogram: jest.fn(() => ({ record: jest.fn() })),
+      createCounter: jest.fn(() => ({ add: jest.fn() })),
+    })),
+  },
 }));
 
 import { BadRequestException, NotFoundException } from '@nestjs/common';
