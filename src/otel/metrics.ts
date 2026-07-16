@@ -59,3 +59,16 @@ export function buildJobAttributes(
   }
   return attrs;
 }
+
+// Counts failed attempts to auto-create the drill-word text media row on a
+// findMediaByStateTransitionId miss ({word}-sentence-word-drillWord stids).
+// `final=true` means the ~20s retry budget was exhausted and the turn failed
+// (wabot's timeout fallback reaches the user). A non-zero rate here is an
+// early signal of database pressure.
+export const drillWordMediaCreateFailure = meter.createCounter(
+  'pp.media.drill_word_create_failure_total',
+  {
+    description:
+      'Failed attempts to auto-create a drill-word text media row (final=true when the retry budget was exhausted).',
+  },
+);
