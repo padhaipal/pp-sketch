@@ -2300,7 +2300,7 @@ describe('findMediaByStateTransitionId — drill-word auto-create', () => {
 
     expect(out.text).toEqual(createdRow);
     const insertCall = dsQuery.mock.calls.find(([sql]) =>
-      (sql as string).includes('INSERT INTO media_metadata'),
+      sql.includes('INSERT INTO media_metadata'),
     )!;
     expect(insertCall[0]).toContain(
       "ON CONFLICT (state_transition_id) WHERE source = 'drill-word-auto' DO NOTHING",
@@ -2354,9 +2354,9 @@ describe('findMediaByStateTransitionId — drill-word auto-create', () => {
     const out = await service.findMediaByStateTransitionId(STID);
 
     expect(out.text?.id).toBe('seeded-1');
-    expect(
-      dsQuery.mock.calls.some(([sql]) => (sql as string).includes('INSERT')),
-    ).toBe(false);
+    expect(dsQuery.mock.calls.some(([sql]) => sql.includes('INSERT'))).toBe(
+      false,
+    );
   });
 
   it('a seeded generic text row wins — no INSERT happens', async () => {
@@ -2371,9 +2371,9 @@ describe('findMediaByStateTransitionId — drill-word auto-create', () => {
     const out = await service.findMediaByStateTransitionId(STID);
 
     expect(out.text?.id).toBe('generic-text-1');
-    expect(
-      dsQuery.mock.calls.some(([sql]) => (sql as string).includes('INSERT')),
-    ).toBe(false);
+    expect(dsQuery.mock.calls.some(([sql]) => sql.includes('INSERT'))).toBe(
+      false,
+    );
   });
 
   it('creates the text row even when other media types exist (generic voice note)', async () => {
@@ -2410,9 +2410,9 @@ describe('findMediaByStateTransitionId — drill-word auto-create', () => {
     const out = await service.findMediaByStateTransitionId(stid);
 
     expect(out.text).toBeUndefined();
-    expect(
-      dsQuery.mock.calls.some(([sql]) => (sql as string).includes('INSERT')),
-    ).toBe(false);
+    expect(dsQuery.mock.calls.some(([sql]) => sql.includes('INSERT'))).toBe(
+      false,
+    );
     // Still the plain miss path → warns as before.
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('no media found'),
