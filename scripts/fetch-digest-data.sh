@@ -49,6 +49,22 @@ loki_ds_uid="${LOKI_DATASOURCE_UID:-grafanacloud-logs}"
 loki_proxy="${grafana_url}/api/datasources/proxy/uid/${loki_ds_uid}/loki/api/v1"
 echo "Using Loki datasource uid=${loki_ds_uid} via ${loki_proxy}" >&2
 
+# Grafana Cloud free-tier stacks HIBERNATE after a few days without UI
+# logins: /api/health serves 404/503 and datasource proxy calls fail with
+# DatasourceError until the first request wakes the stack (~1-3 min).
+# The digest is often that first request (scheduled, nobody logged in),
+# which is exactly how the 2026-07-16/17 runs died. Poll health until the
+# stack is up; give it 5 minutes before declaring a real outage.
+wake_deadline=$(( $(date -u +%s) + 300 ))
+until [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${grafana_url}/api/health" 2>/dev/null)" == "200" ]]; do
+  if (( $(date -u +%s) >= wake_deadline )); then
+    echo "ERROR: Grafana at ${grafana_url} not healthy after 5 min of wake attempts" >&2
+    exit 1
+  fi
+  echo "Grafana not ready (hibernating?) — retrying in 15s" >&2
+  sleep 15
+done
+
 # Body separator used by curl to write http status on its own line
 SEP='__HTTP_STATUS__'
 
