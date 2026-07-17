@@ -72,6 +72,11 @@ beforeEach(() => {
   mockCreateQueue.mockClear();
 });
 
+// Minimal OutboundMessageService stub — recordSent never throws by design.
+function outboundMock() {
+  return { recordSent: jest.fn().mockResolvedValue(undefined) } as never;
+}
+
 describe('processNotifierCronJob', () => {
   it('skips when there are no active users', async () => {
     const ds = { query: makeQuery([]) } as unknown as DataSource;
@@ -236,7 +241,7 @@ describe('processNotifierSendJob', () => {
     const wabot = makeWabot(
       jest.fn().mockResolvedValue({ delivered: true, status: 200 }),
     );
-    await processNotifierSendJob(makeSendJob(baseData), wabot);
+    await processNotifierSendJob(makeSendJob(baseData), wabot, outboundMock());
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'notifier.delivered',
       true,
@@ -252,7 +257,7 @@ describe('processNotifierSendJob', () => {
       }),
     );
     await expect(
-      processNotifierSendJob(makeSendJob(baseData), wabot),
+      processNotifierSendJob(makeSendJob(baseData), wabot, outboundMock()),
     ).rejects.toThrow('WhatsApp rate-limit (130429)');
   });
 
@@ -265,7 +270,7 @@ describe('processNotifierSendJob', () => {
       }),
     );
     await expect(
-      processNotifierSendJob(makeSendJob(baseData), wabot),
+      processNotifierSendJob(makeSendJob(baseData), wabot, outboundMock()),
     ).resolves.toBeUndefined();
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'notifier.skip_reason',
@@ -280,14 +285,14 @@ describe('processNotifierSendJob', () => {
         .mockResolvedValue({ delivered: false, status: 500, error_code: 999 }),
     );
     await expect(
-      processNotifierSendJob(makeSendJob(baseData), wabot),
+      processNotifierSendJob(makeSendJob(baseData), wabot, outboundMock()),
     ).rejects.toThrow('Notification failed');
   });
 
   it('rethrows and records exception when the wabot call itself rejects', async () => {
     const wabot = makeWabot(jest.fn().mockRejectedValue(new Error('netfail')));
     await expect(
-      processNotifierSendJob(makeSendJob(baseData), wabot),
+      processNotifierSendJob(makeSendJob(baseData), wabot, outboundMock()),
     ).rejects.toThrow('netfail');
     expect(mockSpanRecordException).toHaveBeenCalled();
   });
@@ -431,7 +436,7 @@ describe('processNotifierCronJob — span names + span attributes + log messages
     );
     // Second call is the video lookup
     const sql = query.mock.calls[1][0] as string;
-    expect(sql).toContain('SELECT wa_media_url');
+    expect(sql).toContain('SELECT id, wa_media_url');
     expect(sql).toContain('FROM media_metadata');
     expect(sql).toContain(
       "state_transition_id = 'evening_notification_message'",
@@ -554,7 +559,7 @@ describe('processNotifierSendJob — error_code branches + attributes', () => {
   it('opens "notifier.send" span and tags media.count + delivered=true on success', async () => {
     const { log } = spyLog();
     const wabot = makeWabot(jest.fn().mockResolvedValue({ delivered: true }));
-    await processNotifierSendJob(makeSendJob(baseMedia), wabot);
+    await processNotifierSendJob(makeSendJob(baseMedia), wabot, outboundMock());
     expect(tracerMock.tracer.startActiveSpan).toHaveBeenCalledWith(
       'notifier.send',
       expect.any(Function),
@@ -578,7 +583,7 @@ describe('processNotifierSendJob — error_code branches + attributes', () => {
       jest.fn().mockResolvedValue({ delivered: false, error_code: 130429 }),
     );
     await expect(
-      processNotifierSendJob(makeSendJob(baseMedia), wabot),
+      processNotifierSendJob(makeSendJob(baseMedia), wabot, outboundMock()),
     ).rejects.toThrow(/WhatsApp rate-limit \(130429\)/);
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'wabot.error_code',
@@ -592,7 +597,7 @@ describe('processNotifierSendJob — error_code branches + attributes', () => {
       jest.fn().mockResolvedValue({ delivered: false, error_code: 131047 }),
     );
     await expect(
-      processNotifierSendJob(makeSendJob(baseMedia), wabot),
+      processNotifierSendJob(makeSendJob(baseMedia), wabot, outboundMock()),
     ).resolves.toBeUndefined();
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'notifier.skip_reason',
@@ -611,7 +616,7 @@ describe('processNotifierSendJob — error_code branches + attributes', () => {
       jest.fn().mockResolvedValue({ delivered: undefined }),
     );
     await expect(
-      processNotifierSendJob(makeSendJob(baseMedia), wabot),
+      processNotifierSendJob(makeSendJob(baseMedia), wabot, outboundMock()),
     ).rejects.toThrow(/Notification failed for user /);
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'notifier.delivered',
@@ -628,7 +633,66 @@ describe('processNotifierSendJob — error_code branches + attributes', () => {
       }),
     );
     await expect(
-      processNotifierSendJob(makeSendJob(baseMedia), wabot),
+      processNotifierSendJob(makeSendJob(baseMedia), wabot, outboundMock()),
     ).rejects.toThrow(/status=rejected error_code=999/);
+  });
+});
+
+describe('processNotifierSendJob — outbound_messages audit recording', () => {
+  it('records job.data.records with trigger evening-reminder after delivery', async () => {
+    const outbound = outboundMock();
+    const wabot = {
+      sendNotification: jest
+        .fn()
+        .mockResolvedValue({ status: 200, delivered: true }),
+    } as never;
+    const jobData = {
+      user_external_id: '+911111111111',
+      user_id: 'u-9',
+      user_message_id: 'mm-9',
+      media: [{ type: 'video', url: 'https://v' }],
+      records: [
+        {
+          media_metadata_id: 'vid-1',
+          state_transition_id: 'evening_notification_message',
+        },
+      ],
+    };
+    await processNotifierSendJob({ data: jobData } as never, wabot, outbound);
+    expect(
+      (outbound as { recordSent: jest.Mock }).recordSent,
+    ).toHaveBeenCalledWith({
+      user_id: 'u-9',
+      user_message_id: 'mm-9',
+      trigger: 'evening-reminder',
+      items: jobData.records,
+    });
+  });
+
+  it('does NOT record when delivery fails', async () => {
+    const outbound = outboundMock();
+    const wabot = {
+      sendNotification: jest
+        .fn()
+        .mockResolvedValue({ status: 500, delivered: false }),
+    } as never;
+    await expect(
+      processNotifierSendJob(
+        {
+          data: {
+            user_external_id: '+911111111111',
+            user_id: 'u-9',
+            user_message_id: 'mm-9',
+            media: [],
+            records: [],
+          },
+        } as never,
+        wabot,
+        outbound,
+      ),
+    ).rejects.toThrow();
+    expect(
+      (outbound as { recordSent: jest.Mock }).recordSent,
+    ).not.toHaveBeenCalled();
   });
 });

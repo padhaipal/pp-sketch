@@ -100,6 +100,9 @@ function makeMocks(
         opts.activeTime ?? { withLatestTurn: 0, withoutLatestTurn: 0 },
       ),
   };
+  const outboundMessages = {
+    recordSent: jest.fn().mockResolvedValue(undefined),
+  };
 
   return {
     userService,
@@ -107,6 +110,7 @@ function makeMocks(
     literacyLessonService,
     wabotOutbound,
     userActivityService,
+    outboundMessages,
   };
 }
 
@@ -121,6 +125,7 @@ async function runJob(
     mocks.literacyLessonService as any,
     mocks.wabotOutbound as any,
     mocks.userActivityService as any,
+    mocks.outboundMessages as any,
   );
 }
 
@@ -1696,5 +1701,54 @@ describe('processWabotInboundJob — sentence text rendering', () => {
     expect(
       media.filter((m: { type: string }) => m.type === 'text'),
     ).toHaveLength(0);
+  });
+});
+
+describe('processWabotInboundJob — outbound_messages audit recording', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('records entity-backed items with trigger inbound-reply after a 2xx send', async () => {
+    const mocks = makeMocks();
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({
+      audio: { id: 'media-a', wa_media_url: 'https://a', media_details: null },
+    });
+    await runJob(createAudioJob(), mocks);
+    expect(mocks.outboundMessages.recordSent).toHaveBeenCalledWith({
+      user_id: 'user-1',
+      user_message_id: 'audio-entity-1',
+      trigger: 'inbound-reply',
+      items: [{ media_metadata_id: 'media-a', state_transition_id: 'sid-1' }],
+    });
+  });
+
+  it('does NOT record when wabot rejects the send (4xx)', async () => {
+    const mocks = makeMocks();
+    mocks.wabotOutbound.sendMessage.mockResolvedValue({
+      status: 400,
+      body: { delivered: false, reason: 'whatsapp-error' },
+    });
+    await expect(runJob(createAudioJob(), mocks)).rejects.toThrow(
+      'sendMessage 4XX',
+    );
+    expect(mocks.outboundMessages.recordSent).not.toHaveBeenCalled();
+  });
+
+  it('records BEFORE the rolled-back branch so flips can find the rows', async () => {
+    const order: string[] = [];
+    const mocks = makeMocks();
+    mocks.outboundMessages.recordSent.mockImplementation(async () => {
+      order.push('record');
+    });
+    mocks.mediaMetaDataService.markRolledBack.mockImplementation(async () => {
+      order.push('rollback');
+    });
+    mocks.wabotOutbound.sendMessage.mockResolvedValue({
+      status: 200,
+      body: { delivered: false, reason: 'inflight-expired' },
+    });
+    await runJob(createAudioJob(), mocks);
+    expect(order).toEqual(['record', 'rollback']);
   });
 });

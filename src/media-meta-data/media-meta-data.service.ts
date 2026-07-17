@@ -9,6 +9,8 @@ import { Repository, DataSource } from 'typeorm';
 import { Readable } from 'stream';
 import { v4 as uuid } from 'uuid';
 import * as crypto from 'crypto';
+import { trace } from '@opentelemetry/api';
+import { drillWordMediaCreateFailure } from '../otel/metrics';
 import { MediaMetaDataEntity } from './media-meta-data.entity';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
@@ -62,6 +64,21 @@ async function isSttEnabled(provider: string): Promise<boolean> {
     return fallback;
   }
 }
+
+// Sentence→word drill hand-off stids ({word}-sentence-word-drillWord). The
+// drilled word can be any Hindi word (not just word-list entries), so its
+// text prompt cannot be pre-seeded — on lookup miss the row is auto-created
+// (source='drill-word-auto') and then served like any other text media. The
+// prefix guard excludes the generic key ('_') and the fixed 'sentence-*'
+// prompt stids, whose media is human-seeded.
+const DRILL_WORD_STID_RE = /^([^-]+)-sentence-word-drillWord$/;
+const DRILL_WORD_EXCLUDED_PREFIXES = new Set(['_', 'sentence']);
+// Backoff for the auto-create write: attempts at ~0/1/2/4/8s (±25% jitter),
+// bounded by a 20s wall-clock budget — by then wabot's timeout fallback has
+// already reached the user, so later attempts would only benefit the NEXT
+// turn (and the row is created then anyway).
+const DRILL_WORD_CREATE_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
+const DRILL_WORD_CREATE_DEADLINE_MS = 20_000;
 
 @Injectable()
 export class MediaMetaDataService {
@@ -385,6 +402,19 @@ export class MediaMetaDataService {
       }
     }
 
+    // Drill hand-off with no text media (exact or generic): auto-create the
+    // word's text row so the turn always carries the drilled word and can
+    // never produce an empty outbound bundle.
+    if (!result.text) {
+      const drillMatch = DRILL_WORD_STID_RE.exec(stateTransitionId);
+      if (drillMatch && !DRILL_WORD_EXCLUDED_PREFIXES.has(drillMatch[1])) {
+        result.text = await this.ensureDrillWordTextMedia(
+          stateTransitionId,
+          drillMatch[1],
+        );
+      }
+    }
+
     const resultTypes = Object.keys(result);
     if (resultTypes.length === 0) {
       this.logger.warn(
@@ -401,6 +431,86 @@ export class MediaMetaDataService {
     }
 
     return result;
+  }
+
+  // Returns the drill word's auto-created text row, creating it if absent.
+  // Race-safe across instances: the partial unique index on
+  // (state_transition_id) WHERE source='drill-word-auto' makes the INSERT's
+  // ON CONFLICT DO NOTHING lose quietly, and the follow-up SELECT returns the
+  // winner's row. Retries transient DB failures with jittered exponential
+  // backoff inside a 20s budget, then throws (the turn fails; wabot's timeout
+  // fallback reaches the user).
+  private async ensureDrillWordTextMedia(
+    stateTransitionId: string,
+    word: string,
+  ): Promise<MediaMetaData> {
+    const startedAt = Date.now();
+    let attempt = 0;
+    for (;;) {
+      attempt++;
+      try {
+        const inserted: MediaMetaData[] = await this.dataSource.query(
+          `INSERT INTO media_metadata (id, media_type, source, status, text, state_transition_id, rolled_back)
+           VALUES ($1, 'text', 'drill-word-auto', 'ready', $2, $3, false)
+           ON CONFLICT (state_transition_id) WHERE source = 'drill-word-auto' DO NOTHING
+           RETURNING *`,
+          [uuid(), word, stateTransitionId],
+        );
+        let row = inserted[0];
+        if (!row) {
+          // Lost the race — another instance created it; read the winner.
+          const existing: MediaMetaData[] = await this.dataSource.query(
+            `SELECT * FROM media_metadata
+             WHERE state_transition_id = $1 AND source = 'drill-word-auto'
+             LIMIT 1`,
+            [stateTransitionId],
+          );
+          row = existing[0];
+        }
+        if (!row) {
+          throw new Error(
+            'drill-word auto-create: conflict but no existing row found',
+          );
+        }
+        if (attempt > 1) {
+          this.logger.warn(
+            `drill-word auto-create succeeded after ${attempt} attempts for stid="${stateTransitionId}" — possible DB pressure`,
+          );
+        } else {
+          this.logger.log(
+            `drill-word auto-create: created text media for stid="${stateTransitionId}"`,
+          );
+        }
+        return row;
+      } catch (err) {
+        const baseDelay =
+          DRILL_WORD_CREATE_RETRY_DELAYS_MS[
+            Math.min(attempt - 1, DRILL_WORD_CREATE_RETRY_DELAYS_MS.length - 1)
+          ];
+        const delay = baseDelay * (0.75 + Math.random() * 0.5); // ±25% jitter
+        const outOfBudget =
+          Date.now() - startedAt + delay > DRILL_WORD_CREATE_DEADLINE_MS ||
+          attempt > DRILL_WORD_CREATE_RETRY_DELAYS_MS.length;
+        drillWordMediaCreateFailure.add(1, {
+          final: String(outOfBudget),
+        });
+        trace.getActiveSpan()?.addEvent('drill_word_media_create_failed', {
+          'pp.media.stid': stateTransitionId,
+          'pp.media.attempt': attempt,
+          'pp.media.final': outOfBudget,
+        });
+        if (outOfBudget) {
+          this.logger.error(
+            `drill-word auto-create FAILED after ${attempt} attempts (${Date.now() - startedAt}ms) for stid="${stateTransitionId}": ${(err as Error).message}`,
+          );
+          throw err;
+        }
+        this.logger.warn(
+          `drill-word auto-create attempt ${attempt} failed for stid="${stateTransitionId}", retrying in ${Math.round(delay)}ms: ${(err as Error).message}`,
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      }
+    }
   }
 
   async markRolledBack(mediaId: string): Promise<void> {
@@ -424,6 +534,17 @@ export class MediaMetaDataService {
         throw new NotFoundException('Media metadata not found');
       }
 
+      // Audit log: outbound_messages is deliberately EXCLUDED from the
+      // generic FK sweep below (its rows are never deleted — user data).
+      // Instead the rollback is recorded on them, atomically with the media
+      // flag. Convention deviation (cross-entity write inside this
+      // transaction) mirrors user.service.ts's hard-delete: atomicity wins
+      // over module boundaries.
+      await manager.query(
+        `UPDATE outbound_messages SET status = 'rolled_back' WHERE user_message_id = $1`,
+        [mediaId],
+      );
+
       // Identifier escaping done by PG via format() — %s for regclass keeps
       // search-path-correct schema qualification; %I quotes the column name.
       const fkStmts: { sql: string }[] = await manager.query(
@@ -433,6 +554,7 @@ export class MediaMetaDataService {
            ON att.attrelid = con.conrelid AND att.attnum = ANY(con.conkey)
          WHERE con.confrelid = 'media_metadata'::regclass
            AND con.contype = 'f'
+           AND con.conrelid <> 'outbound_messages'::regclass
            AND EXISTS (
              SELECT 1 FROM pg_attribute pa
              WHERE pa.attrelid = con.confrelid

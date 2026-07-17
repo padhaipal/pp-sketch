@@ -59,3 +59,28 @@ export function buildJobAttributes(
   }
   return attrs;
 }
+
+// Counts failed attempts to auto-create the drill-word text media row on a
+// findMediaByStateTransitionId miss ({word}-sentence-word-drillWord stids).
+// `final=true` means the ~20s retry budget was exhausted and the turn failed
+// (wabot's timeout fallback reaches the user). A non-zero rate here is an
+// early signal of database pressure.
+export const drillWordMediaCreateFailure = meter.createCounter(
+  'pp.media.drill_word_create_failure_total',
+  {
+    description:
+      'Failed attempts to auto-create a drill-word text media row (final=true when the retry budget was exhausted).',
+  },
+);
+
+// Counts failed writes to the outbound_messages audit log (recordSent never
+// throws — delivery proceeds, but the audit trail has a hole). A non-zero
+// rate means "what did we send this user" queries are incomplete for the
+// affected window.
+export const outboundRecordFailure = meter.createCounter(
+  'pp.outbound.record_failure_total',
+  {
+    description:
+      'Failed outbound_messages audit-log writes (delivery unaffected; audit trail has a hole).',
+  },
+);

@@ -39,11 +39,14 @@ const LEVEL_BOOST_INCREMENT = 3;
 const FIRST_WORD_ROW_COUNT = 2;
 const SECOND_WORD_ROW_COUNT = 4;
 // Above this lesson level the student gets sentences instead of single words:
-// level 8 → 2 words, 9 → 4, 10 → 8 … (2^(level − 7)), clamped at level 12
-// (32 words) so ten sentences' worth of recency exclusions can never exhaust
-// the ~517-word list.
+// level 8 → 2 words, 9 → 4, 10 → 8 … (2^(level − 7)).
 const SENTENCE_LEVEL_THRESHOLD = 7;
-const MAX_LESSON_LEVEL = 12;
+// TEMPORARY cap at 7 (= SENTENCE_LEVEL_THRESHOLD) so the half-finished
+// sentence flow can never trigger in production — the sentence branch below
+// requires maxLength > 7. Restore to 12 when sentences ship (12 = 32 words,
+// chosen so ten sentences' worth of recency exclusions can never exhaust the
+// ~517-word list).
+const MAX_LESSON_LEVEL = 7;
 // Joins the per-engine STT transcripts for the word-lesson evaluators. The
 // tilde is stripped by their clean() step so it can never match anything,
 // but it stops the tail of one engine's transcript and the head of the

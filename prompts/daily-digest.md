@@ -29,16 +29,16 @@ Read it with `cat /tmp/digest-input.json | jq …`. The whole file is small enou
 
 If something is missing, issue follow-up queries via the helper (it injects auth itself — do NOT expand `$GRAFANA_API_KEY` in your own commands, the sandbox blocks it):
 `bash scripts/grafana-query.sh <uid> <api-path> [curl -G args…]`, e.g.
-`bash scripts/grafana-query.sh loki loki/api/v1/query_range --data-urlencode 'query={service_name="pp-sketch"} | severity_text=~"ERROR"' --data-urlencode 'limit=20'`
-`bash scripts/grafana-query.sh prometheus api/v1/query --data-urlencode 'query=up'`
-Datasource uids: `loki`, `prometheus` (metrics), `tempo` (path `api/search`). Loki indexed labels are ONLY `service_name` and `deployment_environment`; severity, log_context etc. are structured metadata — filter via `| label=~"…"` pipe form, NOT in the stream selector. Use sparingly.
+`bash scripts/grafana-query.sh grafanacloud-logs loki/api/v1/query_range --data-urlencode 'query={service_name="pp-sketch"} | severity_text=~"ERROR"' --data-urlencode 'limit=20'`
+`bash scripts/grafana-query.sh grafanacloud-prom api/v1/query --data-urlencode 'query=up'`
+Datasource uids: `grafanacloud-logs` (logs), `grafanacloud-prom` (metrics), `grafanacloud-traces` (traces, path `api/search`). Loki indexed labels are ONLY `service_name` and `deployment_environment`; severity, log_context etc. are structured metadata — filter via `| label=~"…"` pipe form, NOT in the stream selector. Use sparingly.
 
 Load-test signal lives in Prometheus: histogram `wabot_message_e2e_duration_ms_milliseconds` (`_bucket` / `_count` / `_sum`), labeled by:
   - `outcome` — `success` (pp-sketch accepted the queued message) / `delivered` (WhatsApp send succeeded) / `inflight-expired` / `whatsapp-error` / `fallback`
   - `load_test` — `"true"` for synthetic artillery traffic, `"false"` for real traffic. Label is ALWAYS present.
   - `test_phase` — `"phase_1"` (first message per phone, exercises onboarding) / `"phase_2"` (second message per phone, exercises lesson flow). Only set on `load_test="true"` series.
 
-Records inbound-msg → outbound-dispatch latency end-to-end. Query via `$GRAFANA_URL/api/datasources/proxy/uid/prometheus/api/v1/query_range`.
+Records inbound-msg → outbound-dispatch latency end-to-end. Query via `$GRAFANA_URL/api/datasources/proxy/uid/grafanacloud-prom/api/v1/query_range`.
 
 pp-sketch records a parallel histogram `pp_wabot_inbound_job_duration_ms_milliseconds` for pp-internal stage latency (BullMQ dequeue → job completion) with the same `load_test` / `test_phase` labels plus its own `outcome` set (`success` / `skipped` / `error`).
 

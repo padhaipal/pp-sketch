@@ -23,6 +23,11 @@ const VALID_MEDIA_SOURCES = [
   'reverie',
   'dashboard',
   'morning-update',
+  // Text rows auto-created on lookup miss for {word}-sentence-word-drillWord
+  // stids (drilled words can be any Hindi word, so they cannot be pre-seeded).
+  // A partial unique index on state_transition_id WHERE source =
+  // 'drill-word-auto' guarantees at most one auto-row per drilled word.
+  'drill-word-auto',
 ] as const;
 export type MediaSource = (typeof VALID_MEDIA_SOURCES)[number];
 
