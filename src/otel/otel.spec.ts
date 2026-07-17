@@ -423,6 +423,18 @@ describe('initOtel — metrics flag, views, service.instance.id', () => {
     );
   });
 
+  it('falls back to RAILWAY_ENVIRONMENT_NAME when ENV is unset (pp-sketch does not define ENV on Railway)', () => {
+    delete process.env.OTEL_RESOURCE_ATTRIBUTES;
+    delete process.env.SERVICE_INSTANCE_ID;
+    delete process.env.ENV;
+    process.env.OTEL_SERVICE_NAME = 'pp-sketch';
+    process.env.RAILWAY_ENVIRONMENT_NAME = 'staging';
+    initOtel();
+    expect(process.env.OTEL_RESOURCE_ATTRIBUTES).toBe(
+      'service.instance.id=pp-sketch-staging',
+    );
+  });
+
   it('SERVICE_INSTANCE_ID override wins and merges with existing attributes', () => {
     process.env.OTEL_RESOURCE_ATTRIBUTES = 'foo=bar';
     process.env.SERVICE_INSTANCE_ID = 'replica-7';
