@@ -38,15 +38,26 @@ const LEVEL_BOOST_WINDOW = 6;
 const LEVEL_BOOST_INCREMENT = 3;
 const FIRST_WORD_ROW_COUNT = 2;
 const SECOND_WORD_ROW_COUNT = 4;
-// Above this lesson level the student gets sentences instead of single words:
-// level 8 → 2 words, 9 → 4, 10 → 8 … (2^(level − 7)).
+// Above this lesson level the student gets a reading passage (LLM-generated,
+// selected from media_metadata by media_details.level) instead of single
+// words. Passage levels are computed from word count at seeding time:
+// <10 words → 8, <40 → 9, <70 → 10, <110 → 11, else 12.
 const SENTENCE_LEVEL_THRESHOLD = 7;
-// TEMPORARY cap at 7 (= SENTENCE_LEVEL_THRESHOLD) so the half-finished
-// sentence flow can never trigger in production — the sentence branch below
-// requires maxLength > 7. Restore to 12 when sentences ship (12 = 32 words,
-// chosen so ten sentences' worth of recency exclusions can never exhaust the
-// ~517-word list).
-const MAX_LESSON_LEVEL = 7;
+const MAX_LESSON_LEVEL = 12;
+// Sentence-section (level ≥ 8) progression: same completed-lesson-rows
+// metric as words, new thresholds. A perfect passage lesson costs 3 rows
+// (selection row + sentence-read row + comprehension 'done' row), so the
+// position of the 3rd most recent done row within the last 18 rows encodes
+// how cleanly the last three lessons went: within 9 rows → +2, within
+// 10-12 → +1, 13-17 → hold, deeper than 17 → −1.
+const SENTENCE_RECENT_ROWS_WINDOW = 18;
+const SENTENCE_DONE_ROWS_FOR_SIGNAL = 3;
+const SENTENCE_PLUS_TWO_MAX_ROWS = 9;
+const SENTENCE_PLUS_ONE_MAX_ROWS = 12;
+const SENTENCE_HOLD_MAX_ROWS = 17;
+// Recently-lessoned passages excluded from re-selection (mirrors
+// RECENT_WORDS_TO_EXCLUDE for words).
+const RECENT_PASSAGES_TO_EXCLUDE = 10;
 // Joins the per-engine STT transcripts for the word-lesson evaluators. The
 // tilde is stripped by their clean() step so it can never match anything,
 // but it stops the tail of one engine's transcript and the head of the
@@ -64,6 +75,8 @@ interface NextString {
   // selection ratchets from the stored value instead of re-deriving from the
   // last word's length (which could never climb).
   level: number;
+  // media_metadata id of the selected reading passage; null for word lessons.
+  passageId: string | null;
 }
 
 // Splits a persisted `word` column value into its component words. Sentences
@@ -129,6 +142,28 @@ export class LiteracyLessonService {
         // 3. Find current state
         const currentState = await this.findCurrentState(validated.user.id);
 
+        // 3b. Comprehension flow submission — separate path: staleness rules
+        // don't apply (a flow tap may arrive minutes later) and the answer id
+        // comes from the user's device, so it is validated against the
+        // current lesson's passage before anything is recorded.
+        if (validated.comprehension_answer_id) {
+          const result = await this.handleComprehensionAnswer(
+            validated.user.id,
+            validated.user_message_id,
+            validated.comprehension_answer_id,
+            currentState,
+          );
+          span.setAttribute('pp.lesson.path', 'comprehension-answer');
+          span.setAttribute('pp.lesson.ignored', result.ignored === true);
+          if (result.stateTransitionIds.length > 0) {
+            span.setAttribute(
+              'pp.lesson.state_transition_id',
+              result.stateTransitionIds[0],
+            );
+          }
+          return result;
+        }
+
         // 4. Determine fresh or continue
         let startFresh = false;
         let isStaleRestart = false;
@@ -171,6 +206,7 @@ export class LiteracyLessonService {
             input: {
               word: lesson.word,
               sentence: lesson.sentence ?? undefined,
+              passageId: lesson.passageId ?? undefined,
               userMessageId: validated.user_message_id,
             },
           });
@@ -227,9 +263,10 @@ export class LiteracyLessonService {
         const persistedWord: string = snapshot.context.sentence?.length
           ? snapshot.context.sentence.join(' ')
           : snapshot.context.word;
+        const passageId: string | null = snapshot.context.passageId ?? null;
         const rows: unknown[] = await this.dataSource.query(
-          `INSERT INTO literacy_lesson_states (user_id, user_message_id, word, answer, answer_correct, snapshot, level, created_at)
-           SELECT $1, $2, $3, $4, $5, $6, $7, now()
+          `INSERT INTO literacy_lesson_states (user_id, user_message_id, word, answer, answer_correct, snapshot, level, passage_id, created_at)
+           SELECT $1, $2, $3, $4, $5, $6, $7, $8, now()
            FROM media_metadata m
            WHERE m.id = $2 AND m.rolled_back = false
            RETURNING *`,
@@ -241,6 +278,7 @@ export class LiteracyLessonService {
             answerCorrect,
             JSON.stringify(snapshot),
             selectedLevel,
+            passageId,
           ],
         );
 
@@ -320,6 +358,146 @@ export class LiteracyLessonService {
     });
   }
 
+  // Handles a comprehension flow submission. The answerId arrived from the
+  // student's device via nfm_reply, so it is UNTRUSTED: it must resolve to a
+  // live answer-option row whose question belongs to the current lesson's
+  // passage, and the machine must actually be awaiting a comprehension
+  // answer. Anything else is ignored (nothing persisted, nothing sent).
+  private async handleComprehensionAnswer(
+    userId: string,
+    userMessageId: string,
+    answerId: string,
+    currentState: LiteracyLessonState | null,
+  ): Promise<ProcessAnswerResult> {
+    const ignored: ProcessAnswerResult = {
+      stateTransitionIds: [],
+      isComplete: false,
+      ignored: true,
+    };
+    if (
+      !currentState ||
+      currentState.snapshot?.status === 'done' ||
+      currentState.snapshot?.value !== 'comprehension' ||
+      !currentState.passage_id
+    ) {
+      this.logger.warn(
+        `handleComprehensionAnswer: no comprehension in flight for user ${userId} (answer ${answerId}) — ignoring`,
+      );
+      return ignored;
+    }
+
+    const options: Array<{ id: string; media_details: { correct?: unknown } }> =
+      await this.dataSource.query(
+        `SELECT o.id, o.media_details
+         FROM media_metadata o
+         JOIN media_metadata q ON q.id = o.input_media_id
+         WHERE o.id = $1 AND o.rolled_back = false
+           AND q.rolled_back = false AND q.input_media_id = $2`,
+        [answerId, currentState.passage_id],
+      );
+    if (options.length === 0) {
+      this.logger.warn(
+        `handleComprehensionAnswer: answer ${answerId} does not belong to passage ${currentState.passage_id} for user ${userId} — ignoring`,
+      );
+      return ignored;
+    }
+    const answerCorrect = options[0].media_details?.correct === true;
+
+    const restoredSnapshot = {
+      ...currentState.snapshot,
+      context: {
+        ...currentState.snapshot.context,
+        userMessageId,
+      },
+    } as unknown as LessonSnapshot;
+    const actor = createActor(machine, {
+      snapshot: restoredSnapshot,
+      input: { word: '', userMessageId: '' },
+    });
+    actor.start();
+    actor.send({ type: 'COMPREHENSION_ANSWER', answerId, answerCorrect });
+    const snapshot = actor.getSnapshot();
+    actor.stop();
+
+    const persistedWord: string | null = snapshot.context.sentence?.length
+      ? snapshot.context.sentence.join(' ')
+      : (snapshot.context.word ?? null);
+    const rows: unknown[] = await this.dataSource.query(
+      `INSERT INTO literacy_lesson_states (user_id, user_message_id, word, answer, answer_correct, snapshot, level, passage_id, created_at)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8, now()
+       FROM media_metadata m
+       WHERE m.id = $2 AND m.rolled_back = false
+       RETURNING *`,
+      [
+        userId,
+        userMessageId,
+        persistedWord,
+        answerId,
+        answerCorrect,
+        JSON.stringify(snapshot),
+        currentState.level,
+        currentState.passage_id,
+      ],
+    );
+    if (rows.length === 0) {
+      this.logger.warn(
+        `handleComprehensionAnswer: INSERT returned 0 rows — media ${userMessageId} rolled_back=true or does not exist`,
+      );
+      throw new Error('Media was rolled back — cannot persist lesson state');
+    }
+
+    this.logger.log(
+      `handleComprehensionAnswer: user ${userId} answered ${answerId} correct=${String(answerCorrect)}`,
+    );
+    return {
+      stateTransitionIds: [snapshot.context.stateTransitionId],
+      isComplete: snapshot.status === 'done',
+    };
+  }
+
+  // Random ready reading passage for the level, excluding recently-lessoned
+  // passages; widens to the nearest level (8-12) before giving up.
+  private async selectPassage(
+    level: number,
+    excludePassageIds: string[],
+  ): Promise<{ id: string; text: string } | null> {
+    interface PassageRow {
+      id: string;
+      text: string;
+    }
+    const exclude = excludePassageIds.length > 0 ? excludePassageIds : [];
+    const base = `FROM media_metadata
+       WHERE media_type = 'text' AND status = 'ready' AND rolled_back = false
+         AND media_details->>'role' = 'passage'
+         AND NOT (id = ANY($2::uuid[]))`;
+    // 1. Exact level, non-recent.
+    let rows: PassageRow[] = await this.dataSource.query(
+      `SELECT id, text ${base}
+         AND (media_details->>'level')::int = $1
+       ORDER BY random() LIMIT 1`,
+      [level, exclude],
+    );
+    // 2. Exact level, recency ignored (small pools).
+    if (rows.length === 0 && exclude.length > 0) {
+      rows = await this.dataSource.query(
+        `SELECT id, text ${base}
+           AND (media_details->>'level')::int = $1
+         ORDER BY random() LIMIT 1`,
+        [level, []],
+      );
+    }
+    // 3. Nearest level in the sentence band, non-recent.
+    if (rows.length === 0) {
+      rows = await this.dataSource.query(
+        `SELECT id, text ${base}
+           AND (media_details->>'level')::int BETWEEN ${SENTENCE_LEVEL_THRESHOLD + 1} AND ${MAX_LESSON_LEVEL}
+         ORDER BY ABS((media_details->>'level')::int - $1), random() LIMIT 1`,
+        [level, exclude],
+      );
+    }
+    return rows[0] ?? null;
+  }
+
   async findCurrentState(userId: string): Promise<LiteracyLessonState | null> {
     const entity = await this.lessonStateRepo.findOne({
       where: { user_id: userId },
@@ -369,6 +547,11 @@ export class LiteracyLessonService {
           // every row is null (post-migration cold state) — the caller then
           // derives the base from the most recent word's length.
           prev_level: number | null;
+          // Row-number (1 = newest) of the 3rd most recent completed lesson
+          // within the last 18 rows; null when fewer than 3 completions.
+          // Drives the sentence-section (level ≥ 8) thresholds.
+          third_done_rn: number | null;
+          recent_passage_ids: string[];
         }
         const rows: SelectNextWordRow[] = await this.dataSource.query(
           `WITH recent_distinct_words AS (
@@ -402,6 +585,14 @@ export class LiteracyLessonService {
             SELECT COUNT(DISTINCT word)::int AS count
             FROM literacy_lesson_states
             WHERE user_id = $1
+          ),
+          recent_passages AS (
+            SELECT passage_id, MAX(created_at) AS latest_at
+            FROM literacy_lesson_states
+            WHERE user_id = $1 AND passage_id IS NOT NULL
+            GROUP BY passage_id
+            ORDER BY latest_at DESC
+            LIMIT $8
           )
           SELECT
             COALESCE(
@@ -419,7 +610,7 @@ export class LiteracyLessonService {
               0
             ) AS unique_in_add_window,
             COALESCE(
-              (SELECT COUNT(DISTINCT word)::int FROM recent_rows WHERE is_done),
+              (SELECT COUNT(DISTINCT word)::int FROM recent_rows WHERE rn <= $6 AND is_done),
               0
             ) AS unique_in_keep_window,
             COALESCE(
@@ -431,13 +622,25 @@ export class LiteracyLessonService {
             (SELECT s.level FROM literacy_lesson_states s
               WHERE s.user_id = $1 AND s.level IS NOT NULL
               ORDER BY s.created_at DESC
-              LIMIT 1) AS prev_level`,
+              LIMIT 1) AS prev_level,
+            (SELECT MAX(rn)::int FROM (
+              SELECT rn FROM recent_rows WHERE is_done ORDER BY rn ASC LIMIT $7
+            ) third WHERE (SELECT COUNT(*) FROM recent_rows WHERE is_done) >= $7
+            ) AS third_done_rn,
+            COALESCE(
+              (SELECT json_agg(passage_id ORDER BY latest_at DESC)
+               FROM recent_passages),
+              '[]'::json
+            ) AS recent_passage_ids`,
           [
             userId,
             RECENT_WORDS_TO_EXCLUDE,
-            SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME,
+            SENTENCE_RECENT_ROWS_WINDOW,
             SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH,
             LEVEL_BOOST_WINDOW,
+            SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME,
+            SENTENCE_DONE_ROWS_FOR_SIGNAL,
+            RECENT_PASSAGES_TO_EXCLUDE,
           ],
         );
 
@@ -477,72 +680,98 @@ export class LiteracyLessonService {
         // never read against an empty history.
         const base = prevLevel ?? lessonLevel(recentWords[0] ?? '');
 
-        // Fast-find accelerator (+3), checked BEFORE the new-user gate so a
-        // strong start escapes the level-2 floor: three distinct completed
-        // words in the last 6 rows, OR a perfect first word (1 done, 2 rows
-        // ever), OR a perfect first two words (2 done, 4 rows ever).
-        const accelerate =
-          uniqueInBoostWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS ||
-          (uniqueInKeepWindow >= 1 &&
-            recentRowCount === FIRST_WORD_ROW_COUNT) ||
-          (uniqueInKeepWindow >= 2 && recentRowCount === SECOND_WORD_ROW_COUNT);
-
         let maxLength: number;
-        if (accelerate) {
-          maxLength = base + LEVEL_BOOST_INCREMENT;
-        } else if (
-          distinctWordCount < NEW_USER_THRESHOLD ||
-          recentRowCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH
-        ) {
-          maxLength = MIN_WORD_LENGTH_FLOOR;
-        } else if (recentWords.length === 0) {
-          this.logger.warn(
-            `selectNextString: distinct_word_count=${distinctWordCount} but recent_words is empty for user ${userId}; falling back to min word length`,
-          );
-          maxLength = MIN_WORD_LENGTH_FLOOR;
-        } else if (uniqueInAddWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
-          maxLength = base + 1;
-        } else if (uniqueInKeepWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
-          maxLength = base;
+        if (base > SENTENCE_LEVEL_THRESHOLD) {
+          // Sentence section (level ≥ 8): position of the 3rd most recent
+          // completed lesson within the last 18 rows. A perfect passage
+          // lesson costs 3 rows, so ≤9 = three clean lessons in a row.
+          const thirdDoneRn =
+            data.third_done_rn === null || data.third_done_rn === undefined
+              ? null
+              : Number(data.third_done_rn);
+          if (thirdDoneRn === null) {
+            maxLength = base; // fewer than 3 completions in window — hold
+          } else if (thirdDoneRn <= SENTENCE_PLUS_TWO_MAX_ROWS) {
+            maxLength = base + 2;
+          } else if (thirdDoneRn <= SENTENCE_PLUS_ONE_MAX_ROWS) {
+            maxLength = base + 1;
+          } else if (thirdDoneRn <= SENTENCE_HOLD_MAX_ROWS) {
+            maxLength = base;
+          } else {
+            maxLength = base - 1;
+          }
+          span.setAttribute('pp.lesson.word.third_done_rn', thirdDoneRn ?? -1);
         } else {
-          maxLength = base - 1;
+          // Word section (level ≤ 7): fast-find accelerator (+3), checked
+          // BEFORE the new-user gate so a strong start escapes the level-2
+          // floor: three distinct completed words in the last 6 rows, OR a
+          // perfect first word (1 done, 2 rows ever), OR a perfect first two
+          // words (2 done, 4 rows ever).
+          const accelerate =
+            uniqueInBoostWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS ||
+            (uniqueInKeepWindow >= 1 &&
+              recentRowCount === FIRST_WORD_ROW_COUNT) ||
+            (uniqueInKeepWindow >= 2 &&
+              recentRowCount === SECOND_WORD_ROW_COUNT);
+
+          if (accelerate) {
+            maxLength = base + LEVEL_BOOST_INCREMENT;
+          } else if (
+            distinctWordCount < NEW_USER_THRESHOLD ||
+            recentRowCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH
+          ) {
+            maxLength = MIN_WORD_LENGTH_FLOOR;
+          } else if (recentWords.length === 0) {
+            this.logger.warn(
+              `selectNextString: distinct_word_count=${distinctWordCount} but recent_words is empty for user ${userId}; falling back to min word length`,
+            );
+            maxLength = MIN_WORD_LENGTH_FLOOR;
+          } else if (uniqueInAddWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
+            maxLength = base + 1;
+          } else if (uniqueInKeepWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
+            maxLength = base;
+          } else {
+            maxLength = base - 1;
+          }
+          span.setAttribute('pp.lesson.word.accelerated', accelerate);
         }
         maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR);
         maxLength = Math.min(maxLength, MAX_LESSON_LEVEL);
         span.setAttribute('pp.lesson.word.max_length', maxLength);
         span.setAttribute('pp.lesson.word.prev_level', prevLevel ?? -1);
-        span.setAttribute('pp.lesson.word.accelerated', accelerate);
 
-        // Sentence lesson: 2^(level − 7) random words. Only the recency
-        // filter applies — deliberately no pressure toward weak letters.
+        // Passage lesson: a random ready reading passage at the student's
+        // level (media_details.level, set from word count at seeding time),
+        // excluding recently-lessoned passages. Falls back to the nearest
+        // level, then to a level-7 word lesson when no passage exists at all.
         if (maxLength > SENTENCE_LEVEL_THRESHOLD) {
-          const wordCount = Math.pow(2, maxLength - SENTENCE_LEVEL_THRESHOLD);
-          const pool = [...candidates];
-          const picked: string[] = [];
-          while (picked.length < wordCount && pool.length > 0) {
-            const idx = Math.floor(Math.random() * pool.length);
-            picked.push(pool.splice(idx, 1)[0]);
-          }
-          if (picked.length < wordCount) {
-            // Not enough non-recent words — top up ignoring recency rather
-            // than shrinking the sentence.
-            this.logger.warn(
-              `selectNextString: only ${picked.length}/${wordCount} non-recent words available for user ${userId} — topping up ignoring recency`,
-            );
-            const pickedSet = new Set(picked);
-            const fallbackPool = this.wordList.filter((w) => !pickedSet.has(w));
-            while (picked.length < wordCount && fallbackPool.length > 0) {
-              const idx = Math.floor(Math.random() * fallbackPool.length);
-              picked.push(fallbackPool.splice(idx, 1)[0]);
-            }
-          }
-          span.setAttribute('pp.lesson.word.selection', 'sentence-random');
-          span.setAttribute('pp.lesson.word.count', picked.length);
-          span.setAttribute('pp.lesson.word.selected', picked.join(' '));
-          this.logger.log(
-            `selectNextString: sentence selected=${picked.join(' ')} level=${String(maxLength)} words=${String(picked.length)}`,
+          const passage = await this.selectPassage(
+            maxLength,
+            data.recent_passage_ids ?? [],
           );
-          return { word: '', sentence: picked, level: maxLength };
+          if (passage) {
+            const sentence = splitLessonWords(passage.text);
+            span.setAttribute('pp.lesson.word.selection', 'passage');
+            span.setAttribute('pp.lesson.passage_id', passage.id);
+            span.setAttribute('pp.lesson.word.count', sentence.length);
+            this.logger.log(
+              `selectNextString: passage=${passage.id} level=${String(maxLength)} words=${String(sentence.length)}`,
+            );
+            return {
+              word: '',
+              sentence,
+              level: maxLength,
+              passageId: passage.id,
+            };
+          }
+          this.logger.warn(
+            `selectNextString: no ready reading passage for level ${maxLength} — falling back to a word lesson at level ${SENTENCE_LEVEL_THRESHOLD}`,
+          );
+          span.setAttribute(
+            'pp.lesson.word.selection',
+            'passage-missing-word-fallback',
+          );
+          maxLength = SENTENCE_LEVEL_THRESHOLD;
         }
 
         // Filter by length
@@ -612,7 +841,12 @@ export class LiteracyLessonService {
             'fallback-random-two-letter',
           );
           span.setAttribute('pp.lesson.word.selected', fallbackWord);
-          return { word: fallbackWord, sentence: null, level: maxLength };
+          return {
+            word: fallbackWord,
+            sentence: null,
+            level: maxLength,
+            passageId: null,
+          };
         }
 
         // Tie-break: minimum score → longest grapheme count → random.
@@ -654,7 +888,12 @@ export class LiteracyLessonService {
         this.logger.log(
           `selectNextString: selected=${selected} max_length=${String(maxLength)} baseline=${baseline.toFixed(3)} reviewed=${String(reviewedScores.length)} unique_in_add_window=${String(uniqueInAddWindow)} unique_in_keep_window=${String(uniqueInKeepWindow)} candidates=${String(scored.length)} top5=[${topFive}]`,
         );
-        return { word: selected, sentence: null, level: maxLength };
+        return {
+          word: selected,
+          sentence: null,
+          level: maxLength,
+          passageId: null,
+        };
       } catch (err) {
         span.setStatus({
           code: SpanStatusCode.ERROR,

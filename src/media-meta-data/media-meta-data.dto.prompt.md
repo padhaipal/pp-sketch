@@ -569,3 +569,15 @@ export function assertValidMediaSource(source: string): asserts source is MediaS
     throw new BadRequestException(`Invalid media source "${source}". Must be one of: ${VALID_MEDIA_SOURCES.join(', ')}`);
   }
 }
+
+## 2026-07 additions
+
+- `VALID_MEDIA_TYPES` gained `'flow'` (WhatsApp Flow message; payload JSON in
+  `.text`, no S3 object, no preload). Mirror: pp-dashboard `ALL_MEDIA_TYPES`,
+  wabot-sketch outbound DTOs.
+- `VALID_MEDIA_SOURCES` gained the LLM providers `openai`, `anthropic`,
+  `google`, `mistral`, `sarvam-llm` (suffixed — plain `sarvam` is the STT
+  engine; no data migration). Model id lives in `media_details.model`.
+- Seeding request/output validation lives in `llm-generate.dto.ts` (treats
+  LLM output as untrusted: whitelist copy, server-minted ids only, level from
+  word count, size/char caps, control chars rejected).

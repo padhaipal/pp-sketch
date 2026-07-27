@@ -292,3 +292,31 @@ For each item at index i:
 After all items processed:
   Compute summary: { created: count('created'), duplicate_skipped: count('duplicate_skipped'), failed: count('failed') }.
   Return { results, summary }.
+
+## LLM seeding pipeline (2026-07)
+
+- `createLlmGeneratedMedia(body, otel_carrier)` — synchronous (no queue):
+  validate request (`llm-generate.dto.ts`) → provider `complete()`
+  (`src/interfaces/llm/<provider>`) → parse/validate the untrusted completion
+  → passage level from word count (<10→8, <40→9, <70→10, <110→11, else 12) →
+  zero-context solvability per question (`zero-context-solvability.ts`: 100×
+  sarvam-105b, shuffled options, reject rate > 40%, 'unverified' when < 80
+  parseable runs) → transactional insert of passage → questions → options →
+  explanations (+ one `media_type='flow'` row per `send_as_flow` question) →
+  ElevenLabs TTS enqueue for `explanation.tts` items. Nothing is written
+  unless ≥ 1 question survives. Returns `LlmGenerateResponse` with
+  per-question outcomes and `retriable` flags; TTS enqueue failure sets
+  `tts_error` without failing the generation.
+- Stid scheme: flow rows `${passageId}-sentence-comprehension` (runtime stids
+  `…-correct-first|retry` are mapped back in findMediaByStateTransitionId —
+  flowKey rows count as *specific*, random pick = random question);
+  explanation rows `${optionId}-comprehension-complete`. UUID prefixes mean
+  the `_` generic key does NOT apply to these.
+- `listComprehensionStids({limit, offset})` — paginated distinct comprehension
+  stids (limit clamped to 500) for the dashboard table.
+- `deleteByStateTransitionId(stid)` — rolls back every row carrying the stid;
+  for `…-sentence-comprehension` the whole passage family (prefix = passage
+  id) plus stid-linked explanation audio, deepest-first because
+  markRolledBack's FK sweep hard-deletes referencing rows.
+- findMediaByStateTransitionId now also serves `media_type='flow'` rows (no
+  wa_media_url required — flows are never preloaded to WhatsApp).

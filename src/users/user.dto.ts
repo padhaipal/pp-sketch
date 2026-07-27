@@ -474,3 +474,48 @@ export function validateCreateUserOptions(options: unknown): CreateUserOptions {
     referrer_user_id,
   } as CreateUserOptions;
 }
+
+// ─── Literacy proxy test scores (2026-07) ────────────────────────────────────
+
+// Rolling-window score for one digital-proxy test (or one AMPL-B bucket).
+// score values are fractions correct in [0, 1]; history is one point per
+// attempt from the moment the window first fills, so callers can chart the
+// score over time.
+export interface LiteracyTestScore {
+  status: 'ok' | 'insufficient_data';
+  window_size: number;
+  attempts_available: number;
+  latest_score?: number;
+  history?: { at: Date; score: number }[];
+}
+
+export type AmplBucketKey =
+  | 'retrieve'
+  | 'interpret_infer_integrate'
+  | 'evaluate';
+
+export interface AmplStimulusScores {
+  retrieve: LiteracyTestScore;
+  interpret_infer_integrate: LiteracyTestScore;
+  evaluate: LiteracyTestScore;
+}
+
+export interface LiteracyTestScores {
+  // Grade 1: last 2 level-8 sentence FIRST-time read attempts (a retry
+  // success does not count).
+  nipun_grade_1: LiteracyTestScore;
+  // Grade 2: last 4 level-11 comprehension 'retrieve' answers.
+  nipun_grade_2: LiteracyTestScore;
+  // Grade 3: last 4 level-12 comprehension 'retrieve' answers.
+  nipun_grade_3: LiteracyTestScore;
+  // AMPL-B: per narrative/expository stimulus (level ≥ 12 only): 6 retrieve
+  // + 7 interpret/infer/integrate + 3 evaluate. The combined score is
+  // total-correct/32 and only exists once every bucket's window has filled.
+  ampl_b: {
+    status: 'ok' | 'insufficient_data';
+    latest_score?: number;
+    history?: { at: Date; score: number }[];
+    narrative: AmplStimulusScores;
+    expository: AmplStimulusScores;
+  };
+}

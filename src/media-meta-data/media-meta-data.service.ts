@@ -20,6 +20,36 @@ import { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound
 import { SarvamService } from '../interfaces/stt/sarvam/sarvam.service';
 import { AzureService } from '../interfaces/stt/azure/azure.service';
 import { ReverieService } from '../interfaces/stt/reverie/reverie.service';
+import { OpenaiLlmService } from '../interfaces/llm/openai/openai-llm.service';
+import { AnthropicLlmService } from '../interfaces/llm/anthropic/anthropic-llm.service';
+import { GoogleLlmService } from '../interfaces/llm/google/google-llm.service';
+import { MistralLlmService } from '../interfaces/llm/mistral/mistral-llm.service';
+import { SarvamLlmService } from '../interfaces/llm/sarvam/sarvam-llm.service';
+import {
+  LlmError,
+  LlmProvider,
+  LlmResult,
+  LLM_PROVIDER_TO_MEDIA_SOURCE,
+} from '../interfaces/llm/llm.dto';
+import {
+  COMPREHENSION_RUNTIME_STID_RE,
+  FlowMediaPayload,
+  GeneratedContent,
+  LlmGenerateQuestionResult,
+  LlmGenerateResponse,
+  LlmOutputInvalidError,
+  comprehensionCompleteStid,
+  comprehensionFlowStid,
+  parseGeneratedContent,
+  passageLevelFromWordCount,
+  validateLlmGenerateRequest,
+} from './llm-generate.dto';
+import {
+  SOLVABILITY_MODEL,
+  SOLVABILITY_THRESHOLD,
+  SolvabilityVerdict,
+  runZeroContextSolvability,
+} from './zero-context-solvability';
 import { createQueue, QUEUE_NAMES } from '../interfaces/redis/queues';
 import type { OtelCarrier } from '../otel/otel.dto';
 import {
@@ -104,6 +134,11 @@ export class MediaMetaDataService {
     private readonly sarvamService: SarvamService,
     private readonly azureService: AzureService,
     private readonly reverieService: ReverieService,
+    private readonly openaiLlmService: OpenaiLlmService,
+    private readonly anthropicLlmService: AnthropicLlmService,
+    private readonly googleLlmService: GoogleLlmService,
+    private readonly mistralLlmService: MistralLlmService,
+    private readonly sarvamLlmService: SarvamLlmService,
   ) {}
 
   async createWhatsappAudioMedia(
@@ -356,6 +391,18 @@ export class MediaMetaDataService {
     const genericKey =
       dashIdx >= 0 ? `_${stateTransitionId.substring(dashIdx)}` : null;
 
+    // Comprehension runtime stids (`${passageId}-sentence-comprehension-
+    // correct-first|retry`) additionally resolve the flow rows stored under
+    // `${passageId}-sentence-comprehension` — one flow per question, same
+    // flow regardless of first/retry, random pick among the passage's
+    // questions below. (The `_` generic key is useless for these: the prefix
+    // is a UUID, so splitting at the first dash cuts inside it.)
+    const comprehensionMatch =
+      COMPREHENSION_RUNTIME_STID_RE.exec(stateTransitionId);
+    const flowKey = comprehensionMatch
+      ? comprehensionFlowStid(comprehensionMatch[1])
+      : null;
+
     const cached =
       await this.cacheService.get<FindMediaByStateTransitionIdResult>(
         CACHE_KEYS.mediaByStateTransitionId(stateTransitionId),
@@ -365,22 +412,24 @@ export class MediaMetaDataService {
     }
 
     // Raw SQL — uses ANY($1::text[]) for multi-key lookup
-    const keys = genericKey
-      ? [stateTransitionId, genericKey]
-      : [stateTransitionId];
+    const keys = [stateTransitionId];
+    if (genericKey) keys.push(genericKey);
+    if (flowKey) keys.push(flowKey);
     const rows: MediaMetaData[] = await this.dataSource.query(
       `SELECT * FROM media_metadata
        WHERE state_transition_id = ANY($1::text[])
          AND status = 'ready'
          AND rolled_back = false
-         AND (wa_media_url IS NOT NULL OR media_type = 'text')`,
+         AND (wa_media_url IS NOT NULL OR media_type IN ('text', 'flow'))`,
       [keys],
     );
     const specificByType = new Map<string, MediaMetaData[]>();
     const genericByType = new Map<string, MediaMetaData[]>();
     for (const row of rows) {
+      // flowKey rows are passage-specific, not generic fallbacks.
       const bucket =
-        row.state_transition_id === stateTransitionId
+        row.state_transition_id === stateTransitionId ||
+        (flowKey !== null && row.state_transition_id === flowKey)
           ? specificByType
           : genericByType;
       const existing = bucket.get(row.media_type) ?? [];
@@ -395,6 +444,7 @@ export class MediaMetaDataService {
       'text',
       'image',
       'sticker',
+      'flow',
     ] as const) {
       const items = specificByType.get(type) ?? genericByType.get(type);
       if (items && items.length > 0) {
@@ -762,6 +812,454 @@ export class MediaMetaDataService {
     await this.mediaRepo.update(ids, { status: 'queued' });
 
     return entities.map((e) => ({ ...e, status: 'queued' as const }));
+  }
+
+  private llmServiceFor(provider: LlmProvider) {
+    switch (provider) {
+      case 'openai':
+        return this.openaiLlmService;
+      case 'anthropic':
+        return this.anthropicLlmService;
+      case 'google':
+        return this.googleLlmService;
+      case 'mistral':
+        return this.mistralLlmService;
+      case 'sarvam':
+        return this.sarvamLlmService;
+    }
+  }
+
+  /**
+   * Seeds reading-comprehension media from one LLM completion. Synchronous by
+   * design (no queue): one dashboard request = one generation = one response,
+   * with structured per-question outcomes so the user sees what failed, why,
+   * and whether retrying can help.
+   *
+   * Pipeline: validate request → LLM completion → parse/validate the untrusted
+   * JSON (llm-generate.dto) → compute the passage level from word count → run
+   * the zero-context solvability filter per question (100× sarvam-105b,
+   * reject > 40%) → transactionally insert the surviving entity tree
+   * (passage → questions → options → explanations + one flow row per
+   * question) → enqueue ElevenLabs TTS for explanations that asked for it.
+   *
+   * Nothing is written unless at least one question survives — a passage with
+   * zero questions would dead-end the lesson's comprehension state.
+   */
+  async createLlmGeneratedMedia(
+    body: unknown,
+    otel_carrier: OtelCarrier,
+  ): Promise<LlmGenerateResponse> {
+    const request = validateLlmGenerateRequest(body);
+    const span = trace.getActiveSpan();
+    span?.setAttribute('pp.llm.provider', request.provider);
+    span?.setAttribute('pp.llm.model', request.model);
+
+    const llmService = this.llmServiceFor(request.provider);
+
+    // 1. Generation call.
+    let completion: LlmResult;
+    try {
+      completion = await llmService.complete({
+        model: request.model,
+        messages: request.messages,
+      });
+    } catch (err) {
+      if (err instanceof LlmError) {
+        this.logger.warn(
+          `llm-generate: ${request.provider}/${request.model} failed: ${err.message}`,
+        );
+        return {
+          status: 'failed',
+          reason: err.message,
+          retriable: err.retriable,
+        };
+      }
+      throw err;
+    }
+
+    // 2. Parse + validate the untrusted completion.
+    let content: GeneratedContent;
+    try {
+      content = parseGeneratedContent(completion.text);
+    } catch (err) {
+      if (err instanceof LlmOutputInvalidError) {
+        this.logger.warn(
+          `llm-generate: invalid completion from ${request.provider}/${request.model}: ${err.message}`,
+        );
+        // A fresh sample may well pass validation — retriable.
+        return { status: 'rejected', reason: err.message, retriable: true };
+      }
+      throw err;
+    }
+
+    const level = passageLevelFromWordCount(content.passage.text);
+    span?.setAttribute('pp.llm.passage_level', level);
+
+    // 3. Zero-context solvability, question by question, before any insert.
+    const questionResults: LlmGenerateQuestionResult[] = [];
+    const accepted: Array<{
+      question: (typeof content.questions)[number];
+      solvability_rate: number;
+      solvability_valid_runs: number;
+    }> = [];
+    for (const question of content.questions) {
+      let verdict: SolvabilityVerdict;
+      try {
+        verdict = await runZeroContextSolvability(
+          this.sarvamLlmService,
+          question,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        questionResults.push({
+          status: 'rejected',
+          reason: `solvability filter errored: ${message}`,
+        });
+        continue;
+      }
+      if (verdict.status === 'passed') {
+        accepted.push({
+          question,
+          solvability_rate: verdict.rate!,
+          solvability_valid_runs: verdict.valid_runs,
+        });
+      } else if (verdict.status === 'failed_solvable') {
+        questionResults.push({
+          status: 'rejected',
+          reason: `zero-context solvable: correct answer picked ${Math.round(verdict.rate! * 100)}% of ${verdict.valid_runs} runs (threshold ${SOLVABILITY_THRESHOLD * 100}%)`,
+          solvability_rate: verdict.rate,
+        });
+      } else {
+        questionResults.push({
+          status: 'rejected',
+          reason: `solvability unverified: only ${verdict.valid_runs}/${verdict.total_runs} ${SOLVABILITY_MODEL} runs were parseable — retry`,
+        });
+      }
+    }
+
+    if (accepted.length === 0) {
+      return {
+        status: 'rejected',
+        reason: 'no questions survived the zero-context solvability filter',
+        retriable: true,
+        level,
+        questions: questionResults,
+      };
+    }
+
+    // 4. Build the entity tree with server-minted ids only.
+    const source = LLM_PROVIDER_TO_MEDIA_SOURCE[request.provider];
+    assertValidMediaSource(source);
+    const passageId = uuid();
+    const entities: MediaMetaDataEntity[] = [];
+    const ttsItems: Array<{
+      state_transition_id: string;
+      script_text: string;
+    }> = [];
+
+    entities.push(
+      this.mediaRepo.create({
+        id: passageId,
+        media_type: 'text',
+        source,
+        status: 'ready',
+        text: content.passage.text,
+        rolled_back: false,
+        media_details: {
+          role: 'passage',
+          level,
+          passage_type: content.passage.passage_type,
+          model: request.model,
+          prompt_tokens: completion.prompt_tokens,
+          completion_tokens: completion.completion_tokens,
+        },
+        generation_request_json: {
+          provider: request.provider,
+          model: request.model,
+          messages: request.messages,
+        },
+      }),
+    );
+
+    for (const {
+      question,
+      solvability_rate,
+      solvability_valid_runs,
+    } of accepted) {
+      const questionId = uuid();
+      entities.push(
+        this.mediaRepo.create({
+          id: questionId,
+          media_type: 'text',
+          source,
+          status: 'ready',
+          text: question.text,
+          input_media_id: passageId,
+          rolled_back: false,
+          media_details: {
+            role: 'question',
+            question_type: question.question_type,
+            model: request.model,
+            solvability: {
+              rate: solvability_rate,
+              valid_runs: solvability_valid_runs,
+              model: SOLVABILITY_MODEL,
+            },
+          },
+        }),
+      );
+
+      const flowOptions: FlowMediaPayload['options'] = [];
+      for (const option of question.options) {
+        const optionId = uuid();
+        flowOptions.push({
+          id: optionId,
+          text: option.text,
+          correct: option.correct,
+        });
+        entities.push(
+          this.mediaRepo.create({
+            id: optionId,
+            media_type: 'text',
+            source,
+            status: 'ready',
+            text: option.text,
+            input_media_id: questionId,
+            rolled_back: false,
+            media_details: {
+              role: 'option',
+              correct: option.correct,
+              model: request.model,
+            },
+          }),
+        );
+        entities.push(
+          this.mediaRepo.create({
+            id: uuid(),
+            media_type: 'text',
+            source,
+            status: 'ready',
+            text: option.explanation.text,
+            input_media_id: optionId,
+            state_transition_id: comprehensionCompleteStid(optionId),
+            rolled_back: false,
+            media_details: {
+              role: 'explanation',
+              tts: option.explanation.tts,
+              model: request.model,
+            },
+          }),
+        );
+        if (option.explanation.tts) {
+          ttsItems.push({
+            state_transition_id: comprehensionCompleteStid(optionId),
+            script_text: option.explanation.text,
+          });
+        }
+      }
+
+      if (question.send_as_flow) {
+        const payload: FlowMediaPayload = {
+          question_text: question.text,
+          options: flowOptions,
+        };
+        entities.push(
+          this.mediaRepo.create({
+            id: uuid(),
+            media_type: 'flow',
+            source,
+            status: 'ready',
+            text: JSON.stringify(payload),
+            input_media_id: questionId,
+            state_transition_id: comprehensionFlowStid(passageId),
+            rolled_back: false,
+            media_details: {
+              role: 'flow',
+              question_type: question.question_type,
+              model: request.model,
+            },
+          }),
+        );
+      }
+
+      questionResults.push({
+        status: 'created',
+        question_id: questionId,
+        solvability_rate,
+      });
+    }
+
+    // 5. All-or-nothing insert.
+    await this.dataSource.transaction(async (manager) => {
+      await manager.save(entities);
+    });
+    span?.setAttribute('pp.llm.entities_created', entities.length);
+    this.logger.log(
+      `llm-generate: created passage ${passageId} (level ${level}) with ${accepted.length}/${content.questions.length} questions from ${request.provider}/${request.model}`,
+    );
+
+    // 6. TTS fan-out through the existing ElevenLabs pathway (transcript ends
+    // up in generation_request_json.script_text per that pipeline's contract).
+    const response: LlmGenerateResponse = {
+      status: 'created',
+      passage_id: passageId,
+      level,
+      questions: questionResults,
+    };
+    if (ttsItems.length > 0) {
+      try {
+        await this.createElevenlabsMedia({ items: ttsItems }, otel_carrier);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error(
+          `llm-generate: text entities created but TTS enqueue failed for passage ${passageId}: ${message}`,
+        );
+        response.tts_error = `explanation audio generation failed to start: ${message}`;
+      }
+    }
+    return response;
+  }
+
+  /**
+   * Paginated distinct comprehension stids (flow rows' `…-sentence-
+   * comprehension` and explanation rows' `…-comprehension-complete`) for the
+   * dashboard table. Grows with the passage count — always paginate.
+   */
+  async listComprehensionStids(options: {
+    limit?: number;
+    offset?: number;
+  }): Promise<{
+    rows: Array<{
+      state_transition_id: string;
+      media_count: number;
+      created_at: Date;
+    }>;
+    total: number;
+    limit: number;
+    offset: number;
+  }> {
+    const limit = Math.min(Math.max(options.limit ?? 50, 1), 500);
+    const offset = Math.max(options.offset ?? 0, 0);
+
+    const where = `rolled_back = false
+         AND state_transition_id IS NOT NULL
+         AND (state_transition_id LIKE '%-sentence-comprehension'
+           OR state_transition_id LIKE '%-comprehension-complete')`;
+    const rows: Array<{
+      state_transition_id: string;
+      media_count: string;
+      created_at: Date;
+    }> = await this.dataSource.query(
+      `SELECT state_transition_id, COUNT(*) AS media_count,
+              MIN(created_at) AS created_at
+       FROM media_metadata
+       WHERE ${where}
+       GROUP BY state_transition_id
+       ORDER BY MIN(created_at) DESC, state_transition_id
+       LIMIT $1 OFFSET $2`,
+      [limit, offset],
+    );
+    const totals: Array<{ total: string }> = await this.dataSource.query(
+      `SELECT COUNT(DISTINCT state_transition_id) AS total
+       FROM media_metadata
+       WHERE ${where}`,
+    );
+
+    return {
+      rows: rows.map((r) => ({
+        state_transition_id: r.state_transition_id,
+        media_count: parseInt(r.media_count, 10),
+        created_at: r.created_at,
+      })),
+      total: parseInt(totals[0]?.total ?? '0', 10),
+      limit,
+      offset,
+    };
+  }
+
+  /**
+   * Rolls back every media row carrying the stid. For `…-sentence-
+   * comprehension` stids the whole passage family is torn down (passage →
+   * questions → options → explanations → flows): the stid prefix IS the
+   * passage id. Descendants are rolled back deepest-first because
+   * markRolledBack's FK sweep hard-deletes referencing rows and the
+   * input_media_id self-FK would otherwise block on grandchildren.
+   */
+  async deleteByStateTransitionId(
+    stateTransitionId: string,
+  ): Promise<{ deleted: number }> {
+    if (
+      typeof stateTransitionId !== 'string' ||
+      stateTransitionId.length === 0
+    ) {
+      throw new BadRequestException(
+        'stateTransitionId must be a non-empty string',
+      );
+    }
+
+    const direct: Array<{ id: string }> = await this.dataSource.query(
+      `SELECT id FROM media_metadata
+       WHERE state_transition_id = $1 AND rolled_back = false`,
+      [stateTransitionId],
+    );
+    if (direct.length === 0) {
+      throw new NotFoundException(
+        `No media found for state_transition_id ${stateTransitionId}`,
+      );
+    }
+
+    const flowSuffix = '-sentence-comprehension';
+    const rootIds = stateTransitionId.endsWith(flowSuffix)
+      ? [stateTransitionId.slice(0, -flowSuffix.length)]
+      : direct.map((r) => r.id);
+
+    const subtree: Array<{ id: string; depth: number }> =
+      await this.dataSource.query(
+        `WITH RECURSIVE subtree AS (
+           SELECT id, 0 AS depth FROM media_metadata WHERE id = ANY($1::uuid[])
+           UNION ALL
+           SELECT m.id, s.depth + 1
+           FROM media_metadata m JOIN subtree s ON m.input_media_id = s.id
+         )
+         SELECT id, MAX(depth) AS depth FROM subtree
+         GROUP BY id ORDER BY MAX(depth) DESC`,
+        [rootIds],
+      );
+
+    // ElevenLabs explanation-audio rows are linked by stid only (no
+    // input_media_id — that pipeline's contract), so the FK walk above misses
+    // them. Pick them up via their `${optionId}-comprehension-complete` stids.
+    const audioOrphans: Array<{ id: string }> = await this.dataSource.query(
+      `SELECT id FROM media_metadata
+       WHERE rolled_back = false AND input_media_id IS NULL
+         AND state_transition_id = ANY($1::text[])`,
+      [subtree.map((r) => comprehensionCompleteStid(r.id))],
+    );
+    const toDelete = [
+      ...audioOrphans.map((r) => ({
+        id: r.id,
+        depth: Number.MAX_SAFE_INTEGER,
+      })),
+      ...subtree,
+    ];
+
+    let deleted = 0;
+    for (const row of toDelete) {
+      try {
+        await this.markRolledBack(row.id);
+        deleted++;
+      } catch (err) {
+        // A concurrent markRolledBack (or the FK sweep of an earlier
+        // iteration) may have removed the row already — skip and continue.
+        this.logger.warn(
+          `deleteByStateTransitionId: markRolledBack(${row.id}) failed: ${(err as Error).message}`,
+        );
+      }
+    }
+    this.logger.log(
+      `deleteByStateTransitionId: rolled back ${deleted} rows for stid="${stateTransitionId}"`,
+    );
+    return { deleted };
   }
 
   // Persists a rendered image (e.g. report card) as a media_metadata row,

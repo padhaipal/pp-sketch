@@ -30,8 +30,21 @@ export class LiteracyLessonStateEntity {
   @JoinColumn({ name: 'user_message_id' })
   user_message: MediaMetaDataEntity;
 
-  @Column({ type: 'text' })
-  word: string;
+  // For word lessons: the drilled word. For passage lessons: the joined
+  // sentence text (kept for existing readers). Nullable since passage-based
+  // lessons; a CHECK constraint guarantees word OR passage_id is present.
+  @Column({ type: 'text', nullable: true })
+  word: string | null;
+
+  // FK → media_metadata.id of the reading-passage row (media_details.level
+  // selected it). Null for word lessons and pre-passage rows.
+  @Index('idx_literacy_lesson_states_passage_id')
+  @Column({ type: 'uuid', nullable: true })
+  passage_id: string | null;
+
+  @ManyToOne(() => MediaMetaDataEntity)
+  @JoinColumn({ name: 'passage_id' })
+  passage: MediaMetaDataEntity;
 
   @Column({ type: 'text', nullable: true })
   answer: string | null;

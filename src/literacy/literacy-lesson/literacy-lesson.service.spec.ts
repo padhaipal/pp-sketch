@@ -730,6 +730,8 @@ function freshRow(over: Record<string, unknown> = {}): Record<string, unknown> {
     recent_row_count: 0,
     distinct_word_count: 0,
     prev_level: null,
+    third_done_rn: null,
+    recent_passage_ids: [],
     ...over,
   };
 }
@@ -1057,14 +1059,46 @@ describe('LiteracyLessonService.selectNextWord — scoring + exclusion + tie-bre
 
 // Build a fresh-start service whose selectNextWord returns `row`, with a fully
 // controlled snapshot. Returns the service + the INSERT param capture.
-function freshStart(row: Record<string, unknown>, snapshot = happySnapshot()) {
+const DEFAULT_TEST_PASSAGES = [{ id: 'passage-1', text: 'अब कमल' }];
+
+// SQL-routed dsQuery: the selection query, the passage lookup(s) and the
+// INSERT are matched by shape, so word-path call indexes stay stable and the
+// passage path (level ≥ 8, 2026-07) just works.
+function routedDsQuery(
+  row: Record<string, unknown>,
+  passages: { id: string; text: string }[] = DEFAULT_TEST_PASSAGES,
+): jest.Mock {
+  return jest.fn().mockImplementation(async (sql: string) => {
+    if (sql.includes('recent_distinct_words')) return [row];
+    if (sql.includes("media_details->>'role' = 'passage'")) {
+      return passages.slice(0, 1);
+    }
+    if (sql.includes('INSERT INTO literacy_lesson_states')) {
+      return [{ id: 'lls-1' }];
+    }
+    return [];
+  });
+}
+
+// Params of the literacy_lesson_states INSERT, wherever it landed in the
+// call order.
+function insertParamsOf(dsQuery: jest.Mock): unknown[] {
+  const call = dsQuery.mock.calls.find((c) =>
+    (c[0] as string).includes('INSERT INTO literacy_lesson_states'),
+  );
+  expect(call).toBeDefined();
+  return call![1] as unknown[];
+}
+
+function freshStart(
+  row: Record<string, unknown>,
+  snapshot = happySnapshot(),
+  passages: { id: string; text: string }[] = DEFAULT_TEST_PASSAGES,
+) {
   const repo = makeRepo();
   repo.findOne.mockResolvedValue(null);
   mockActorGetSnapshot.mockReturnValue(snapshot);
-  const dsQuery = jest
-    .fn()
-    .mockResolvedValueOnce([row])
-    .mockResolvedValueOnce([{ id: 'lls-1' }]);
+  const dsQuery = routedDsQuery(row, passages);
   return { ...makeService({ repo, dsQuery }), dsQuery };
 }
 
@@ -1537,7 +1571,7 @@ describe('LiteracyLessonService — selectNextWord SQL (timeout progression regr
   it('keep window counts only completed words', async () => {
     const sql = await capturedSql();
     expect(sql).toContain(
-      'COUNT(DISTINCT word)::int FROM recent_rows WHERE is_done',
+      'COUNT(DISTINCT word)::int FROM recent_rows WHERE rn <= $6 AND is_done',
     );
   });
 
@@ -1634,6 +1668,7 @@ describe('LiteracyLessonService — word-length decisions on timeout-shaped hist
 async function freshSentenceStart(
   row: Record<string, unknown>,
   snapshot: unknown = happySnapshot(),
+  passages: { id: string; text: string }[] = DEFAULT_TEST_PASSAGES,
 ): Promise<{
   out: {
     stateTransitionIds: string[];
@@ -1644,10 +1679,7 @@ async function freshSentenceStart(
   dsQuery: jest.Mock;
 }> {
   xstateMock.createActor.mockClear();
-  const dsQuery = jest
-    .fn()
-    .mockResolvedValueOnce([row]) // selectNextString
-    .mockResolvedValueOnce([{ id: 'lls-1' }]); // INSERT
+  const dsQuery = routedDsQuery(row, passages);
   mockActorGetSnapshot.mockReturnValue(snapshot);
   const repo = makeRepo();
   repo.findOne.mockResolvedValue(null);
@@ -1656,6 +1688,7 @@ async function freshSentenceStart(
   const input = xstateMock.createActor.mock.calls[0][1].input as {
     word: string;
     sentence?: string[];
+    passageId?: string;
     userMessageId: string;
   };
   return { out, input, dsQuery };
@@ -1671,62 +1704,89 @@ const progressed = (over: Record<string, unknown>) =>
     ...over,
   });
 
-// The sentence branch (maxLength > 7) is TEMPORARILY unreachable: the clamp
-// sits at MAX_LESSON_LEVEL = 7 so half-finished sentence functionality never
-// triggers in production. These tests pin the cap — every history that used
-// to produce a sentence must now produce a word lesson at level 7. The
-// original sentence-branch tests live in git history (pre-cap) and come back
-// with the 12 ceiling.
-describe('LiteracyLessonService.selectNextString — temporary level-7 cap (no sentences)', () => {
-  it('a would-be level 8 (7-grapheme word + progression) stays a WORD lesson clamped at 7', async () => {
-    const { input } = await freshSentenceStart(
+// Level ≥ 8 selects a reading passage from media_metadata (2026-07). The
+// passage pool is mocked via routedDsQuery; an empty pool exercises the
+// word-lesson fallback.
+describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 8)', () => {
+  it('a would-be level 8 (7-grapheme word + progression) becomes a passage lesson', async () => {
+    const { input, dsQuery } = await freshSentenceStart(
       progressed({
-        recent_words: ['चौकीदार'], // 7 graphemes → level 7, +1 → wants 8
+        recent_words: ['चौकीदार'], // 7 graphemes → level 7, +1 → 8
         unique_in_add_window: 3,
       }),
     );
+    expect(input.word).toBe('');
+    expect(input.sentence).toEqual(['अब', 'कमल']);
+    expect(input.passageId).toBe('passage-1');
+    expect(
+      dsQuery.mock.calls.some((c) =>
+        (c[0] as string).includes("media_details->>'role' = 'passage'"),
+      ),
+    ).toBe(true);
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.word.max_length',
+      8,
+    ]);
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.word.selection',
+      'passage',
+    ]);
+  });
+
+  it('persists the passage id on the INSERT (fresh passage lesson)', async () => {
+    const { dsQuery } = await freshSentenceStart(
+      progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
+      happySnapshot({
+        value: 'sentence',
+        context: {
+          word: '',
+          sentence: ['अब', 'कमल'],
+          passageId: 'passage-1',
+          pendingCorrect: [],
+          pendingIncorrect: [],
+          answer: 'अब कमल',
+          answerCorrect: null,
+          stateTransitionId: 'sentence-start-sentence-initial',
+        },
+      }),
+    );
+    const params = insertParamsOf(dsQuery);
+    expect(params[7]).toBe('passage-1'); // passage_id
+  });
+
+  it('falls back to a level-7 word lesson when no passage exists at all', async () => {
+    const { input } = await freshSentenceStart(
+      progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
+      happySnapshot(),
+      [], // empty passage pool
+    );
     expect(input.sentence).toBeUndefined();
-    expect(input.word).not.toBe('');
     expect(TEST_WORD_LIST).toContain(input.word);
     expect(mockSpanSetAttribute.mock.calls).toContainEqual([
-      'pp.lesson.word.max_length',
-      7,
+      'pp.lesson.word.selection',
+      'passage-missing-word-fallback',
     ]);
   });
 
-  it('a stored sentence in history (level 8 derivation) still yields a word lesson clamped at 7', async () => {
-    const { input } = await freshSentenceStart(
+  it('passes the recently-lessoned passage ids into the exclusion parameter', async () => {
+    const { dsQuery } = await freshSentenceStart(
       progressed({
-        recent_words: ['अब कमल'], // 2 words → derives 8, +1 → wants 9
-        unique_in_add_window: 3,
+        prev_level: 8,
+        recent_words: ['अब कमल'],
+        third_done_rn: 15, // hold at 8
+        recent_passage_ids: ['old-p1', 'old-p2'],
       }),
     );
-    expect(input.sentence).toBeUndefined();
-    expect(input.word).not.toBe('');
-    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
-      'pp.lesson.word.max_length',
-      7,
-    ]);
-  });
-
-  it('a deep history (32-word stored sentence, would-be level 12) is also clamped at 7', async () => {
-    const thirtyTwo = Array.from({ length: 32 }, (_, i) => `w${i}`).join(' ');
-    const { input } = await freshSentenceStart(
-      progressed({
-        recent_words: [thirtyTwo], // derives 12
-        unique_in_add_window: 3,
-      }),
-    );
-    expect(input.sentence).toBeUndefined();
-    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
-      'pp.lesson.word.max_length',
-      7,
-    ]);
+    const passageCall = dsQuery.mock.calls.find((c) =>
+      (c[0] as string).includes("media_details->>'role' = 'passage'"),
+    )!;
+    expect(passageCall[1]).toEqual([8, ['old-p1', 'old-p2']]);
   });
 
   it('recency exclusion still sees each word inside a stored sentence (word path)', async () => {
     const { input } = await freshSentenceStart(
       progressed({
+        prev_level: 5,
         recent_words: ['दीवार किताब', 'सूरज पानी'],
       }),
     );
@@ -1738,6 +1798,7 @@ describe('LiteracyLessonService.selectNextString — temporary level-7 cap (no s
   it('punctuation inside a stored sentence does not defeat recency exclusion (word path)', async () => {
     const { input } = await freshSentenceStart(
       progressed({
+        prev_level: 5,
         recent_words: ['दीवार, किताब। सूरज पानी!'],
       }),
     );
@@ -1776,8 +1837,7 @@ describe('LiteracyLessonService.processAnswer — sentence persistence + result'
       progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
       sentenceSnapshot('sentence'),
     );
-    const insertParams = dsQuery.mock.calls[1][1] as unknown[];
-    expect(insertParams[2]).toBe('अब कमल');
+    expect(insertParamsOf(dsQuery)[2]).toBe('अब कमल');
   });
 
   it('returns sentenceText when the machine sits in the sentence state', async () => {
@@ -1807,13 +1867,13 @@ describe('LiteracyLessonService — sentence observability (kills literal mutant
   // cap (the branch is unreachable from the selector) — restore them from git
   // history alongside the 12 ceiling. Machine-driven sentence states are
   // still live (snapshot resume), so the result-side tag keeps its test.
-  it('never tags a sentence selection while the level-7 cap holds', async () => {
+  it('tags the passage id when a passage lesson is selected', async () => {
     await freshSentenceStart(
       progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
     );
-    expect(mockSpanSetAttribute.mock.calls).not.toContainEqual([
-      'pp.lesson.word.selection',
-      'sentence-random',
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.passage_id',
+      'passage-1',
     ]);
   });
 
@@ -1855,13 +1915,14 @@ async function runLevel(
   await svc.processAnswer({ user, user_message_id: 'mm-1' });
   const calls = mockSpanSetAttribute.mock.calls;
   const maxLength = calls.find((c) => c[0] === 'pp.lesson.word.max_length')![1];
+  // Absent on the sentence-section branch (level ≥ 8), which has no
+  // accelerator.
   const accelerated = calls.find(
     (c) => c[0] === 'pp.lesson.word.accelerated',
-  )![1];
-  const insertParams = dsQuery.mock.calls[1][1] as unknown[];
+  )?.[1];
   return {
     maxLength: maxLength as number,
-    levelParam: insertParams[6],
+    levelParam: insertParamsOf(dsQuery)[6],
     accelerated,
   };
 }
@@ -1889,12 +1950,12 @@ describe('LiteracyLessonService — difficulty cap ratchet', () => {
 
   it('decreases by 1 from the stored level when neither window is satisfied', async () => {
     const { maxLength } = await runLevel({
-      prev_level: 8,
+      prev_level: 7,
       recent_words: ['अब'],
       unique_in_add_window: 0,
       unique_in_keep_window: 0,
     });
-    expect(maxLength).toBe(7);
+    expect(maxLength).toBe(6);
   });
 
   it('does NOT drag the cap down to the last word length (the staging bug)', async () => {
@@ -1917,26 +1978,25 @@ describe('LiteracyLessonService — difficulty cap ratchet', () => {
     expect(maxLength).toBe(6);
   });
 
-  it('clamps an increase at the temporary 7 ceiling (sentence flow stays off)', async () => {
+  it('crosses into the passage band when the add-window pushes past 7', async () => {
     const { maxLength, levelParam } = await runLevel({
       prev_level: 7,
       recent_words: ['अब'],
-      unique_in_add_window: 3, // wants 8 → clamped
+      unique_in_add_window: 3, // wants 8 — no cap anymore
       unique_in_keep_window: 3,
     });
-    expect(maxLength).toBe(7);
-    expect(levelParam).toBe(7);
+    expect(maxLength).toBe(8);
+    expect(levelParam).toBe(8);
   });
 
-  it('clamps a stored above-ceiling level (pre-cap ratchet state) back to 7', async () => {
-    // Users who ratcheted past 7 before the cap landed must come back down.
+  it('clamps at the level-12 ceiling', async () => {
     const { maxLength, levelParam } = await runLevel({
       prev_level: 12,
-      recent_words: ['अब'],
-      unique_in_keep_window: 3,
+      recent_words: ['अब कमल'],
+      third_done_rn: 5, // wants +2 → clamped at 12
     });
-    expect(maxLength).toBe(7);
-    expect(levelParam).toBe(7);
+    expect(maxLength).toBe(12);
+    expect(levelParam).toBe(12);
   });
 
   it('clamps a decrease at the floor of 2', async () => {
@@ -1951,14 +2011,14 @@ describe('LiteracyLessonService — difficulty cap ratchet', () => {
 
   it('emits prev_level and accelerated span attributes', async () => {
     const { accelerated } = await runLevel({
-      prev_level: 8,
+      prev_level: 6,
       recent_words: ['अब'],
       unique_in_keep_window: 3,
     });
     expect(accelerated).toBe(false);
     expect(mockSpanSetAttribute.mock.calls).toContainEqual([
       'pp.lesson.word.prev_level',
-      8,
+      6,
     ]);
   });
 });
@@ -1974,25 +2034,25 @@ describe('LiteracyLessonService — cap cold-start (all levels null)', () => {
   });
 
   it('derives the base from the word COUNT when the recent row is a sentence', async () => {
-    // 'अब कमल' = 2 words → level 7 + ceil(log2 2) = 8; keep-window holds → 8,
-    // then the temporary 7 ceiling clamps it.
+    // 'अब कमल' = 2 words → level 7 + ceil(log2 2) = 8; fewer than 3
+    // completions in window → hold at 8 (passage band).
     const { maxLength, levelParam } = await runLevel({
       prev_level: null,
       recent_words: ['अब कमल'],
       unique_in_keep_window: 3,
     });
-    expect(maxLength).toBe(7);
-    expect(levelParam).toBe(7);
+    expect(maxLength).toBe(8);
+    expect(levelParam).toBe(8);
   });
 
   it('tolerates punctuation in the sentence when deriving the cold-start base', async () => {
     const { maxLength } = await runLevel({
       prev_level: null,
-      // 3 words → 7 + ceil(log2 3) = 9 → clamped to the temporary 7 ceiling.
+      // 3 words → 7 + ceil(log2 3) = 9; no completion signal → hold.
       recent_words: ['अब, कमल। पानी'],
       unique_in_keep_window: 3,
     });
-    expect(maxLength).toBe(7);
+    expect(maxLength).toBe(9);
   });
 
   it('emits prev_level = -1 on the span when there is no stored level', async () => {
@@ -2085,36 +2145,36 @@ describe('LiteracyLessonService — fast-find accelerator (+3)', () => {
   it('requires EXACTLY 4 rows for the first-two-words boost (8 rows does not qualify)', async () => {
     // 8 rows, keep=2 (<3), no add, no boost → normal ladder decrements.
     const { maxLength, accelerated } = await runLevel({
-      prev_level: 8,
+      prev_level: 7,
       recent_words: ['अब'],
       recent_row_count: 8,
       distinct_word_count: 8,
       unique_in_keep_window: 2,
     });
     expect(accelerated).toBe(false);
-    expect(maxLength).toBe(7); // base - 1
+    expect(maxLength).toBe(6); // base - 1
   });
 
   it('does not boost when only 2 words completed in the last 6 rows (drilled history)', async () => {
     // A drilled recent history fits only 2 distinct done words in 6 rows.
     const { maxLength, accelerated } = await runLevel({
-      prev_level: 8,
+      prev_level: 7,
       recent_words: ['अब'],
       unique_in_boost_window: 2,
       unique_in_add_window: 0,
       unique_in_keep_window: 2,
     });
     expect(accelerated).toBe(false);
-    expect(maxLength).toBe(7);
+    expect(maxLength).toBe(6);
   });
 
-  it('clamps a boost at the temporary 7 ceiling', async () => {
+  it('a boost can cross into the passage band', async () => {
     const { maxLength } = await runLevel({
-      prev_level: 6, // +3 wants 9 → clamped
+      prev_level: 6, // +3 → 9 (passage lesson)
       recent_words: ['अब'],
       unique_in_boost_window: 3,
     });
-    expect(maxLength).toBe(7);
+    expect(maxLength).toBe(9);
   });
 });
 
@@ -2150,5 +2210,215 @@ describe('LiteracyLessonService — level persistence on the continue path', () 
       transcripts: [{ id: 't1', text: 'कमल' }] as never,
     });
     expect((dsQuery.mock.calls[0][1] as unknown[])[6]).toBeNull();
+  });
+});
+
+// ─── sentence-section thresholds (level ≥ 8, 2026-07) ────────────────────────
+
+describe('LiteracyLessonService — sentence-section thresholds (level ≥ 8)', () => {
+  const sentenceBand = (over: Record<string, unknown>) => ({
+    prev_level: 9,
+    recent_words: ['अब कमल'],
+    recent_row_count: 18,
+    distinct_word_count: 20,
+    ...over,
+  });
+
+  it.each([
+    [9, 11], // 3rd completion within 9 rows → +2
+    [1, 11],
+    [10, 10], // within 10-12 → +1
+    [12, 10],
+    [13, 9], // within 13-17 → hold
+    [17, 9],
+    [18, 8], // deeper than 17 → −1
+  ])('third_done_rn=%d → level %d', async (thirdDoneRn, expected) => {
+    const { maxLength } = await runLevel(
+      sentenceBand({ third_done_rn: thirdDoneRn }),
+    );
+    expect(maxLength).toBe(expected);
+  });
+
+  it('holds when fewer than 3 completions are in the window', async () => {
+    const { maxLength } = await runLevel(sentenceBand({ third_done_rn: null }));
+    expect(maxLength).toBe(9);
+  });
+
+  it('a level-8 decrement falls back into word lessons at 7', async () => {
+    const { maxLength } = await runLevel(
+      sentenceBand({ prev_level: 8, third_done_rn: 18 }),
+    );
+    expect(maxLength).toBe(7);
+  });
+
+  it('never applies the word-section accelerator in the sentence band', async () => {
+    const { maxLength, accelerated } = await runLevel(
+      sentenceBand({ third_done_rn: 15, unique_in_boost_window: 3 }),
+    );
+    expect(maxLength).toBe(9);
+    expect(accelerated).toBeUndefined();
+  });
+});
+
+// ─── comprehension answers (2026-07) ─────────────────────────────────────────
+
+describe('LiteracyLessonService.processAnswer — comprehension answers', () => {
+  const comprehensionState = (over: Record<string, unknown> = {}) => ({
+    created_at: new Date(), // age irrelevant — staleness is bypassed
+    level: 9,
+    passage_id: 'passage-1',
+    snapshot: {
+      status: 'active',
+      value: 'comprehension',
+      context: {
+        word: '',
+        sentence: ['अब', 'कमल'],
+        passageId: 'passage-1',
+        pendingCorrect: [],
+        pendingIncorrect: [],
+        answer: 'अब कमल',
+        answerCorrect: null,
+        stateTransitionId: 'passage-1-sentence-comprehension-correct-first',
+      },
+    },
+    ...over,
+  });
+
+  function comprehensionSetup(opts: {
+    state: Record<string, unknown> | null;
+    optionRows?: unknown[];
+  }) {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue(opts.state);
+    mockActorGetSnapshot.mockReturnValue(
+      happySnapshot({
+        status: 'done',
+        value: 'complete',
+        context: {
+          word: '',
+          sentence: ['अब', 'कमल'],
+          passageId: 'passage-1',
+          pendingCorrect: [],
+          pendingIncorrect: [],
+          answer: 'opt-1',
+          answerCorrect: true,
+          stateTransitionId: 'opt-1-comprehension-complete',
+        },
+      }),
+    );
+    const dsQuery = jest.fn().mockImplementation(async (sql: string) => {
+      if (sql.includes('JOIN media_metadata q')) return opts.optionRows ?? [];
+      if (sql.includes('INSERT INTO literacy_lesson_states')) {
+        return [{ id: 'lls-1' }];
+      }
+      return [];
+    });
+    return { ...makeService({ repo, dsQuery }), dsQuery };
+  }
+
+  it('completes the lesson and persists answer_correct + passage_id', async () => {
+    const { svc, dsQuery } = comprehensionSetup({
+      state: comprehensionState(),
+      optionRows: [{ id: 'opt-1', media_details: { correct: true } }],
+    });
+    const out = await svc.processAnswer({
+      user,
+      user_message_id: 'mm-9',
+      comprehension_answer_id: 'opt-1',
+    });
+    expect(out.stateTransitionIds).toEqual(['opt-1-comprehension-complete']);
+    expect(out.isComplete).toBe(true);
+    expect(out.ignored).toBeUndefined();
+    expect(mockActorSend).toHaveBeenCalledWith({
+      type: 'COMPREHENSION_ANSWER',
+      answerId: 'opt-1',
+      answerCorrect: true,
+    });
+    const params = insertParamsOf(dsQuery);
+    expect(params[2]).toBe('अब कमल'); // word column keeps the sentence
+    expect(params[3]).toBe('opt-1'); // answer
+    expect(params[4]).toBe(true); // answer_correct
+    expect(params[6]).toBe(9); // level carried
+    expect(params[7]).toBe('passage-1'); // passage_id carried
+  });
+
+  it('records an incorrect answer when the option is not the correct one', async () => {
+    const { svc } = comprehensionSetup({
+      state: comprehensionState(),
+      optionRows: [{ id: 'opt-2', media_details: { correct: false } }],
+    });
+    await svc.processAnswer({
+      user,
+      user_message_id: 'mm-9',
+      comprehension_answer_id: 'opt-2',
+    });
+    expect(mockActorSend).toHaveBeenCalledWith({
+      type: 'COMPREHENSION_ANSWER',
+      answerId: 'opt-2',
+      answerCorrect: false,
+    });
+  });
+
+  it('ignores an answer id that does not belong to the lesson passage', async () => {
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    const { svc, dsQuery } = comprehensionSetup({
+      state: comprehensionState(),
+      optionRows: [], // JOIN found nothing → forged/foreign id
+    });
+    const out = await svc.processAnswer({
+      user,
+      user_message_id: 'mm-9',
+      comprehension_answer_id: 'not-an-option',
+    });
+    expect(out).toEqual({
+      stateTransitionIds: [],
+      isComplete: false,
+      ignored: true,
+    });
+    expect(
+      dsQuery.mock.calls.some((c) => (c[0] as string).includes('INSERT')),
+    ).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('ignores an answer when no lesson is awaiting comprehension', async () => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { svc } = comprehensionSetup({
+      state: comprehensionState({
+        snapshot: { status: 'done', value: 'complete', context: {} },
+      }),
+    });
+    const out = await svc.processAnswer({
+      user,
+      user_message_id: 'mm-9',
+      comprehension_answer_id: 'opt-1',
+    });
+    expect(out.ignored).toBe(true);
+  });
+
+  it('ignores an answer for a user with no lesson history', async () => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { svc } = comprehensionSetup({ state: null });
+    const out = await svc.processAnswer({
+      user,
+      user_message_id: 'mm-9',
+      comprehension_answer_id: 'opt-1',
+    });
+    expect(out.ignored).toBe(true);
+  });
+
+  it('rejects comprehension_answer_id combined with transcripts', async () => {
+    const { svc } = comprehensionSetup({ state: comprehensionState() });
+    await expect(
+      svc.processAnswer({
+        user,
+        user_message_id: 'mm-9',
+        comprehension_answer_id: 'opt-1',
+        transcripts: [{ id: 't1', text: 'कुछ' }] as never,
+      }),
+    ).rejects.toThrow('mutually exclusive');
   });
 });

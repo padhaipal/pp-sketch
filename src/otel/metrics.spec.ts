@@ -42,7 +42,9 @@ describe('metrics module', () => {
   });
 
   it('defines wabotInboundJobDuration with the documented name, unit, and bucket boundaries', () => {
-    expect(mockCreateHistogram).toHaveBeenCalledTimes(1);
+    // Two histograms live in this module: the wabot-inbound job duration and
+    // pp.llm.request_duration_ms (2026-07).
+    expect(mockCreateHistogram).toHaveBeenCalledTimes(2);
     const [name, options] = mockCreateHistogram.mock.calls[0] as [
       string,
       {

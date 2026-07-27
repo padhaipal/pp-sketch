@@ -1281,10 +1281,22 @@ describe('markSentence', () => {
     ).toBe(true);
   });
 
-  it('rejects an out-of-order reading', () => {
+  it('accepts a near-word swap under the distance-1 leniency rule', () => {
+    // 2026-07 rule: a sentence only fails on a word 2+ graphemes off. नल and
+    // घर are distance 1 apart (ल/र are same-family, substitutes for free), so
+    // the swapped reading still walks in order within tolerance.
     expect(markSentence({ words: WORDS, transcripts: ['घर नल कमल'] })).toBe(
-      false,
+      true,
     );
+  });
+
+  it('rejects an out-of-order reading of distinct words', () => {
+    expect(
+      markSentence({
+        words: ['कमल', 'बादल', 'नल'],
+        transcripts: ['नल कमल बादल'],
+      }),
+    ).toBe(false);
   });
 
   it('rejects a reading with a word missing', () => {
@@ -1455,5 +1467,118 @@ describe('rankWorstWord', () => {
         transcripts: ['नल। कमल!'],
       }),
     ).toBe('घर');
+  });
+});
+
+/* ───────── assessSentenceWords / selectDrillWord (2026-07) ───────── */
+
+import {
+  assessSentenceWords,
+  selectDrillWord,
+  TEACHABLE_GRAPHEMES,
+} from './evaluate-answer.utils';
+
+describe('TEACHABLE_GRAPHEMES', () => {
+  it('contains no halant and no nukta forms', () => {
+    expect(TEACHABLE_GRAPHEMES.has('्')).toBe(false); // halant
+    expect(TEACHABLE_GRAPHEMES.has('ज़')).toBe(false);
+    expect(TEACHABLE_GRAPHEMES.has('ड़')).toBe(false);
+  });
+
+  it('contains the word-list alphabet', () => {
+    for (const ch of ['क', 'ा', 'ं', 'औ', 'ह']) {
+      expect(TEACHABLE_GRAPHEMES.has(ch)).toBe(true);
+    }
+  });
+});
+
+describe('assessSentenceWords', () => {
+  it('scores a perfect reading at distance 0 for every word', () => {
+    const result = assessSentenceWords({
+      words: ['नल', 'घर', 'कमल'],
+      transcripts: ['नल घर कमल'],
+    });
+    expect(result.map((a) => a.distance)).toEqual([0, 0, 0]);
+    expect(result.every((a) => a.teachable)).toBe(true);
+  });
+
+  it('scores a badly-read word by its levenshtein distance', () => {
+    const result = assessSentenceWords({
+      words: ['कमल', 'बादल'],
+      transcripts: ['कमल तिతపా'],
+    });
+    expect(result[0].distance).toBe(0);
+    expect(result[1].distance).toBeGreaterThanOrEqual(2);
+  });
+
+  it('marks words with conjuncts or nukta as unteachable', () => {
+    const result = assessSentenceWords({
+      words: ['सड़क', 'स्कूल', 'घर'],
+      transcripts: [''],
+    });
+    expect(result[0].teachable).toBe(false); // nukta ड़
+    expect(result[1].teachable).toBe(false); // halant conjunct
+    expect(result[2].teachable).toBe(true);
+  });
+
+  it('does not let two engine transcripts jointly lower a distance across the seam', () => {
+    const result = assessSentenceWords({
+      words: ['कमल'],
+      transcripts: ['क~मल'],
+    });
+    // 'क' alone is distance 2; 'मल' alone is distance ≥2 from कमल? no —
+    // levenshtein(कमल, मल) = 1 (deletion) — the point is segments are
+    // assessed separately, so assert the seam-joined 'कमल' never scores 0.
+    expect(result[0].distance).toBeGreaterThan(0);
+  });
+});
+
+describe('selectDrillWord', () => {
+  it('returns null when every word is within distance 1', () => {
+    expect(
+      selectDrillWord({
+        words: ['नल', 'घर'],
+        transcripts: ['नाल घर'],
+      }),
+    ).toBeNull();
+  });
+
+  it('picks the teachable word with the largest distance', () => {
+    const picked = selectDrillWord({
+      words: ['कमल', 'बादल', 'नल'],
+      transcripts: ['कमल कुछ और नल'],
+    });
+    expect(picked).toBe('बादल');
+  });
+
+  it('never picks an unteachable word even when it is worst', () => {
+    const picked = selectDrillWord({
+      words: ['स्कूल', 'कमल'],
+      transcripts: ['तितली तितली'],
+    });
+    expect(picked).toBe('कमल');
+  });
+
+  it('returns null when only unteachable words failed', () => {
+    expect(
+      selectDrillWord({
+        words: ['सड़क', 'घर'],
+        transcripts: ['कुछभीनहीं घर'],
+      }),
+    ).toBeNull();
+  });
+
+  it('randomizes among equal-distance ties', () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 60; i++) {
+      // Both words are 3 graphemes with no overlap with the transcript, so
+      // they tie at the same distance.
+      const picked = selectDrillWord({
+        words: ['कमल', 'मगध'],
+        transcripts: ['xyz xyz'],
+      });
+      if (picked) seen.add(picked);
+    }
+    expect(seen.size).toBeGreaterThan(1);
   });
 });

@@ -1078,3 +1078,151 @@ describe('UserService.delete', () => {
     expect(out.failed).toEqual([]);
   });
 });
+
+// ─── getLiteracyTestScores (2026-07) ─────────────────────────────────────────
+
+describe('UserService.getLiteracyTestScores', () => {
+  const USER_ID = '123e4567-e89b-42d3-a456-426614174000';
+  const userRow = { id: USER_ID, external_id: '+919999990001' };
+
+  const day = (n: number) => new Date(2026, 6, n);
+
+  function firstAttempt(n: number, correct: boolean) {
+    return { created_at: day(n), correct };
+  }
+  function answer(
+    n: number,
+    correct: boolean,
+    level: number,
+    questionType: string,
+    passageType: string = 'narrative',
+  ) {
+    return {
+      created_at: day(n),
+      answer_correct: correct,
+      level,
+      question_type: questionType,
+      passage_type: passageType,
+    };
+  }
+
+  function scoreService(opts: {
+    firstAttempts?: unknown[];
+    answers?: unknown[];
+    user?: unknown;
+  }) {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue(
+      opts.user === undefined ? userRow : opts.user,
+    );
+    const cache = makeCache();
+    cache.get.mockResolvedValue(null);
+    const dsQuery = jest.fn().mockImplementation(async (sql: string) => {
+      if (sql.includes('sentence-comprehension-correct-first')) {
+        return opts.firstAttempts ?? [];
+      }
+      if (sql.includes('comprehension-complete')) return opts.answers ?? [];
+      return [];
+    });
+    return { svc: makeService(repo, dsQuery, cache, makeScore()), dsQuery };
+  }
+
+  it('returns null for an unknown user', async () => {
+    const { svc } = scoreService({ user: null });
+    expect(await svc.getLiteracyTestScores(USER_ID)).toBeNull();
+  });
+
+  it('reports insufficient data across the board for a fresh user', async () => {
+    const { svc } = scoreService({});
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    expect(scores.nipun_grade_1.status).toBe('insufficient_data');
+    expect(scores.nipun_grade_1.attempts_available).toBe(0);
+    expect(scores.nipun_grade_2.status).toBe('insufficient_data');
+    expect(scores.nipun_grade_3.status).toBe('insufficient_data');
+    expect(scores.ampl_b.status).toBe('insufficient_data');
+    expect(scores.ampl_b.narrative.retrieve.status).toBe('insufficient_data');
+  });
+
+  it('computes NIPUN grade 1 over the last two level-8 first attempts with history', async () => {
+    const { svc } = scoreService({
+      firstAttempts: [
+        firstAttempt(1, false),
+        firstAttempt(2, true),
+        firstAttempt(3, true),
+      ],
+    });
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    const g1 = scores.nipun_grade_1;
+    expect(g1.status).toBe('ok');
+    expect(g1.window_size).toBe(2);
+    expect(g1.latest_score).toBe(1); // last two both correct
+    expect(g1.history).toEqual([
+      { at: day(2), score: 0.5 },
+      { at: day(3), score: 1 },
+    ]);
+  });
+
+  it('computes NIPUN grades 2 and 3 from level-scoped retrieve answers only', async () => {
+    const { svc } = scoreService({
+      answers: [
+        answer(1, true, 11, 'retrieve'),
+        answer(2, true, 11, 'retrieve'),
+        answer(3, false, 11, 'retrieve'),
+        answer(4, true, 11, 'retrieve'),
+        answer(5, true, 11, 'infer'), // wrong type — ignored
+        answer(6, true, 12, 'retrieve'), // wrong level for g2
+      ],
+    });
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    expect(scores.nipun_grade_2.status).toBe('ok');
+    expect(scores.nipun_grade_2.latest_score).toBe(0.75); // 3 of last 4
+    expect(scores.nipun_grade_3.status).toBe('insufficient_data');
+    expect(scores.nipun_grade_3.attempts_available).toBe(1);
+  });
+
+  it('computes the combined AMPL-B score once every bucket window fills', async () => {
+    const answers: unknown[] = [];
+    let n = 1;
+    for (const stimulus of ['narrative', 'expository']) {
+      for (let i = 0; i < 6; i++)
+        answers.push(answer(n++, true, 12, 'retrieve', stimulus));
+      for (let i = 0; i < 7; i++)
+        answers.push(answer(n++, true, 12, 'infer', stimulus));
+      for (let i = 0; i < 3; i++)
+        answers.push(answer(n++, i > 0, 12, 'evaluate', stimulus));
+    }
+    const { svc } = scoreService({ answers });
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    expect(scores.ampl_b.status).toBe('ok');
+    // 32 answers, one wrong evaluate per stimulus → 30/32
+    expect(scores.ampl_b.latest_score).toBeCloseTo(30 / 32);
+    expect(scores.ampl_b.narrative.retrieve.latest_score).toBe(1);
+    expect(scores.ampl_b.narrative.evaluate.latest_score).toBeCloseTo(2 / 3);
+    expect(scores.ampl_b.history!.length).toBeGreaterThan(0);
+  });
+
+  it('excludes below-level-12 answers from AMPL-B but keeps them for grade 2', async () => {
+    const answers: unknown[] = [answer(1, true, 11, 'retrieve')];
+    const { svc } = scoreService({ answers });
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    expect(scores.ampl_b.narrative.retrieve.attempts_available).toBe(0);
+    expect(scores.nipun_grade_2.attempts_available).toBe(1);
+  });
+
+  it('groups interpret, infer and integrate into one AMPL-B bucket', async () => {
+    const answers = [
+      answer(1, true, 12, 'interpret'),
+      answer(2, true, 12, 'infer'),
+      answer(3, false, 12, 'integrate'),
+      answer(4, true, 12, 'interpret'),
+      answer(5, true, 12, 'infer'),
+      answer(6, true, 12, 'integrate'),
+      answer(7, true, 12, 'interpret'),
+    ];
+    const { svc } = scoreService({ answers });
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    const bucket = scores.ampl_b.narrative.interpret_infer_integrate;
+    expect(bucket.status).toBe('ok');
+    expect(bucket.latest_score).toBeCloseTo(6 / 7);
+  });
+});

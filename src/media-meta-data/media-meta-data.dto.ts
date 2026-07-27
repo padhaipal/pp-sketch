@@ -11,6 +11,12 @@ export const VALID_MEDIA_TYPES = [
   'video',
   'image',
   'sticker',
+  // WhatsApp Flow message (single-screen comprehension question). The flow
+  // payload lives in .text as JSON — no S3 object and no WhatsApp preload:
+  // sends reference the once-published flow asset by id and inject the
+  // payload at send time. Keep in sync with pp-dashboard ALL_MEDIA_TYPES and
+  // the wabot-sketch outbound DTOs.
+  'flow',
 ] as const;
 export type MediaType = (typeof VALID_MEDIA_TYPES)[number];
 
@@ -28,6 +34,17 @@ const VALID_MEDIA_SOURCES = [
   // A partial unique index on state_transition_id WHERE source =
   // 'drill-word-auto' guarantees at most one auto-row per drilled word.
   'drill-word-auto',
+  // LLM-generated content (reading passages / comprehension questions /
+  // answer options / explanations / flows). source = the third-party entity;
+  // the concrete model lives in media_details.model. 'sarvam-llm' is suffixed
+  // because 'sarvam' is already taken by the STT engine above — existing STT
+  // rows are never migrated. Keep in sync with LLM_PROVIDER_TO_MEDIA_SOURCE
+  // in src/interfaces/llm/llm.dto.ts.
+  'openai',
+  'anthropic',
+  'google',
+  'mistral',
+  'sarvam-llm',
 ] as const;
 export type MediaSource = (typeof VALID_MEDIA_SOURCES)[number];
 
@@ -273,6 +290,7 @@ export interface FindMediaByStateTransitionIdResult {
   text?: MediaMetaData;
   image?: MediaMetaData;
   sticker?: MediaMetaData;
+  flow?: MediaMetaData;
 }
 
 export interface WhatsappPreloadJobDto {

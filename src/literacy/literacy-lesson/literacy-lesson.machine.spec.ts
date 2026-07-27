@@ -7,7 +7,7 @@ const mockMarkWord = jest.fn();
 const mockMarkLetter = jest.fn();
 const mockMarkImage = jest.fn();
 const mockMarkSentence = jest.fn();
-const mockRankWorstWord = jest.fn();
+const mockSelectDrillWord = jest.fn();
 const mockDetectIncorrectEndMatra = jest.fn();
 const mockDetectIncorrectMiddleMatra = jest.fn();
 const mockDetectInsertion = jest.fn();
@@ -16,7 +16,7 @@ jest.mock('./evaluate-answer.utils', () => ({
   markLetter: (...args: unknown[]) => mockMarkLetter(...args),
   markImage: (...args: unknown[]) => mockMarkImage(...args),
   markSentence: (...args: unknown[]) => mockMarkSentence(...args),
-  rankWorstWord: (...args: unknown[]) => mockRankWorstWord(...args),
+  selectDrillWord: (...args: unknown[]) => mockSelectDrillWord(...args),
   detectIncorrectEndMatra: (...args: unknown[]) =>
     mockDetectIncorrectEndMatra(...args),
   detectIncorrectMiddleMatra: (...args: unknown[]) =>
@@ -41,11 +41,19 @@ type Snapshot = ReturnType<
 >;
 
 interface ActorHandle {
-  send: (event: {
-    type: 'ANSWER';
-    studentAnswer: string;
-    studentTranscripts?: string[];
-  }) => void;
+  send: (
+    event:
+      | {
+          type: 'ANSWER';
+          studentAnswer: string;
+          studentTranscripts?: string[];
+        }
+      | {
+          type: 'COMPREHENSION_ANSWER';
+          answerId: string;
+          answerCorrect: boolean;
+        },
+  ) => void;
   snap: () => Snapshot;
   stop: () => void;
 }
@@ -54,6 +62,7 @@ function makeActor(input: {
   word: string;
   userMessageId: string;
   sentence?: string[];
+  passageId?: string;
 }): ActorHandle {
   const actor = createActor(machine, { input });
   actor.start();
@@ -69,7 +78,7 @@ function allMarksFalse(): void {
   mockMarkLetter.mockReturnValue(false);
   mockMarkImage.mockReturnValue(false);
   mockMarkSentence.mockReturnValue(false);
-  mockRankWorstWord.mockReturnValue('');
+  mockSelectDrillWord.mockReturnValue(null);
   mockDetectIncorrectEndMatra.mockReturnValue(false);
   mockDetectIncorrectMiddleMatra.mockReturnValue(false);
   mockDetectInsertion.mockReturnValue(false);
@@ -80,7 +89,7 @@ beforeEach(() => {
   mockMarkLetter.mockReset();
   mockMarkImage.mockReset();
   mockMarkSentence.mockReset();
-  mockRankWorstWord.mockReset();
+  mockSelectDrillWord.mockReset();
   mockDetectIncorrectEndMatra.mockReset();
   mockDetectIncorrectMiddleMatra.mockReset();
   mockDetectInsertion.mockReset();
@@ -1149,8 +1158,15 @@ describe('machine — routing + constants', () => {
 
 const SENTENCE = ['नल', 'घर'];
 
+const PASSAGE_ID = 'passage-1';
+
 function makeSentenceActor(sentence: string[] = SENTENCE): ActorHandle {
-  return makeActor({ word: '', userMessageId: 'mm-1', sentence });
+  return makeActor({
+    word: '',
+    userMessageId: 'mm-1',
+    sentence,
+    passageId: PASSAGE_ID,
+  });
 }
 
 describe('machine — start router', () => {
@@ -1197,16 +1213,16 @@ describe('machine — start router', () => {
 });
 
 describe('machine — sentence state', () => {
-  it('correct on the first attempt → complete + correct-first stid + every letter of every word pendingCorrect', () => {
+  it('correct on the first attempt → comprehension + correct-first stid + every letter of every word pendingCorrect', () => {
     mockMarkSentence.mockReturnValue(true);
     const a = makeSentenceActor();
     a.send(ANSWER('नल घर'));
     const snap = a.snap();
-    expect(snap.value).toBe('complete');
-    expect(snap.status).toBe('done');
+    expect(snap.value).toBe('comprehension');
+    expect(snap.status).toBe('active');
     expect(snap.context.answerCorrect).toBe(true);
     expect(snap.context.stateTransitionId).toBe(
-      'sentence-sentence-complete-correct-first',
+      `${PASSAGE_ID}-sentence-comprehension-correct-first`,
     );
     expect(snap.context.pendingCorrect).toEqual(['न', 'ल', 'घ', 'र']);
     expect(snap.context.pendingIncorrect).toEqual([]);
@@ -1239,8 +1255,8 @@ describe('machine — sentence state', () => {
     a.stop();
   });
 
-  it('wrong on the first attempt → drills the word rankWorstWord picked', () => {
-    mockRankWorstWord.mockReturnValue('घर');
+  it('wrong on the first attempt → drills the word selectDrillWord picked', () => {
+    mockSelectDrillWord.mockReturnValue('घर');
     const a = makeSentenceActor();
     a.send({
       type: 'ANSWER',
@@ -1254,7 +1270,7 @@ describe('machine — sentence state', () => {
     expect(snap.context.sentenceErrors).toBe(1);
     expect(snap.context.answerCorrect).toBe(false);
     expect(snap.context.stateTransitionId).toBe('घर-sentence-word-drillWord');
-    expect(mockRankWorstWord).toHaveBeenCalledWith({
+    expect(mockSelectDrillWord).toHaveBeenCalledWith({
       words: SENTENCE,
       transcripts: ['नल'],
     });
@@ -1262,7 +1278,7 @@ describe('machine — sentence state', () => {
   });
 
   it('wrong on the second attempt → complete + maxErrors stid, no score change', () => {
-    mockRankWorstWord.mockReturnValue('घर');
+    mockSelectDrillWord.mockReturnValue('घर');
     const a = makeSentenceActor();
     a.send(ANSWER('wrong')); // attempt 1 → drill
     mockMarkWord.mockReturnValue(true);
@@ -1282,7 +1298,7 @@ describe('machine — sentence state', () => {
   });
 
   it('correct on the retry → complete + correct-retry stid + every letter pendingCorrect', () => {
-    mockRankWorstWord.mockReturnValue('नल');
+    mockSelectDrillWord.mockReturnValue('नल');
     const a = makeSentenceActor();
     a.send(ANSWER('wrong')); // attempt 1 → drill नल
     mockMarkWord.mockReturnValue(true);
@@ -1290,17 +1306,17 @@ describe('machine — sentence state', () => {
     mockMarkSentence.mockReturnValue(true);
     a.send(ANSWER('नल घर')); // attempt 2 correct
     const snap = a.snap();
-    expect(snap.value).toBe('complete');
+    expect(snap.value).toBe('comprehension');
     expect(snap.context.answerCorrect).toBe(true);
     expect(snap.context.stateTransitionId).toBe(
-      'sentence-sentence-complete-correct-retry',
+      `${PASSAGE_ID}-sentence-comprehension-correct-retry`,
     );
     expect(snap.context.pendingCorrect).toEqual(['न', 'ल', 'घ', 'र']);
     a.stop();
   });
 
   it('re-entering sentence after the drill re-arms answer with the full sentence', () => {
-    mockRankWorstWord.mockReturnValue('घर');
+    mockSelectDrillWord.mockReturnValue('घर');
     const a = makeSentenceActor();
     a.send(ANSWER('wrong'));
     expect(a.snap().context.answer).toBe('घर');
@@ -1314,7 +1330,7 @@ describe('machine — sentence state', () => {
 
 describe('machine — word drill inside a sentence', () => {
   function driveToDrill(drillWord: string): ActorHandle {
-    mockRankWorstWord.mockReturnValue(drillWord);
+    mockSelectDrillWord.mockReturnValue(drillWord);
     const a = makeSentenceActor();
     a.send(ANSWER('wrong'));
     expect(a.snap().value).toBe('word');
@@ -1391,6 +1407,111 @@ describe('machine — word drill inside a sentence', () => {
     expect(snap.value).toBe('complete');
     expect(snap.context.stateTransitionId).toBe(
       'कमल-word-complete-correct-first',
+    );
+    a.stop();
+  });
+});
+
+// ─── comprehension state (2026-07) ───────────────────────────────────────────
+
+describe('machine — comprehension state', () => {
+  function driveToComprehension(): ActorHandle {
+    mockMarkSentence.mockReturnValue(true);
+    const a = makeSentenceActor();
+    a.send(ANSWER('नल घर'));
+    expect(a.snap().value).toBe('comprehension');
+    return a;
+  }
+
+  it('COMPREHENSION_ANSWER completes the lesson with the answer-scoped stid', () => {
+    const a = driveToComprehension();
+    a.send({
+      type: 'COMPREHENSION_ANSWER',
+      answerId: 'opt-42',
+      answerCorrect: true,
+    });
+    const snap = a.snap();
+    expect(snap.value).toBe('complete');
+    expect(snap.status).toBe('done');
+    expect(snap.context.answerCorrect).toBe(true);
+    expect(snap.context.answer).toBe('opt-42');
+    expect(snap.context.stateTransitionId).toBe(
+      'opt-42-comprehension-complete',
+    );
+    expect(snap.context.pendingCorrect).toEqual([]);
+    expect(snap.context.pendingIncorrect).toEqual([]);
+    a.stop();
+  });
+
+  it('records an incorrect comprehension answer (no retry mechanism)', () => {
+    const a = driveToComprehension();
+    a.send({
+      type: 'COMPREHENSION_ANSWER',
+      answerId: 'opt-13',
+      answerCorrect: false,
+    });
+    const snap = a.snap();
+    expect(snap.status).toBe('done');
+    expect(snap.context.answerCorrect).toBe(false);
+    expect(snap.context.stateTransitionId).toBe(
+      'opt-13-comprehension-complete',
+    );
+    a.stop();
+  });
+
+  it('a voice note while awaiting the tap re-sends the flow and records nothing', () => {
+    const a = driveToComprehension();
+    a.send(ANSWER('नल घर'));
+    const snap = a.snap();
+    expect(snap.value).toBe('comprehension');
+    expect(snap.context.answerCorrect).toBeNull();
+    expect(snap.context.stateTransitionId).toBe(
+      `${PASSAGE_ID}-sentence-comprehension-correct-retry`,
+    );
+    expect(snap.context.pendingCorrect).toEqual([]);
+    a.stop();
+  });
+});
+
+describe('machine — sentence retry without a teachable drill word', () => {
+  it('no drillable word → stays in sentence with the wrong-retry stid and one sentenceError', () => {
+    mockSelectDrillWord.mockReturnValue(null);
+    const a = makeSentenceActor();
+    a.send(ANSWER('गलत'));
+    const snap = a.snap();
+    expect(snap.value).toBe('sentence');
+    expect(snap.context.sentenceErrors).toBe(1);
+    expect(snap.context.answerCorrect).toBe(false);
+    expect(snap.context.stateTransitionId).toBe(
+      'sentence-sentence-wrong-retry',
+    );
+    expect(snap.context.answer).toBe('नल घर'); // re-armed by re-entry
+    a.stop();
+  });
+
+  it('second failure after a wrong-retry → complete via maxErrors', () => {
+    mockSelectDrillWord.mockReturnValue(null);
+    const a = makeSentenceActor();
+    a.send(ANSWER('गलत'));
+    a.send(ANSWER('फिर गलत'));
+    const snap = a.snap();
+    expect(snap.value).toBe('complete');
+    expect(snap.context.stateTransitionId).toBe(
+      'sentence-sentence-complete-maxErrors',
+    );
+    a.stop();
+  });
+
+  it('correct after a wrong-retry → comprehension via the correct-retry stid', () => {
+    mockSelectDrillWord.mockReturnValue(null);
+    const a = makeSentenceActor();
+    a.send(ANSWER('गलत'));
+    mockMarkSentence.mockReturnValue(true);
+    a.send(ANSWER('नल घर'));
+    const snap = a.snap();
+    expect(snap.value).toBe('comprehension');
+    expect(snap.context.stateTransitionId).toBe(
+      `${PASSAGE_ID}-sentence-comprehension-correct-retry`,
     );
     a.stop();
   });

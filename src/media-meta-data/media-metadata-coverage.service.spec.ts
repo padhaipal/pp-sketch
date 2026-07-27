@@ -66,6 +66,7 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
       'video',
       'image',
       'sticker',
+      'flow',
     ]);
     expect(out.letters).toEqual(['क', 'ख']);
     expect(out.words).toEqual(['word1', 'word2']);
@@ -151,6 +152,7 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
       video: 2,
       image: 0,
       sticker: 0,
+      flow: 0,
     });
     // Any unrelated suffix should be all zeros.
     const otherIdx = out.suffixes.indexOf('word-word-loopBack');
@@ -160,6 +162,7 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
       video: 0,
       image: 0,
       sticker: 0,
+      flow: 0,
     });
   });
 
@@ -183,6 +186,7 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
           video: 0,
           image: 0,
           sticker: 0,
+          flow: 0,
         });
       }
     }
@@ -213,6 +217,7 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
       video: 0,
       image: 0,
       sticker: 0,
+      flow: 0,
     });
   });
 });

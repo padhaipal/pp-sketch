@@ -46,3 +46,14 @@ uploadStaticMedia()
 4.) Call src/media-meta-data/media-meta-data.service.ts/uploadStaticMedia(files, validatedItems, injectCarrier(span)). The service is responsible for skipping S3 upload and WHATSAPP_PRELOAD enqueue for text items, and for inserting them with status='ready'.
 5.) End the span.
 6.) Return 201 with UploadStaticMediaResult body.
+
+## 2026-07 additions
+
+- `GET /media-meta-data/comprehension-stids?limit&offset` — paginated distinct
+  comprehension stids for the dashboard table.
+- `DELETE /media-meta-data/by-state-transition-id?state_transition_id=…` —
+  declared before `DELETE :id`; delegates to
+  `MediaMetaDataService.deleteByStateTransitionId`.
+- `POST /media-meta-data/llm-generate` (200, slow ~1-2 min/question) —
+  synchronous seeding; body `{provider, model, messages}`; returns
+  `LlmGenerateResponse` (per-question outcomes, `retriable` flags).

@@ -1752,3 +1752,202 @@ describe('processWabotInboundJob — outbound_messages audit recording', () => {
     expect(order).toEqual(['record', 'rollback']);
   });
 });
+
+// ─── comprehension flow replies (nfm_reply, 2026-07) ─────────────────────────
+
+function createInteractiveJob(responseJson: string): Job<MessageJobDto> {
+  return {
+    data: {
+      message: {
+        from: '+910000000001',
+        id: 'wamid-tap-1',
+        // Flow taps are exempt from the 20s staleness guard — use an old ts
+        // deliberately so a regression re-applying the guard fails here.
+        timestamp: String(Math.floor(Date.now() / 1000) - 600),
+        type: 'interactive',
+        interactive: {
+          type: 'nfm_reply',
+          nfm_reply: {
+            name: 'flow',
+            body: 'Sent',
+            response_json: responseJson,
+          },
+        },
+      },
+      otel: { carrier: {} },
+    } as any,
+    attemptsMade: 0,
+    opts: { attempts: 3 },
+  } as any;
+}
+
+describe('processWabotInboundJob — comprehension flow replies', () => {
+  it('routes the tapped answer into processAnswer and sends the reply bundle', async () => {
+    const mocks = makeMocks();
+    mocks.mediaMetaDataService.createTextMedia.mockResolvedValue({
+      id: 'tap-entity-1',
+    });
+    mocks.literacyLessonService.processAnswer
+      .mockResolvedValueOnce({
+        stateTransitionIds: ['opt-9-comprehension-complete'],
+        isComplete: true,
+      })
+      .mockResolvedValueOnce({
+        stateTransitionIds: ['sentence-start-sentence-initial'],
+        isComplete: false,
+        sentenceText: 'अब कमल',
+      });
+
+    await runJob(createInteractiveJob('{"answer_id":"opt-9"}'), mocks);
+
+    expect(mocks.mediaMetaDataService.createTextMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'opt-9',
+        media_details: { nfm_reply: true },
+      }),
+    );
+    expect(mocks.literacyLessonService.processAnswer).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        user_message_id: 'tap-entity-1',
+        comprehension_answer_id: 'opt-9',
+      }),
+    );
+    // Lesson completed → next lesson chained, sentence text sent as text item.
+    expect(mocks.literacyLessonService.processAnswer).toHaveBeenCalledTimes(2);
+    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
+    expect(media).toContainEqual({ type: 'text', body: 'अब कमल' });
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'pp.path',
+      'comprehension-answer',
+    );
+    // No activity thresholds on tap turns.
+    expect(mocks.userActivityService.getTodayActiveTime).not.toHaveBeenCalled();
+  });
+
+  it('skips (no send, no rows) when the lesson was not awaiting an answer', async () => {
+    const mocks = makeMocks();
+    mocks.mediaMetaDataService.createTextMedia.mockResolvedValue({
+      id: 'tap-entity-1',
+    });
+    mocks.literacyLessonService.processAnswer.mockResolvedValue({
+      stateTransitionIds: [],
+      isComplete: false,
+      ignored: true,
+    });
+    await runJob(createInteractiveJob('{"answer_id":"opt-9"}'), mocks);
+    expect(mocks.wabotOutbound.sendMessage).not.toHaveBeenCalled();
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('pp.outcome', 'skipped');
+  });
+
+  it.each([
+    ['not json', 'garbage'],
+    ['missing answer_id', '{"other":"x"}'],
+    ['non-string answer_id', '{"answer_id":42}'],
+    ['oversized answer_id', `{"answer_id":"${'x'.repeat(200)}"}`],
+  ])('skips an unparseable nfm_reply (%s)', async (_label, responseJson) => {
+    const mocks = makeMocks();
+    await runJob(createInteractiveJob(responseJson), mocks);
+    expect(mocks.mediaMetaDataService.createTextMedia).not.toHaveBeenCalled();
+    expect(mocks.wabotOutbound.sendMessage).not.toHaveBeenCalled();
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('pp.outcome', 'skipped');
+  });
+});
+
+describe('processWabotInboundJob — outbound flow items', () => {
+  const FLOW_ENTITY = {
+    id: 'flow-media-1',
+    media_type: 'flow',
+    text: JSON.stringify({
+      question_text: 'कहानी किसके बारे में है?',
+      options: [
+        { id: 'opt-a', text: 'पहला', correct: true },
+        { id: 'opt-b', text: 'दूसरा', correct: false },
+        { id: 'opt-c', text: 'तीसरा', correct: false },
+      ],
+    }),
+  };
+
+  beforeEach(() => {
+    process.env.WHATSAPP_COMPREHENSION_FLOW_ID = 'flow-asset-1';
+  });
+  afterEach(() => {
+    delete process.env.WHATSAPP_COMPREHENSION_FLOW_ID;
+  });
+
+  it('sends the flow LAST with shuffled options titled A-C and records the row', async () => {
+    const mocks = makeMocks();
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({
+      audio: {
+        id: 'audio-9',
+        wa_media_url: 'wa-audio-9',
+        media_details: { mime_type: 'audio/mpeg' },
+      },
+      flow: FLOW_ENTITY,
+    });
+    await runJob(createAudioJob(), mocks);
+
+    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
+    const flowItem = media[media.length - 1];
+    expect(flowItem.type).toBe('flow');
+    expect(flowItem.flow.flow_id).toBe('flow-asset-1');
+    expect(flowItem.flow.screen).toBe('COMPREHENSION');
+    expect(flowItem.flow.data.question_text).toBe('कहानी किसके बारे में है?');
+    expect(flowItem.flow.data.options.map((o: any) => o.title)).toEqual([
+      'A',
+      'B',
+      'C',
+    ]);
+    expect(flowItem.flow.data.options.map((o: any) => o.id).sort()).toEqual([
+      'opt-a',
+      'opt-b',
+      'opt-c',
+    ]);
+    expect(mocks.outboundMessages.recordSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: expect.arrayContaining([
+          expect.objectContaining({ media_metadata_id: 'flow-media-1' }),
+        ]),
+      }),
+    );
+  });
+
+  it('shuffles the option order across sends', async () => {
+    const orders = new Set<string>();
+    for (let i = 0; i < 25; i++) {
+      const mocks = makeMocks();
+      mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
+        { flow: FLOW_ENTITY },
+      );
+      await runJob(createAudioJob(), mocks);
+      const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
+      const flowItem = media[media.length - 1];
+      orders.add(flowItem.flow.data.options.map((o: any) => o.id).join(','));
+    }
+    expect(orders.size).toBeGreaterThan(1);
+  });
+
+  it('skips the flow item (rest of bundle intact) when the flow env id is missing', async () => {
+    delete process.env.WHATSAPP_COMPREHENSION_FLOW_ID;
+    const mocks = makeMocks();
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({
+      text: { id: 'text-1', text: 'शाबाश!' },
+      flow: FLOW_ENTITY,
+    });
+    await runJob(createAudioJob(), mocks);
+    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
+    expect(media.some((m: any) => m.type === 'flow')).toBe(false);
+    expect(media.some((m: any) => m.type === 'text')).toBe(true);
+  });
+
+  it('skips a flow row with a malformed payload', async () => {
+    const mocks = makeMocks();
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({
+      text: { id: 'text-1', text: 'शाबाश!' },
+      flow: { id: 'flow-bad', text: '{"nope":1}' },
+    });
+    await runJob(createAudioJob(), mocks);
+    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
+    expect(media.some((m: any) => m.type === 'flow')).toBe(false);
+  });
+});

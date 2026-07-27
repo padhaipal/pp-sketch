@@ -147,3 +147,24 @@ This enforces the max-length rule and avoids repeating any of the last `RECENT_W
 6.) **Safety fallback.** If the filtered list is empty (should not happen given the word list size), fall back to a random two-letter word from the full word list and log a WARN.
 
 7.) Return the selected word.
+
+## 2026-07: passages, comprehension, new level thresholds
+
+- MAX_LESSON_LEVEL restored to 12. Level ≥ 8 selects a random ready reading
+  passage (media_details.role='passage', media_details.level = level) instead
+  of random word-list sentences; recently-lessoned passages (last 10) are
+  excluded; falls back to nearest level, then to a level-7 word lesson.
+- Sentence-band progression (base ≥ 8): same done-rows metric, new
+  thresholds via `third_done_rn` (position of the 3rd most recent done row in
+  the last 18): ≤9 → +2, ≤12 → +1, ≤17 → hold, >17 → −1; <3 completions →
+  hold. Word-band logic (≤7) unchanged; keep-window is now explicitly
+  bounded at 15 rows (`rn <= $6`).
+- literacy_lesson_states gained `passage_id` (FK → media_metadata, persisted
+  from snapshot.context.passageId); `word` is nullable (CHECK word OR
+  passage_id).
+- `processAnswer` accepts `comprehension_answer_id` (nfm_reply option id):
+  bypasses staleness, validates the id belongs to the current lesson's
+  passage (JOIN option → question → passage), sends COMPREHENSION_ANSWER,
+  persists answer/answer_correct/level/passage_id, returns the
+  `${answerId}-comprehension-complete` stid. Invalid/mistimed answers return
+  `{ignored: true}` and persist nothing.
