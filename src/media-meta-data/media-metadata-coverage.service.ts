@@ -17,6 +17,7 @@ function emptyCounts(): MediaTypeCounts {
     video: 0,
     image: 0,
     sticker: 0,
+    flow: 0,
   };
 }
 

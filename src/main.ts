@@ -63,6 +63,8 @@ async function bootstrap() {
   // global default parser so the specific route matches first.
   app.use('/media-meta-data/elevenlabs-generate', json({ limit: '5mb' }));
   app.use('/media-meta-data/heygen-generate', json({ limit: '5mb' }));
+  // LLM seeding requests carry full prompts (messages up to 50k chars each).
+  app.use('/media-meta-data/llm-generate', json({ limit: '5mb' }));
   // Default body parsers (Nest's built-in parser is disabled above).
   app.use(json());
   app.use(urlencoded({ extended: true }));

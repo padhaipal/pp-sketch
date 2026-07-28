@@ -9,7 +9,11 @@ import { UserActivityService } from '../../../users/user-activity.service';
 import { MediaMetaDataService } from '../../../media-meta-data/media-meta-data.service';
 import { LiteracyLessonService } from '../../../literacy/literacy-lesson/literacy-lesson.service';
 import { WabotOutboundService } from '../outbound/outbound.service';
-import { OutboundMediaItem } from '../outbound/outbound.dto';
+import {
+  COMPREHENSION_FLOW_SCREEN,
+  OutboundMediaItem,
+} from '../outbound/outbound.dto';
+import type { FlowMediaPayload } from '../../../media-meta-data/llm-generate.dto';
 import {
   startChildSpanWithContext,
   injectCarrier,
@@ -304,11 +308,16 @@ export async function processWabotInboundJob(
         return;
       }
 
-      // 4. Check timestamp (20 second staleness)
+      // 4. Check timestamp (20 second staleness). Interactive replies are
+      // exempt: a comprehension flow tap legitimately arrives minutes after
+      // the flow message was sent.
       const tsRaw = parseInt(payload.message.timestamp, 10);
       const tsMs = tsRaw <= 9_999_999_999 ? tsRaw * 1000 : tsRaw;
 
-      if (Date.now() - tsMs > 20_000) {
+      if (
+        payload.message.type !== 'interactive' &&
+        Date.now() - tsMs > 20_000
+      ) {
         path = 'stale-skip';
         logger.warn(
           `Message from ${toLogId(payload.message.from)} is older than 20s — skipping`,
@@ -317,8 +326,59 @@ export async function processWabotInboundJob(
         return;
       }
 
-      // 5. Non-audio message — send "audio only" video
-      if (payload.message.type !== 'audio') {
+      // 4b. Comprehension flow submission (interactive → nfm_reply). The
+      // answer id inside response_json is untrusted device input —
+      // processAnswer validates it against the current lesson's passage and
+      // returns {ignored: true} for anything mistimed or forged.
+      let userMessageId: string;
+      let stateTransitionIds: string[];
+      let sentenceText: string | undefined;
+
+      if (payload.message.type === 'interactive') {
+        path = 'comprehension-answer';
+        const answerId = parseNfmReplyAnswerId(payload.message.interactive);
+        if (!answerId) {
+          logger.warn(
+            `Unparseable nfm_reply from ${toLogId(user.external_id)} — skipping`,
+          );
+          outcome = 'skipped';
+          return;
+        }
+
+        // Anchor row for the lesson-state FK (the tap is the user's message).
+        const tapEntity = await mediaMetaDataService.createTextMedia({
+          text: answerId,
+          user,
+          media_details: { nfm_reply: true },
+        });
+        userMessageId = tapEntity.id;
+
+        const result1 = await literacyLessonService.processAnswer({
+          user,
+          user_message_id: userMessageId,
+          comprehension_answer_id: answerId,
+        });
+        if (result1.ignored) {
+          logger.warn(
+            `Comprehension answer ignored for ${toLogId(user.external_id)} — no lesson awaiting it`,
+          );
+          outcome = 'skipped';
+          return;
+        }
+        stateTransitionIds = [...result1.stateTransitionIds];
+        sentenceText = result1.sentenceText;
+
+        // Lesson complete — chain the next lesson's prompt, like the audio
+        // path does.
+        if (result1.isComplete) {
+          const result2 = await literacyLessonService.processAnswer({
+            user,
+            user_message_id: userMessageId,
+          });
+          stateTransitionIds.push(...result2.stateTransitionIds);
+          sentenceText = result2.sentenceText;
+        }
+      } else if (payload.message.type !== 'audio') {
         path = 'non-audio-redirect';
         const audioOnlyMedia =
           await mediaMetaDataService.findMediaByStateTransitionId(
@@ -355,76 +415,82 @@ export async function processWabotInboundJob(
         }
         outcome = 'success';
         return;
-      }
-
-      // 6. Process audio message
-      path = 'audio-reply';
-      const audioEntity = await mediaMetaDataService.createWhatsappAudioMedia({
-        wa_media_url: payload.message.audio!.url,
-        user,
-        otel_carrier: injectCarrier(span),
-      });
-      const userMessageId = audioEntity.id;
-
-      try {
-        await rearmHailMary({
-          user_id: user.id,
-          user_external_id: user.external_id,
-          user_message_id: audioEntity.id,
-          otel_carrier: injectCarrier(span),
-        });
-      } catch (err) {
-        logger.warn(
-          `rearmHailMary failed for user ${toLogId(user.external_id)}: ${(err as Error).message}`,
+      } else {
+        // 6. Process audio message
+        path = 'audio-reply';
+        const audioEntity = await mediaMetaDataService.createWhatsappAudioMedia(
+          {
+            wa_media_url: payload.message.audio!.url,
+            user,
+            otel_carrier: injectCarrier(span),
+          },
         );
-      }
+        userMessageId = audioEntity.id;
 
-      // On retry, wipe any partial DB writes from prior attempts so
-      // processAnswer runs against a clean slate for this user_message_id.
-      if (job.attemptsMade > 0) {
-        await literacyLessonService.cleanupPartialState(userMessageId);
-      }
+        try {
+          await rearmHailMary({
+            user_id: user.id,
+            user_external_id: user.external_id,
+            user_message_id: audioEntity.id,
+            otel_carrier: injectCarrier(span),
+          });
+        } catch (err) {
+          logger.warn(
+            `rearmHailMary failed for user ${toLogId(user.external_id)}: ${(err as Error).message}`,
+          );
+        }
 
-      // 7. Find transcripts
-      const transcripts = await mediaMetaDataService.findTranscripts({
-        media_metadata: audioEntity,
-      });
+        // On retry, wipe any partial DB writes from prior attempts so
+        // processAnswer runs against a clean slate for this user_message_id.
+        if (job.attemptsMade > 0) {
+          await literacyLessonService.cleanupPartialState(userMessageId);
+        }
 
-      if (transcripts.length === 0) {
-        logger.error(`No transcripts found for audio ${audioEntity.id}`);
-        throw new Error('No transcripts');
-      }
+        // 7. Find transcripts
+        const transcripts = await mediaMetaDataService.findTranscripts({
+          media_metadata: audioEntity,
+        });
 
-      // 8. Process answer
-      const result1 = await literacyLessonService.processAnswer({
-        user,
-        transcripts,
-        user_message_id: userMessageId,
-      });
-      const stateTransitionIds: string[] = [...result1.stateTransitionIds];
-      let sentenceText = result1.sentenceText;
+        if (transcripts.length === 0) {
+          logger.error(`No transcripts found for audio ${audioEntity.id}`);
+          throw new Error('No transcripts');
+        }
 
-      // If lesson complete, start fresh
-      if (result1.isComplete) {
-        const result2 = await literacyLessonService.processAnswer({
+        // 8. Process answer
+        const result1 = await literacyLessonService.processAnswer({
           user,
+          transcripts,
           user_message_id: userMessageId,
         });
-        stateTransitionIds.push(...result2.stateTransitionIds);
-        sentenceText = result2.sentenceText;
-      }
+        stateTransitionIds = [...result1.stateTransitionIds];
+        sentenceText = result1.sentenceText;
 
-      const { withLatestTurn, withoutLatestTurn } =
-        await userActivityService.getTodayActiveTime(user.id);
-      for (const minutes of ACTIVE_MINUTE_THRESHOLDS) {
-        const thresholdMs = minutes * 60_000;
-        if (withoutLatestTurn < thresholdMs && withLatestTurn >= thresholdMs) {
-          stateTransitionIds.unshift(
-            `threshold-reached-${minutes}-active-minutes-today`,
-          );
-          // A single turn adds <120s of active time (ACTIVE_GAP_THRESHOLD_MS)
-          // while thresholds are ≥5min apart, so at most one can cross.
-          break;
+        // If lesson complete, start fresh
+        if (result1.isComplete) {
+          const result2 = await literacyLessonService.processAnswer({
+            user,
+            user_message_id: userMessageId,
+          });
+          stateTransitionIds.push(...result2.stateTransitionIds);
+          sentenceText = result2.sentenceText;
+        }
+
+        // Voice-turn-driven milestones only — a flow tap adds no active time.
+        const { withLatestTurn, withoutLatestTurn } =
+          await userActivityService.getTodayActiveTime(user.id);
+        for (const minutes of ACTIVE_MINUTE_THRESHOLDS) {
+          const thresholdMs = minutes * 60_000;
+          if (
+            withoutLatestTurn < thresholdMs &&
+            withLatestTurn >= thresholdMs
+          ) {
+            stateTransitionIds.unshift(
+              `threshold-reached-${minutes}-active-minutes-today`,
+            );
+            // A single turn adds <120s of active time (ACTIVE_GAP_THRESHOLD_MS)
+            // while thresholds are ≥5min apart, so at most one can cross.
+            break;
+          }
         }
       }
 
@@ -519,6 +585,106 @@ export async function processWabotInboundJob(
   }
 }
 
+// Static copy for the flow message wrapper; the question itself renders
+// inside the flow.
+const FLOW_MESSAGE_BODY = 'सवाल का जवाब देने के लिए नीचे बटन दबाओ 👇';
+const FLOW_MESSAGE_CTA = 'जवाब दें';
+const FLOW_OPTION_LETTERS = ['A', 'B', 'C', 'D'] as const;
+// Meta cap on RadioButtonsGroup option descriptions (also enforced at
+// creation time in llm-generate.dto.ts and at send time in wabot-sketch).
+const FLOW_OPTION_DESCRIPTION_MAX = 300;
+
+// Extracts the tapped option id from an nfm_reply. response_json comes from
+// the user's device — parse defensively, accept only a modest-length string
+// answer_id, and let processAnswer do the real ownership validation.
+function parseNfmReplyAnswerId(
+  interactive?: { type: string; nfm_reply?: { response_json: string } } | null,
+): string | null {
+  const raw = interactive?.nfm_reply?.response_json;
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 10_000) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const answerId = parsed?.answer_id;
+    if (
+      typeof answerId === 'string' &&
+      answerId.length > 0 &&
+      answerId.length <= 100
+    ) {
+      return answerId;
+    }
+  } catch {
+    // fall through — unparseable device payload
+  }
+  return null;
+}
+
+function shuffled<T>(items: readonly T[]): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+// Builds the outbound flow item from a media_type='flow' row: parse the
+// stored FlowMediaPayload, shuffle the options (fresh order every send) and
+// assign the fixed A-D titles. Config/data problems log an error and skip
+// the item — the rest of the bundle still goes out.
+function appendFlowItem(
+  items: OutboundMediaItem[],
+  entity: { id: string; text?: string | null },
+  records?: OutboundSentItem[],
+  stateTransitionId?: string,
+): void {
+  const flowId = process.env.WHATSAPP_COMPREHENSION_FLOW_ID;
+  if (!flowId) {
+    logger.error(
+      'WHATSAPP_COMPREHENSION_FLOW_ID is not set — cannot send comprehension flow',
+    );
+    return;
+  }
+  let payload: FlowMediaPayload;
+  try {
+    payload = JSON.parse(entity.text ?? '') as FlowMediaPayload;
+  } catch {
+    logger.error(`Flow media ${entity.id} has unparseable payload — skipping`);
+    return;
+  }
+  if (
+    typeof payload?.question_text !== 'string' ||
+    !Array.isArray(payload.options) ||
+    payload.options.length < 2 ||
+    payload.options.length > FLOW_OPTION_LETTERS.length
+  ) {
+    logger.error(`Flow media ${entity.id} has malformed payload — skipping`);
+    return;
+  }
+  const options = shuffled(payload.options).map((option, i) => ({
+    id: option.id,
+    title: FLOW_OPTION_LETTERS[i],
+    description: option.text.slice(0, FLOW_OPTION_DESCRIPTION_MAX),
+  }));
+  items.push({
+    type: 'flow',
+    flow: {
+      flow_id: flowId,
+      body: FLOW_MESSAGE_BODY,
+      cta: FLOW_MESSAGE_CTA,
+      screen: COMPREHENSION_FLOW_SCREEN,
+      data: { question_text: payload.question_text, options },
+    },
+  });
+  if (records) {
+    records.push({
+      media_metadata_id: entity.id,
+      state_transition_id: stateTransitionId ?? null,
+    });
+  }
+}
+
 function appendMediaItems(
   items: OutboundMediaItem[],
   media: FindMediaByStateTransitionIdResult,
@@ -541,6 +707,11 @@ function appendMediaItems(
         state_transition_id: stateTransitionId ?? null,
       });
     }
+  }
+  // Flows go LAST so the question lands after any praise/prompt media (order
+  // within one bundle is best-effort on WhatsApp's side regardless).
+  if (media.flow) {
+    appendFlowItem(items, media.flow, records, stateTransitionId);
   }
 }
 

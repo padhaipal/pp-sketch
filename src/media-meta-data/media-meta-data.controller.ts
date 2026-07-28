@@ -93,6 +93,63 @@ export class MediaMetaDataController {
     });
   }
 
+  // Paginated distinct comprehension stids for the dashboard's bottom table
+  // (thousands of passages eventually — never unbounded).
+  @Get('comprehension-stids')
+  async listComprehensionStids(
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.mediaMetaDataService.listComprehensionStids({
+      limit: limit !== undefined ? parseInt(limit, 10) : undefined,
+      offset: offset !== undefined ? parseInt(offset, 10) : undefined,
+    });
+  }
+
+  // Declared before @Delete(':id') so 'by-state-transition-id' is not
+  // captured as an id.
+  @Delete('by-state-transition-id')
+  async deleteByStateTransitionId(
+    @Query('state_transition_id') stid: string,
+  ): Promise<{ deleted: number }> {
+    if (!stid || typeof stid !== 'string') {
+      throw new BadRequestException('state_transition_id query param required');
+    }
+    return this.mediaMetaDataService.deleteByStateTransitionId(stid);
+  }
+
+  // Synchronous seeding endpoint (no queue): LLM generation → validation →
+  // zero-context solvability filter → entity tree insert. Slow by nature
+  // (~1-2 min per question for the 100-run filter); the dashboard sends one
+  // generation per request and shows per-question outcomes.
+  @Post('llm-generate')
+  @HttpCode(HttpStatus.OK)
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        provider: { type: 'string' },
+        model: { type: 'string' },
+        messages: { type: 'array' },
+      },
+    },
+  })
+  @ApiResponse({ status: 200 })
+  async llmGenerate(@Body() body: unknown) {
+    const span = startRootSpan('llm-generate-controller');
+    try {
+      const ctxWithSpan = trace.setSpan(context.active(), span);
+      return await context.with(ctxWithSpan, () =>
+        this.mediaMetaDataService.createLlmGeneratedMedia(
+          body,
+          injectCarrierFromContext(ctxWithSpan),
+        ),
+      );
+    } finally {
+      span.end();
+    }
+  }
+
   @Delete(':id')
   async deleteMedia(@Param('id') id: string): Promise<DeleteResponse> {
     await this.mediaMetaDataService.markRolledBack(id);

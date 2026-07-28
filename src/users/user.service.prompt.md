@@ -48,3 +48,18 @@ create(options: CreateUserOptions): Promise<User>
 * One atomic query to create the user and resolve the referrer (if provided). After write, if a referrer was set: run the same recursive CTE cycle check as in update() — if it returns any rows, roll back and throw BadRequestException.
 * Populate the cache for both userById and userByExternalId keys with CACHE_TTL.USER.
 * Return the newly created user entity.
+
+## getLiteracyTestScores (2026-07)
+
+Digital-proxy literacy test scores as rolling windows (latest + full history):
+- NIPUN g1: last 2 level-8 sentence FIRST attempts (success = the
+  `…-sentence-comprehension-correct-first` stid; drill/wrong-retry rows are
+  the failures; retry successes never count).
+- NIPUN g2/g3: last 4 level-11 / level-12 'retrieve' comprehension answers.
+- AMPL-B (level ≥ 12 only): per narrative/expository stimulus, buckets of 6
+  retrieve + 7 interpret/infer/integrate + 3 evaluate ('reflect' in the paper
+  test = 'evaluate'); combined score = total-correct/32, emitted only once
+  every bucket window has filled (chronological replay).
+Question/passage types come from media_details on the option's question row
+and the lesson's passage row (complex queries #1/#2 in the method). Exposed
+at GET /users/:id/literacy-test-scores.

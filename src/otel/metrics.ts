@@ -73,6 +73,25 @@ export const drillWordMediaCreateFailure = meter.createCounter(
   },
 );
 
+// Duration of one LLM chat-completions call (src/interfaces/llm), including
+// in-process retries. Attributes: provider ("openai" | "anthropic" | "google"
+// | "mistral" | "sarvam"), outcome ("success" | "error"). Request counts and
+// error rates are derived from the histogram count. Boundaries reflect the
+// LLM_TIME_CAP default of 45 s plus retry headroom.
+export const llmRequestDuration = meter.createHistogram(
+  'pp.llm.request_duration_ms',
+  {
+    description:
+      'Milliseconds per LLM chat-completions call, retries included.',
+    unit: 'ms',
+    advice: {
+      explicitBucketBoundaries: [
+        250, 500, 1000, 2500, 5000, 10000, 20000, 45000, 90000, 180000,
+      ],
+    },
+  },
+);
+
 // Counts failed writes to the outbound_messages audit log (recordSent never
 // throws — delivery proceeds, but the audit trail has a hole). A non-zero
 // rate means "what did we send this user" queries are incomplete for the

@@ -21,6 +21,7 @@ class TypeMatchesPayloadConstraint implements ValidatorConstraintInterface {
       text: dto.text,
       video: dto.video,
       system: dto.system,
+      interactive: dto.interactive,
     };
 
     const presentFields = Object.entries(typeToField).filter(
@@ -32,7 +33,7 @@ class TypeMatchesPayloadConstraint implements ValidatorConstraintInterface {
 
   defaultMessage(args: ValidationArguments): string {
     const dto = args.object as MessageDto;
-    return `type "${dto.type}" must match the populated field. Exactly one of audio, text, video or system must be present and it must match type.`;
+    return `type "${dto.type}" must match the populated field. Exactly one of audio, text, video, system or interactive must be present and it must match type.`;
   }
 }
 
@@ -57,6 +58,31 @@ export class SystemDto {
 
   @IsString()
   wa_id!: string;
+}
+
+// WhatsApp Flow completion (the child tapped submit on the comprehension
+// flow). name is always "flow", body always "Sent"; response_json is the
+// stringified JSON of the flow's Complete action payload — UNTRUSTED user
+// input, parsed defensively in the processor.
+export class NfmReplyDto {
+  @IsString()
+  name!: string;
+
+  @IsString()
+  body!: string;
+
+  @IsString()
+  response_json!: string;
+}
+
+export class InteractiveDto {
+  @IsString()
+  type!: string; // 'nfm_reply' is the only variant we handle
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => NfmReplyDto)
+  nfm_reply?: NfmReplyDto;
 }
 
 export class MessageDto {
@@ -91,6 +117,11 @@ export class MessageDto {
   @ValidateNested()
   @Type(() => SystemDto)
   system?: SystemDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => InteractiveDto)
+  interactive?: InteractiveDto;
 
   @Validate(TypeMatchesPayloadConstraint)
   private readonly typeMatchesPayload!: true;

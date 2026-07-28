@@ -60,6 +60,78 @@ const MATRA_TO_VOWEL: Record<string, string> = {
 type MarkArgs = { correctAnswer: string; studentAnswer: string };
 type SentenceArgs = { words: string[]; transcripts: string[] };
 
+// Every code point that appears in word-list.json (52 as of 2026-07-27:
+// anusvara + independent vowels + consonants + matras; notably NO halant and
+// NO nukta forms). The letter loop (word → letter → image → letterImage) can
+// only teach these — a word containing anything outside this set (conjuncts,
+// nukta consonants, rare vowels) must never be selected as a sentence drill
+// word. Regenerate by unioning the code points of word-list.json if the list
+// changes.
+export const TEACHABLE_GRAPHEMES = new Set([
+  'ं',
+  'अ',
+  'आ',
+  'इ',
+  'ई',
+  'उ',
+  'ऊ',
+  'ऋ',
+  'ए',
+  'ऐ',
+  'ओ',
+  'औ',
+  'क',
+  'ख',
+  'ग',
+  'घ',
+  'च',
+  'छ',
+  'ज',
+  'झ',
+  'ट',
+  'ठ',
+  'ड',
+  'ढ',
+  'ण',
+  'त',
+  'थ',
+  'द',
+  'ध',
+  'न',
+  'प',
+  'फ',
+  'ब',
+  'भ',
+  'म',
+  'य',
+  'र',
+  'ल',
+  'व',
+  'श',
+  'ष',
+  'स',
+  'ह',
+  'ा',
+  'ि',
+  'ी',
+  'ु',
+  'ू',
+  'े',
+  'ै',
+  'ो',
+  'ौ',
+]);
+
+export interface SentenceWordAssessment {
+  word: string;
+  // Best (lowest) grapheme-level levenshtein distance of this word against
+  // any transcript token (family-equivalent graphemes substitute for free;
+  // markWord acceptance — hardcodes, schwa deletion, etc. — counts as 0).
+  distance: number;
+  // Whether every code point of the word is in TEACHABLE_GRAPHEMES.
+  teachable: boolean;
+}
+
 /* ───────── utility class ───────── */
 class EvaluateAnswer {
   /* helpers */
@@ -697,22 +769,55 @@ class EvaluateAnswer {
     return false;
   }
 
+  // Grapheme-level levenshtein where family-equivalent graphemes substitute
+  // for free — a phoneme-family variant is the same sound, not an error.
+  private static levenshtein(a: string[], b: string[]): number {
+    const rows = a.length + 1;
+    const cols = b.length + 1;
+    let prev = Array.from({ length: cols }, (_, j) => j);
+    for (let i = 1; i < rows; i++) {
+      const curr = new Array<number>(cols);
+      curr[0] = i;
+      for (let j = 1; j < cols; j++) {
+        const same = a[i - 1] === b[j - 1] || sameFamily(a[i - 1], b[j - 1]);
+        curr[j] = Math.min(
+          prev[j] + 1,
+          curr[j - 1] + 1,
+          prev[j - 1] + (same ? 0 : 1),
+        );
+      }
+      prev = curr;
+    }
+    return prev[cols - 1];
+  }
+
+  // A token "matches" an expected word when word-lesson acceptance says so
+  // (families, hardcodes, schwa deletion, …) OR it is within levenshtein
+  // distance 1 — per the 2026-07 leniency rule, a sentence attempt only fails
+  // on a word that is 2+ graphemes off.
+  private static tokenMatchesLeniently(word: string, token: string): boolean {
+    if (this.markWord({ correctAnswer: word, studentAnswer: token })) {
+      return true;
+    }
+    return (
+      this.levenshtein(
+        Array.from(this.clean(word)),
+        Array.from(this.clean(token)),
+      ) <= 1
+    );
+  }
+
   private static matchesInOrder(words: string[], tokens: string[]): boolean {
     let matched = 0;
     for (let i = 0; i < tokens.length; i++) {
-      if (
-        this.markWord({
-          correctAnswer: words[matched],
-          studentAnswer: tokens[i],
-        })
-      ) {
+      if (this.tokenMatchesLeniently(words[matched], tokens[i])) {
         matched++;
       } else if (
         i + 1 < tokens.length &&
-        this.markWord({
-          correctAnswer: words[matched],
-          studentAnswer: `${tokens[i]} ${tokens[i + 1]}`,
-        })
+        this.tokenMatchesLeniently(
+          words[matched],
+          `${tokens[i]} ${tokens[i + 1]}`,
+        )
       ) {
         // The STT engines split some multi-syllable words in two ("अमर रस"
         // for अमरस) and markWord's .includes() hardcodes only fire on the
@@ -752,6 +857,65 @@ class EvaluateAnswer {
       if (matches > best) best = matches;
     }
     return best / wordChars.length;
+  }
+
+  // Per-word best levenshtein distance against the transcripts (each split at
+  // the '~' engine seam like markSentence). markWord acceptance → 0; joined
+  // adjacent token pairs are tried so STT-split words ("अमर रस" for अमरस)
+  // don't inflate the distance; an empty/unmatched transcript costs the whole
+  // word.
+  static assessSentenceWords({
+    words,
+    transcripts,
+  }: SentenceArgs): SentenceWordAssessment[] {
+    const segments = transcripts.flatMap((t) => t.split('~'));
+    return words.map((word) => {
+      const wordChars = Array.from(this.clean(word));
+      let distance = wordChars.length;
+      outer: for (const segment of segments) {
+        if (this.markWord({ correctAnswer: word, studentAnswer: segment })) {
+          distance = 0;
+          break outer;
+        }
+        const tokens = this.tokenize(segment);
+        for (let i = 0; i < tokens.length; i++) {
+          const single = this.levenshtein(
+            wordChars,
+            Array.from(this.clean(tokens[i])),
+          );
+          if (single < distance) distance = single;
+          if (i + 1 < tokens.length) {
+            const joined = this.levenshtein(
+              wordChars,
+              Array.from(this.clean(tokens[i] + tokens[i + 1])),
+            );
+            if (joined < distance) distance = joined;
+          }
+          if (distance === 0) break outer;
+        }
+      }
+      const teachable = Array.from(word.normalize('NFC')).every((ch) =>
+        TEACHABLE_GRAPHEMES.has(ch),
+      );
+      return { word, distance, teachable };
+    });
+  }
+
+  // Drill-word selection for a failed sentence attempt: among words that are
+  // 2+ graphemes off, pick the teachable one with the LARGEST distance
+  // (random on ties). Returns null when no teachable word qualifies — every
+  // badly-read word contains a conjunct/nukta/other untaught grapheme (or the
+  // failure was ordering, not any single word) — in which case the machine
+  // retries the sentence instead of entering the word loop.
+  static selectDrillWord({ words, transcripts }: SentenceArgs): string | null {
+    const failing = this.assessSentenceWords({ words, transcripts }).filter(
+      (a) => a.distance >= 2,
+    );
+    const teachable = failing.filter((a) => a.teachable);
+    if (teachable.length === 0) return null;
+    const maxDistance = Math.max(...teachable.map((a) => a.distance));
+    const worst = teachable.filter((a) => a.distance === maxDistance);
+    return worst[Math.floor(Math.random() * worst.length)].word;
   }
 
   // Loop over the words of the correct answer and return the one with the
@@ -852,6 +1016,10 @@ export type { MarkArgs, SentenceArgs };
 export const markWord = (args: MarkArgs) => EvaluateAnswer.markWord(args);
 export const markSentence = (args: SentenceArgs) =>
   EvaluateAnswer.markSentence(args);
+export const assessSentenceWords = (args: SentenceArgs) =>
+  EvaluateAnswer.assessSentenceWords(args);
+export const selectDrillWord = (args: SentenceArgs) =>
+  EvaluateAnswer.selectDrillWord(args);
 export const rankWorstWord = (args: SentenceArgs) =>
   EvaluateAnswer.rankWorstWord(args);
 export const markImage = (args: MarkArgs) => EvaluateAnswer.markImage(args);

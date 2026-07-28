@@ -4,7 +4,7 @@ import {
   markLetter,
   markImage,
   markSentence,
-  rankWorstWord,
+  selectDrillWord,
   detectIncorrectEndMatra,
   detectIncorrectMiddleMatra,
   detectInsertion,
@@ -16,6 +16,11 @@ import { identifyCharacterStatus } from './identify-character-status.utils';
 export const WELCOME_MESSAGE_STATE_TRANSITION_ID = 'welcome-message';
 export const AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID = 'audio-only-request';
 export const STALE_LESSON_RESTART_STATE_TRANSITION_ID = 'stale-lesson-restart';
+// Sentence failed but no teachable drill word exists (every badly-read word
+// contains a conjunct/nukta/other grapheme outside TEACHABLE_GRAPHEMES, or
+// the failure was ordering) — the child simply retries the sentence.
+export const SENTENCE_WRONG_RETRY_STATE_TRANSITION_ID =
+  'sentence-sentence-wrong-retry';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -23,6 +28,10 @@ interface Context {
   word: string;
   // Words of the sentence in display order; null for a plain word lesson.
   sentence: string[] | null;
+  // media_metadata id of the reading passage this sentence lesson came from.
+  // Null for word lessons (and for pre-passage snapshots, which can no longer
+  // reach the comprehension state anyway). Drives the comprehension stids.
+  passageId: string | null;
   sentenceErrors: number;
   wrongLetters: string[];
   wordErrors: number;
@@ -46,7 +55,7 @@ function normalizeKeys(keys: CounterKey | CounterKey[]): CounterKey[] {
   return Array.isArray(keys) ? keys : [keys];
 }
 
-type Events = {
+type AnswerEvent = {
   type: 'ANSWER';
   studentAnswer: string;
   // Per-STT-engine transcripts. Sentence matching must never run over the
@@ -55,9 +64,21 @@ type Events = {
   studentTranscripts?: string[];
 };
 
+// The child tapped an option in the comprehension WhatsApp Flow and hit
+// submit. The service resolves the selected option entity (answerId is its
+// media_metadata id) and its correctness before sending this event — the
+// machine never touches the database.
+type ComprehensionAnswerEvent = {
+  type: 'COMPREHENSION_ANSWER';
+  answerId: string;
+  answerCorrect: boolean;
+};
+
+type Events = AnswerEvent | ComprehensionAnswerEvent;
+
 // Sentence guards fall back to the combined answer when per-engine
 // transcripts are absent (e.g. a snapshot driven by an older caller).
-function transcriptsOf(event: Events): string[] {
+function transcriptsOf(event: AnswerEvent): string[] {
   return event.studentTranscripts && event.studentTranscripts.length > 0
     ? event.studentTranscripts
     : [event.studentAnswer];
@@ -75,6 +96,7 @@ export const machine = setup({
       word: string;
       userMessageId: string;
       sentence?: string[];
+      passageId?: string;
     },
   },
 
@@ -85,6 +107,9 @@ export const machine = setup({
         fn: (args: { correctAnswer: string; studentAnswer: string }) => boolean;
       },
     ) => {
+      if (event.type !== 'ANSWER') {
+        return false;
+      }
       if (!context.answer || !event.studentAnswer) {
         throw new Error(
           'checkAnswer guard requires context.answer and event.studentAnswer to be set',
@@ -137,6 +162,7 @@ export const machine = setup({
     return {
       word: input.word,
       sentence,
+      passageId: input.passageId ?? null,
       sentenceErrors: 0,
       wrongLetters: [],
       wordErrors: 0,
@@ -178,8 +204,11 @@ export const machine = setup({
       ],
       on: {
         ANSWER: [
-          // Student read the whole sentence correctly on the first attempt,
-          // mark every letter of every word as correct.
+          // Student read the whole sentence correctly on the first attempt —
+          // mark every letter of every word correct and move on to the
+          // comprehension question (the flow media lives under the passage's
+          // `…-sentence-comprehension` stid; the -correct-first/-retry
+          // runtime stids are mapped back to it in the media lookup).
           {
             guard: and([
               ({ context, event }) =>
@@ -189,13 +218,13 @@ export const machine = setup({
                 }),
               ({ context }) => context.sentenceErrors === 0,
             ]),
-            target: 'complete',
+            target: 'comprehension',
             actions: [
               { type: 'clearPendingScores' },
               assign({ answerCorrect: () => true }),
               assign({
-                stateTransitionId: () =>
-                  'sentence-sentence-complete-correct-first',
+                stateTransitionId: ({ context }) =>
+                  `${context.passageId}-sentence-comprehension-correct-first`,
               }),
               assign({
                 pendingCorrect: ({ context }) =>
@@ -203,21 +232,21 @@ export const machine = setup({
               }),
             ],
           },
-          // Student read the whole sentence correctly on the retry,
-          // mark every letter of every word as correct.
+          // Student read the whole sentence correctly on the retry —
+          // mark every letter of every word correct, then comprehension.
           {
             guard: ({ context, event }) =>
               markSentence({
                 words: context.sentence ?? [],
                 transcripts: transcriptsOf(event),
               }),
-            target: 'complete',
+            target: 'comprehension',
             actions: [
               { type: 'clearPendingScores' },
               assign({ answerCorrect: () => true }),
               assign({
-                stateTransitionId: () =>
-                  'sentence-sentence-complete-correct-retry',
+                stateTransitionId: ({ context }) =>
+                  `${context.passageId}-sentence-comprehension-correct-retry`,
               }),
               assign({
                 pendingCorrect: ({ context }) =>
@@ -237,9 +266,16 @@ export const machine = setup({
               }),
             ],
           },
-          // First failed attempt: drill the worst-read word through the
-          // existing word lesson, then come back for the retry.
+          // First failed attempt with a teachable drill word (2+ graphemes
+          // off, largest distance, random ties, never a conjunct/nukta word):
+          // drill it through the existing word lesson, then come back for the
+          // retry.
           {
+            guard: ({ context, event }) =>
+              selectDrillWord({
+                words: context.sentence ?? [],
+                transcripts: transcriptsOf(event),
+              }) !== null,
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
@@ -247,10 +283,10 @@ export const machine = setup({
               { type: 'increment', params: { keys: 'sentenceErrors' } },
               assign({
                 word: ({ context, event }) =>
-                  rankWorstWord({
+                  selectDrillWord({
                     words: context.sentence ?? [],
                     transcripts: transcriptsOf(event),
-                  }),
+                  }) ?? context.word,
               }),
               assign({
                 stateTransitionId: ({ context }) =>
@@ -258,7 +294,60 @@ export const machine = setup({
               }),
             ],
           },
+          // First failed attempt but every badly-read word is unteachable
+          // (conjunct/nukta) or no single word is to blame: retry the whole
+          // sentence instead of entering the word loop.
+          {
+            target: 'sentence',
+            reenter: true,
+            actions: [
+              { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => false }),
+              { type: 'increment', params: { keys: 'sentenceErrors' } },
+              assign({
+                stateTransitionId: () =>
+                  SENTENCE_WRONG_RETRY_STATE_TRANSITION_ID,
+              }),
+            ],
+          },
         ],
+      },
+    },
+
+    // Awaiting the comprehension flow submission (nfm_reply → service →
+    // COMPREHENSION_ANSWER). No retry mechanism: one tap completes the
+    // lesson; the explanation media lives under the selected answer's
+    // `${answerId}-comprehension-complete` stid.
+    comprehension: {
+      on: {
+        COMPREHENSION_ANSWER: {
+          target: 'complete',
+          actions: [
+            { type: 'clearPendingScores' },
+            assign({
+              answerCorrect: ({ event }) => event.answerCorrect,
+              answer: ({ event }) => event.answerId,
+            }),
+            assign({
+              stateTransitionId: ({ event }) =>
+                `${event.answerId}-comprehension-complete`,
+            }),
+          ],
+        },
+        // A voice note while we're waiting for the flow tap: nudge by
+        // re-sending the comprehension flow, record nothing.
+        ANSWER: {
+          target: 'comprehension',
+          reenter: false,
+          actions: [
+            { type: 'clearPendingScores' },
+            assign({ answerCorrect: () => null }),
+            assign({
+              stateTransitionId: ({ context }) =>
+                `${context.passageId}-sentence-comprehension-correct-retry`,
+            }),
+          ],
+        },
       },
     },
 
