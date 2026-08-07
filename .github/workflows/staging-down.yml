@@ -1,0 +1,42 @@
+name: Staging Down
+
+# Removes the active deployments of the three staging APP services so they
+# stop billing (~$12-18/mo saved at 24/7). Postgres / Redis / volumes stay
+# up — they're cheap and the weekly mirror needs them. Any push to main
+# auto-deploys staging again (Railway git trigger), and "Staging Up" brings
+# it back on demand in ~1-2 min.
+#
+# Auth: RAILWAY_STAGING_TOKEN must be a PROJECT token scoped to the
+# *staging* environment (Project Settings → Tokens) — it cannot touch
+# production by construction.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly auto-off so a testing session forgotten in the evening costs
+    # at most a few hours. 06:00 UTC = 02:00 Boston / 11:30 IST — adjust to
+    # taste.
+    - cron: '0 6 * * *'
+
+permissions: {}
+
+jobs:
+  down:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_STAGING_TOKEN }}
+    steps:
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli
+
+      - name: Remove staging app deployments
+        run: |
+          set -euo pipefail
+          for svc in pp-sketch wabot-sketch pp-dashboard; do
+            echo "--- railway down: $svc"
+            # `railway down` removes the service's latest deployment.
+            # Tolerate services that are already down.
+            railway down --service "$svc" --yes \
+              || echo "$svc: down failed (already down?) — continuing"
+          done
