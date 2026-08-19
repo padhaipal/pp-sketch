@@ -151,7 +151,7 @@ describe('assessSentence', () => {
     expect(result.passed).toBe(true);
   });
 
-  it('labels an adjacent swap transposed, not two substitutions, and does not count it as errors', () => {
+  it('labels an adjacent swap transposed, not two substitutions, counting the pair as ONE error', () => {
     const words = ['नल', 'घर', 'में', 'है'];
     const result = assessSentence({
       words,
@@ -159,8 +159,29 @@ describe('assessSentence', () => {
     });
     expect(result.words[0].status).toBe('transposed');
     expect(result.words[1].status).toBe('transposed');
-    expect(result.errorCount).toBe(0);
+    // A transposition is a decoding error — one per PAIR, not per word.
+    expect(result.errorCount).toBe(1);
+    // Budget for 4 words is max(1, ceil(0.4)) = 1, so a single swap still passes.
     expect(result.passed).toBe(true);
+  });
+
+  it('counts two transposed pairs as two errors', () => {
+    const words = ['नल', 'घर', 'कलम', 'पतंग', 'सागर', 'बादल'];
+    const result = assessSentence({
+      words,
+      transcripts: ['घर नल कलम पतंग बादल सागर'],
+    });
+    expect(result.words.map((w) => w.status)).toEqual([
+      'transposed',
+      'transposed',
+      'correct',
+      'correct',
+      'transposed',
+      'transposed',
+    ]);
+    expect(result.errorCount).toBe(2);
+    // Budget for 6 words is 1 — two transposed pairs now fail the read.
+    expect(result.passed).toBe(false);
   });
 
   it('हिंदी target matched by हिन्दी transcript is correct', () => {

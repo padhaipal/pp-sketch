@@ -1214,12 +1214,14 @@ describe('UserService.getLiteracyTestScores', () => {
     const g2 = scores.nipun_grade_2;
     expect(g2.status).toBe('ok');
     expect(g2.attempts_available).toBe(5);
-    // Snapshot = most recent 4 of the pool at each qualifying prefix.
+    // Snapshot = most recent 4 of the pool at each qualifying prefix
+    // (prefix-recomputed, same method as MPL-B).
     expect(g2.history).toEqual([
       { at: day(4), score: 1, passed: true },
       { at: day(5), score: 0.75, passed: true },
     ]);
     expect(g2.latest).toEqual({ at: day(5), score: 0.75, passed: true });
+    expect(g2.latest).toBe(g2.history![g2.history!.length - 1]);
   });
 
   it('reports grade 2 insufficient data below four pooled attempts', async () => {
@@ -1252,6 +1254,30 @@ describe('UserService.getLiteracyTestScores', () => {
     expect(g3.attempts_available).toBe(4);
     expect(g3.latest).toEqual({ at: day(4), score: 0.75, passed: true });
     expect(scores.nipun_grade_2.attempts_available).toBe(1);
+  });
+
+  it('recomputes NIPUN grade 3 history over each prefix, latest = final entry', async () => {
+    const { svc } = scoreService({
+      answers: [
+        answer(1, true, 11, 'R1.1'),
+        answer(2, false, 12, 'R1.2'),
+        answer(3, true, 11, 'R1.3'),
+        answer(4, true, 12, 'R1.1'),
+        answer(5, false, 11, 'R1.2'),
+        answer(6, false, 12, 'R1.3'),
+      ],
+    });
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    const g3 = scores.nipun_grade_3;
+    expect(g3.status).toBe('ok');
+    // Prefix-recomputed snapshots (most recent 4 at each qualifying prefix,
+    // same method as MPL-B): t,f,t,t → t/f,t,t,f → t,t,f,f.
+    expect(g3.history).toEqual([
+      { at: day(4), score: 0.75, passed: true },
+      { at: day(5), score: 0.5, passed: false },
+      { at: day(6), score: 0.5, passed: false },
+    ]);
+    expect(g3.latest).toBe(g3.history![g3.history!.length - 1]);
   });
 
   // A 20-row MPL-B pool that satisfies every filter: R1.x ×14 (≥5),
