@@ -2,38 +2,36 @@
  * Zero-context solvability filter for LLM-generated comprehension questions.
  *
  * A well-designed passage question should NOT be answerable without the
- * passage. We send the question + options (no passage) to sarvam-105b 100
- * times, shuffling the option order every run, and reject the question if the
- * correct option is picked in more than 40% of valid runs (thresholds set
- * 2026-07-27; applies to 2-, 3- and 4-option questions alike).
+ * passage. We send the question + options (no passage) to the shared gate
+ * model 144 times, shuffling the option order every run, and reject the
+ * question if the correct option is picked in more than 40% of valid runs
+ * (threshold set 2026-07-27; applies to 2-, 3- and 4-option questions alike).
+ * 144 runs = the 4! = 24 option orderings × 6, so every ordering of a
+ * 4-option question is expected several times; 115 min valid runs keeps the
+ * original 80/100 (~80%) parseability contract.
  *
- * Runs before any DB insert. If too few runs come back parseable/successful
- * the verdict is 'unverified' — the question is rejected with a retriable
- * reason rather than saved unchecked.
+ * Runs after the passage-judge gate and before any DB insert. If too few runs
+ * come back parseable/successful the verdict is 'unverified' — the question
+ * is rejected with a retriable reason rather than saved unchecked.
  */
 import { SpanStatusCode } from '@opentelemetry/api';
 import { tracer } from '../otel/otel';
-import type {
-  LlmBatchItem,
-  LlmBatchOptions,
-  LlmRequest,
-} from '../interfaces/llm/llm.dto';
+import type { LlmBatchOptions, LlmRequest } from '../interfaces/llm/llm.dto';
 import type { GeneratedQuestion } from './llm-generate.dto';
+import {
+  GATE_JUDGE_MODEL,
+  GateBatchRunner,
+  OPTION_LETTERS,
+  parseAnswerLetter,
+  shuffled,
+} from './gate-shared';
 
-export const SOLVABILITY_RUNS = 100;
+export const SOLVABILITY_RUNS = 144;
 export const SOLVABILITY_THRESHOLD = 0.4;
-export const SOLVABILITY_MODEL = 'sarvam-105b';
 /** Minimum parseable runs for a verdict; below this → 'unverified'. */
-export const SOLVABILITY_MIN_VALID_RUNS = 80;
+export const SOLVABILITY_MIN_VALID_RUNS = 115;
 
-const OPTION_LETTERS = ['A', 'B', 'C', 'D'] as const;
-
-export interface SolvabilityBatchRunner {
-  completeBatch(
-    requests: LlmRequest[],
-    options?: LlmBatchOptions,
-  ): Promise<LlmBatchItem[]>;
-}
+export type SolvabilityBatchRunner = GateBatchRunner;
 
 export interface SolvabilityVerdict {
   status: 'passed' | 'failed_solvable' | 'unverified';
@@ -41,24 +39,6 @@ export interface SolvabilityVerdict {
   rate?: number;
   valid_runs: number;
   total_runs: number;
-}
-
-function shuffled<T>(items: readonly T[]): T[] {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
-
-// The model must answer with a bare letter; we accept the first standalone
-// A-D (case-insensitive) in the reply to survive mild chattiness.
-function parseAnswerLetter(text: string, optionCount: number): number | null {
-  const match = /\b([A-Da-d])\b/.exec(text);
-  if (!match) return null;
-  const index = match[1].toUpperCase().charCodeAt(0) - 65;
-  return index < optionCount ? index : null;
 }
 
 function buildRun(question: GeneratedQuestion): {
@@ -73,7 +53,7 @@ function buildRun(question: GeneratedQuestion): {
   return {
     correctLetterIndex,
     request: {
-      model: SOLVABILITY_MODEL,
+      model: GATE_JUDGE_MODEL,
       max_tokens: 10,
       messages: [
         {

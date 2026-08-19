@@ -1079,7 +1079,7 @@ describe('UserService.delete', () => {
   });
 });
 
-// ─── getLiteracyTestScores (2026-07) ─────────────────────────────────────────
+// ─── getLiteracyTestScores (2026-07, reworked 2026-08) ───────────────────────
 
 describe('UserService.getLiteracyTestScores', () => {
   const USER_ID = '123e4567-e89b-42d3-a456-426614174000';
@@ -1090,21 +1090,37 @@ describe('UserService.getLiteracyTestScores', () => {
   function firstAttempt(n: number, correct: boolean) {
     return { created_at: day(n), correct };
   }
+  // One comprehension-answer row as returned by complex query #2. question_id
+  // defaults to a per-day unique id; pass it explicitly to model repeats.
   function answer(
     n: number,
     correct: boolean,
     level: number,
     questionType: string,
-    passageType: string = 'narrative',
+    questionId = `q${n}`,
   ) {
     return {
       created_at: day(n),
       answer_correct: correct,
-      level,
+      question_id: questionId,
       question_type: questionType,
-      passage_type: passageType,
+      level,
     };
   }
+  // Bulk MPL-B rows: one answer per type entry, days startDay, startDay+1, …
+  // correct/level are per-index functions so mixes stay one-liners.
+  function answers(
+    types: string[],
+    opts: {
+      correct?: (i: number) => boolean;
+      level?: (i: number) => number;
+      startDay?: number;
+    } = {},
+  ) {
+    const { correct = () => true, level = () => 11, startDay = 1 } = opts;
+    return types.map((t, i) => answer(startDay + i, correct(i), level(i), t));
+  }
+  const rep = (type: string, count: number) => Array<string>(count).fill(type);
 
   function scoreService(opts: {
     firstAttempts?: unknown[];
@@ -1138,9 +1154,10 @@ describe('UserService.getLiteracyTestScores', () => {
     expect(scores.nipun_grade_1.status).toBe('insufficient_data');
     expect(scores.nipun_grade_1.attempts_available).toBe(0);
     expect(scores.nipun_grade_2.status).toBe('insufficient_data');
+    expect(scores.nipun_grade_2.attempts_available).toBe(0);
     expect(scores.nipun_grade_3.status).toBe('insufficient_data');
-    expect(scores.ampl_b.status).toBe('insufficient_data');
-    expect(scores.ampl_b.narrative.retrieve.status).toBe('insufficient_data');
+    expect(scores.mpl_b.status).toBe('insufficient_data');
+    expect(scores.mpl_b.attempts_available).toBe(0);
   });
 
   it('computes NIPUN grade 1 over the last two level-8 first attempts with history', async () => {
@@ -1162,67 +1179,175 @@ describe('UserService.getLiteracyTestScores', () => {
     ]);
   });
 
-  it('computes NIPUN grades 2 and 3 from level-scoped retrieve answers only', async () => {
+  it('counts only the FIRST attempt at each question — repeats never count', async () => {
     const { svc } = scoreService({
       answers: [
-        answer(1, true, 11, 'retrieve'),
-        answer(2, true, 11, 'retrieve'),
-        answer(3, false, 11, 'retrieve'),
-        answer(4, true, 11, 'retrieve'),
-        answer(5, true, 11, 'infer'), // wrong type — ignored
-        answer(6, true, 12, 'retrieve'), // wrong level for g2
+        answer(1, false, 10, 'R1.1', 'q-repeat'),
+        answer(2, true, 10, 'R1.1', 'q-repeat'), // repeat — ignored entirely
+        answer(3, true, 10, 'R1.2'),
+        answer(4, true, 10, 'R1.3'),
+        answer(5, true, 10, 'R1.1'),
       ],
     });
     const scores = (await svc.getLiteracyTestScores(USER_ID))!;
-    expect(scores.nipun_grade_2.status).toBe('ok');
-    expect(scores.nipun_grade_2.latest_score).toBe(0.75); // 3 of last 4
-    expect(scores.nipun_grade_3.status).toBe('insufficient_data');
-    expect(scores.nipun_grade_3.attempts_available).toBe(1);
+    const g2 = scores.nipun_grade_2;
+    // Pool = 4 deduped attempts; the first (wrong) attempt at q-repeat wins.
+    expect(g2.status).toBe('ok');
+    expect(g2.attempts_available).toBe(4);
+    expect(g2.latest!.score).toBe(0.75); // f,t,t,t — not 1.0
+    expect(g2.latest!.passed).toBe(true);
   });
 
-  it('computes the combined AMPL-B score once every bucket window fills', async () => {
-    const answers: unknown[] = [];
-    let n = 1;
-    for (const stimulus of ['narrative', 'expository']) {
-      for (let i = 0; i < 6; i++)
-        answers.push(answer(n++, true, 12, 'retrieve', stimulus));
-      for (let i = 0; i < 7; i++)
-        answers.push(answer(n++, true, 12, 'infer', stimulus));
-      for (let i = 0; i < 3; i++)
-        answers.push(answer(n++, i > 0, 12, 'evaluate', stimulus));
-    }
-    const { svc } = scoreService({ answers });
+  it('computes NIPUN grade 2 from level-10 R1.x first attempts only', async () => {
+    const { svc } = scoreService({
+      answers: [
+        answer(1, true, 10, 'R1.1'),
+        answer(2, true, 10, 'R1.2'),
+        answer(3, true, 10, 'R1.3'),
+        answer(4, true, 10, 'R1.1'),
+        answer(5, false, 10, 'R1.2'),
+        answer(6, true, 10, 'R2.1'), // wrong type — ignored
+        answer(7, true, 11, 'R1.1'), // wrong level for g2
+      ],
+    });
     const scores = (await svc.getLiteracyTestScores(USER_ID))!;
-    expect(scores.ampl_b.status).toBe('ok');
-    // 32 answers, one wrong evaluate per stimulus → 30/32
-    expect(scores.ampl_b.latest_score).toBeCloseTo(30 / 32);
-    expect(scores.ampl_b.narrative.retrieve.latest_score).toBe(1);
-    expect(scores.ampl_b.narrative.evaluate.latest_score).toBeCloseTo(2 / 3);
-    expect(scores.ampl_b.history!.length).toBeGreaterThan(0);
+    const g2 = scores.nipun_grade_2;
+    expect(g2.status).toBe('ok');
+    expect(g2.attempts_available).toBe(5);
+    // Snapshot = most recent 4 of the pool at each qualifying prefix.
+    expect(g2.history).toEqual([
+      { at: day(4), score: 1, passed: true },
+      { at: day(5), score: 0.75, passed: true },
+    ]);
+    expect(g2.latest).toEqual({ at: day(5), score: 0.75, passed: true });
   });
 
-  it('excludes below-level-12 answers from AMPL-B but keeps them for grade 2', async () => {
-    const answers: unknown[] = [answer(1, true, 11, 'retrieve')];
-    const { svc } = scoreService({ answers });
+  it('reports grade 2 insufficient data below four pooled attempts', async () => {
+    const { svc } = scoreService({
+      answers: [
+        answer(1, true, 10, 'R1.1'),
+        answer(2, true, 10, 'R1.2'),
+        answer(3, true, 10, 'R1.3'),
+      ],
+    });
     const scores = (await svc.getLiteracyTestScores(USER_ID))!;
-    expect(scores.ampl_b.narrative.retrieve.attempts_available).toBe(0);
+    expect(scores.nipun_grade_2.status).toBe('insufficient_data');
+    expect(scores.nipun_grade_2.attempts_available).toBe(3);
+    expect(scores.nipun_grade_2.latest).toBeUndefined();
+  });
+
+  it('pools levels 11 and 12 together for NIPUN grade 3', async () => {
+    const { svc } = scoreService({
+      answers: [
+        answer(1, true, 11, 'R1.1'),
+        answer(2, false, 12, 'R1.2'),
+        answer(3, true, 11, 'R1.3'),
+        answer(4, true, 12, 'R1.1'),
+        answer(5, true, 10, 'R1.1'), // level 10 — grade 2, not grade 3
+      ],
+    });
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    const g3 = scores.nipun_grade_3;
+    expect(g3.status).toBe('ok');
+    expect(g3.attempts_available).toBe(4);
+    expect(g3.latest).toEqual({ at: day(4), score: 0.75, passed: true });
     expect(scores.nipun_grade_2.attempts_available).toBe(1);
   });
 
-  it('groups interpret, infer and integrate into one AMPL-B bucket', async () => {
-    const answers = [
-      answer(1, true, 12, 'interpret'),
-      answer(2, true, 12, 'infer'),
-      answer(3, false, 12, 'integrate'),
-      answer(4, true, 12, 'interpret'),
-      answer(5, true, 12, 'infer'),
-      answer(6, true, 12, 'integrate'),
-      answer(7, true, 12, 'interpret'),
-    ];
-    const { svc } = scoreService({ answers });
+  // A 20-row MPL-B pool that satisfies every filter: R1.x ×14 (≥5),
+  // R2.x ×5 (≥5), R3.x ×1 (≥1), 6 distinct types (≥4).
+  const mplHappyTypes = [
+    ...rep('R1.1', 3),
+    ...rep('R1.2', 2),
+    ...rep('R2.1', 3),
+    ...rep('R2.2', 2),
+    'R3.1',
+    ...rep('R1.3', 9),
+  ];
+
+  it('computes MPL-B over exactly 20 level-11/12 first attempts', async () => {
+    const { svc } = scoreService({
+      answers: answers(mplHappyTypes, {
+        correct: (i) => i >= 5, // first 5 wrong → 15/20
+        level: (i) => (i % 2 === 0 ? 11 : 12),
+      }),
+    });
     const scores = (await svc.getLiteracyTestScores(USER_ID))!;
-    const bucket = scores.ampl_b.narrative.interpret_infer_integrate;
-    expect(bucket.status).toBe('ok');
-    expect(bucket.latest_score).toBeCloseTo(6 / 7);
+    const mpl = scores.mpl_b;
+    expect(mpl.status).toBe('ok');
+    expect(mpl.attempts_available).toBe(20);
+    expect(mpl.latest!.score).toBe(15 / 20);
+    expect(mpl.latest!.passed).toBe(true);
+    expect(mpl.latest!.at).toEqual(day(20));
+    // Only the full-pool prefix qualifies; latest is the last history entry.
+    expect(mpl.history).toHaveLength(1);
+    expect(mpl.latest).toBe(mpl.history![mpl.history!.length - 1]);
+  });
+
+  it('passes MPL-B only on a score STRICTLY greater than 0.5', async () => {
+    const { svc } = scoreService({
+      answers: answers(mplHappyTypes, { correct: (i) => i < 10 }), // 10/20
+    });
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    expect(scores.mpl_b.status).toBe('ok');
+    expect(scores.mpl_b.latest!.score).toBe(0.5);
+    expect(scores.mpl_b.latest!.passed).toBe(false);
+  });
+
+  it('reports MPL-B insufficient data below 20 pooled attempts', async () => {
+    const { svc } = scoreService({
+      answers: answers(mplHappyTypes.slice(0, 19)),
+    });
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    expect(scores.mpl_b.status).toBe('insufficient_data');
+    expect(scores.mpl_b.attempts_available).toBe(19);
+    expect(scores.mpl_b.history).toBeUndefined();
+  });
+
+  it('reports MPL-B insufficient data with 20 attempts but only 3 distinct types', async () => {
+    const { svc } = scoreService({
+      answers: answers([
+        ...rep('R1.1', 7),
+        ...rep('R1.2', 7),
+        ...rep('R1.3', 6),
+      ]),
+    });
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    expect(scores.mpl_b.status).toBe('insufficient_data');
+    expect(scores.mpl_b.attempts_available).toBe(20);
+  });
+
+  it('reports MPL-B insufficient data when a batch quota is unmeetable (4 R1.x)', async () => {
+    // 4 distinct types and 20 attempts, but only 4 R1.x rows exist — the
+    // R1 batch needs 5 selected, so filter three can never be satisfied.
+    const { svc } = scoreService({
+      answers: answers([
+        ...rep('R1.1', 4),
+        ...rep('R2.1', 5),
+        ...rep('R2.2', 4),
+        ...rep('R3.1', 7),
+      ]),
+    });
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    expect(scores.mpl_b.status).toBe('insufficient_data');
+    expect(scores.mpl_b.attempts_available).toBe(20);
+  });
+
+  it('excludes level-13 answers from every pool', async () => {
+    const { svc } = scoreService({
+      answers: [
+        ...answers(mplHappyTypes, { level: () => 13 }),
+        answer(21, true, 11, 'R1.1'),
+        answer(22, true, 11, 'R1.2'),
+        answer(23, true, 12, 'R1.3'),
+      ],
+    });
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    // Only the three level-11/12 rows count anywhere.
+    expect(scores.mpl_b.status).toBe('insufficient_data');
+    expect(scores.mpl_b.attempts_available).toBe(3);
+    expect(scores.nipun_grade_3.status).toBe('insufficient_data');
+    expect(scores.nipun_grade_3.attempts_available).toBe(3);
+    expect(scores.nipun_grade_2.attempts_available).toBe(0);
   });
 });

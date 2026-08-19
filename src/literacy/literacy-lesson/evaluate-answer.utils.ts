@@ -58,7 +58,6 @@ const MATRA_TO_VOWEL: Record<string, string> = {
 };
 
 type MarkArgs = { correctAnswer: string; studentAnswer: string };
-type SentenceArgs = { words: string[]; transcripts: string[] };
 
 // Every code point that appears in word-list.json (52 as of 2026-07-27:
 // anusvara + independent vowels + consonants + matras; notably NO halant and
@@ -122,16 +121,6 @@ export const TEACHABLE_GRAPHEMES = new Set([
   'ौ',
 ]);
 
-export interface SentenceWordAssessment {
-  word: string;
-  // Best (lowest) grapheme-level levenshtein distance of this word against
-  // any transcript token (family-equivalent graphemes substitute for free;
-  // markWord acceptance — hardcodes, schwa deletion, etc. — counts as 0).
-  distance: number;
-  // Whether every code point of the word is in TEACHABLE_GRAPHEMES.
-  teachable: boolean;
-}
-
 /* ───────── utility class ───────── */
 class EvaluateAnswer {
   /* helpers */
@@ -145,7 +134,7 @@ class EvaluateAnswer {
     return c;
   }
 
-  private static clean(str: string): string {
+  static clean(str: string): string {
     return str
       .normalize('NFC')
       .trim()
@@ -735,43 +724,15 @@ class EvaluateAnswer {
   // tokenize cleanly. clean() strips punctuation attached to a token anyway;
   // splitting additionally rescues word pairs glued together by punctuation
   // with no space. Newlines/tabs fall under \s.
-  private static tokenize(utterance: string): string[] {
+  static tokenize(utterance: string): string[] {
     return utterance
       .split(/[\s।॥,.!?;:'"“”‘’()[\]{}\-–—~]+/u)
       .filter((t) => t.length > 0);
   }
 
-  // A sentence is correct when a single transcript contains every expected
-  // word in order. Matching is an order-preserving subsequence walk, so any
-  // extra material before, between, or after the expected words is ignored:
-  // "the sentence reads as follows <sentence> end of sentence" passes, and so
-  // do cumulative build-ups like "the bird sang. the bird sang a sentence.
-  // the bird sang a sentence to the dog" (the walk simply skips tokens that
-  // don't match the next expected word). Greedy matching is safe here:
-  // matching an expected word at its earliest opportunity can never block a
-  // later expected word, because every token only ever tests the next
-  // unmatched expected word. Each comparison goes through markWord, so
-  // phoneme-family equivalence and the transcription hardcodes apply per
-  // word. Transcripts are checked individually, and each transcript is
-  // additionally split at the '~' engine-join token (the fallback path hands
-  // us the combined string), so words straddling the seam between two
-  // engines' outputs can never fake an in-order match.
-  static markSentence({ words, transcripts }: SentenceArgs): boolean {
-    if (words.length === 0) {
-      console.error('markSentence: words is empty');
-      return false;
-    }
-    for (const transcript of transcripts) {
-      for (const segment of transcript.split('~')) {
-        if (this.matchesInOrder(words, this.tokenize(segment))) return true;
-      }
-    }
-    return false;
-  }
-
   // Grapheme-level levenshtein where family-equivalent graphemes substitute
   // for free — a phoneme-family variant is the same sound, not an error.
-  private static levenshtein(a: string[], b: string[]): number {
+  static levenshtein(a: string[], b: string[]): number {
     const rows = a.length + 1;
     const cols = b.length + 1;
     let prev = Array.from({ length: cols }, (_, j) => j);
@@ -789,167 +750,6 @@ class EvaluateAnswer {
       prev = curr;
     }
     return prev[cols - 1];
-  }
-
-  // A token "matches" an expected word when word-lesson acceptance says so
-  // (families, hardcodes, schwa deletion, …) OR it is within levenshtein
-  // distance 1 — per the 2026-07 leniency rule, a sentence attempt only fails
-  // on a word that is 2+ graphemes off.
-  private static tokenMatchesLeniently(word: string, token: string): boolean {
-    if (this.markWord({ correctAnswer: word, studentAnswer: token })) {
-      return true;
-    }
-    return (
-      this.levenshtein(
-        Array.from(this.clean(word)),
-        Array.from(this.clean(token)),
-      ) <= 1
-    );
-  }
-
-  private static matchesInOrder(words: string[], tokens: string[]): boolean {
-    let matched = 0;
-    for (let i = 0; i < tokens.length; i++) {
-      if (this.tokenMatchesLeniently(words[matched], tokens[i])) {
-        matched++;
-      } else if (
-        i + 1 < tokens.length &&
-        this.tokenMatchesLeniently(
-          words[matched],
-          `${tokens[i]} ${tokens[i + 1]}`,
-        )
-      ) {
-        // The STT engines split some multi-syllable words in two ("अमर रस"
-        // for अमरस) and markWord's .includes() hardcodes only fire on the
-        // joined pair — so before giving up on a token, try it joined with
-        // its successor. Only fires when the single token failed, so it can
-        // never steal a match a later expected word needed.
-        matched++;
-        i++;
-      }
-      if (matched === words.length) return true;
-    }
-    return false;
-  }
-
-  // Best positional overlap between an expected word and one token, as a
-  // fraction of the expected word's graphemes. Graphemes count as matching
-  // when identical or in the same phoneme family, and every relative shift of
-  // the token against the word is tried so a dropped or inserted grapheme
-  // only costs the positions it displaces.
-  private static alignScore(wordChars: string[], tokenChars: string[]): number {
-    if (wordChars.length === 0) return 0;
-    let best = 0;
-    for (
-      let shift = -(wordChars.length - 1);
-      shift < tokenChars.length;
-      shift++
-    ) {
-      let matches = 0;
-      for (let i = 0; i < wordChars.length; i++) {
-        const t = tokenChars[i + shift];
-        if (
-          t !== undefined &&
-          (t === wordChars[i] || sameFamily(wordChars[i], t))
-        )
-          matches++;
-      }
-      if (matches > best) best = matches;
-    }
-    return best / wordChars.length;
-  }
-
-  // Per-word best levenshtein distance against the transcripts (each split at
-  // the '~' engine seam like markSentence). markWord acceptance → 0; joined
-  // adjacent token pairs are tried so STT-split words ("अमर रस" for अमरस)
-  // don't inflate the distance; an empty/unmatched transcript costs the whole
-  // word.
-  static assessSentenceWords({
-    words,
-    transcripts,
-  }: SentenceArgs): SentenceWordAssessment[] {
-    const segments = transcripts.flatMap((t) => t.split('~'));
-    return words.map((word) => {
-      const wordChars = Array.from(this.clean(word));
-      let distance = wordChars.length;
-      outer: for (const segment of segments) {
-        if (this.markWord({ correctAnswer: word, studentAnswer: segment })) {
-          distance = 0;
-          break outer;
-        }
-        const tokens = this.tokenize(segment);
-        for (let i = 0; i < tokens.length; i++) {
-          const single = this.levenshtein(
-            wordChars,
-            Array.from(this.clean(tokens[i])),
-          );
-          if (single < distance) distance = single;
-          if (i + 1 < tokens.length) {
-            const joined = this.levenshtein(
-              wordChars,
-              Array.from(this.clean(tokens[i] + tokens[i + 1])),
-            );
-            if (joined < distance) distance = joined;
-          }
-          if (distance === 0) break outer;
-        }
-      }
-      const teachable = Array.from(word.normalize('NFC')).every((ch) =>
-        TEACHABLE_GRAPHEMES.has(ch),
-      );
-      return { word, distance, teachable };
-    });
-  }
-
-  // Drill-word selection for a failed sentence attempt: among words that are
-  // 2+ graphemes off, pick the teachable one with the LARGEST distance
-  // (random on ties). Returns null when no teachable word qualifies — every
-  // badly-read word contains a conjunct/nukta/other untaught grapheme (or the
-  // failure was ordering, not any single word) — in which case the machine
-  // retries the sentence instead of entering the word loop.
-  static selectDrillWord({ words, transcripts }: SentenceArgs): string | null {
-    const failing = this.assessSentenceWords({ words, transcripts }).filter(
-      (a) => a.distance >= 2,
-    );
-    const teachable = failing.filter((a) => a.teachable);
-    if (teachable.length === 0) return null;
-    const maxDistance = Math.max(...teachable.map((a) => a.distance));
-    const worst = teachable.filter((a) => a.distance === maxDistance);
-    return worst[Math.floor(Math.random() * worst.length)].word;
-  }
-
-  // Loop over the words of the correct answer and return the one with the
-  // lowest matching score against the student answer. A word markWord accepts
-  // against the whole transcript scores a full 1 — exactly word-lesson
-  // acceptance semantics, so phoneme families, split-word .includes()
-  // hardcodes ("अमर रस" for अमरस) and the rest all count as correct.
-  // Otherwise the word scores its best family-aware character overlap with
-  // any single token. Ties go to the earliest word in the sentence.
-  static rankWorstWord({ words, transcripts }: SentenceArgs): string {
-    let worstWord = words[0];
-    let worstScore = Infinity;
-    for (const word of words) {
-      const wordChars = Array.from(this.clean(word));
-      let bestScore = 0;
-      for (const transcript of transcripts) {
-        if (this.markWord({ correctAnswer: word, studentAnswer: transcript })) {
-          bestScore = 1;
-          break;
-        }
-        for (const token of this.tokenize(transcript)) {
-          const score = this.alignScore(
-            wordChars,
-            Array.from(this.clean(token)),
-          );
-          if (score > bestScore) bestScore = score;
-        }
-      }
-      if (bestScore < worstScore) {
-        worstScore = bestScore;
-        worstWord = word;
-      }
-    }
-    return worstWord;
   }
 
   static detectIncorrectEndMatra({
@@ -1012,16 +812,15 @@ class EvaluateAnswer {
   }
 }
 
-export type { MarkArgs, SentenceArgs };
+export type { MarkArgs };
 export const markWord = (args: MarkArgs) => EvaluateAnswer.markWord(args);
-export const markSentence = (args: SentenceArgs) =>
-  EvaluateAnswer.markSentence(args);
-export const assessSentenceWords = (args: SentenceArgs) =>
-  EvaluateAnswer.assessSentenceWords(args);
-export const selectDrillWord = (args: SentenceArgs) =>
-  EvaluateAnswer.selectDrillWord(args);
-export const rankWorstWord = (args: SentenceArgs) =>
-  EvaluateAnswer.rankWorstWord(args);
+// Normalization / tokenization / distance primitives reused by the
+// sentence-assessment module (sentence-assessment.ts).
+export const cleanWord = (str: string) => EvaluateAnswer.clean(str);
+export const tokenizeUtterance = (utterance: string) =>
+  EvaluateAnswer.tokenize(utterance);
+export const levenshteinDistance = (a: string[], b: string[]) =>
+  EvaluateAnswer.levenshtein(a, b);
 export const markImage = (args: MarkArgs) => EvaluateAnswer.markImage(args);
 export const markLetter = (args: MarkArgs) => EvaluateAnswer.markLetter(args);
 export const detectInsertion = (args: MarkArgs) =>

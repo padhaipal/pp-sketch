@@ -2,6 +2,12 @@ import { BadRequestException } from '@nestjs/common';
 import type { OtelCarrier } from '../otel/otel.dto';
 import { User } from '../users/user.dto';
 
+// Local uuid check (any version, RFC 4122 shape) — the `uuid` package is
+// ESM-only, which breaks jest transforms in specs that don't mock it.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (value: string): boolean => UUID_RE.test(value);
+
 const VALID_MEDIA_STATUSES = ['created', 'queued', 'ready', 'failed'] as const;
 export type MediaStatus = (typeof VALID_MEDIA_STATUSES)[number];
 
@@ -155,7 +161,19 @@ export interface CreateHeygenMediaOptions {
 }
 
 export interface CreateElevenlabsMediaItem {
-  state_transition_id: string;
+  /**
+   * Optional: only audio that is delivered by stid lookup (e.g. comprehension
+   * explanations, coverage-page bulk TTS) carries one. Generation-only audio
+   * (passage/question/option) has none.
+   */
+  state_transition_id?: string | null;
+  /**
+   * Source text row this audio is generated from — symmetric with STT
+   * transcript rows linking to their source audio. Required when
+   * state_transition_id is absent (every audio row must be reachable either
+   * by stid or by the input_media_id FK walk).
+   */
+  input_media_id?: string;
   script_text: string;
   voice_id?: string;
   model_id?: string;
@@ -959,11 +977,31 @@ export function validateCreateElevenlabsMediaOptions(
       const item = raw as Record<string, unknown>;
 
       if (
-        typeof item.state_transition_id !== 'string' ||
-        item.state_transition_id.length === 0
+        item.state_transition_id !== undefined &&
+        item.state_transition_id !== null &&
+        (typeof item.state_transition_id !== 'string' ||
+          item.state_transition_id.length === 0)
       ) {
         throw new BadRequestException(
-          `createElevenlabsMedia() items[${idx}].state_transition_id is required and must be a non-empty string`,
+          `createElevenlabsMedia() items[${idx}].state_transition_id must be a non-empty string when provided`,
+        );
+      }
+      if (
+        item.input_media_id !== undefined &&
+        (typeof item.input_media_id !== 'string' ||
+          !isUuid(item.input_media_id))
+      ) {
+        throw new BadRequestException(
+          `createElevenlabsMedia() items[${idx}].input_media_id must be a uuid when provided`,
+        );
+      }
+      if (
+        (item.state_transition_id === undefined ||
+          item.state_transition_id === null) &&
+        item.input_media_id === undefined
+      ) {
+        throw new BadRequestException(
+          `createElevenlabsMedia() items[${idx}] must have state_transition_id and/or input_media_id — an audio row must be reachable by stid or by the input_media_id link`,
         );
       }
       if (
@@ -1073,7 +1111,8 @@ export function validateCreateElevenlabsMediaOptions(
       }
 
       return {
-        state_transition_id: item.state_transition_id,
+        state_transition_id: item.state_transition_id ?? null,
+        input_media_id: item.input_media_id,
         script_text: item.script_text,
         voice_id: item.voice_id,
         model_id: item.model_id,

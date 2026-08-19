@@ -106,6 +106,16 @@ export class MediaMetaDataController {
     });
   }
 
+  // Recent gate-failed generations (soft-deleted question rows carrying
+  // media_details.gate_failure) for the dashboard's read-only "Filter
+  // failures" list.
+  @Get('generation-failures')
+  async listGenerationFailures(@Query('limit') limit?: string) {
+    return this.mediaMetaDataService.listGenerationFailures({
+      limit: limit !== undefined ? parseInt(limit, 10) : undefined,
+    });
+  }
+
   // Declared before @Delete(':id') so 'by-state-transition-id' is not
   // captured as an id.
   @Delete('by-state-transition-id')
@@ -119,9 +129,10 @@ export class MediaMetaDataController {
   }
 
   // Synchronous seeding endpoint (no queue): LLM generation → validation →
-  // zero-context solvability filter → entity tree insert. Slow by nature
-  // (~1-2 min per question for the 100-run filter); the dashboard sends one
-  // generation per request and shows per-question outcomes.
+  // passage-judge gate → zero-context solvability filter → entity tree
+  // insert (one passage, one question). Slow by nature (~2-3 min for the
+  // 10+144 gate runs); the dashboard sends one generation per request and
+  // shows the outcome.
   @Post('llm-generate')
   @HttpCode(HttpStatus.OK)
   @ApiBody({

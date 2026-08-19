@@ -456,7 +456,9 @@ export class LiteracyLessonService {
   }
 
   // Random ready reading passage for the level, excluding recently-lessoned
-  // passages; widens to the nearest level (8-12) before giving up.
+  // passages; widens to the nearest level (8-12) before giving up. The
+  // explicit <= MAX_LESSON_LEVEL bound keeps level-13 (250+ word) passages
+  // out of lessons even if a future caller skips the maxLength clamp.
   private async selectPassage(
     level: number,
     excludePassageIds: string[],
@@ -469,6 +471,7 @@ export class LiteracyLessonService {
     const base = `FROM media_metadata
        WHERE media_type = 'text' AND status = 'ready' AND rolled_back = false
          AND media_details->>'role' = 'passage'
+         AND (media_details->>'level')::int <= ${MAX_LESSON_LEVEL}
          AND NOT (id = ANY($2::uuid[]))`;
     // 1. Exact level, non-recent.
     let rows: PassageRow[] = await this.dataSource.query(

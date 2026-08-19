@@ -1,7 +1,16 @@
 // Unit tests for MediaMetaDataService. All collaborators (DB, cache,
 // wabot, STT, S3, queues) are mocked.
 
-jest.mock('uuid', () => ({ v4: jest.fn(() => 'gen-uuid') }));
+jest.mock('uuid', () => ({
+  v4: jest.fn(() => 'gen-uuid'),
+  // media-meta-data.dto imports { validate as isUuid } from 'uuid' for the
+  // createElevenlabsMedia input_media_id check — keep it real-shaped.
+  validate: (s: unknown) =>
+    typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      s,
+    ),
+}));
 
 const mockQueueAdd = jest.fn();
 const mockQueueAddBulk = jest.fn();
@@ -2221,6 +2230,49 @@ describe('createElevenlabsMedia — conditional spreads + queue payload', () => 
       status: 'queued',
     });
   });
+
+  it('accepts an input_media_id-only item: row gets input_media_id, stid null', async () => {
+    const repo = makeRepo();
+    repo.save.mockImplementation(async (e) => ({ ...e, id: 'mm-1' }));
+    const { service } = makeService({ repo });
+    const textRowId = '123e4567-e89b-42d3-a456-426614174000';
+    await service.createElevenlabsMedia(
+      {
+        items: [{ input_media_id: textRowId, script_text: 'hi' }],
+      } as never,
+      carrier,
+    );
+    const created = repo.create.mock.calls[0][0] as {
+      input_media_id: string | null;
+      state_transition_id: string | null;
+    };
+    expect(created.input_media_id).toBe(textRowId);
+    expect(created.state_transition_id).toBeNull();
+  });
+
+  it('rejects an item with neither state_transition_id nor input_media_id', async () => {
+    const repo = makeRepo();
+    const { service } = makeService({ repo });
+    await expect(
+      service.createElevenlabsMedia(
+        { items: [{ script_text: 'hi' }] } as never,
+        carrier,
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-uuid input_media_id', async () => {
+    const { service } = makeService({});
+    await expect(
+      service.createElevenlabsMedia(
+        {
+          items: [{ input_media_id: 'not-a-uuid', script_text: 'hi' }],
+        } as never,
+        carrier,
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
 });
 
 describe('MediaMetaDataService.recordWhatsappUpload / markMediaFailed', () => {
@@ -2540,49 +2592,69 @@ import { v4 as uuidV4 } from 'uuid';
 import type { LlmRequest as LlmReq } from '../interfaces/llm/llm.dto';
 import { LlmError as LlmErr } from '../interfaces/llm/llm.dto';
 
+const PASSAGE_TEXT = 'यह एक छोटी कहानी है जो बच्चों के लिए लिखी गई है।';
+const CORRECT_OPTION_TEXT = 'बच्चों के लिए';
+const WRONG_OPTION_TEXT = 'बड़ों के लिए';
+
 function generatedJson(overrides?: {
-  questions?: unknown[];
+  question?: unknown;
   passageText?: string;
 }): string {
   return JSON.stringify({
     passage: {
-      text:
-        overrides?.passageText ??
-        'यह एक छोटी कहानी है जो बच्चों के लिए लिखी गई है।',
+      text: overrides?.passageText ?? PASSAGE_TEXT,
       passage_type: 'narrative',
     },
-    questions: overrides?.questions ?? [
-      {
-        text: 'कहानी किसके लिए है?',
-        question_type: 'retrieve',
-        send_as_flow: true,
-        options: [
-          {
-            text: 'बच्चों के लिए',
-            correct: true,
-            explanation: { text: 'सही! कहानी बच्चों के लिए है।', tts: true },
-          },
-          {
-            text: 'बड़ों के लिए',
-            correct: false,
-            explanation: { text: 'नहीं, फिर से सोचो।', tts: false },
-          },
-        ],
-      },
-    ],
+    question: overrides?.question ?? {
+      text: 'कहानी किसके लिए है?',
+      question_type: 'R1.1',
+      send_as_flow: true,
+      options: [
+        {
+          text: CORRECT_OPTION_TEXT,
+          correct: true,
+          explanation: { text: 'सही! कहानी बच्चों के लिए है।' },
+        },
+        {
+          text: WRONG_OPTION_TEXT,
+          correct: false,
+          explanation: { text: 'नहीं, फिर से सोचो।' },
+        },
+      ],
+    },
   });
 }
 
-// completeBatch stub whose answers pick the letter of `pickText` each run.
-function solvabilityStub(pickText: string | null) {
+// completeBatch stub for BOTH gates. Judge requests carry the passage text in
+// the user message (solvability requests do not) — route each request's
+// behavior on that. 'correct'/'wrong' answer with the letter whose option
+// line matches that text (option order is shuffled per run); 'invalid'
+// answers unparseable text so the run doesn't count as valid.
+type GateAnswer = 'correct' | 'wrong' | 'invalid' | 'error';
+function gateStub(opts: { judge?: GateAnswer; solvability?: GateAnswer }) {
   return jest.fn().mockImplementation(async (requests: LlmReq[]) =>
     requests.map((request) => {
-      if (pickText === null) {
+      const content = request.messages[1].content;
+      const mode =
+        (content.includes(PASSAGE_TEXT) ? opts.judge : opts.solvability) ??
+        'correct';
+      if (mode === 'error') {
         return { result: null, error: { message: 'down', retriable: true } };
       }
-      const line = request.messages[1].content
-        .split('\n')
-        .find((l) => l.endsWith(`. ${pickText}`));
+      if (mode === 'invalid') {
+        return {
+          result: {
+            text: 'ok',
+            model: 'sarvam-105b',
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            duration_ms: 1,
+          },
+        };
+      }
+      const target =
+        mode === 'correct' ? CORRECT_OPTION_TEXT : WRONG_OPTION_TEXT;
+      const line = content.split('\n').find((l) => l.endsWith(`. ${target}`));
       return {
         result: {
           text: line ? line[0] : 'A',
@@ -2603,16 +2675,19 @@ describe('createLlmGeneratedMedia', () => {
     messages: [{ role: 'user', content: 'generate' }],
   };
 
+  // Valid v4 uuids: createElevenlabsMedia validates input_media_id as a uuid.
   function seq() {
     let n = 0;
-    (uuidV4 as unknown as jest.Mock).mockImplementation(() => `id-${n++}`);
+    (uuidV4 as unknown as jest.Mock).mockImplementation(
+      () => `00000000-0000-4000-8000-${String(n++).padStart(12, '0')}`,
+    );
   }
 
   afterEach(() => {
     (uuidV4 as unknown as jest.Mock).mockImplementation(() => 'gen-uuid');
   });
 
-  it('creates the full entity tree for a surviving question', async () => {
+  it('creates the full entity tree for a question that passes both gates', async () => {
     seq();
     const saved: Record<string, unknown>[] = [];
     const dsTransaction = jest
@@ -2627,6 +2702,9 @@ describe('createLlmGeneratedMedia', () => {
       );
     const repo = makeRepo();
     repo.save.mockImplementation(async (e: unknown) => e);
+    // Judge (with passage) always right; zero-context guessing always wrong
+    // → judge passes, solvability rate 0 ≤ 0.4 passes.
+    const completeBatch = gateStub({ judge: 'correct', solvability: 'wrong' });
     const { service } = makeService({
       repo,
       dsTransaction,
@@ -2639,18 +2717,31 @@ describe('createLlmGeneratedMedia', () => {
           duration_ms: 5,
         }),
       },
-      sarvamLlm: {
-        completeBatch: solvabilityStub('बड़ों के लिए'),
-      } as never,
+      sarvamLlm: { completeBatch } as never,
     });
 
     const result = await service.createLlmGeneratedMedia(request, carrier);
 
     expect(result.status).toBe('created');
-    expect(result.level).toBe(9); // 11 words
-    expect(result.questions).toHaveLength(1);
-    expect(result.questions![0].status).toBe('created');
-    expect(result.questions![0].solvability_rate).toBe(0);
+    expect(result.level).toBe(9); // <40 words
+    expect(result.question!.status).toBe('created');
+    expect(result.question!.solvability_rate).toBe(0);
+
+    // Gate order + shapes: judge first (10 runs WITH the passage), then
+    // solvability (144 runs without it).
+    expect(completeBatch).toHaveBeenCalledTimes(2);
+    const judgeRequests = completeBatch.mock.calls[0][0] as LlmReq[];
+    expect(judgeRequests).toHaveLength(10);
+    expect(
+      judgeRequests.every((r) => r.messages[1].content.includes(PASSAGE_TEXT)),
+    ).toBe(true);
+    const solvabilityRequests = completeBatch.mock.calls[1][0] as LlmReq[];
+    expect(solvabilityRequests).toHaveLength(144);
+    expect(
+      solvabilityRequests.every(
+        (r) => !r.messages[1].content.includes(PASSAGE_TEXT),
+      ),
+    ).toBe(true);
 
     const passage = saved.find(
       (e) => (e.media_details as { role?: string })?.role === 'passage',
@@ -2658,6 +2749,7 @@ describe('createLlmGeneratedMedia', () => {
     expect(passage.media_type).toBe('text');
     expect(passage.source).toBe('openai');
     expect(passage.state_transition_id).toBeUndefined();
+    expect(passage.rolled_back).toBe(false);
     expect((passage.media_details as { level: number }).level).toBe(9);
     expect(
       (passage.generation_request_json as { provider: string }).provider,
@@ -2667,9 +2759,25 @@ describe('createLlmGeneratedMedia', () => {
       (e) => (e.media_details as { role?: string })?.role === 'question',
     )!;
     expect(question.input_media_id).toBe(passage.id);
-    expect(
-      (question.media_details as { question_type: string }).question_type,
-    ).toBe('retrieve');
+    expect(question.rolled_back).toBe(false);
+    const questionDetails = question.media_details as {
+      question_type: string;
+      judge: Record<string, unknown>;
+      solvability: Record<string, unknown>;
+      gate_failure?: unknown;
+    };
+    expect(questionDetails.question_type).toBe('R1.1');
+    expect(questionDetails.judge).toEqual({
+      valid_runs: 10,
+      total_runs: 10,
+      model: 'sarvam-105b',
+    });
+    expect(questionDetails.solvability).toEqual({
+      rate: 0,
+      valid_runs: 144,
+      model: 'sarvam-105b',
+    });
+    expect(questionDetails.gate_failure).toBeUndefined();
 
     const options = saved.filter(
       (e) => (e.media_details as { role?: string })?.role === 'option',
@@ -2701,13 +2809,43 @@ describe('createLlmGeneratedMedia', () => {
       options.map((o) => o.id as string).sort(),
     );
 
-    // tts:true explanation → ElevenLabs enqueue with the completion stid
+    // TTS: ONE createElevenlabsMedia call with one item per text entity —
+    // passage, question, both options, both explanations.
     expect(mockQueueAddBulk).toHaveBeenCalledTimes(1);
     const jobs = mockQueueAddBulk.mock.calls[0][0] as {
       data: { elevenlabs_params: { script_text: string } };
     }[];
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0].data.elevenlabs_params.script_text).toContain('सही!');
+    expect(jobs).toHaveLength(6);
+    const scripts = jobs.map((j) => j.data.elevenlabs_params.script_text);
+    expect(scripts.sort()).toEqual(
+      [
+        PASSAGE_TEXT,
+        'कहानी किसके लिए है?',
+        CORRECT_OPTION_TEXT,
+        WRONG_OPTION_TEXT,
+        'सही! कहानी बच्चों के लिए है।',
+        'नहीं, फिर से सोचो।',
+      ].sort(),
+    );
+
+    // Every audio row links to its source text row; only explanation audio
+    // carries the `${optionId}-comprehension-complete` stid.
+    const audioRows = repo.create.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((r) => r.source === 'elevenlabs');
+    expect(audioRows).toHaveLength(6);
+    for (const textEntity of [passage, question, ...options]) {
+      const audio = audioRows.find((a) => a.input_media_id === textEntity.id)!;
+      expect(audio).toBeDefined();
+      expect(audio.state_transition_id).toBeNull();
+    }
+    for (const explanation of explanations) {
+      const audio = audioRows.find((a) => a.input_media_id === explanation.id)!;
+      expect(audio).toBeDefined();
+      expect(audio.state_transition_id).toBe(
+        `${explanation.input_media_id as string}-comprehension-complete`,
+      );
+    }
   });
 
   it('routes to the provider named in the request', async () => {
@@ -2755,9 +2893,23 @@ describe('createLlmGeneratedMedia', () => {
     expect(result.reason).toContain('not valid JSON');
   });
 
-  it('rejects everything when all questions are zero-context solvable', async () => {
-    const dsTransaction = jest.fn();
+  function gateFailureSetup(completeBatch: jest.Mock) {
+    seq();
+    const saved: Record<string, unknown>[] = [];
+    const dsTransaction = jest
+      .fn()
+      .mockImplementation(async (cb: (m: unknown) => Promise<void>) =>
+        cb({
+          save: jest.fn(async (entities: Record<string, unknown>[]) => {
+            saved.push(...entities);
+            return entities;
+          }),
+        }),
+      );
+    const repo = makeRepo();
+    repo.save.mockImplementation(async (e: unknown) => e);
     const { service } = makeService({
+      repo,
       dsTransaction,
       openaiLlm: {
         complete: jest.fn().mockResolvedValue({
@@ -2768,33 +2920,136 @@ describe('createLlmGeneratedMedia', () => {
           duration_ms: 1,
         }),
       },
-      sarvamLlm: {
-        completeBatch: solvabilityStub('बच्चों के लिए'), // always correct
-      } as never,
+      sarvamLlm: { completeBatch } as never,
     });
+    return { service, saved, dsTransaction };
+  }
+
+  it('zero-context solvable: persists the whole family soft-deleted with a gate_failure record, no TTS', async () => {
+    const completeBatch = gateStub({
+      judge: 'correct',
+      solvability: 'correct',
+    });
+    const { service, saved, dsTransaction } = gateFailureSetup(completeBatch);
+
     const result = await service.createLlmGeneratedMedia(request, carrier);
+
     expect(result.status).toBe('rejected');
     expect(result.retriable).toBe(true);
-    expect(result.questions![0].reason).toContain('zero-context solvable');
-    expect(dsTransaction).not.toHaveBeenCalled();
+    expect(result.reason).toContain('zero-context solvable');
+    expect(result.passage_id).toBeDefined();
+    expect(result.level).toBe(9);
+    expect(result.question!.status).toBe('discarded');
+    expect(result.question!.reason).toContain('zero-context solvable');
+    expect(result.question!.solvability_rate).toBe(1);
+
+    // The family IS inserted — every row rolled_back: true.
+    expect(dsTransaction).toHaveBeenCalledTimes(1);
+    expect(saved.length).toBe(7); // passage + question + 2 options + 2 explanations + flow
+    expect(saved.every((e) => e.rolled_back === true)).toBe(true);
+
+    const question = saved.find(
+      (e) => (e.media_details as { role?: string })?.role === 'question',
+    )!;
+    const gateFailure = (
+      question.media_details as { gate_failure: Record<string, unknown> }
+    ).gate_failure;
+    expect(gateFailure).toMatchObject({
+      gate: 'solvability',
+      rate: 1,
+      valid_runs: 144,
+      total_runs: 144,
+      model: 'sarvam-105b',
+    });
+    expect(gateFailure.reason).toContain('zero-context solvable');
+
+    // Soft-deleted content never gets audio.
+    expect(mockQueueAddBulk).not.toHaveBeenCalled();
   });
 
-  it('marks unverifiable questions rejected with a retry hint', async () => {
-    const { service } = makeService({
-      openaiLlm: {
-        complete: jest.fn().mockResolvedValue({
-          text: generatedJson(),
-          model: 'gpt-4.1',
-          prompt_tokens: 1,
-          completion_tokens: 1,
-          duration_ms: 1,
-        }),
-      },
-      sarvamLlm: { completeBatch: solvabilityStub(null) } as never,
-    });
+  it('judge failure: persists soft-deleted with judge_picks, never runs solvability', async () => {
+    const completeBatch = gateStub({ judge: 'wrong' });
+    const { service, saved, dsTransaction } = gateFailureSetup(completeBatch);
+
     const result = await service.createLlmGeneratedMedia(request, carrier);
+
     expect(result.status).toBe('rejected');
-    expect(result.questions![0].reason).toContain('unverified');
+    expect(result.retriable).toBe(true);
+    expect(result.reason).toContain('passage-judge');
+    expect(result.question!.status).toBe('discarded');
+    // Solvability never ran → no rate on the response.
+    expect(result.question!.solvability_rate).toBeUndefined();
+
+    // Only the 10-run judge batch — a failed question never reaches gate 4.
+    expect(completeBatch).toHaveBeenCalledTimes(1);
+    expect(completeBatch.mock.calls[0][0]).toHaveLength(10);
+
+    expect(dsTransaction).toHaveBeenCalledTimes(1);
+    expect(saved.every((e) => e.rolled_back === true)).toBe(true);
+    const question = saved.find(
+      (e) => (e.media_details as { role?: string })?.role === 'question',
+    )!;
+    const details = question.media_details as {
+      gate_failure: Record<string, unknown>;
+      solvability?: unknown;
+    };
+    expect(details.gate_failure).toMatchObject({
+      gate: 'judge',
+      valid_runs: 10,
+      total_runs: 10,
+      model: 'sarvam-105b',
+      // The judge always picked the wrong option (original index 1) — the
+      // per-miss picks are persisted for answer-key troubleshooting.
+      judge_picks: Array(10).fill(1),
+    });
+    expect(details.solvability).toBeUndefined();
+
+    expect(mockQueueAddBulk).not.toHaveBeenCalled();
+  });
+
+  it('judge unverified (too few parseable runs): inserts nothing, rejects retriable', async () => {
+    const completeBatch = gateStub({ judge: 'invalid' });
+    const { service, saved, dsTransaction } = gateFailureSetup(completeBatch);
+
+    const result = await service.createLlmGeneratedMedia(request, carrier);
+
+    expect(result.status).toBe('rejected');
+    expect(result.retriable).toBe(true);
+    expect(result.reason).toContain('unverified');
+    expect(result.question!.status).toBe('unverified');
+    expect(dsTransaction).not.toHaveBeenCalled();
+    expect(saved).toHaveLength(0);
+    expect(mockQueueAddBulk).not.toHaveBeenCalled();
+  });
+
+  it('solvability unverified: inserts nothing, rejects retriable', async () => {
+    const completeBatch = gateStub({
+      judge: 'correct',
+      solvability: 'invalid',
+    });
+    const { service, dsTransaction } = gateFailureSetup(completeBatch);
+
+    const result = await service.createLlmGeneratedMedia(request, carrier);
+
+    expect(result.status).toBe('rejected');
+    expect(result.retriable).toBe(true);
+    expect(result.reason).toContain('solvability unverified');
+    expect(result.question!.status).toBe('unverified');
+    expect(dsTransaction).not.toHaveBeenCalled();
+    expect(mockQueueAddBulk).not.toHaveBeenCalled();
+  });
+
+  it('gate transport errors (batch rejects) reject retriable as unverified without inserting', async () => {
+    const completeBatch = jest.fn().mockRejectedValue(new Error('sarvam down'));
+    const { service, dsTransaction } = gateFailureSetup(completeBatch);
+
+    const result = await service.createLlmGeneratedMedia(request, carrier);
+
+    expect(result.status).toBe('rejected');
+    expect(result.retriable).toBe(true);
+    expect(result.reason).toContain('passage-judge gate errored');
+    expect(result.question!.status).toBe('unverified');
+    expect(dsTransaction).not.toHaveBeenCalled();
   });
 
   it('surfaces a TTS enqueue failure without failing the generation', async () => {
@@ -2822,7 +3077,7 @@ describe('createLlmGeneratedMedia', () => {
         }),
       },
       sarvamLlm: {
-        completeBatch: solvabilityStub('बड़ों के लिए'),
+        completeBatch: gateStub({ judge: 'correct', solvability: 'wrong' }),
       } as never,
     });
     const pending = service.createLlmGeneratedMedia(request, carrier);
@@ -2830,6 +3085,7 @@ describe('createLlmGeneratedMedia', () => {
     const result = await pending;
     jest.useRealTimers();
     expect(result.status).toBe('created');
+    expect(result.question!.status).toBe('created');
     expect(result.tts_error).toContain('failed to start');
   });
 
@@ -2871,6 +3127,81 @@ describe('listComprehensionStids', () => {
   });
 });
 
+describe('listGenerationFailures', () => {
+  it('queries gate-failed question rows (media_details ? gate_failure) newest first with the passage joined', async () => {
+    const dsQuery = jest.fn().mockResolvedValue([
+      {
+        question_id: 'q-1',
+        question_text: 'कहानी किसके लिए है?',
+        media_details: {
+          role: 'question',
+          question_type: 'R2.1',
+          gate_failure: { gate: 'judge', reason: 'wrong picks' },
+          solvability: { rate: 0.5, valid_runs: 144, model: 'sarvam-105b' },
+        },
+        passage_id: 'p-1',
+        passage_preview: 'यह एक छोटी कहानी…',
+        level: '9',
+        created_at: new Date('2026-08-01'),
+      },
+    ]);
+    const { service } = makeService({ dsQuery });
+
+    const result = await service.listGenerationFailures({ limit: 5 });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toEqual({
+      question_id: 'q-1',
+      question_text: 'कहानी किसके लिए है?',
+      question_type: 'R2.1',
+      gate_failure: { gate: 'judge', reason: 'wrong picks' },
+      solvability: { rate: 0.5, valid_runs: 144, model: 'sarvam-105b' },
+      passage_id: 'p-1',
+      passage_preview: 'यह एक छोटी कहानी…',
+      level: 9,
+      created_at: new Date('2026-08-01'),
+    });
+
+    expect(dsQuery).toHaveBeenCalledTimes(1);
+    const [sql, params] = dsQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("media_details ? 'gate_failure'");
+    expect(sql).toContain('LEFT JOIN media_metadata p');
+    expect(sql).toContain('ORDER BY q.created_at DESC');
+    expect(params).toEqual([5]);
+  });
+
+  it('clamps limit to 1..100 (default 10) and null-safes missing fields', async () => {
+    const dsQuery = jest.fn().mockResolvedValue([
+      {
+        question_id: 'q-orphan',
+        question_text: null,
+        media_details: { gate_failure: { gate: 'solvability' } },
+        passage_id: null,
+        passage_preview: null,
+        level: null,
+        created_at: new Date('2026-08-02'),
+      },
+    ]);
+    const { service } = makeService({ dsQuery });
+
+    await service.listGenerationFailures({ limit: 9999 });
+    expect(dsQuery.mock.calls[0][1]).toEqual([100]);
+
+    await service.listGenerationFailures({});
+    expect(dsQuery.mock.calls[1][1]).toEqual([10]);
+
+    const result = await service.listGenerationFailures({ limit: 0 });
+    expect(dsQuery.mock.calls[2][1]).toEqual([1]);
+    expect(result.items[0]).toMatchObject({
+      question_type: null,
+      gate_failure: { gate: 'solvability' },
+      solvability: null,
+      passage_id: null,
+      level: null,
+    });
+  });
+});
+
 describe('deleteByStateTransitionId', () => {
   it('throws NotFound when the stid has no live rows', async () => {
     const dsQuery = jest.fn().mockResolvedValueOnce([]);
@@ -2880,21 +3211,22 @@ describe('deleteByStateTransitionId', () => {
     ).rejects.toThrow(NotFoundException);
   });
 
-  it('tears down the passage family deepest-first for flow stids', async () => {
+  it('tears down the passage family deepest-first for flow stids (audio reached via the input_media_id walk)', async () => {
     const dsQuery = jest
       .fn()
       // direct rows carrying the stid (the flow rows)
       .mockResolvedValueOnce([{ id: 'flow-1' }])
-      // recursive subtree from the passage root, deepest first
+      // recursive subtree from the passage root, deepest first — TTS audio
+      // rows carry input_media_id, so the CTE reaches them too (no separate
+      // orphan-audio-by-stid sweep any more).
       .mockResolvedValueOnce([
+        { id: 'expl-audio-1', depth: 4 },
         { id: 'expl-1', depth: 3 },
         { id: 'opt-1', depth: 2 },
         { id: 'q-1', depth: 1 },
         { id: 'flow-1', depth: 1 },
         { id: 'passage-1', depth: 0 },
-      ])
-      // stid-linked explanation audio orphans
-      .mockResolvedValueOnce([{ id: 'audio-1' }]);
+      ]);
     const { service } = makeService({ dsQuery });
     const rolled: string[] = [];
     jest
@@ -2908,8 +3240,12 @@ describe('deleteByStateTransitionId', () => {
     );
 
     expect(result.deleted).toBe(6);
-    expect(rolled[0]).toBe('audio-1');
+    expect(rolled[0]).toBe('expl-audio-1');
     expect(rolled[rolled.length - 1]).toBe('passage-1');
+    // Exactly two queries: direct lookup + recursive subtree. The old
+    // orphan-audio-by-stid sweep is gone.
+    expect(dsQuery).toHaveBeenCalledTimes(2);
+    expect(dsQuery.mock.calls[1][0]).toContain('WITH RECURSIVE subtree');
     // subtree query rooted at the passage id parsed from the stid
     const subtreeParams = dsQuery.mock.calls[1][1] as [string[]];
     expect(subtreeParams[0]).toEqual(['passage-1']);
@@ -2920,8 +3256,7 @@ describe('deleteByStateTransitionId', () => {
     const dsQuery = jest
       .fn()
       .mockResolvedValueOnce([{ id: 'expl-1' }])
-      .mockResolvedValueOnce([{ id: 'expl-1', depth: 0 }])
-      .mockResolvedValueOnce([]);
+      .mockResolvedValueOnce([{ id: 'expl-1', depth: 0 }]);
     const { service } = makeService({ dsQuery });
     jest
       .spyOn(service, 'markRolledBack')

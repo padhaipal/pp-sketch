@@ -1,24 +1,22 @@
 import {
-  SOLVABILITY_MODEL,
+  SOLVABILITY_RUNS,
+  SOLVABILITY_MIN_VALID_RUNS,
   runZeroContextSolvability,
   SolvabilityBatchRunner,
 } from './zero-context-solvability';
+import { GATE_JUDGE_MODEL } from './gate-shared';
 import type { LlmBatchItem, LlmRequest } from '../interfaces/llm/llm.dto';
 import type { GeneratedQuestion } from './llm-generate.dto';
 
 const question: GeneratedQuestion = {
   text: 'कहानी में कौन था?',
-  question_type: 'retrieve',
+  question_type: 'R1.2',
   send_as_flow: true,
   options: [
-    { text: 'सही', correct: true, explanation: { text: 'e1', tts: false } },
-    { text: 'गलत-एक', correct: false, explanation: { text: 'e2', tts: false } },
-    { text: 'गलत-दो', correct: false, explanation: { text: 'e3', tts: false } },
-    {
-      text: 'गलत-तीन',
-      correct: false,
-      explanation: { text: 'e4', tts: false },
-    },
+    { text: 'सही', correct: true, explanation: { text: 'e1' } },
+    { text: 'गलत-एक', correct: false, explanation: { text: 'e2' } },
+    { text: 'गलत-दो', correct: false, explanation: { text: 'e3' } },
+    { text: 'गलत-तीन', correct: false, explanation: { text: 'e4' } },
   ],
 };
 
@@ -46,7 +44,7 @@ function runner(
           : {
               result: {
                 text,
-                model: SOLVABILITY_MODEL,
+                model: GATE_JUDGE_MODEL,
                 prompt_tokens: 1,
                 completion_tokens: 1,
                 duration_ms: 1,
@@ -58,6 +56,16 @@ function runner(
 }
 
 describe('runZeroContextSolvability', () => {
+  it('defaults to 144 runs with a ~80% min-valid contract', async () => {
+    const llm = runner((request) => letterOf(request, 'गलत-एक'));
+    const verdict = await runZeroContextSolvability(llm, question);
+    expect(SOLVABILITY_RUNS).toBe(144);
+    expect(SOLVABILITY_MIN_VALID_RUNS).toBe(115);
+    expect(llm.calls[0]).toHaveLength(SOLVABILITY_RUNS);
+    expect(verdict.total_runs).toBe(SOLVABILITY_RUNS);
+    expect(verdict.status).toBe('passed');
+  });
+
   it('passes a question the model cannot solve blind', async () => {
     const llm = runner((request) => letterOf(request, 'गलत-एक'));
     const verdict = await runZeroContextSolvability(llm, question, {
@@ -76,7 +84,7 @@ describe('runZeroContextSolvability', () => {
     const firstLetters = new Set(requests.map((r) => letterOf(r, 'सही')));
     expect(firstLetters.size).toBeGreaterThan(1); // shuffled
     for (const r of requests) {
-      expect(r.model).toBe(SOLVABILITY_MODEL);
+      expect(r.model).toBe(GATE_JUDGE_MODEL);
       expect(r.messages[1].content).toContain(question.text);
       expect(r.messages[1].content).not.toContain('कहानी है।'); // no passage
     }
