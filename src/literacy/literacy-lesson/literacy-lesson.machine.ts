@@ -3,12 +3,11 @@ import {
   markWord,
   markLetter,
   markImage,
-  markSentence,
-  selectDrillWord,
   detectIncorrectEndMatra,
   detectIncorrectMiddleMatra,
   detectInsertion,
 } from './evaluate-answer.utils';
+import { assessSentence, selectDrillWord } from './sentence-assessment';
 import { identifyCharacterStatus } from './identify-character-status.utils';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -212,10 +211,10 @@ export const machine = setup({
           {
             guard: and([
               ({ context, event }) =>
-                markSentence({
+                assessSentence({
                   words: context.sentence ?? [],
                   transcripts: transcriptsOf(event),
-                }),
+                }).passed,
               ({ context }) => context.sentenceErrors === 0,
             ]),
             target: 'comprehension',
@@ -236,10 +235,10 @@ export const machine = setup({
           // mark every letter of every word correct, then comprehension.
           {
             guard: ({ context, event }) =>
-              markSentence({
+              assessSentence({
                 words: context.sentence ?? [],
                 transcripts: transcriptsOf(event),
-              }),
+              }).passed,
             target: 'comprehension',
             actions: [
               { type: 'clearPendingScores' },
@@ -266,16 +265,19 @@ export const machine = setup({
               }),
             ],
           },
-          // First failed attempt with a teachable drill word (2+ graphemes
-          // off, largest distance, random ties, never a conjunct/nukta word):
-          // drill it through the existing word lesson, then come back for the
-          // retry.
+          // First failed attempt with a teachable drill word (a substituted/
+          // omitted word per the SAME assessment that failed the sentence;
+          // largest akshara distance, random ties, never a conjunct/nukta
+          // word): drill it through the existing word lesson, then come back
+          // for the retry.
           {
             guard: ({ context, event }) =>
-              selectDrillWord({
-                words: context.sentence ?? [],
-                transcripts: transcriptsOf(event),
-              }) !== null,
+              selectDrillWord(
+                assessSentence({
+                  words: context.sentence ?? [],
+                  transcripts: transcriptsOf(event),
+                }).words,
+              ) !== null,
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
@@ -283,10 +285,12 @@ export const machine = setup({
               { type: 'increment', params: { keys: 'sentenceErrors' } },
               assign({
                 word: ({ context, event }) =>
-                  selectDrillWord({
-                    words: context.sentence ?? [],
-                    transcripts: transcriptsOf(event),
-                  }) ?? context.word,
+                  selectDrillWord(
+                    assessSentence({
+                      words: context.sentence ?? [],
+                      transcripts: transcriptsOf(event),
+                    }).words,
+                  ) ?? context.word,
               }),
               assign({
                 stateTransitionId: ({ context }) =>

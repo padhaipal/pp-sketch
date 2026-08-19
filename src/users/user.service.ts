@@ -21,13 +21,15 @@ import {
   validateUpdateUserOptions,
   validateCreateUserOptions,
   partitionUserIdentifiers,
-  AmplStimulusScores,
   LiteracyTestScore,
   LiteracyTestScores,
+  SnapshotTestScore,
+  TestSnapshotPoint,
 } from './user.dto';
 
 // Rolling fraction-correct over a fixed window: one history point per attempt
-// from the moment the window first fills. O(n) single pass.
+// from the moment the window first fills. O(n) single pass. NIPUN grade 1
+// only — grades 2/3 and MPL-B use snapshot scoring below.
 function rollingScore(
   attempts: { at: Date; correct: boolean }[],
   windowSize: number,
@@ -53,6 +55,139 @@ function rollingScore(
     window_size: windowSize,
     attempts_available: attempts.length,
     latest_score: history[history.length - 1].score,
+    history,
+  };
+}
+
+// ─── Snapshot scoring (NIPUN grades 2/3 + MPL-B) ─────────────────────────────
+
+// A student's FIRST attempt at one question. Only first attempts count toward
+// tests: once the child has seen the explanation for their tap, any repeat of
+// that question is invalidated for testing.
+interface FirstAttempt {
+  at: Date;
+  correct: boolean;
+  question_id: string;
+  // The question's level = its passage's media_details.level (the generation
+  // pipeline's word-count level), NOT literacy_lesson_states.level (the
+  // lesson cap, which can diverge on nearest-level passage fallback).
+  level: number | null;
+  question_type: string | null;
+}
+
+// All tests pass on score STRICTLY greater than 0.5.
+const TEST_PASS_THRESHOLD = 0.5;
+
+const NIPUN_QUESTION_COUNT = 4;
+// NIPUN reading proxies use the retrieve subconstructs only.
+const NIPUN_R1_TYPES = ['R1.1', 'R1.2', 'R1.3'];
+const NIPUN_G2_LEVELS = [10];
+const NIPUN_G3_LEVELS = [11, 12];
+
+// MPL-B selection. Level-13 questions are excluded from every test (and from
+// lessons) by construction — only levels 11/12 qualify here.
+const MPL_B_LEVELS = [11, 12];
+const MPL_B_QUESTION_COUNT = 20;
+const MPL_B_MIN_DISTINCT_TYPES = 4;
+const MPL_B_BATCHES: Array<{ types: string[]; required: number }> = [
+  { types: ['R1.1', 'R1.2', 'R1.3'], required: 5 },
+  { types: ['R2.1', 'R2.2', 'R2.3'], required: 5 },
+  { types: ['R3.1', 'R3.2'], required: 1 },
+];
+
+// NIPUN grade 2/3 snapshot: the most recent `count` first attempts from the
+// (already level/type-filtered) pool. Null = insufficient data.
+function nipunSnapshot(
+  pool: FirstAttempt[],
+  count: number,
+): { score: number; passed: boolean } | null {
+  if (pool.length < count) return null;
+  const selected = pool.slice(-count);
+  const score = selected.filter((a) => a.correct).length / count;
+  return { score, passed: score > TEST_PASS_THRESHOLD };
+}
+
+// MPL-B snapshot over a pool of level-11/12 first attempts (chronological).
+// Four filters, walking most-recent-first; one question may satisfy both
+// filter two and filter three. Null = insufficient data at any filter.
+function mplBSnapshot(
+  pool: FirstAttempt[],
+): { score: number; passed: boolean } | null {
+  // Filter one: fewer than 20 level-11/12 first attempts → no result.
+  if (pool.length < MPL_B_QUESTION_COUNT) return null;
+  const recent = [...pool].reverse();
+  const selected = new Set<FirstAttempt>();
+
+  // Filter two: most recent representative of each question type until four
+  // distinct types are covered; three or fewer distinct types → no result.
+  const seenTypes = new Set<string>();
+  for (const attempt of recent) {
+    if (seenTypes.size >= MPL_B_MIN_DISTINCT_TYPES) break;
+    if (attempt.question_type && !seenTypes.has(attempt.question_type)) {
+      seenTypes.add(attempt.question_type);
+      selected.add(attempt);
+    }
+  }
+  if (seenTypes.size < MPL_B_MIN_DISTINCT_TYPES) return null;
+
+  // Filter three: most recent representatives per batch — R1.x ×5, R2.x ×5,
+  // R3.x ×1 (filter-two picks count toward their batch).
+  for (const batch of MPL_B_BATCHES) {
+    let have = [...selected].filter(
+      (a) => a.question_type && batch.types.includes(a.question_type),
+    ).length;
+    for (const attempt of recent) {
+      if (have >= batch.required) break;
+      if (
+        !selected.has(attempt) &&
+        attempt.question_type &&
+        batch.types.includes(attempt.question_type)
+      ) {
+        selected.add(attempt);
+        have++;
+      }
+    }
+    if (have < batch.required) return null;
+  }
+
+  // Filter four: top up with the most recent remaining attempts to 20
+  // (guaranteed reachable — the pool holds at least 20).
+  for (const attempt of recent) {
+    if (selected.size >= MPL_B_QUESTION_COUNT) break;
+    selected.add(attempt);
+  }
+
+  const score =
+    [...selected].filter((a) => a.correct).length / MPL_B_QUESTION_COUNT;
+  return { score, passed: score > TEST_PASS_THRESHOLD };
+}
+
+// history[] = the snapshot algorithm replayed over every chronological prefix
+// of the pool (insufficient-data prefixes skipped); latest = final entry.
+function snapshotSeries(
+  pool: FirstAttempt[],
+  snapshot: (
+    prefix: FirstAttempt[],
+  ) => { score: number; passed: boolean } | null,
+): SnapshotTestScore {
+  const history: TestSnapshotPoint[] = [];
+  for (let i = 0; i < pool.length; i++) {
+    const result = snapshot(pool.slice(0, i + 1));
+    if (result) {
+      history.push({
+        at: pool[i].at,
+        score: result.score,
+        passed: result.passed,
+      });
+    }
+  }
+  if (history.length === 0) {
+    return { status: 'insufficient_data', attempts_available: pool.length };
+  }
+  return {
+    status: 'ok',
+    attempts_available: pool.length,
+    latest: history[history.length - 1],
     history,
   };
 }
@@ -466,17 +601,21 @@ export class UserService {
   }
 
   /**
-   * Digital-proxy literacy test scores (NIPUN grades 1-3 + AMPL-B), each as a
-   * rolling window over the student's answer history — latest score plus the
-   * full score-over-time series. Returns null when the user does not exist;
-   * per-test status 'insufficient_data' when a window has not filled yet.
+   * Digital-proxy literacy test scores (NIPUN grades 1-3 + MPL-B). Returns
+   * null when the user does not exist; per-test status 'insufficient_data'
+   * when there is not enough answer history yet.
    *
-   * Complex query #1 (first attempts): a level-8 sentence lesson's FIRST read
-   * attempt leaves exactly one row whose stid is either
+   * Grade 1 is unchanged: a rolling window over level-8 sentence FIRST read
+   * attempts (complex query #1 — the stid is either
    * `…-sentence-comprehension-correct-first` (success) or a drill/wrong-retry
-   * stid (failure) — retry successes deliberately never appear here.
-   * Complex query #2 (comprehension answers): joins the tapped option → its
-   * question (question_type) and the lesson's passage (passage_type).
+   * stid (failure); retry successes deliberately never appear).
+   *
+   * Grades 2/3 and MPL-B are snapshot tests over comprehension answers
+   * (complex query #2 — the tapped option is joined to its question and the
+   * question's passage). Only a student's FIRST attempt at each question
+   * counts: after seeing the explanation, repeats are invalidated. The
+   * question's level is the passage's media_details.level (word-count level);
+   * level-13 questions never qualify.
    */
   async getLiteracyTestScores(
     input: string,
@@ -511,18 +650,21 @@ export class UserService {
     interface ComprehensionRow {
       created_at: Date;
       answer_correct: boolean;
-      level: number | null;
+      question_id: string;
       question_type: string | null;
-      passage_type: string | null;
+      level: number | null;
     }
     const answers: ComprehensionRow[] = await this.dataSource.query(
-      `SELECT s.created_at, s.answer_correct, s.level,
+      `SELECT s.created_at, s.answer_correct,
+              q.id AS question_id,
               q.media_details->>'question_type' AS question_type,
-              p.media_details->>'passage_type' AS passage_type
+              (p.media_details->>'level')::int AS level
        FROM literacy_lesson_states s
        JOIN media_metadata o ON o.id::text = s.answer AND o.rolled_back = false
-       JOIN media_metadata q ON q.id = o.input_media_id
-       JOIN media_metadata p ON p.id = s.passage_id
+       JOIN media_metadata q
+         ON q.id = o.input_media_id AND q.rolled_back = false
+       JOIN media_metadata p
+         ON p.id = q.input_media_id AND p.rolled_back = false
        WHERE s.user_id = $1
          AND s.answer_correct IS NOT NULL
          AND (s.snapshot->'context'->>'stateTransitionId')
@@ -531,116 +673,57 @@ export class UserService {
       [user.id],
     );
 
-    const attempts = (rows: { created_at: Date; correct: boolean }[]) =>
-      rows.map((r) => ({ at: r.created_at, correct: r.correct === true }));
-    const answerAttempts = (filter: (r: ComprehensionRow) => boolean) =>
-      answers
-        .filter(filter)
-        .map((r) => ({ at: r.created_at, correct: r.answer_correct === true }));
+    // Dedup to first attempts, in chronological order.
+    const seenQuestions = new Set<string>();
+    const dedupedAttempts: FirstAttempt[] = [];
+    for (const row of answers) {
+      if (seenQuestions.has(row.question_id)) continue;
+      seenQuestions.add(row.question_id);
+      dedupedAttempts.push({
+        at: row.created_at,
+        correct: row.answer_correct === true,
+        question_id: row.question_id,
+        level: row.level,
+        question_type: row.question_type,
+      });
+    }
 
     const NIPUN_G1_WINDOW = 2;
-    const NIPUN_RETRIEVE_WINDOW = 4;
-    const nipunGrade1 = rollingScore(attempts(firstAttempts), NIPUN_G1_WINDOW);
-    const nipunGrade2 = rollingScore(
-      answerAttempts((r) => r.level === 11 && r.question_type === 'retrieve'),
-      NIPUN_RETRIEVE_WINDOW,
-    );
-    const nipunGrade3 = rollingScore(
-      answerAttempts((r) => r.level === 12 && r.question_type === 'retrieve'),
-      NIPUN_RETRIEVE_WINDOW,
+    const nipunGrade1 = rollingScore(
+      firstAttempts.map((r) => ({
+        at: r.created_at,
+        correct: r.correct === true,
+      })),
+      NIPUN_G1_WINDOW,
     );
 
-    // AMPL-B: level ≥ 12 stimulus only ('reflect' in the paper test = our
-    // 'evaluate' question type).
-    const AMPL_MIN_LEVEL = 12;
-    const AMPL_BUCKETS: Array<{
-      key: keyof AmplStimulusScores;
-      size: number;
-      types: string[];
-    }> = [
-      { key: 'retrieve', size: 6, types: ['retrieve'] },
-      {
-        key: 'interpret_infer_integrate',
-        size: 7,
-        types: ['interpret', 'infer', 'integrate'],
-      },
-      { key: 'evaluate', size: 3, types: ['evaluate'] },
-    ];
-    const STIMULUS_TYPES = ['narrative', 'expository'] as const;
-
-    const bucketAttempts = new Map<string, { at: Date; correct: boolean }[]>();
-    const bucketScores = {} as Record<
-      (typeof STIMULUS_TYPES)[number],
-      AmplStimulusScores
-    >;
-    for (const stimulus of STIMULUS_TYPES) {
-      const scores = {} as AmplStimulusScores;
-      for (const bucket of AMPL_BUCKETS) {
-        const rows = answerAttempts(
-          (r) =>
-            (r.level ?? 0) >= AMPL_MIN_LEVEL &&
-            r.passage_type === stimulus &&
-            bucket.types.includes(r.question_type ?? ''),
-        );
-        bucketAttempts.set(`${stimulus}:${bucket.key}`, rows);
-        scores[bucket.key] = rollingScore(rows, bucket.size);
-      }
-      bucketScores[stimulus] = scores;
-    }
-
-    // Combined AMPL-B score: replay all buckets chronologically; once every
-    // bucket's window has filled, each subsequent answer yields a point of
-    // total-correct / 32.
-    const totalWindow = AMPL_BUCKETS.reduce((sum, b) => sum + b.size, 0) * 2;
-    interface Event {
-      at: Date;
-      bucket: string;
-      correct: boolean;
-    }
-    const events: Event[] = [];
-    for (const [bucket, rows] of bucketAttempts) {
-      for (const row of rows) {
-        events.push({ at: row.at, bucket, correct: row.correct });
-      }
-    }
-    events.sort((a, b) => a.at.getTime() - b.at.getTime());
-    const windows = new Map<string, boolean[]>();
-    const sizes = new Map<string, number>();
-    for (const stimulus of STIMULUS_TYPES) {
-      for (const bucket of AMPL_BUCKETS) {
-        windows.set(`${stimulus}:${bucket.key}`, []);
-        sizes.set(`${stimulus}:${bucket.key}`, bucket.size);
-      }
-    }
-    const combinedHistory: { at: Date; score: number }[] = [];
-    for (const event of events) {
-      const window = windows.get(event.bucket)!;
-      window.push(event.correct);
-      if (window.length > sizes.get(event.bucket)!) window.shift();
-      const allFull = Array.from(windows.entries()).every(
-        ([key, w]) => w.length >= sizes.get(key)!,
-      );
-      if (allFull) {
-        const correct = Array.from(windows.values())
-          .flat()
-          .filter(Boolean).length;
-        combinedHistory.push({ at: event.at, score: correct / totalWindow });
-      }
-    }
+    const nipunGrade2Pool = dedupedAttempts.filter(
+      (a) =>
+        a.level !== null &&
+        NIPUN_G2_LEVELS.includes(a.level) &&
+        a.question_type !== null &&
+        NIPUN_R1_TYPES.includes(a.question_type),
+    );
+    const nipunGrade3Pool = dedupedAttempts.filter(
+      (a) =>
+        a.level !== null &&
+        NIPUN_G3_LEVELS.includes(a.level) &&
+        a.question_type !== null &&
+        NIPUN_R1_TYPES.includes(a.question_type),
+    );
+    const mplBPool = dedupedAttempts.filter(
+      (a) => a.level !== null && MPL_B_LEVELS.includes(a.level),
+    );
 
     return {
       nipun_grade_1: nipunGrade1,
-      nipun_grade_2: nipunGrade2,
-      nipun_grade_3: nipunGrade3,
-      ampl_b: {
-        status: combinedHistory.length > 0 ? 'ok' : 'insufficient_data',
-        ...(combinedHistory.length > 0 && {
-          latest_score: combinedHistory[combinedHistory.length - 1].score,
-          history: combinedHistory,
-        }),
-        narrative: bucketScores.narrative,
-        expository: bucketScores.expository,
-      },
+      nipun_grade_2: snapshotSeries(nipunGrade2Pool, (prefix) =>
+        nipunSnapshot(prefix, NIPUN_QUESTION_COUNT),
+      ),
+      nipun_grade_3: snapshotSeries(nipunGrade3Pool, (prefix) =>
+        nipunSnapshot(prefix, NIPUN_QUESTION_COUNT),
+      ),
+      mpl_b: snapshotSeries(mplBPool, mplBSnapshot),
     };
   }
 

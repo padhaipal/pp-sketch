@@ -49,17 +49,25 @@ create(options: CreateUserOptions): Promise<User>
 * Populate the cache for both userById and userByExternalId keys with CACHE_TTL.USER.
 * Return the newly created user entity.
 
-## getLiteracyTestScores (2026-07)
+## getLiteracyTestScores (2026-07, reworked 2026-08)
 
-Digital-proxy literacy test scores as rolling windows (latest + full history):
-- NIPUN g1: last 2 level-8 sentence FIRST attempts (success = the
-  `…-sentence-comprehension-correct-first` stid; drill/wrong-retry rows are
-  the failures; retry successes never count).
-- NIPUN g2/g3: last 4 level-11 / level-12 'retrieve' comprehension answers.
-- AMPL-B (level ≥ 12 only): per narrative/expository stimulus, buckets of 6
-  retrieve + 7 interpret/infer/integrate + 3 evaluate ('reflect' in the paper
-  test = 'evaluate'); combined score = total-correct/32, emitted only once
-  every bucket window has filled (chronological replay).
-Question/passage types come from media_details on the option's question row
-and the lesson's passage row (complex queries #1/#2 in the method). Exposed
+Digital-proxy literacy test scores:
+- NIPUN g1 (unchanged rolling window): last 2 level-8 sentence FIRST read
+  attempts (success = the `…-sentence-comprehension-correct-first` stid;
+  drill/wrong-retry rows are the failures; retry successes never count).
+- Everything else counts only a student's FIRST attempt per question (deduped
+  by question id — after seeing the explanation, repeats are invalidated).
+  The question's level is its passage's media_details.level; level 13 never
+  qualifies. Question types are the reading subconstructs R1.1-R3.2.
+- NIPUN g2: 4 most recent level-10 R1.1/R1.2/R1.3 first attempts.
+- NIPUN g3: 4 most recent level-11/12 R1.1/R1.2/R1.3 first attempts.
+- MPL-B: 20 level-11/12 first attempts selected by four filters walking
+  most-recent-first — (1) pool < 20 → insufficient; (2) one per distinct
+  type until 4 types (≤3 distinct types → insufficient); (3) batch quotas
+  R1.x ×5, R2.x ×5, R3.x ×1 (filter-2 picks count); (4) fill to 20.
+- Snapshot tests score correct/selected, pass STRICTLY > 0.5, and return
+  history[] = the snapshot replayed over every chronological prefix
+  (insufficient prefixes skipped); latest = final history entry.
+Question types/levels come from media_details on the option's question row
+and its parent passage row (complex queries #1/#2 in the method). Exposed
 at GET /users/:id/literacy-test-scores.

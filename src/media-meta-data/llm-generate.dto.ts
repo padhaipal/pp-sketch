@@ -54,7 +54,6 @@ export const FLOW_QUESTION_MAX_CHARS = 1000;
 const RAW_COMPLETION_MAX_CHARS = 100_000;
 const PASSAGE_MAX_CHARS = 4096;
 const EXPLANATION_MAX_CHARS = 4096;
-const MAX_QUESTIONS = 10;
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 4;
 const REQUEST_MESSAGE_MAX_CHARS = 50_000;
@@ -65,12 +64,21 @@ const REQUEST_MAX_MESSAGES = 50;
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS_RE = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F]/;
 
+// Reading subconstructs from "SDG 4.1.1 Minimum Proficiency Levels:
+// Definition and blueprint for assessment" (ACER GEM / UNESCO UIS),
+// https://research.acer.edu.au/cgi/viewcontent.cgi?article=1025&context=gem
+// R1.x = retrieve, R2.x = interpret, R3.x = reflect. Human-readable
+// descriptions live beside the dashboard's template selector
+// (pp-dashboard/src/app/llm/seed.ts).
 export const VALID_QUESTION_TYPES = [
-  'retrieve',
-  'infer',
-  'integrate',
-  'interpret',
-  'evaluate',
+  'R1.1',
+  'R1.2',
+  'R1.3',
+  'R2.1',
+  'R2.2',
+  'R2.3',
+  'R3.1',
+  'R3.2',
 ] as const;
 export type QuestionType = (typeof VALID_QUESTION_TYPES)[number];
 
@@ -85,9 +93,10 @@ export interface LlmGenerateRequest {
   messages: LlmMessage[];
 }
 
+// All text media is always converted to audio (passage, question, options,
+// explanations) — there is no per-entity tts flag.
 export interface GeneratedExplanation {
   text: string;
-  tts: boolean;
 }
 
 export interface GeneratedOption {
@@ -106,16 +115,25 @@ export interface GeneratedQuestion {
 export interface GeneratedPassage {
   text: string;
   passage_type: PassageType;
-  tts: boolean;
 }
 
 export interface GeneratedContent {
   passage: GeneratedPassage;
-  questions: GeneratedQuestion[];
+  question: GeneratedQuestion;
 }
 
 export interface LlmGenerateQuestionResult {
-  status: 'created' | 'rejected';
+  /**
+   * 'created'    — passed every gate, family inserted live.
+   * 'discarded'  — failed the judge or solvability gate; the whole family is
+   *                persisted with rolled_back = true and a
+   *                media_details.gate_failure record on the question row for
+   *                troubleshooting (see GET /media-meta-data/
+   *                generation-failures). No audio is generated for it.
+   * 'unverified' — too few parseable gate runs for a verdict; nothing is
+   *                written, retrying the same request may succeed.
+   */
+  status: 'created' | 'discarded' | 'unverified';
   reason?: string;
   question_id?: string;
   solvability_rate?: number;
@@ -129,7 +147,7 @@ export interface LlmGenerateResponse {
   retriable?: boolean;
   passage_id?: string;
   level?: number;
-  questions?: LlmGenerateQuestionResult[];
+  question?: LlmGenerateQuestionResult;
   /** Set when text entities were created but TTS enqueue failed. */
   tts_error?: string;
 }
@@ -234,8 +252,9 @@ function optionalBoolean(value: unknown, fallback: boolean): boolean {
 }
 
 /**
- * Parses a raw chat completion into validated GeneratedContent. Tolerates a
- * ```json fenced block around the object (common LLM habit), nothing else.
+ * Parses a raw chat completion into validated GeneratedContent — exactly one
+ * question per passage. Tolerates a ```json fenced block around the object
+ * (common LLM habit), nothing else.
  */
 export function parseGeneratedContent(raw: string): GeneratedContent {
   if (raw.length > RAW_COMPLETION_MAX_CHARS) {
@@ -280,98 +299,84 @@ export function parseGeneratedContent(raw: string): GeneratedContent {
       PASSAGE_MAX_CHARS,
     ),
     passage_type: passageType as PassageType,
-    tts: optionalBoolean(passageRecord.tts, false),
   };
 
-  const rawQuestions = root.questions;
+  const rawQuestion = root.question;
+  if (!rawQuestion || typeof rawQuestion !== 'object') {
+    throw new LlmOutputInvalidError('question must be an object');
+  }
+  const questionRecord = rawQuestion as Record<string, unknown>;
+  const questionType = questionRecord.question_type;
   if (
-    !Array.isArray(rawQuestions) ||
-    rawQuestions.length === 0 ||
-    rawQuestions.length > MAX_QUESTIONS
+    typeof questionType !== 'string' ||
+    !(VALID_QUESTION_TYPES as readonly string[]).includes(questionType)
   ) {
     throw new LlmOutputInvalidError(
-      `questions must be an array of 1-${MAX_QUESTIONS} items`,
+      `question.question_type must be one of: ${VALID_QUESTION_TYPES.join(', ')}`,
     );
   }
 
-  const questions: GeneratedQuestion[] = rawQuestions.map((q, qi) => {
-    if (!q || typeof q !== 'object') {
-      throw new LlmOutputInvalidError(`questions[${qi}] must be an object`);
-    }
-    const questionRecord = q as Record<string, unknown>;
-    const questionType = questionRecord.question_type;
-    if (
-      typeof questionType !== 'string' ||
-      !(VALID_QUESTION_TYPES as readonly string[]).includes(questionType)
-    ) {
+  const rawOptions = questionRecord.options;
+  if (
+    !Array.isArray(rawOptions) ||
+    rawOptions.length < MIN_OPTIONS ||
+    rawOptions.length > MAX_OPTIONS
+  ) {
+    throw new LlmOutputInvalidError(
+      `question.options must have ${MIN_OPTIONS}-${MAX_OPTIONS} items`,
+    );
+  }
+
+  const options: GeneratedOption[] = rawOptions.map((o, oi) => {
+    if (!o || typeof o !== 'object') {
       throw new LlmOutputInvalidError(
-        `questions[${qi}].question_type must be one of: ${VALID_QUESTION_TYPES.join(', ')}`,
+        `question.options[${oi}] must be an object`,
       );
     }
-
-    const rawOptions = questionRecord.options;
-    if (
-      !Array.isArray(rawOptions) ||
-      rawOptions.length < MIN_OPTIONS ||
-      rawOptions.length > MAX_OPTIONS
-    ) {
+    const optionRecord = o as Record<string, unknown>;
+    const rawExplanation = optionRecord.explanation;
+    if (!rawExplanation || typeof rawExplanation !== 'object') {
       throw new LlmOutputInvalidError(
-        `questions[${qi}].options must have ${MIN_OPTIONS}-${MAX_OPTIONS} items`,
+        `question.options[${oi}].explanation must be an object`,
       );
     }
-
-    const options: GeneratedOption[] = rawOptions.map((o, oi) => {
-      if (!o || typeof o !== 'object') {
-        throw new LlmOutputInvalidError(
-          `questions[${qi}].options[${oi}] must be an object`,
-        );
-      }
-      const optionRecord = o as Record<string, unknown>;
-      const rawExplanation = optionRecord.explanation;
-      if (!rawExplanation || typeof rawExplanation !== 'object') {
-        throw new LlmOutputInvalidError(
-          `questions[${qi}].options[${oi}].explanation must be an object`,
-        );
-      }
-      const explanationRecord = rawExplanation as Record<string, unknown>;
-      return {
-        text: requireCleanString(
-          optionRecord.text,
-          `questions[${qi}].options[${oi}].text`,
-          FLOW_OPTION_DESCRIPTION_MAX_CHARS,
-        ),
-        correct: optionalBoolean(optionRecord.correct, false),
-        explanation: {
-          text: requireCleanString(
-            explanationRecord.text,
-            `questions[${qi}].options[${oi}].explanation.text`,
-            EXPLANATION_MAX_CHARS,
-          ),
-          tts: optionalBoolean(explanationRecord.tts, false),
-        },
-      };
-    });
-
-    const correctCount = options.filter((o) => o.correct).length;
-    if (correctCount !== 1) {
-      throw new LlmOutputInvalidError(
-        `questions[${qi}] must have exactly one correct option (got ${correctCount})`,
-      );
-    }
-
+    const explanationRecord = rawExplanation as Record<string, unknown>;
     return {
       text: requireCleanString(
-        questionRecord.text,
-        `questions[${qi}].text`,
-        FLOW_QUESTION_MAX_CHARS,
+        optionRecord.text,
+        `question.options[${oi}].text`,
+        FLOW_OPTION_DESCRIPTION_MAX_CHARS,
       ),
-      question_type: questionType as QuestionType,
-      send_as_flow: optionalBoolean(questionRecord.send_as_flow, true),
-      options,
+      correct: optionalBoolean(optionRecord.correct, false),
+      explanation: {
+        text: requireCleanString(
+          explanationRecord.text,
+          `question.options[${oi}].explanation.text`,
+          EXPLANATION_MAX_CHARS,
+        ),
+      },
     };
   });
 
-  return { passage, questions };
+  const correctCount = options.filter((o) => o.correct).length;
+  if (correctCount !== 1) {
+    throw new LlmOutputInvalidError(
+      `question must have exactly one correct option (got ${correctCount})`,
+    );
+  }
+
+  const question: GeneratedQuestion = {
+    text: requireCleanString(
+      questionRecord.text,
+      'question.text',
+      FLOW_QUESTION_MAX_CHARS,
+    ),
+    question_type: questionType as QuestionType,
+    send_as_flow: optionalBoolean(questionRecord.send_as_flow, true),
+    options,
+  };
+
+  return { passage, question };
 }
 
 // ─── Passage level ───────────────────────────────────────────────────────────
@@ -382,7 +387,11 @@ const WORD_SEPARATORS_RE = /[\s।॥,.!?;:'"“”‘’()[\]{}\-–—~]+/u;
 
 /**
  * Level is computed from word count, never trusted from the LLM:
- * <10 words → 8, <40 → 9, <70 → 10, <110 → 11, else 12.
+ * <10 words → 8, <40 → 9, <70 → 10, <110 → 11, <250 → 12, else 13.
+ *
+ * Level-13 passages are storage-only: they are never served to students
+ * (lesson selection caps at MAX_LESSON_LEVEL = 12) and are excluded from the
+ * NIPUN and MPL-B test calculations (which filter on levels 10-12).
  */
 export function passageLevelFromWordCount(text: string): number {
   const wordCount = text
@@ -392,7 +401,8 @@ export function passageLevelFromWordCount(text: string): number {
   if (wordCount < 40) return 9;
   if (wordCount < 70) return 10;
   if (wordCount < 110) return 11;
-  return 12;
+  if (wordCount < 250) return 12;
+  return 13;
 }
 
 // ─── Flow payload (media_metadata.text of media_type='flow' rows) ────────────

@@ -6,7 +6,7 @@
 const mockMarkWord = jest.fn();
 const mockMarkLetter = jest.fn();
 const mockMarkImage = jest.fn();
-const mockMarkSentence = jest.fn();
+const mockAssessSentence = jest.fn();
 const mockSelectDrillWord = jest.fn();
 const mockDetectIncorrectEndMatra = jest.fn();
 const mockDetectIncorrectMiddleMatra = jest.fn();
@@ -15,14 +15,35 @@ jest.mock('./evaluate-answer.utils', () => ({
   markWord: (...args: unknown[]) => mockMarkWord(...args),
   markLetter: (...args: unknown[]) => mockMarkLetter(...args),
   markImage: (...args: unknown[]) => mockMarkImage(...args),
-  markSentence: (...args: unknown[]) => mockMarkSentence(...args),
-  selectDrillWord: (...args: unknown[]) => mockSelectDrillWord(...args),
   detectIncorrectEndMatra: (...args: unknown[]) =>
     mockDetectIncorrectEndMatra(...args),
   detectIncorrectMiddleMatra: (...args: unknown[]) =>
     mockDetectIncorrectMiddleMatra(...args),
   detectInsertion: (...args: unknown[]) => mockDetectInsertion(...args),
 }));
+jest.mock('./sentence-assessment', () => ({
+  assessSentence: (...args: unknown[]) => mockAssessSentence(...args),
+  selectDrillWord: (...args: unknown[]) => mockSelectDrillWord(...args),
+}));
+
+// Shape mirror of SentenceAssessment — tests only steer `passed` (and the
+// `words` array handed on to selectDrillWord); the machine reads nothing else.
+const sentenceAssessment = (
+  passed: boolean,
+  words: unknown[] = [],
+): {
+  passed: boolean;
+  wordCount: number;
+  errorCount: number;
+  accuracy: number;
+  words: unknown[];
+} => ({
+  passed,
+  wordCount: 2,
+  errorCount: passed ? 0 : 1,
+  accuracy: passed ? 1 : 0.5,
+  words,
+});
 
 // identifyCharacterStatus returns the list of wrong letters used to seed the
 // machine's `wrongLetters` array on the first wrong-word transition. Control
@@ -77,7 +98,7 @@ function allMarksFalse(): void {
   mockMarkWord.mockReturnValue(false);
   mockMarkLetter.mockReturnValue(false);
   mockMarkImage.mockReturnValue(false);
-  mockMarkSentence.mockReturnValue(false);
+  mockAssessSentence.mockReturnValue(sentenceAssessment(false));
   mockSelectDrillWord.mockReturnValue(null);
   mockDetectIncorrectEndMatra.mockReturnValue(false);
   mockDetectIncorrectMiddleMatra.mockReturnValue(false);
@@ -88,7 +109,7 @@ beforeEach(() => {
   mockMarkWord.mockReset();
   mockMarkLetter.mockReset();
   mockMarkImage.mockReset();
-  mockMarkSentence.mockReset();
+  mockAssessSentence.mockReset();
   mockSelectDrillWord.mockReset();
   mockDetectIncorrectEndMatra.mockReset();
   mockDetectIncorrectMiddleMatra.mockReset();
@@ -1214,7 +1235,7 @@ describe('machine — start router', () => {
 
 describe('machine — sentence state', () => {
   it('correct on the first attempt → comprehension + correct-first stid + every letter of every word pendingCorrect', () => {
-    mockMarkSentence.mockReturnValue(true);
+    mockAssessSentence.mockReturnValue(sentenceAssessment(true));
     const a = makeSentenceActor();
     a.send(ANSWER('नल घर'));
     const snap = a.snap();
@@ -1229,15 +1250,15 @@ describe('machine — sentence state', () => {
     a.stop();
   });
 
-  it('passes context.sentence and the per-engine transcripts to markSentence', () => {
-    mockMarkSentence.mockReturnValue(true);
+  it('passes context.sentence and the per-engine transcripts to assessSentence', () => {
+    mockAssessSentence.mockReturnValue(sentenceAssessment(true));
     const a = makeSentenceActor();
     a.send({
       type: 'ANSWER',
       studentAnswer: 'नल ~ घर',
       studentTranscripts: ['नल', 'घर'],
     });
-    expect(mockMarkSentence).toHaveBeenCalledWith({
+    expect(mockAssessSentence).toHaveBeenCalledWith({
       words: SENTENCE,
       transcripts: ['नल', 'घर'],
     });
@@ -1245,10 +1266,10 @@ describe('machine — sentence state', () => {
   });
 
   it('falls back to [studentAnswer] when the event carries no studentTranscripts', () => {
-    mockMarkSentence.mockReturnValue(true);
+    mockAssessSentence.mockReturnValue(sentenceAssessment(true));
     const a = makeSentenceActor();
     a.send(ANSWER('नल घर'));
-    expect(mockMarkSentence).toHaveBeenCalledWith({
+    expect(mockAssessSentence).toHaveBeenCalledWith({
       words: SENTENCE,
       transcripts: ['नल घर'],
     });
@@ -1256,6 +1277,11 @@ describe('machine — sentence state', () => {
   });
 
   it('wrong on the first attempt → drills the word selectDrillWord picked', () => {
+    const failedWords = [
+      { target: 'नल', heard: 'नल', status: 'correct' },
+      { target: 'घर', heard: null, status: 'omitted' },
+    ];
+    mockAssessSentence.mockReturnValue(sentenceAssessment(false, failedWords));
     mockSelectDrillWord.mockReturnValue('घर');
     const a = makeSentenceActor();
     a.send({
@@ -1270,10 +1296,12 @@ describe('machine — sentence state', () => {
     expect(snap.context.sentenceErrors).toBe(1);
     expect(snap.context.answerCorrect).toBe(false);
     expect(snap.context.stateTransitionId).toBe('घर-sentence-word-drillWord');
-    expect(mockSelectDrillWord).toHaveBeenCalledWith({
+    // The guard hands the assessment's per-word evidence to selectDrillWord.
+    expect(mockAssessSentence).toHaveBeenCalledWith({
       words: SENTENCE,
       transcripts: ['नल'],
     });
+    expect(mockSelectDrillWord).toHaveBeenCalledWith(failedWords);
     a.stop();
   });
 
@@ -1303,7 +1331,7 @@ describe('machine — sentence state', () => {
     a.send(ANSWER('wrong')); // attempt 1 → drill नल
     mockMarkWord.mockReturnValue(true);
     a.send(ANSWER('नल')); // drill passed → back to sentence
-    mockMarkSentence.mockReturnValue(true);
+    mockAssessSentence.mockReturnValue(sentenceAssessment(true));
     a.send(ANSWER('नल घर')); // attempt 2 correct
     const snap = a.snap();
     expect(snap.value).toBe('comprehension');
@@ -1416,7 +1444,7 @@ describe('machine — word drill inside a sentence', () => {
 
 describe('machine — comprehension state', () => {
   function driveToComprehension(): ActorHandle {
-    mockMarkSentence.mockReturnValue(true);
+    mockAssessSentence.mockReturnValue(sentenceAssessment(true));
     const a = makeSentenceActor();
     a.send(ANSWER('नल घर'));
     expect(a.snap().value).toBe('comprehension');
@@ -1506,7 +1534,7 @@ describe('machine — sentence retry without a teachable drill word', () => {
     mockSelectDrillWord.mockReturnValue(null);
     const a = makeSentenceActor();
     a.send(ANSWER('गलत'));
-    mockMarkSentence.mockReturnValue(true);
+    mockAssessSentence.mockReturnValue(sentenceAssessment(true));
     a.send(ANSWER('नल घर'));
     const snap = a.snap();
     expect(snap.value).toBe('comprehension');

@@ -20,25 +20,23 @@ function validBody(): Record<string, unknown> {
 function validContent(): Record<string, unknown> {
   return {
     passage: { text: 'यह एक कहानी है।', passage_type: 'narrative' },
-    questions: [
-      {
-        text: 'कहानी किस बारे में है?',
-        question_type: 'retrieve',
-        send_as_flow: true,
-        options: [
-          {
-            text: 'सही उत्तर',
-            correct: true,
-            explanation: { text: 'यह सही है', tts: true },
-          },
-          {
-            text: 'गलत उत्तर',
-            correct: false,
-            explanation: { text: 'यह गलत है', tts: false },
-          },
-        ],
-      },
-    ],
+    question: {
+      text: 'कहानी किस बारे में है?',
+      question_type: 'R1.2',
+      send_as_flow: true,
+      options: [
+        {
+          text: 'सही उत्तर',
+          correct: true,
+          explanation: { text: 'यह सही है' },
+        },
+        {
+          text: 'गलत उत्तर',
+          correct: false,
+          explanation: { text: 'यह गलत है' },
+        },
+      ],
+    },
   };
 }
 
@@ -79,30 +77,33 @@ describe('parseGeneratedContent', () => {
   it('parses a valid completion', () => {
     const content = parseGeneratedContent(JSON.stringify(validContent()));
     expect(content.passage.passage_type).toBe('narrative');
-    expect(content.questions[0].options).toHaveLength(2);
-    expect(content.questions[0].options[0].correct).toBe(true);
-    expect(content.questions[0].options[0].explanation.tts).toBe(true);
+    expect(content.question.question_type).toBe('R1.2');
+    expect(content.question.options).toHaveLength(2);
+    expect(content.question.options[0].correct).toBe(true);
+    expect(content.question.options[0].explanation.text).toBe('यह सही है');
   });
 
   it('tolerates a ```json fenced block', () => {
     const raw = '```json\n' + JSON.stringify(validContent()) + '\n```';
-    expect(parseGeneratedContent(raw).questions).toHaveLength(1);
+    expect(parseGeneratedContent(raw).question.options).toHaveLength(2);
   });
 
-  it('defaults send_as_flow to true and tts to false when absent', () => {
+  it('defaults send_as_flow to true when absent', () => {
     const value = validContent();
-    const q = (value.questions as Record<string, unknown>[])[0];
-    delete q.send_as_flow;
-    delete (
-      (q.options as Record<string, unknown>[])[1].explanation as Record<
-        string,
-        unknown
-      >
-    ).tts;
+    delete (value.question as Record<string, unknown>).send_as_flow;
     const content = parseGeneratedContent(JSON.stringify(value));
-    expect(content.questions[0].send_as_flow).toBe(true);
-    expect(content.questions[0].options[1].explanation.tts).toBe(false);
+    expect(content.question.send_as_flow).toBe(true);
   });
+
+  it.each(['R1.1', 'R1.2', 'R1.3', 'R2.1', 'R2.2', 'R2.3', 'R3.1', 'R3.2'])(
+    'accepts question_type %s',
+    (questionType) => {
+      const value = validContent();
+      (value.question as Record<string, unknown>).question_type = questionType;
+      const content = parseGeneratedContent(JSON.stringify(value));
+      expect(content.question.question_type).toBe(questionType);
+    },
+  );
 
   it('ignores unknown keys instead of passing them through', () => {
     const value = validContent();
@@ -119,8 +120,8 @@ describe('parseGeneratedContent', () => {
 
   it('is immune to __proto__ smuggling', () => {
     const raw =
-      '{"passage":{"text":"क","passage_type":"narrative"},"__proto__":{"polluted":true},"questions":' +
-      JSON.stringify(validContent().questions) +
+      '{"passage":{"text":"क","passage_type":"narrative"},"__proto__":{"polluted":true},"question":' +
+      JSON.stringify(validContent().question) +
       '}';
     const content = parseGeneratedContent(raw);
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
@@ -132,7 +133,7 @@ describe('parseGeneratedContent', () => {
   it.each([
     ['invalid JSON', 'not json'],
     ['array root', '[1,2]'],
-    ['missing passage', JSON.stringify({ questions: [] })],
+    ['missing passage', JSON.stringify({ question: validContent().question })],
     [
       'bad passage_type',
       JSON.stringify({
@@ -140,12 +141,27 @@ describe('parseGeneratedContent', () => {
         passage: { text: 'क', passage_type: 'poem' },
       }),
     ],
-    ['no questions', JSON.stringify({ ...validContent(), questions: [] })],
+    ['missing question', JSON.stringify({ passage: validContent().passage })],
+    [
+      'questions array instead of a single question',
+      (() => {
+        const v = validContent();
+        return JSON.stringify({ passage: v.passage, questions: [v.question] });
+      })(),
+    ],
+    [
+      'legacy question_type value',
+      (() => {
+        const v = validContent();
+        (v.question as Record<string, unknown>).question_type = 'retrieve';
+        return JSON.stringify(v);
+      })(),
+    ],
     [
       'bad question_type',
       (() => {
         const v = validContent();
-        (v.questions as Record<string, unknown>[])[0].question_type = 'recall';
+        (v.question as Record<string, unknown>).question_type = 'R9.9';
         return JSON.stringify(v);
       })(),
     ],
@@ -153,7 +169,7 @@ describe('parseGeneratedContent', () => {
       'single option',
       (() => {
         const v = validContent();
-        const q = (v.questions as Record<string, unknown>[])[0];
+        const q = v.question as Record<string, unknown>;
         q.options = (q.options as unknown[]).slice(0, 1);
         return JSON.stringify(v);
       })(),
@@ -162,7 +178,7 @@ describe('parseGeneratedContent', () => {
       'two correct options',
       (() => {
         const v = validContent();
-        const q = (v.questions as Record<string, unknown>[])[0];
+        const q = v.question as Record<string, unknown>;
         (q.options as Record<string, unknown>[])[1].correct = true;
         return JSON.stringify(v);
       })(),
@@ -171,7 +187,7 @@ describe('parseGeneratedContent', () => {
       'option text over the flow description cap',
       (() => {
         const v = validContent();
-        const q = (v.questions as Record<string, unknown>[])[0];
+        const q = v.question as Record<string, unknown>;
         (q.options as Record<string, unknown>[])[0].text = 'क'.repeat(301);
         return JSON.stringify(v);
       })(),
@@ -180,7 +196,7 @@ describe('parseGeneratedContent', () => {
       'control characters in passage',
       JSON.stringify({
         ...validContent(),
-        passage: { text: 'कख', passage_type: 'narrative' },
+        passage: { text: 'क\u0007ख', passage_type: 'narrative' },
       }),
     ],
   ])('rejects %s', (_label, raw) => {
@@ -210,7 +226,9 @@ describe('passageLevelFromWordCount', () => {
     [70, 11],
     [109, 11],
     [110, 12],
-    [500, 12],
+    [249, 12],
+    [250, 13],
+    [500, 13],
   ])('%d words → level %d', (count, level) => {
     expect(passageLevelFromWordCount(words(count))).toBe(level);
   });

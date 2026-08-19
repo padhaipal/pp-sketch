@@ -475,12 +475,11 @@ export function validateCreateUserOptions(options: unknown): CreateUserOptions {
   } as CreateUserOptions;
 }
 
-// ─── Literacy proxy test scores (2026-07) ────────────────────────────────────
+// ─── Literacy proxy test scores (2026-07, reworked 2026-08) ──────────────────
 
-// Rolling-window score for one digital-proxy test (or one AMPL-B bucket).
-// score values are fractions correct in [0, 1]; history is one point per
-// attempt from the moment the window first fills, so callers can chart the
-// score over time.
+// Rolling-window score for the NIPUN grade 1 digital-proxy test. score values
+// are fractions correct in [0, 1]; history is one point per attempt from the
+// moment the window first fills, so callers can chart the score over time.
 export interface LiteracyTestScore {
   status: 'ok' | 'insufficient_data';
   window_size: number;
@@ -489,33 +488,36 @@ export interface LiteracyTestScore {
   history?: { at: Date; score: number }[];
 }
 
-export type AmplBucketKey =
-  | 'retrieve'
-  | 'interpret_infer_integrate'
-  | 'evaluate';
+export interface TestSnapshotPoint {
+  at: Date;
+  score: number;
+  passed: boolean;
+}
 
-export interface AmplStimulusScores {
-  retrieve: LiteracyTestScore;
-  interpret_infer_integrate: LiteracyTestScore;
-  evaluate: LiteracyTestScore;
+// Snapshot-based score for NIPUN grade 2/3 and MPL-B: only a student's FIRST
+// attempt at each question counts (after seeing the explanation, later
+// attempts are invalidated for testing). history replays the full snapshot
+// algorithm over each chronological prefix of deduped first attempts
+// (prefixes with insufficient data are skipped); latest equals the final
+// history entry.
+export interface SnapshotTestScore {
+  status: 'ok' | 'insufficient_data';
+  attempts_available: number;
+  latest?: TestSnapshotPoint;
+  history?: TestSnapshotPoint[];
 }
 
 export interface LiteracyTestScores {
   // Grade 1: last 2 level-8 sentence FIRST-time read attempts (a retry
-  // success does not count).
+  // success does not count). Unchanged rolling-window output.
   nipun_grade_1: LiteracyTestScore;
-  // Grade 2: last 4 level-11 comprehension 'retrieve' answers.
-  nipun_grade_2: LiteracyTestScore;
-  // Grade 3: last 4 level-12 comprehension 'retrieve' answers.
-  nipun_grade_3: LiteracyTestScore;
-  // AMPL-B: per narrative/expository stimulus (level ≥ 12 only): 6 retrieve
-  // + 7 interpret/infer/integrate + 3 evaluate. The combined score is
-  // total-correct/32 and only exists once every bucket's window has filled.
-  ampl_b: {
-    status: 'ok' | 'insufficient_data';
-    latest_score?: number;
-    history?: { at: Date; score: number }[];
-    narrative: AmplStimulusScores;
-    expository: AmplStimulusScores;
-  };
+  // Grade 2: most recent 4 first attempts at level-10 R1.1/R1.2/R1.3
+  // questions; pass at score > 0.5.
+  nipun_grade_2: SnapshotTestScore;
+  // Grade 3: most recent 4 first attempts at level-11/12 R1.1/R1.2/R1.3
+  // questions; pass at score > 0.5.
+  nipun_grade_3: SnapshotTestScore;
+  // MPL-B: 20 level-11/12 first attempts selected by the four-filter
+  // algorithm in UserService.getLiteracyTestScores; pass at score > 0.5.
+  mpl_b: SnapshotTestScore;
 }

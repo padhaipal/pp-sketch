@@ -293,30 +293,45 @@ After all items processed:
   Compute summary: { created: count('created'), duplicate_skipped: count('duplicate_skipped'), failed: count('failed') }.
   Return { results, summary }.
 
-## LLM seeding pipeline (2026-07)
+## LLM seeding pipeline (2026-07, reworked 2026-08)
 
-- `createLlmGeneratedMedia(body, otel_carrier)` — synchronous (no queue):
+- `createLlmGeneratedMedia(body, otel_carrier)` — synchronous (no queue), one
+  passage with exactly ONE question per generation. Gate order, cheap-first:
   validate request (`llm-generate.dto.ts`) → provider `complete()`
   (`src/interfaces/llm/<provider>`) → parse/validate the untrusted completion
-  → passage level from word count (<10→8, <40→9, <70→10, <110→11, else 12) →
-  zero-context solvability per question (`zero-context-solvability.ts`: 100×
-  sarvam-105b, shuffled options, reject rate > 40%, 'unverified' when < 80
-  parseable runs) → transactional insert of passage → questions → options →
-  explanations (+ one `media_type='flow'` row per `send_as_flow` question) →
-  ElevenLabs TTS enqueue for `explanation.tts` items. Nothing is written
-  unless ≥ 1 question survives. Returns `LlmGenerateResponse` with
-  per-question outcomes and `retriable` flags; TTS enqueue failure sets
+  (DTO shape, question_type ∈ R1.1-R3.2) → passage level from word count
+  (<10→8, <40→9, <70→10, <110→11, <250→12, else 13; 13 is storage-only) →
+  passage-judge gate (`passage-judge.ts`: 10× GATE_JUDGE_MODEL WITH passage;
+  pass = every valid run correct AND ≥ 8 valid; 'unverified' below 8) →
+  zero-context solvability (`zero-context-solvability.ts`: 144× shuffled
+  options, no passage, reject rate > 40%, 'unverified' when < 115 parseable
+  runs) → transactional insert of passage → question → options →
+  explanations (+ one `media_type='flow'` row when `send_as_flow`) →
+  ElevenLabs TTS enqueue for EVERY text entity (one audio row per text row,
+  `input_media_id` = source text row, stid only on explanation audio).
+  Gate failures are NOT discarded: the whole family is inserted
+  `rolled_back = true` with `media_details.gate_failure` on the question row
+  ({gate, reason, judge_picks?/rate?, valid_runs, total_runs, model}); no
+  TTS for soft-deleted content. 'unverified' inserts nothing (retriable).
+  Returns `LlmGenerateResponse` with a single `question` outcome
+  ('created' | 'discarded' | 'unverified'); TTS enqueue failure sets
   `tts_error` without failing the generation.
+- Both gates share `GATE_JUDGE_MODEL = 'sarvam-105b'` (`gate-shared.ts` —
+  note the self-agreement caveat comment there).
 - Stid scheme: flow rows `${passageId}-sentence-comprehension` (runtime stids
-  `…-correct-first|retry` are mapped back in findMediaByStateTransitionId —
-  flowKey rows count as *specific*, random pick = random question);
+  `…-correct-first|retry` are mapped back in findMediaByStateTransitionId);
   explanation rows `${optionId}-comprehension-complete`. UUID prefixes mean
   the `_` generic key does NOT apply to these.
 - `listComprehensionStids({limit, offset})` — paginated distinct comprehension
   stids (limit clamped to 500) for the dashboard table.
+- `listGenerationFailures({limit})` — recent question rows with
+  `media_details ? 'gate_failure'` (intentionally rolled-back rows), newest
+  first, LEFT JOINed to the parent passage preview; dashboard "Filter
+  failures" list.
 - `deleteByStateTransitionId(stid)` — rolls back every row carrying the stid;
   for `…-sentence-comprehension` the whole passage family (prefix = passage
-  id) plus stid-linked explanation audio, deepest-first because
-  markRolledBack's FK sweep hard-deletes referencing rows.
+  id), deepest-first because markRolledBack's FK sweep hard-deletes
+  referencing rows. TTS audio is reached by the `input_media_id` CTE walk —
+  the old orphan-audio-by-stid sweep is gone.
 - findMediaByStateTransitionId now also serves `media_type='flow'` rows (no
   wa_media_url required — flows are never preloaded to WhatsApp).
