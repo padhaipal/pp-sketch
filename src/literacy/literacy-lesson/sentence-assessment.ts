@@ -140,11 +140,17 @@ function clustersOf(normalized: string): string[] {
 // Passages repeat words heavily — memoize word-pair distances.
 const distanceCache = new Map<string, number>();
 
+// Cache-key separator: U+001F (unit separator). A Cc control character, so
+// cleanWord's [^\p{L}\p{M}\p{N}] strip guarantees it can never appear in a
+// normalized word — two distinct word pairs can never collide on a key
+// ("अब"+"कद" vs "अबक"+"द" naively concatenate identically).
+const CACHE_KEY_SEPARATOR = '\u001f';
+
 /** Levenshtein over grapheme clusters of the normalized words. */
 export function aksharaDistance(a: string, b: string): number {
   const na = normalizeForAlignment(a);
   const nb = normalizeForAlignment(b);
-  const key = `${na}\u0000${nb}`;
+  const key = `${na}${CACHE_KEY_SEPARATOR}${nb}`;
   const cached = distanceCache.get(key);
   if (cached !== undefined) return cached;
   const distance = levenshteinDistance(clustersOf(na), clustersOf(nb));
@@ -161,7 +167,7 @@ const matchCostCache = new Map<string, number>();
 // families, ASR hardcodes, numerals, schwa deletion) says the token IS the
 // word — this keeps sentence marking consistent with word-lesson marking.
 function matchCost(target: string, token: string): number {
-  const key = `${target}\u0000${token}`;
+  const key = `${target}${CACHE_KEY_SEPARATOR}${token}`;
   const cached = matchCostCache.get(key);
   if (cached !== undefined) return cached;
   let cost: number;

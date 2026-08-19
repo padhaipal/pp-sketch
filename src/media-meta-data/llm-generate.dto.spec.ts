@@ -196,7 +196,7 @@ describe('parseGeneratedContent', () => {
       'control characters in passage',
       JSON.stringify({
         ...validContent(),
-        passage: { text: 'कख', passage_type: 'narrative' },
+        passage: { text: 'क\u0007ख', passage_type: 'narrative' },
       }),
     ],
   ])('rejects %s', (_label, raw) => {

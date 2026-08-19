@@ -52,6 +52,17 @@ describe('aksharaDistance', () => {
   it('कि vs की → 1 (single-cluster matra difference)', () => {
     expect(aksharaDistance('कि', 'की')).toBe(1);
   });
+
+  it('word pairs that concatenate identically never collide on the memo cache', () => {
+    // "अब"+"कद" and "अबक"+"द" both naively concatenate to "अबकद"; with the
+    // control-character key separator they are distinct cache entries.
+    // Populate the first pair's entry, then assert the second is computed
+    // independently — and re-assert both after caching.
+    expect(aksharaDistance('अब', 'कद')).toBe(2);
+    expect(aksharaDistance('अबक', 'द')).toBe(3);
+    expect(aksharaDistance('अब', 'कद')).toBe(2);
+    expect(aksharaDistance('अबक', 'द')).toBe(3);
+  });
 });
 
 describe('readErrorBudget', () => {
