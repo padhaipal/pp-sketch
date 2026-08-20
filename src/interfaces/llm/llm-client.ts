@@ -10,6 +10,11 @@
  *  - 429/5xx/network errors are retried with jittered exponential backoff
  *    (Retry-After honored); other 4xx throw immediately as non-retriable
  *  - every failure is normalized to LlmError
+ *  - sarvam sends (only) are paced ≥2s apart process-wide, retries included
+ *    (SARVAM_LLM_MIN_SEND_INTERVAL_MS overrides; 0 disables) — sarvam-105b's
+ *    rate limit is 40 req/min on the Starter tier. NOTE: the pacing wait is
+ *    included in the pp.llm.request_duration_ms histogram (it measures the
+ *    caller-observed call, queueing and retries included).
  *
  * Batch calls are a bounded-concurrency pool over single calls — deliberately
  * NOT the providers' async batch APIs (no queues per product decision
@@ -31,6 +36,39 @@ import {
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_BASE_BACKOFF_MS = 1000;
 const DEFAULT_BATCH_CONCURRENCY = 8;
+
+// Sarvam allows only 40 req/min on sarvam-105b (Starter tier; 60 Pro /
+// 120 Business — docs.sarvam.ai rate limits, per-account across all keys),
+// so every sarvam send in this process — generation, gate runs, retries —
+// is serialized through a shared slot queue spaced 2s apart (~30 rpm).
+// Override via SARVAM_LLM_MIN_SEND_INTERVAL_MS (0 disables). Other
+// providers are unpaced.
+const DEFAULT_SARVAM_MIN_SEND_INTERVAL_MS = 2000;
+const paceTails = new Map<string, Promise<void>>();
+
+function minSendIntervalMs(provider: string): number {
+  if (provider !== 'sarvam') return 0;
+  const parsed = parseInt(
+    process.env.SARVAM_LLM_MIN_SEND_INTERVAL_MS ?? '',
+    10,
+  );
+  return Number.isFinite(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_SARVAM_MIN_SEND_INTERVAL_MS;
+}
+
+// Resolves when this caller may send, and books the next caller's slot one
+// interval later — concurrent callers thereby serialize at the interval.
+function awaitSendSlot(provider: string): Promise<void> {
+  const interval = minSendIntervalMs(provider);
+  if (interval === 0) return Promise.resolve();
+  const prev = paceTails.get(provider) ?? Promise.resolve();
+  paceTails.set(
+    provider,
+    prev.then(() => sleep(interval)),
+  );
+  return prev;
+}
 
 interface ChatCompletionsResponse {
   choices?: Array<{ message?: { content?: string | null } }>;
@@ -65,6 +103,10 @@ async function singleCall(
   if (!apiKey) {
     throw new LlmError(`Missing ${config.envKey}`, false);
   }
+
+  // Rate pacing before the timeout clock starts — the wait for a send slot
+  // must not eat into LLM_TIME_CAP.
+  await awaitSendSlot(config.provider);
 
   const timeCapMs = parseInt(process.env.LLM_TIME_CAP ?? '45', 10) * 1000;
   const controller = new AbortController();

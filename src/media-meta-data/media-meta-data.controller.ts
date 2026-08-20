@@ -131,10 +131,11 @@ export class MediaMetaDataController {
   }
 
   // Synchronous seeding endpoint (no queue): LLM generation → validation →
-  // passage-judge gate → zero-context solvability filter → entity tree
-  // insert (one passage, one question). Slow by nature (~2-3 min for the
-  // gate batches: 10 valid judge runs over ≤14 calls, then 144 valid
-  // solvability runs over ≤300 calls); the dashboard sends one generation
+  // passage-judge gate → zero-context solvability filter (narrative
+  // R1.1–R1.3 only) → entity tree insert (one passage, one question). Slow
+  // by nature: gate calls are paced 2s apart (Sarvam rate limit) — 10 valid
+  // judge runs over ≤14 calls, then 24 valid solvability runs over ≤50
+  // calls, ~1-2.5 min per gated item; the dashboard sends one generation
   // per request and shows the outcome.
   @Post('llm-generate')
   @HttpCode(HttpStatus.OK)

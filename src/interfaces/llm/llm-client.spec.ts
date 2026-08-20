@@ -1,5 +1,8 @@
 process.env.TEST_API_KEY = 'test-key';
 process.env.LLM_TIME_CAP = '45';
+// Keep the sarvam send pacer out of unit tests' way (re-enabled in the
+// dedicated pacing test below).
+process.env.SARVAM_LLM_MIN_SEND_INTERVAL_MS = '0';
 
 import { callChatCompletions, runCompletionBatch } from './llm-client';
 import { LlmError, LlmProviderConfig, LlmRequest } from './llm.dto';
@@ -91,6 +94,45 @@ describe('callChatCompletions', () => {
     ).toBe('test-key');
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(body.reasoning_effort).toBeNull();
+  });
+
+  it('paces consecutive sarvam sends by SARVAM_LLM_MIN_SEND_INTERVAL_MS', async () => {
+    process.env.SARVAM_LLM_MIN_SEND_INTERVAL_MS = '60';
+    try {
+      const sendTimes: number[] = [];
+      const fetchMock = jest.fn().mockImplementation(() => {
+        sendTimes.push(Date.now());
+        return Promise.resolve(okResponse());
+      });
+      global.fetch = fetchMock;
+      const sarvamLike: LlmProviderConfig = { ...config, provider: 'sarvam' };
+      // Fired concurrently — the send-slot queue must serialize them.
+      await Promise.all([
+        callChatCompletions(sarvamLike, request, fast),
+        callChatCompletions(sarvamLike, request, fast),
+      ]);
+      expect(sendTimes).toHaveLength(2);
+      // setTimeout can fire ~1ms early; assert with a small tolerance.
+      expect(Math.abs(sendTimes[1] - sendTimes[0])).toBeGreaterThanOrEqual(55);
+    } finally {
+      process.env.SARVAM_LLM_MIN_SEND_INTERVAL_MS = '0';
+    }
+  });
+
+  it('does not pace non-sarvam providers', async () => {
+    process.env.SARVAM_LLM_MIN_SEND_INTERVAL_MS = '60';
+    try {
+      const fetchMock = jest.fn().mockResolvedValue(okResponse());
+      global.fetch = fetchMock;
+      const started = Date.now();
+      await Promise.all([
+        callChatCompletions(config, request, fast),
+        callChatCompletions(config, request, fast),
+      ]);
+      expect(Date.now() - started).toBeLessThan(55);
+    } finally {
+      process.env.SARVAM_LLM_MIN_SEND_INTERVAL_MS = '0';
+    }
   });
 
   it('passes max_tokens and temperature through when set', async () => {
