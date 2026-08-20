@@ -64,23 +64,22 @@ function runner(
 }
 
 describe('runPassageJudge', () => {
-  it('all calls valid: spends the whole 14-call budget (batches 8 + 6) and scores exactly 10 valid runs', async () => {
+  it('all calls valid: issues exactly 10 calls (batches 8 + 2) and scores them all', async () => {
     const llm = runner((request) => letterOf(request, 'शेर'));
     const verdict = await runPassageJudge(llm, passageText, question);
     expect(JUDGE_REQUIRED_VALID).toBe(10);
     expect(JUDGE_MAX_CALLS).toBe(14);
-    // First batch of 8 yields only 8 valid (< 10), so a second batch runs,
-    // clamped to the remaining budget (6). The 14 valid runs are truncated
-    // to 10 in issue order.
+    // First batch of 8 yields 8 valid (< 10); the second batch is sized to
+    // the remaining deficit (2), so nothing is issued beyond the target.
     expect(llm.calls.map((batch) => batch.length)).toEqual([
       GATE_BATCH_SIZE,
-      JUDGE_MAX_CALLS - GATE_BATCH_SIZE,
+      JUDGE_REQUIRED_VALID - GATE_BATCH_SIZE,
     ]);
     expect(verdict).toEqual({
       status: 'passed',
       correct: 10,
       valid_runs: 10,
-      total_calls: 14,
+      total_calls: 10,
       call_failures: 0,
       unparseable: 0,
     });
@@ -90,7 +89,7 @@ describe('runPassageJudge', () => {
     const llm = runner((request) => letterOf(request, 'शेर'));
     await runPassageJudge(llm, passageText, question);
     const requests = llm.calls.flat();
-    expect(requests).toHaveLength(14);
+    expect(requests).toHaveLength(10);
     const correctLetters = new Set(requests.map((r) => letterOf(r, 'शेर')));
     expect(correctLetters.size).toBeGreaterThan(1); // shuffled per run
     for (const r of requests) {
@@ -120,29 +119,19 @@ describe('runPassageJudge', () => {
     expect(verdict.correct).toBe(0);
   });
 
-  it('truncates excess valid runs in issue order — wrong picks beyond the 10th valid run are not scored', async () => {
-    // Calls 0-9 correct, 10-13 wrong: only the first 10 valid runs count.
-    const llm = runner((request, i) =>
-      i < 10 ? letterOf(request, 'शेर') : letterOf(request, 'हाथी'),
-    );
-    const verdict = await runPassageJudge(llm, passageText, question);
-    expect(verdict.status).toBe('passed');
-    expect(verdict.correct).toBe(10);
-    expect(verdict.wrong_picks).toBeUndefined();
-    expect(verdict.total_calls).toBe(14);
-  });
-
-  it('invalid responses reduce valid runs without counting as wrong', async () => {
-    // 2 unparseable early + 12 valid correct → 10 scored, all correct.
+  it('invalid responses trigger a deficit-sized top-up batch without counting as wrong', async () => {
+    // Batch 1 (8 calls): 2 unparseable + 6 valid → deficit 4 → batch 2 is
+    // sized 4, all valid → exactly 10 scored, all correct, 12 calls total.
     const llm = runner((request, i) =>
       i < 2 ? 'पता नहीं' : letterOf(request, 'शेर'),
     );
     const verdict = await runPassageJudge(llm, passageText, question);
+    expect(llm.calls.map((batch) => batch.length)).toEqual([8, 4]);
     expect(verdict).toEqual({
       status: 'passed',
       correct: 10,
       valid_runs: 10,
-      total_calls: 14,
+      total_calls: 12,
       call_failures: 0,
       unparseable: 2,
     });

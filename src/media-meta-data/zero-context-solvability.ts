@@ -5,8 +5,10 @@
  * passage. We send the question + options (no passage) to the shared gate
  * model, shuffling the option order every run, until exactly
  * SOLVABILITY_REQUIRED_VALID (144) valid runs are collected — issued in
- * sequential batches of GATE_BATCH_SIZE with a hard budget of
- * SOLVABILITY_MAX_CALLS (300) calls (see collectValidRuns in gate-shared.ts).
+ * sequential batches sized to the remaining valid deficit (up to
+ * GATE_BATCH_SIZE) with a hard budget of SOLVABILITY_MAX_CALLS (300) calls,
+ * so an all-valid run issues exactly 144 calls in 18 batches of 8 (see
+ * collectValidRuns in gate-shared.ts).
  * 144 = the 4! = 24 option orderings × 6, so every ordering of a 4-option
  * question is expected several times.
  *

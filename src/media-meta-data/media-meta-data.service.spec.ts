@@ -2735,16 +2735,17 @@ describe('createLlmGeneratedMedia', () => {
     expect(result.question!.judge).toEqual({
       correct: 10,
       valid_runs: 10,
-      total_calls: 14,
+      total_calls: 10,
       call_failures: 0,
       unparseable: 0,
     });
 
-    // Gate order + shapes: judge first (10 valid over 14 calls WITH the
-    // passage, batches 8 + 6), then solvability (144 valid over 18 batches
-    // of 8 without it). All calls valid here, so both spend a fixed number.
+    // Gate order + shapes: judge first (10 valid WITH the passage, batches
+    // sized to the deficit: 8 + 2), then solvability (144 valid over 18
+    // batches of 8 without it). All calls valid here, so both issue exactly
+    // their target.
     const batches = completeBatch.mock.calls.map((c) => c[0] as LlmReq[]);
-    expect(batches.map((b) => b.length)).toEqual([8, 6, ...Array(18).fill(8)]);
+    expect(batches.map((b) => b.length)).toEqual([8, 2, ...Array(18).fill(8)]);
     const judgeRequests = batches.slice(0, 2).flat();
     expect(
       judgeRequests.every((r) => r.messages[1].content.includes(PASSAGE_TEXT)),
@@ -2784,7 +2785,7 @@ describe('createLlmGeneratedMedia', () => {
     expect(questionDetails.judge).toEqual({
       valid_runs: 10,
       correct: 10,
-      total_calls: 14,
+      total_calls: 10,
       call_failures: 0,
       unparseable: 0,
       model: 'sarvam-105b',
@@ -3011,17 +3012,17 @@ describe('createLlmGeneratedMedia', () => {
     expect(result.question!.judge).toEqual({
       correct: 0,
       valid_runs: 10,
-      total_calls: 14,
+      total_calls: 10,
       call_failures: 0,
       unparseable: 0,
     });
 
-    // Only the judge batches (8 + 6 calls, all valid) — a failed question
+    // Only the judge batches (8 + 2 calls, all valid) — a failed question
     // never reaches gate 4.
     expect(completeBatch).toHaveBeenCalledTimes(2);
     expect(
       completeBatch.mock.calls.map((c) => (c[0] as LlmReq[]).length),
-    ).toEqual([8, 6]);
+    ).toEqual([8, 2]);
 
     expect(dsTransaction).toHaveBeenCalledTimes(1);
     expect(saved.every((e) => e.rolled_back === true)).toBe(true);
@@ -3036,7 +3037,7 @@ describe('createLlmGeneratedMedia', () => {
       gate: 'judge',
       valid_runs: 10,
       correct: 0,
-      total_calls: 14,
+      total_calls: 10,
       call_failures: 0,
       unparseable: 0,
       model: 'sarvam-105b',

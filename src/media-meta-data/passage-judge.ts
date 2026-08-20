@@ -4,9 +4,11 @@
  * The inverse check to zero-context solvability: WITH the passage, the
  * question must be reliably answerable. The gate model is shown the passage,
  * question and randomly ordered options until exactly JUDGE_REQUIRED_VALID
- * (10) valid runs are collected — issued in sequential batches of
- * GATE_BATCH_SIZE with a hard budget of JUDGE_MAX_CALLS (14) calls (see
- * collectValidRuns in gate-shared.ts). The question passes only if all 10
+ * (10) valid runs are collected — issued in sequential batches sized to the
+ * remaining valid deficit (up to GATE_BATCH_SIZE) with a hard budget of
+ * JUDGE_MAX_CALLS (14) calls, so an all-valid run issues exactly 10 calls in
+ * batches of 8 + 2 (see collectValidRuns in gate-shared.ts). The question
+ * passes only if all 10
  * valid runs pick the correct option. Invalid runs (transport failures,
  * unparseable replies) don't count as wrong — they just consume budget; if
  * the budget is spent before 10 valid runs arrive the verdict is

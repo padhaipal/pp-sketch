@@ -88,21 +88,21 @@ describe('runZeroContextSolvability', () => {
     });
   });
 
-  it('counts the whole final batch but scores exactly 144 valid runs in issue order', async () => {
-    // 4 unparseable replies early → the 144th valid run lands mid-batch 19.
-    // The excess valid runs (global indices 148-151) answer CORRECT; if
-    // issue-order truncation drops them, correct stays 0.
-    const llm = runner((request, i) => {
-      if (i < 4) return 'पता नहीं';
-      return letterOf(request, i >= 148 ? 'सही' : 'गलत-एक');
-    });
+  it('tops up invalid runs with a deficit-sized final batch and scores exactly 144 valid runs', async () => {
+    // 4 unparseable replies early → 140 valid after 18 batches of 8; the
+    // final batch is sized to the deficit (4), never a full 8, so exactly
+    // 148 calls are issued and exactly 144 valid runs are scored.
+    const llm = runner((request, i) =>
+      i < 4 ? 'पता नहीं' : letterOf(request, 'गलत-एक'),
+    );
     const verdict = await runZeroContextSolvability(llm, question);
     expect(llm.calls).toHaveLength(19);
+    expect(llm.calls[18]).toHaveLength(4);
     expect(verdict).toEqual({
       status: 'passed',
-      correct: 0, // the 4 excess correct runs were truncated, not scored
+      correct: 0,
       valid_runs: 144,
-      total_calls: 152, // the whole batch counts even once the target is hit
+      total_calls: 148,
       call_failures: 0,
       unparseable: 4,
     });
