@@ -3183,6 +3183,10 @@ describe('listGenerationFailures', () => {
           gate_failure: { gate: 'judge', reason: 'wrong picks' },
           solvability: { rate: 0.5, valid_runs: 144, model: 'sarvam-105b' },
         },
+        options: [
+          { text: 'बच्चों के लिए', correct: true },
+          { text: 'बड़ों के लिए', correct: false },
+        ],
         passage_id: 'p-1',
         passage_preview: 'यह एक छोटी कहानी…',
         level: '9',
@@ -3200,6 +3204,10 @@ describe('listGenerationFailures', () => {
       question_type: 'R2.1',
       gate_failure: { gate: 'judge', reason: 'wrong picks' },
       solvability: { rate: 0.5, valid_runs: 144, model: 'sarvam-105b' },
+      options: [
+        { text: 'बच्चों के लिए', correct: true },
+        { text: 'बड़ों के लिए', correct: false },
+      ],
       passage_id: 'p-1',
       passage_preview: 'यह एक छोटी कहानी…',
       level: 9,
@@ -3212,6 +3220,48 @@ describe('listGenerationFailures', () => {
     expect(sql).toContain('LEFT JOIN media_metadata p');
     expect(sql).toContain('ORDER BY q.created_at DESC');
     expect(params).toEqual([5]);
+  });
+
+  it("aggregates each failure item's options in creation order with exactly one correct", async () => {
+    // The SQL subquery returns the option children ordered by created_at;
+    // exactly one carries correct: true (enforced at parse time by
+    // parseGeneratedContent) — pinned here as the endpoint contract the
+    // dashboard relies on to mark the answer among its distractors.
+    const options = [
+      { text: 'हाथी', correct: false },
+      { text: 'शेर', correct: true },
+      { text: 'बंदर', correct: false },
+    ];
+    const dsQuery = jest.fn().mockResolvedValue([
+      {
+        question_id: 'q-2',
+        question_text: 'जंगल में कौन रहता था?',
+        media_details: {
+          question_type: 'R1.2',
+          gate_failure: { gate: 'solvability', reason: 'too guessable' },
+        },
+        options,
+        passage_id: 'p-2',
+        passage_preview: 'एक दिन…',
+        level: '9',
+        created_at: new Date('2026-08-20'),
+      },
+    ]);
+    const { service } = makeService({ dsQuery });
+
+    const result = await service.listGenerationFailures({ limit: 5 });
+
+    expect(result.items[0].options).toEqual(options); // order preserved
+    expect(result.items[0].options.filter((o) => o.correct)).toHaveLength(1);
+
+    const [sql] = dsQuery.mock.calls[0] as [string, unknown[]];
+    // Option children of the question row, aggregated in creation order.
+    expect(sql).toContain('o.input_media_id = q.id');
+    expect(sql).toContain("media_details->>'role' = 'option'");
+    expect(sql).toContain('ORDER BY o.created_at');
+    // Options of gate-failed questions are themselves rolled_back = true —
+    // the subquery must NOT filter on rolled_back.
+    expect(sql).not.toMatch(/o\.rolled_back/);
   });
 
   it('clamps limit to 1..100 (default 10) and null-safes missing fields', async () => {
@@ -3240,6 +3290,7 @@ describe('listGenerationFailures', () => {
       question_type: null,
       gate_failure: { gate: 'solvability' },
       solvability: null,
+      options: [], // null/absent aggregate → empty array
       passage_id: null,
       level: null,
     });

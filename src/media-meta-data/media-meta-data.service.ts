@@ -1240,10 +1240,13 @@ export class MediaMetaDataService {
   /**
    * Recent gate-failed generations for the dashboard's read-only "Filter
    * failures" list: question rows carrying media_details.gate_failure, newest
-   * first, joined to their parent passage for preview. These rows are
-   * intentionally rolled_back = true (soft-deleted at creation because they
-   * failed the judge or solvability gate) — the usual rolled_back = false
-   * visibility filter is deliberately NOT applied here.
+   * first, joined to their parent passage for preview and to their option
+   * rows (children via input_media_id with role 'option', aggregated in
+   * creation order) — seeing the correct option next to its distractors is
+   * how a solvability rejection is diagnosed. These rows are intentionally
+   * rolled_back = true (soft-deleted at creation because they failed the
+   * judge or solvability gate; their options likewise) — the usual
+   * rolled_back = false visibility filter is deliberately NOT applied here.
    */
   async listGenerationFailures(options: { limit?: number }): Promise<{
     items: Array<{
@@ -1252,6 +1255,7 @@ export class MediaMetaDataService {
       question_type: string | null;
       gate_failure: Record<string, unknown>;
       solvability: Record<string, unknown> | null;
+      options: Array<{ text: string | null; correct: boolean }>;
       passage_id: string | null;
       passage_preview: string | null;
       level: number | null;
@@ -1263,6 +1267,7 @@ export class MediaMetaDataService {
       question_id: string;
       question_text: string | null;
       media_details: Record<string, unknown> | null;
+      options: Array<{ text: string | null; correct: boolean }> | null;
       passage_id: string | null;
       passage_preview: string | null;
       level: string | null;
@@ -1270,7 +1275,15 @@ export class MediaMetaDataService {
     }> = await this.dataSource.query(
       `SELECT q.id AS question_id, q.text AS question_text, q.media_details,
               p.id AS passage_id, LEFT(p.text, 300) AS passage_preview,
-              p.media_details->>'level' AS level, q.created_at
+              p.media_details->>'level' AS level, q.created_at,
+              (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                        'text', o.text,
+                        'correct',
+                        COALESCE((o.media_details->>'correct')::boolean, false))
+                      ORDER BY o.created_at), '[]'::jsonb)
+               FROM media_metadata o
+               WHERE o.input_media_id = q.id
+                 AND o.media_details->>'role' = 'option') AS options
        FROM media_metadata q
        LEFT JOIN media_metadata p ON p.id = q.input_media_id
        WHERE q.media_details ? 'gate_failure'
@@ -1287,6 +1300,7 @@ export class MediaMetaDataService {
           (r.media_details?.gate_failure as Record<string, unknown>) ?? {},
         solvability:
           (r.media_details?.solvability as Record<string, unknown>) ?? null,
+        options: r.options ?? [],
         passage_id: r.passage_id,
         passage_preview: r.passage_preview,
         level: r.level === null ? null : parseInt(r.level, 10),
