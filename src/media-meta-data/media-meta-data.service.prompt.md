@@ -343,8 +343,11 @@ After all items processed:
   stids (limit clamped to 500) for the dashboard table.
 - `listGenerationFailures({limit})` — recent question rows with
   `media_details ? 'gate_failure'` (intentionally rolled-back rows), newest
-  first, LEFT JOINed to the parent passage preview; dashboard "Filter
-  failures" list.
+  first, LEFT JOINed to the parent passage preview and carrying the question's
+  option rows as `options: [{text, correct}]` (children via `input_media_id`
+  with role 'option', jsonb_agg in created_at order, no rolled_back filter —
+  the options of a gate-failed question are rolled back too); dashboard
+  "Filter failures" list.
 - `deleteByStateTransitionId(stid)` — rolls back every row carrying the stid;
   for `…-sentence-comprehension` the whole passage family (prefix = passage
   id), deepest-first because markRolledBack's FK sweep hard-deletes
