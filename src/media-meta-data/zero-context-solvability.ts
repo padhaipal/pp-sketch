@@ -3,42 +3,59 @@
  *
  * A well-designed passage question should NOT be answerable without the
  * passage. We send the question + options (no passage) to the shared gate
- * model 144 times, shuffling the option order every run, and reject the
- * question if the correct option is picked in more than 40% of valid runs
- * (threshold set 2026-07-27; applies to 2-, 3- and 4-option questions alike).
- * 144 runs = the 4! = 24 option orderings × 6, so every ordering of a
- * 4-option question is expected several times; 115 min valid runs keeps the
- * original 80/100 (~80%) parseability contract.
+ * model, shuffling the option order every run, until exactly
+ * SOLVABILITY_REQUIRED_VALID (144) valid runs are collected — issued in
+ * sequential batches sized to the remaining valid deficit (up to
+ * GATE_BATCH_SIZE) with a hard budget of SOLVABILITY_MAX_CALLS (300) calls,
+ * so an all-valid run issues exactly 144 calls in 18 batches of 8 (see
+ * collectValidRuns in gate-shared.ts).
+ * 144 = the 4! = 24 option orderings × 6, so every ordering of a 4-option
+ * question is expected several times.
  *
- * Runs after the passage-judge gate and before any DB insert. If too few runs
- * come back parseable/successful the verdict is 'unverified' — the question
- * is rejected with a retriable reason rather than saved unchecked.
+ * The verdict is always computed over exactly 144 valid runs: the question is
+ * rejected when the correct option was picked at least
+ * SOLVABILITY_REJECT_MIN_CORRECT[optionCount] times (exact per-option-count
+ * minima replacing the old 40%-of-valid threshold, 2026-08). If the call
+ * budget is spent before 144 valid runs arrive the verdict is 'unverified' —
+ * the question is rejected with a retriable reason rather than saved
+ * unchecked (no DB row).
+ *
+ * Runs after the passage-judge gate and before any DB insert.
  */
 import { SpanStatusCode } from '@opentelemetry/api';
 import { tracer } from '../otel/otel';
 import type { LlmBatchOptions, LlmRequest } from '../interfaces/llm/llm.dto';
 import type { GeneratedQuestion } from './llm-generate.dto';
 import {
+  collectValidRuns,
   GATE_JUDGE_MODEL,
   GateBatchRunner,
+  GateRunStats,
   OPTION_LETTERS,
-  parseAnswerLetter,
+  setGateSpanAttributes,
   shuffled,
 } from './gate-shared';
 
-export const SOLVABILITY_RUNS = 144;
-export const SOLVABILITY_THRESHOLD = 0.4;
-/** Minimum parseable runs for a verdict; below this → 'unverified'. */
-export const SOLVABILITY_MIN_VALID_RUNS = 115;
+/** The verdict is computed over exactly this many valid runs. */
+export const SOLVABILITY_REQUIRED_VALID = 144;
+/** Hard call budget; spent before 144 valid runs → 'unverified'. */
+export const SOLVABILITY_MAX_CALLS = 300;
+/**
+ * Rejection minima over the fixed 144-valid denominator, per option count:
+ * correct picks >= minimum → 'failed_solvable'.
+ */
+export const SOLVABILITY_REJECT_MIN_CORRECT: Record<2 | 3 | 4, number> = {
+  2: 91,
+  3: 67,
+  4: 54,
+};
 
 export type SolvabilityBatchRunner = GateBatchRunner;
 
-export interface SolvabilityVerdict {
+export interface SolvabilityVerdict extends GateRunStats {
   status: 'passed' | 'failed_solvable' | 'unverified';
-  /** correct picks / valid runs; absent when unverified. */
-  rate?: number;
-  valid_runs: number;
-  total_runs: number;
+  /** Correct picks over the 144 scored valid runs; absent when unverified. */
+  correct?: number;
 }
 
 function buildRun(question: GeneratedQuestion): {
@@ -73,52 +90,37 @@ function buildRun(question: GeneratedQuestion): {
 export async function runZeroContextSolvability(
   llm: SolvabilityBatchRunner,
   question: GeneratedQuestion,
-  options?: LlmBatchOptions & { runs?: number },
+  options?: LlmBatchOptions,
 ): Promise<SolvabilityVerdict> {
   return tracer.startActiveSpan('llm.solvability_filter', async (span) => {
     try {
-      const totalRuns = options?.runs ?? SOLVABILITY_RUNS;
-      const runs = Array.from({ length: totalRuns }, () => buildRun(question));
-      const items = await llm.completeBatch(
-        runs.map((r) => r.request),
-        options,
-      );
-
-      let valid = 0;
-      let correct = 0;
-      items.forEach((item, i) => {
-        if (!item.result) return;
-        const picked = parseAnswerLetter(
-          item.result.text,
-          question.options.length,
-        );
-        if (picked === null) return;
-        valid++;
-        if (picked === runs[i].correctLetterIndex) correct++;
+      const { scored, stats } = await collectValidRuns({
+        llm,
+        buildRun: () => buildRun(question),
+        optionCount: question.options.length,
+        requiredValid: SOLVABILITY_REQUIRED_VALID,
+        maxCalls: SOLVABILITY_MAX_CALLS,
+        batchOptions: options,
       });
 
       let verdict: SolvabilityVerdict;
-      if (valid < SOLVABILITY_MIN_VALID_RUNS * (totalRuns / SOLVABILITY_RUNS)) {
-        verdict = {
-          status: 'unverified',
-          valid_runs: valid,
-          total_runs: totalRuns,
-        };
+      if (stats.valid_runs < SOLVABILITY_REQUIRED_VALID) {
+        verdict = { status: 'unverified', ...stats };
       } else {
-        const rate = correct / valid;
+        const correct = scored.filter(
+          (s) => s.picked === s.run.correctLetterIndex,
+        ).length;
+        const minCorrect =
+          SOLVABILITY_REJECT_MIN_CORRECT[question.options.length as 2 | 3 | 4];
         verdict = {
-          status: rate > SOLVABILITY_THRESHOLD ? 'failed_solvable' : 'passed',
-          rate,
-          valid_runs: valid,
-          total_runs: totalRuns,
+          status: correct >= minCorrect ? 'failed_solvable' : 'passed',
+          correct,
+          ...stats,
         };
       }
 
       span.setAttribute('pp.llm.solvability.status', verdict.status);
-      span.setAttribute('pp.llm.solvability.valid_runs', verdict.valid_runs);
-      if (verdict.rate !== undefined) {
-        span.setAttribute('pp.llm.solvability.rate', verdict.rate);
-      }
+      setGateSpanAttributes(span, stats);
       return verdict;
     } catch (err) {
       span.setStatus({

@@ -301,23 +301,40 @@ After all items processed:
   (`src/interfaces/llm/<provider>`) → parse/validate the untrusted completion
   (DTO shape, question_type ∈ R1.1-R3.2) → passage level from word count
   (<10→8, <40→9, <70→10, <110→11, <250→12, else 13; 13 is storage-only) →
-  passage-judge gate (`passage-judge.ts`: 10× GATE_JUDGE_MODEL WITH passage;
-  pass = every valid run correct AND ≥ 8 valid; 'unverified' below 8) →
-  zero-context solvability (`zero-context-solvability.ts`: 144× shuffled
-  options, no passage, reject rate > 40%, 'unverified' when < 115 parseable
-  runs) → transactional insert of passage → question → options →
+  passage-judge gate (`passage-judge.ts`: collects JUDGE_REQUIRED_VALID = 10
+  valid GATE_JUDGE_MODEL runs WITH the passage over ≤ JUDGE_MAX_CALLS = 14
+  calls; pass = all 10 valid runs correct; budget spent short of 10 valid →
+  'unverified') → zero-context solvability (`zero-context-solvability.ts`:
+  collects SOLVABILITY_REQUIRED_VALID = 144 valid runs, shuffled options, no
+  passage, over ≤ SOLVABILITY_MAX_CALLS = 300 calls; reject when correct
+  picks ≥ SOLVABILITY_REJECT_MIN_CORRECT per option count {2: 91, 3: 67,
+  4: 54}; budget spent short of 144 valid → 'unverified') → transactional
+  insert of passage → question → options →
   explanations (+ one `media_type='flow'` row when `send_as_flow`) →
   ElevenLabs TTS enqueue for EVERY text entity (one audio row per text row,
   `input_media_id` = source text row, stid only on explanation audio).
   Gate failures are NOT discarded: the whole family is inserted
   `rolled_back = true` with `media_details.gate_failure` on the question row
-  ({gate, reason, judge_picks?/rate?, valid_runs, total_runs, model}); no
-  TTS for soft-deleted content. 'unverified' inserts nothing (retriable).
-  Returns `LlmGenerateResponse` with a single `question` outcome
-  ('created' | 'discarded' | 'unverified'); TTS enqueue failure sets
-  `tts_error` without failing the generation.
-- Both gates share `GATE_JUDGE_MODEL = 'sarvam-105b'` (`gate-shared.ts` —
-  note the self-agreement caveat comment there).
+  ({gate, reason, judge_picks?, valid_runs, correct, total_calls,
+  call_failures, unparseable, model}); no TTS for soft-deleted content.
+  'unverified' inserts nothing (retriable). Returns `LlmGenerateResponse`
+  with a single `question` outcome ('created' | 'discarded' | 'unverified')
+  carrying per-gate observability counters (`judge`/`solvability`:
+  { valid_runs, correct?, total_calls, call_failures, unparseable }); TTS
+  enqueue failure sets `tts_error` without failing the generation.
+- Both gates share `GATE_JUDGE_MODEL = 'sarvam-105b'` and the
+  sequential-batch collector `collectValidRuns` (`gate-shared.ts`: each batch
+  sized min(GATE_BATCH_SIZE = 8, remaining valid deficit, remaining budget),
+  stop after the first batch that reaches the valid target; a batch never
+  over-delivers, so an all-valid run issues exactly the target — judge 8+2,
+  solvability 18×8 — and invalid runs trigger deficit-sized top-up batches;
+  verdicts always score exactly the target number of valid runs). Every verdict carries { valid_runs, correct?, total_calls,
+  call_failures, unparseable } (the split counters partition invalid runs:
+  transport failure after client retries vs no parseable letter); the same
+  values go on the `llm.passage_judge` / `llm.solvability_filter` spans as
+  `pp.gate.valid`, `pp.gate.issued`, `pp.gate.call_failures`,
+  `pp.gate.unparseable`. Note the self-agreement caveat comment in
+  `gate-shared.ts`.
 - Stid scheme: flow rows `${passageId}-sentence-comprehension` (runtime stids
   `…-correct-first|retry` are mapped back in findMediaByStateTransitionId);
   explanation rows `${optionId}-comprehension-complete`. UUID prefixes mean

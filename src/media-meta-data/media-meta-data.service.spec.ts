@@ -2725,17 +2725,32 @@ describe('createLlmGeneratedMedia', () => {
     expect(result.status).toBe('created');
     expect(result.level).toBe(9); // <40 words
     expect(result.question!.status).toBe('created');
-    expect(result.question!.solvability_rate).toBe(0);
+    expect(result.question!.solvability).toEqual({
+      correct: 0,
+      valid_runs: 144,
+      total_calls: 144,
+      call_failures: 0,
+      unparseable: 0,
+    });
+    expect(result.question!.judge).toEqual({
+      correct: 10,
+      valid_runs: 10,
+      total_calls: 10,
+      call_failures: 0,
+      unparseable: 0,
+    });
 
-    // Gate order + shapes: judge first (10 runs WITH the passage), then
-    // solvability (144 runs without it).
-    expect(completeBatch).toHaveBeenCalledTimes(2);
-    const judgeRequests = completeBatch.mock.calls[0][0] as LlmReq[];
-    expect(judgeRequests).toHaveLength(10);
+    // Gate order + shapes: judge first (10 valid WITH the passage, batches
+    // sized to the deficit: 8 + 2), then solvability (144 valid over 18
+    // batches of 8 without it). All calls valid here, so both issue exactly
+    // their target.
+    const batches = completeBatch.mock.calls.map((c) => c[0] as LlmReq[]);
+    expect(batches.map((b) => b.length)).toEqual([8, 2, ...Array(18).fill(8)]);
+    const judgeRequests = batches.slice(0, 2).flat();
     expect(
       judgeRequests.every((r) => r.messages[1].content.includes(PASSAGE_TEXT)),
     ).toBe(true);
-    const solvabilityRequests = completeBatch.mock.calls[1][0] as LlmReq[];
+    const solvabilityRequests = batches.slice(2).flat();
     expect(solvabilityRequests).toHaveLength(144);
     expect(
       solvabilityRequests.every(
@@ -2769,12 +2784,18 @@ describe('createLlmGeneratedMedia', () => {
     expect(questionDetails.question_type).toBe('R1.1');
     expect(questionDetails.judge).toEqual({
       valid_runs: 10,
-      total_runs: 10,
+      correct: 10,
+      total_calls: 10,
+      call_failures: 0,
+      unparseable: 0,
       model: 'sarvam-105b',
     });
     expect(questionDetails.solvability).toEqual({
-      rate: 0,
       valid_runs: 144,
+      correct: 0,
+      total_calls: 144,
+      call_failures: 0,
+      unparseable: 0,
       model: 'sarvam-105b',
     });
     expect(questionDetails.gate_failure).toBeUndefined();
@@ -2941,7 +2962,14 @@ describe('createLlmGeneratedMedia', () => {
     expect(result.level).toBe(9);
     expect(result.question!.status).toBe('discarded');
     expect(result.question!.reason).toContain('zero-context solvable');
-    expect(result.question!.solvability_rate).toBe(1);
+    // 2-option question: 144/144 correct ≥ the 91-correct rejection minimum.
+    expect(result.question!.solvability).toEqual({
+      correct: 144,
+      valid_runs: 144,
+      total_calls: 144,
+      call_failures: 0,
+      unparseable: 0,
+    });
 
     // The family IS inserted — every row rolled_back: true.
     expect(dsTransaction).toHaveBeenCalledTimes(1);
@@ -2956,9 +2984,11 @@ describe('createLlmGeneratedMedia', () => {
     ).gate_failure;
     expect(gateFailure).toMatchObject({
       gate: 'solvability',
-      rate: 1,
+      correct: 144,
       valid_runs: 144,
-      total_runs: 144,
+      total_calls: 144,
+      call_failures: 0,
+      unparseable: 0,
       model: 'sarvam-105b',
     });
     expect(gateFailure.reason).toContain('zero-context solvable');
@@ -2977,12 +3007,22 @@ describe('createLlmGeneratedMedia', () => {
     expect(result.retriable).toBe(true);
     expect(result.reason).toContain('passage-judge');
     expect(result.question!.status).toBe('discarded');
-    // Solvability never ran → no rate on the response.
-    expect(result.question!.solvability_rate).toBeUndefined();
+    // Solvability never ran → no solvability report on the response.
+    expect(result.question!.solvability).toBeUndefined();
+    expect(result.question!.judge).toEqual({
+      correct: 0,
+      valid_runs: 10,
+      total_calls: 10,
+      call_failures: 0,
+      unparseable: 0,
+    });
 
-    // Only the 10-run judge batch — a failed question never reaches gate 4.
-    expect(completeBatch).toHaveBeenCalledTimes(1);
-    expect(completeBatch.mock.calls[0][0]).toHaveLength(10);
+    // Only the judge batches (8 + 2 calls, all valid) — a failed question
+    // never reaches gate 4.
+    expect(completeBatch).toHaveBeenCalledTimes(2);
+    expect(
+      completeBatch.mock.calls.map((c) => (c[0] as LlmReq[]).length),
+    ).toEqual([8, 2]);
 
     expect(dsTransaction).toHaveBeenCalledTimes(1);
     expect(saved.every((e) => e.rolled_back === true)).toBe(true);
@@ -2996,10 +3036,14 @@ describe('createLlmGeneratedMedia', () => {
     expect(details.gate_failure).toMatchObject({
       gate: 'judge',
       valid_runs: 10,
-      total_runs: 10,
+      correct: 0,
+      total_calls: 10,
+      call_failures: 0,
+      unparseable: 0,
       model: 'sarvam-105b',
       // The judge always picked the wrong option (original index 1) — the
-      // per-miss picks are persisted for answer-key troubleshooting.
+      // per-miss picks are persisted for answer-key troubleshooting (only
+      // the 10 scored valid runs are recorded).
       judge_picks: Array(10).fill(1),
     });
     expect(details.solvability).toBeUndefined();

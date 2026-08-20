@@ -19,6 +19,7 @@ import {
   LlmProvider,
   VALID_LLM_PROVIDERS,
 } from '../interfaces/llm/llm.dto';
+import type { GateObservability } from './gate-shared';
 
 // ─── Comprehension state-transition-id helpers ───────────────────────────────
 // Flow rows are stored under `${passageId}-sentence-comprehension`; the lesson
@@ -136,7 +137,15 @@ export interface LlmGenerateQuestionResult {
   status: 'created' | 'discarded' | 'unverified';
   reason?: string;
   question_id?: string;
-  solvability_rate?: number;
+  /**
+   * Per-gate observability counters ({ valid_runs, correct?, total_calls,
+   * call_failures, unparseable } — see gate-shared.ts), present for every
+   * gate that ran, whatever its verdict. The dashboard status line renders
+   * these, e.g. "unverified — 140/144 valid after 300 calls (52 call
+   * failures, 8 unparseable)".
+   */
+  judge?: GateObservability;
+  solvability?: GateObservability;
 }
 
 export interface LlmGenerateResponse {
