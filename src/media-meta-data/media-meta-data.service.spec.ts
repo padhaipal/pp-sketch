@@ -3099,7 +3099,10 @@ describe('createLlmGeneratedMedia', () => {
     const repo = makeRepo();
     repo.save.mockImplementation(async (e: unknown) => e);
     // Solvability stubbed 'correct' (would reject if it ran) — it must not.
-    const completeBatch = gateStub({ judge: 'correct', solvability: 'correct' });
+    const completeBatch = gateStub({
+      judge: 'correct',
+      solvability: 'correct',
+    });
     const { service } = makeService({
       repo,
       dsTransaction,
