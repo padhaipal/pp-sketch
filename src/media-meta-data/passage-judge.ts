@@ -4,11 +4,10 @@
  * The inverse check to zero-context solvability: WITH the passage, the
  * question must be reliably answerable. The gate model is shown the passage,
  * question and randomly ordered options until exactly JUDGE_REQUIRED_VALID
- * (10) valid runs are collected — issued in sequential batches sized to the
- * remaining valid deficit (up to GATE_BATCH_SIZE) with a hard budget of
- * JUDGE_MAX_CALLS (14) calls, so an all-valid run issues exactly 10 calls in
- * batches of 8 + 2 (see collectValidRuns in gate-shared.ts). The question
- * passes only if all 10
+ * (10) valid runs are collected — issued one call at a time
+ * (GATE_BATCH_SIZE = 1, paced 2s apart by the llm-client) with a hard budget
+ * of JUDGE_MAX_CALLS (14) calls, so an all-valid run issues exactly 10 calls
+ * (see collectValidRuns in gate-shared.ts). The question passes only if all 10
  * valid runs pick the correct option. Invalid runs (transport failures,
  * unparseable replies) don't count as wrong — they just consume budget; if
  * the budget is spent before 10 valid runs arrive the verdict is
@@ -19,8 +18,8 @@
  * wrong option means the answer key is wrong — the most valuable diagnostic
  * this gate produces; it is persisted in media_details.gate_failure.
  *
- * Runs cheap-first: DTO shape → this gate (≤14 calls) → solvability (≤300
- * calls) → TTS enqueue.
+ * Runs cheap-first: DTO shape → this gate (≤14 calls) → solvability (≤50
+ * calls, narrative R1.1–R1.3 only) → TTS enqueue.
  */
 import { SpanStatusCode } from '@opentelemetry/api';
 import { tracer } from '../otel/otel';

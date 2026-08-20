@@ -22,8 +22,13 @@ export const GATE_JUDGE_MODEL = 'sarvam-105b';
 
 export const OPTION_LETTERS = ['A', 'B', 'C', 'D'] as const;
 
-/** Calls per sequential gate batch (matches the batch runner's default concurrency). */
-export const GATE_BATCH_SIZE = 8;
+/**
+ * Calls per sequential gate batch. 1 = fully sequential (2026-08 rate-limit
+ * redesign): sarvam-105b allows only 40 req/min on the Starter tier, so gate
+ * calls are issued one at a time and the shared llm-client paces consecutive
+ * sarvam sends 2s apart (~30 rpm). Raise only together with that pacer.
+ */
+export const GATE_BATCH_SIZE = 1;
 
 export interface GateBatchRunner {
   completeBatch(

@@ -2703,7 +2703,7 @@ describe('createLlmGeneratedMedia', () => {
     const repo = makeRepo();
     repo.save.mockImplementation(async (e: unknown) => e);
     // Judge (with passage) always right; zero-context guessing always wrong
-    // → judge passes, solvability rate 0 ≤ 0.4 passes.
+    // → judge passes, solvability 0 correct < the rejection minimum, passes.
     const completeBatch = gateStub({ judge: 'correct', solvability: 'wrong' });
     const { service } = makeService({
       repo,
@@ -2727,8 +2727,8 @@ describe('createLlmGeneratedMedia', () => {
     expect(result.question!.status).toBe('created');
     expect(result.question!.solvability).toEqual({
       correct: 0,
-      valid_runs: 144,
-      total_calls: 144,
+      valid_runs: 24,
+      total_calls: 24,
       call_failures: 0,
       unparseable: 0,
     });
@@ -2740,18 +2740,18 @@ describe('createLlmGeneratedMedia', () => {
       unparseable: 0,
     });
 
-    // Gate order + shapes: judge first (10 valid WITH the passage, batches
-    // sized to the deficit: 8 + 2), then solvability (144 valid over 18
-    // batches of 8 without it). All calls valid here, so both issue exactly
+    // Gate order + shapes: judge first (10 valid WITH the passage), then
+    // solvability (24 valid without it) — all single-call batches
+    // (GATE_BATCH_SIZE = 1). All calls valid here, so both issue exactly
     // their target.
     const batches = completeBatch.mock.calls.map((c) => c[0] as LlmReq[]);
-    expect(batches.map((b) => b.length)).toEqual([8, 2, ...Array(18).fill(8)]);
-    const judgeRequests = batches.slice(0, 2).flat();
+    expect(batches.map((b) => b.length)).toEqual(Array(10 + 24).fill(1));
+    const judgeRequests = batches.slice(0, 10).flat();
     expect(
       judgeRequests.every((r) => r.messages[1].content.includes(PASSAGE_TEXT)),
     ).toBe(true);
-    const solvabilityRequests = batches.slice(2).flat();
-    expect(solvabilityRequests).toHaveLength(144);
+    const solvabilityRequests = batches.slice(10).flat();
+    expect(solvabilityRequests).toHaveLength(24);
     expect(
       solvabilityRequests.every(
         (r) => !r.messages[1].content.includes(PASSAGE_TEXT),
@@ -2791,9 +2791,9 @@ describe('createLlmGeneratedMedia', () => {
       model: 'sarvam-105b',
     });
     expect(questionDetails.solvability).toEqual({
-      valid_runs: 144,
+      valid_runs: 24,
       correct: 0,
-      total_calls: 144,
+      total_calls: 24,
       call_failures: 0,
       unparseable: 0,
       model: 'sarvam-105b',
@@ -2962,11 +2962,11 @@ describe('createLlmGeneratedMedia', () => {
     expect(result.level).toBe(9);
     expect(result.question!.status).toBe('discarded');
     expect(result.question!.reason).toContain('zero-context solvable');
-    // 2-option question: 144/144 correct ≥ the 91-correct rejection minimum.
+    // 2-option question: 24/24 correct ≥ the 18-correct rejection minimum.
     expect(result.question!.solvability).toEqual({
-      correct: 144,
-      valid_runs: 144,
-      total_calls: 144,
+      correct: 24,
+      valid_runs: 24,
+      total_calls: 24,
       call_failures: 0,
       unparseable: 0,
     });
@@ -2984,9 +2984,9 @@ describe('createLlmGeneratedMedia', () => {
     ).gate_failure;
     expect(gateFailure).toMatchObject({
       gate: 'solvability',
-      correct: 144,
-      valid_runs: 144,
-      total_calls: 144,
+      correct: 24,
+      valid_runs: 24,
+      total_calls: 24,
       call_failures: 0,
       unparseable: 0,
       model: 'sarvam-105b',
@@ -3017,12 +3017,12 @@ describe('createLlmGeneratedMedia', () => {
       unparseable: 0,
     });
 
-    // Only the judge batches (8 + 2 calls, all valid) — a failed question
-    // never reaches gate 4.
-    expect(completeBatch).toHaveBeenCalledTimes(2);
+    // Only the judge's 10 single-call batches (all valid) — a failed
+    // question never reaches gate 4.
+    expect(completeBatch).toHaveBeenCalledTimes(10);
     expect(
       completeBatch.mock.calls.map((c) => (c[0] as LlmReq[]).length),
-    ).toEqual([8, 2]);
+    ).toEqual(Array(10).fill(1));
 
     expect(dsTransaction).toHaveBeenCalledTimes(1);
     expect(saved.every((e) => e.rolled_back === true)).toBe(true);
@@ -3081,6 +3081,82 @@ describe('createLlmGeneratedMedia', () => {
     expect(result.question!.status).toBe('unverified');
     expect(dsTransaction).not.toHaveBeenCalled();
     expect(mockQueueAddBulk).not.toHaveBeenCalled();
+  });
+
+  it('skips the solvability gate outside narrative R1.1–R1.3 and creates on the judge alone', async () => {
+    seq();
+    const saved: Record<string, unknown>[] = [];
+    const dsTransaction = jest
+      .fn()
+      .mockImplementation(async (cb: (m: unknown) => Promise<void>) =>
+        cb({
+          save: jest.fn(async (entities: Record<string, unknown>[]) => {
+            saved.push(...entities);
+            return entities;
+          }),
+        }),
+      );
+    const repo = makeRepo();
+    repo.save.mockImplementation(async (e: unknown) => e);
+    // Solvability stubbed 'correct' (would reject if it ran) — it must not.
+    const completeBatch = gateStub({ judge: 'correct', solvability: 'correct' });
+    const { service } = makeService({
+      repo,
+      dsTransaction,
+      openaiLlm: {
+        complete: jest.fn().mockResolvedValue({
+          text: generatedJson({
+            question: {
+              text: 'कहानी किसके लिए है?',
+              question_type: 'R2.1', // narrative but not R1.x → gate skipped
+              send_as_flow: true,
+              options: [
+                {
+                  text: CORRECT_OPTION_TEXT,
+                  correct: true,
+                  explanation: { text: 'सही!' },
+                },
+                {
+                  text: WRONG_OPTION_TEXT,
+                  correct: false,
+                  explanation: { text: 'नहीं।' },
+                },
+              ],
+            },
+          }),
+          model: 'gpt-4.1',
+          prompt_tokens: 1,
+          completion_tokens: 1,
+          duration_ms: 1,
+        }),
+      },
+      sarvamLlm: { completeBatch } as never,
+    });
+
+    const result = await service.createLlmGeneratedMedia(request, carrier);
+
+    expect(result.status).toBe('created');
+    expect(result.question!.status).toBe('created');
+    // No solvability verdict on the response when the gate is out of scope.
+    expect(result.question!.solvability).toBeUndefined();
+
+    // Only the judge's 10 single-call batches — never a zero-context call.
+    expect(completeBatch).toHaveBeenCalledTimes(10);
+    const gateRequests = completeBatch.mock.calls.flatMap(
+      (c) => c[0] as LlmReq[],
+    );
+    expect(
+      gateRequests.every((r) => r.messages[1].content.includes(PASSAGE_TEXT)),
+    ).toBe(true);
+
+    // Rows are live, and the question records the skip for the funnel.
+    expect(saved.every((e) => e.rolled_back === false)).toBe(true);
+    const question = saved.find(
+      (e) => (e.media_details as { role?: string })?.role === 'question',
+    )!;
+    expect(
+      (question.media_details as { solvability?: unknown }).solvability,
+    ).toEqual({ skipped: true });
   });
 
   it('gate transport errors (batch rejects) reject retriable as unverified without inserting', async () => {

@@ -305,10 +305,16 @@ After all items processed:
   valid GATE_JUDGE_MODEL runs WITH the passage over ≤ JUDGE_MAX_CALLS = 14
   calls; pass = all 10 valid runs correct; budget spent short of 10 valid →
   'unverified') → zero-context solvability (`zero-context-solvability.ts`:
-  collects SOLVABILITY_REQUIRED_VALID = 144 valid runs, shuffled options, no
-  passage, over ≤ SOLVABILITY_MAX_CALLS = 300 calls; reject when correct
-  picks ≥ SOLVABILITY_REJECT_MIN_CORRECT per option count {2: 91, 3: 67,
-  4: 54}; budget spent short of 144 valid → 'unverified') → transactional
+  narrative R1.1–R1.3 questions ONLY (`solvabilityGateApplies`; everything
+  else skips the gate and the question row records
+  `media_details.solvability = { skipped: true }`); collects
+  SOLVABILITY_REQUIRED_VALID = 24 valid runs (= the 4! orderings of a
+  4-option question, divisible by the 2/6 orderings of 2-/3-option ones),
+  shuffled options, no passage, over ≤ SOLVABILITY_MAX_CALLS = 50 calls;
+  reject when correct picks ≥ SOLVABILITY_REJECT_MIN_CORRECT per option
+  count {2: 18, 3: 14, 4: 12}; budget spent short of 24 valid →
+  'unverified'; scaled down from 144/300/{91,67,54} 2026-08 to fit
+  sarvam-105b's 40 req/min Starter-tier limit) → transactional
   insert of passage → question → options →
   explanations (+ one `media_type='flow'` row when `send_as_flow`) →
   ElevenLabs TTS enqueue for EVERY text entity (one audio row per text row,
@@ -323,12 +329,14 @@ After all items processed:
   { valid_runs, correct?, total_calls, call_failures, unparseable }); TTS
   enqueue failure sets `tts_error` without failing the generation.
 - Both gates share `GATE_JUDGE_MODEL = 'sarvam-105b'` and the
-  sequential-batch collector `collectValidRuns` (`gate-shared.ts`: each batch
-  sized min(GATE_BATCH_SIZE = 8, remaining valid deficit, remaining budget),
-  stop after the first batch that reaches the valid target; a batch never
-  over-delivers, so an all-valid run issues exactly the target — judge 8+2,
-  solvability 18×8 — and invalid runs trigger deficit-sized top-up batches;
-  verdicts always score exactly the target number of valid runs). Every verdict carries { valid_runs, correct?, total_calls,
+  sequential collector `collectValidRuns` (`gate-shared.ts`:
+  GATE_BATCH_SIZE = 1 since the 2026-08 rate-limit redesign — calls issue
+  one at a time, and the shared llm-client additionally paces consecutive
+  sarvam sends 2s apart (~30 rpm, under the 40 req/min Starter cap); the
+  loop stops exactly at the valid target, so an all-valid run issues
+  exactly the target — judge 10, solvability 24 — and invalid runs trigger
+  top-up calls until the budget runs out; verdicts always score exactly the
+  target number of valid runs). Every verdict carries { valid_runs, correct?, total_calls,
   call_failures, unparseable } (the split counters partition invalid runs:
   transport failure after client retries vs no parseable letter); the same
   values go on the `llm.passage_judge` / `llm.solvability_filter` spans as
