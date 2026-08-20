@@ -72,25 +72,27 @@ export class MediaMetaDataController {
       where: { state_transition_id: stid, rolled_back: false },
       order: { created_at: 'ASC' },
     });
-    return rows.map((row) => {
-      const gen = row.generation_request_json as {
-        script_text?: string;
-      } | null;
-      const details = row.media_details as { mime_type?: string } | null;
-      return {
-        id: row.id,
-        media_type: row.media_type,
-        source: row.source,
-        status: row.status,
-        created_at: row.created_at,
-        state_transition_id: row.state_transition_id,
-        text: row.text ?? null,
-        has_content: !!row.s3_key,
-        content_mime: details?.mime_type ?? null,
-        generation_script: gen?.script_text ?? null,
-        wa_media_url: row.wa_media_url,
-      };
-    });
+    return rows.map((row) => this.toMediaItemResponse(row));
+  }
+
+  private toMediaItemResponse(row: MediaMetaDataEntity): MediaItemResponse {
+    const gen = row.generation_request_json as {
+      script_text?: string;
+    } | null;
+    const details = row.media_details as { mime_type?: string } | null;
+    return {
+      id: row.id,
+      media_type: row.media_type,
+      source: row.source,
+      status: row.status,
+      created_at: row.created_at,
+      state_transition_id: row.state_transition_id,
+      text: row.text ?? null,
+      has_content: !!row.s3_key,
+      content_mime: details?.mime_type ?? null,
+      generation_script: gen?.script_text ?? null,
+      wa_media_url: row.wa_media_url,
+    };
   }
 
   // Paginated distinct comprehension stids for the dashboard's bottom table
@@ -180,6 +182,27 @@ export class MediaMetaDataController {
     res.set('Content-Type', content_type);
     res.set('Content-Length', buffer.length.toString());
     res.send(buffer);
+  }
+
+  // Single media row by id, for the dashboard's read-only views (e.g. the
+  // comprehension modal fetching the passage row, which carries no stid —
+  // its id is the `…-sentence-comprehension` prefix). Declared after every
+  // named @Get so ':id' cannot capture 'coverage' etc.; the uuid guard is a
+  // second line of defense against that.
+  @Get(':id')
+  async getMedia(@Param('id') id: string): Promise<MediaItemResponse> {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        id,
+      )
+    ) {
+      throw new BadRequestException('id must be a uuid');
+    }
+    const row = await this.mediaRepo.findOneBy({ id, rolled_back: false });
+    if (!row) {
+      throw new NotFoundException('Media not found');
+    }
+    return this.toMediaItemResponse(row);
   }
 
   @Post('heygen-generate')

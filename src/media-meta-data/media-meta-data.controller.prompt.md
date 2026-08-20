@@ -57,3 +57,11 @@ uploadStaticMedia()
 - `POST /media-meta-data/llm-generate` (200, slow ~1-2 min/question) —
   synchronous seeding; body `{provider, model, messages}`; returns
   `LlmGenerateResponse` (per-question outcomes, `retriable` flags).
+
+## 2026-08 additions
+
+- `GET /media-meta-data/:id` — single non-rolled-back row as
+  `MediaItemResponse`, for the dashboard's read-only views (e.g. the
+  comprehension modal fetching the stid-less passage row by the
+  `…-sentence-comprehension` prefix). Declared after every named `@Get`;
+  a uuid guard rejects route-capture strays like `coverage`.

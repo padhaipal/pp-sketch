@@ -198,6 +198,52 @@ describe('MediaMetaDataController.listByStateTransitionId', () => {
   });
 });
 
+describe('MediaMetaDataController.getMedia', () => {
+  const id = '2f115dd8-6f5a-4b1d-9b6f-67f6c8bb1519';
+
+  it('rejects a non-uuid id (route-capture defense)', async () => {
+    const { ctrl } = makeController({});
+    await expect(ctrl.getMedia('coverage')).rejects.toThrow(
+      'id must be a uuid',
+    );
+  });
+
+  it('404s when the row is missing (or rolled back, via the where clause)', async () => {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue(null);
+    const { ctrl } = makeController({ repo });
+    await expect(ctrl.getMedia(id)).rejects.toThrow('Media not found');
+    expect(repo.findOneBy).toHaveBeenCalledWith({ id, rolled_back: false });
+  });
+
+  it('returns the mapped media item', async () => {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue({
+      id,
+      media_type: 'text',
+      source: 'openai',
+      status: 'ready',
+      created_at: new Date('2026-08-20T19:07:43Z'),
+      state_transition_id: null,
+      text: 'गाय हरी घास खाती है।',
+      s3_key: null,
+      wa_media_url: null,
+      media_details: { role: 'passage', level: 9 },
+      generation_request_json: null,
+    });
+    const { ctrl } = makeController({ repo });
+    const out = await ctrl.getMedia(id);
+    expect(out).toMatchObject({
+      id,
+      media_type: 'text',
+      state_transition_id: null,
+      text: 'गाय हरी घास खाती है।',
+      has_content: false,
+      generation_script: null,
+    });
+  });
+});
+
 describe('MediaMetaDataController.deleteMedia', () => {
   it('delegates to MediaMetaDataService.markRolledBack', async () => {
     const markRolledBack = jest.fn().mockResolvedValue(undefined);
