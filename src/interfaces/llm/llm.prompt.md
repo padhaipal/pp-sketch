@@ -37,6 +37,14 @@ carry only an `LlmProviderConfig` (`baseUrl`, `envKey`, optional
 - No provider async-batch APIs and no BullMQ queues (product decision
   2026-07-27): seeding requests are synchronous per-generation HTTP calls and
   Sarvam (the solvability model) has no batch API.
+- Sarvam send pacing (2026-08): sarvam-105b allows only 40 req/min on the
+  Starter tier (60 Pro / 120 Business; per-account, all keys pooled), so
+  every sarvam send in the process — generation, gate runs, retries — is
+  serialized through a shared slot queue spaced
+  `SARVAM_LLM_MIN_SEND_INTERVAL_MS` apart (default 2000 ms ≈ 30 rpm; 0
+  disables). The wait happens before the `LLM_TIME_CAP` clock starts but IS
+  included in the `pp.llm.request_duration_ms` histogram (it measures the
+  caller-observed call). Other providers are unpaced.
 
 ## Observability
 

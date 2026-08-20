@@ -64,17 +64,16 @@ function runner(
 }
 
 describe('runPassageJudge', () => {
-  it('all calls valid: issues exactly 10 calls (batches 8 + 2) and scores them all', async () => {
+  it('all calls valid: issues exactly 10 single-call batches and scores them all', async () => {
     const llm = runner((request) => letterOf(request, 'शेर'));
     const verdict = await runPassageJudge(llm, passageText, question);
     expect(JUDGE_REQUIRED_VALID).toBe(10);
     expect(JUDGE_MAX_CALLS).toBe(14);
-    // First batch of 8 yields 8 valid (< 10); the second batch is sized to
-    // the remaining deficit (2), so nothing is issued beyond the target.
-    expect(llm.calls.map((batch) => batch.length)).toEqual([
-      GATE_BATCH_SIZE,
-      JUDGE_REQUIRED_VALID - GATE_BATCH_SIZE,
-    ]);
+    // GATE_BATCH_SIZE = 1: calls issue one at a time and stop exactly at
+    // the target — nothing is issued beyond it.
+    expect(llm.calls.map((batch) => batch.length)).toEqual(
+      Array(JUDGE_REQUIRED_VALID).fill(GATE_BATCH_SIZE),
+    );
     expect(verdict).toEqual({
       status: 'passed',
       correct: 10,
@@ -119,14 +118,14 @@ describe('runPassageJudge', () => {
     expect(verdict.correct).toBe(0);
   });
 
-  it('invalid responses trigger a deficit-sized top-up batch without counting as wrong', async () => {
-    // Batch 1 (8 calls): 2 unparseable + 6 valid → deficit 4 → batch 2 is
-    // sized 4, all valid → exactly 10 scored, all correct, 12 calls total.
+  it('invalid responses trigger top-up calls without counting as wrong', async () => {
+    // 2 unparseable early → the sequential loop keeps issuing single calls
+    // until 10 valid runs are scored: 12 calls total, all correct.
     const llm = runner((request, i) =>
       i < 2 ? 'पता नहीं' : letterOf(request, 'शेर'),
     );
     const verdict = await runPassageJudge(llm, passageText, question);
-    expect(llm.calls.map((batch) => batch.length)).toEqual([8, 4]);
+    expect(llm.calls.map((batch) => batch.length)).toEqual(Array(12).fill(1));
     expect(verdict).toEqual({
       status: 'passed',
       correct: 10,

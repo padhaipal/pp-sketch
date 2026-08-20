@@ -140,9 +140,10 @@ export interface LlmGenerateQuestionResult {
   /**
    * Per-gate observability counters ({ valid_runs, correct?, total_calls,
    * call_failures, unparseable } — see gate-shared.ts), present for every
-   * gate that ran, whatever its verdict. The dashboard status line renders
-   * these, e.g. "unverified — 140/144 valid after 300 calls (52 call
-   * failures, 8 unparseable)".
+   * gate that ran, whatever its verdict (absent when the solvability gate
+   * was skipped — non-narrative or non-R1.x questions). The dashboard
+   * status line renders these, e.g. "unverified — 20/24 valid after 50
+   * calls (26 call failures, 4 unparseable)".
    */
   judge?: GateObservability;
   solvability?: GateObservability;

@@ -4,19 +4,24 @@
  * A well-designed passage question should NOT be answerable without the
  * passage. We send the question + options (no passage) to the shared gate
  * model, shuffling the option order every run, until exactly
- * SOLVABILITY_REQUIRED_VALID (144) valid runs are collected — issued in
- * sequential batches sized to the remaining valid deficit (up to
- * GATE_BATCH_SIZE) with a hard budget of SOLVABILITY_MAX_CALLS (300) calls,
- * so an all-valid run issues exactly 144 calls in 18 batches of 8 (see
+ * SOLVABILITY_REQUIRED_VALID (24) valid runs are collected — issued one call
+ * at a time (GATE_BATCH_SIZE = 1) with a hard budget of SOLVABILITY_MAX_CALLS
+ * (50) calls, so an all-valid run issues exactly 24 calls (see
  * collectValidRuns in gate-shared.ts).
- * 144 = the 4! = 24 option orderings × 6, so every ordering of a 4-option
- * question is expected several times.
+ * 24 = the 4! orderings of a 4-option question, and is divisible by the 2 and
+ * 6 orderings of 2-/3-option questions, so every ordering carries equal
+ * weight in the verdict (position-bias control). Scaled down from 144×/300
+ * (2026-08) to fit sarvam-105b's 40 req/min Starter-tier rate limit.
  *
- * The verdict is always computed over exactly 144 valid runs: the question is
+ * The gate only applies to narrative R1.1/R1.2/R1.3 questions (see
+ * solvabilityGateApplies); all other passage/question types skip it and are
+ * created on the passage-judge verdict alone.
+ *
+ * The verdict is always computed over exactly 24 valid runs: the question is
  * rejected when the correct option was picked at least
  * SOLVABILITY_REJECT_MIN_CORRECT[optionCount] times (exact per-option-count
  * minima replacing the old 40%-of-valid threshold, 2026-08). If the call
- * budget is spent before 144 valid runs arrive the verdict is 'unverified' —
+ * budget is spent before 24 valid runs arrive the verdict is 'unverified' —
  * the question is rejected with a retriable reason rather than saved
  * unchecked (no DB row).
  *
@@ -37,24 +42,48 @@ import {
 } from './gate-shared';
 
 /** The verdict is computed over exactly this many valid runs. */
-export const SOLVABILITY_REQUIRED_VALID = 144;
-/** Hard call budget; spent before 144 valid runs → 'unverified'. */
-export const SOLVABILITY_MAX_CALLS = 300;
+export const SOLVABILITY_REQUIRED_VALID = 24;
+/** Hard call budget; spent before 24 valid runs → 'unverified'. */
+export const SOLVABILITY_MAX_CALLS = 50;
 /**
- * Rejection minima over the fixed 144-valid denominator, per option count:
+ * Rejection minima over the fixed 24-valid denominator, per option count:
  * correct picks >= minimum → 'failed_solvable'.
  */
 export const SOLVABILITY_REJECT_MIN_CORRECT: Record<2 | 3 | 4, number> = {
-  2: 91,
-  3: 67,
-  4: 54,
+  2: 18,
+  3: 14,
+  4: 12,
 };
+
+/** The gate runs only for this passage type… */
+export const SOLVABILITY_GATED_PASSAGE_TYPE = 'narrative';
+/** …combined with these (retrieve-subconstruct) question types. */
+export const SOLVABILITY_GATED_QUESTION_TYPES: readonly string[] = [
+  'R1.1',
+  'R1.2',
+  'R1.3',
+];
+
+/**
+ * Whether the zero-context solvability gate applies to a generated question.
+ * Everything outside narrative R1.1–R1.3 skips the gate (2026-08 scope-down;
+ * the question row then carries media_details.solvability.skipped = true).
+ */
+export function solvabilityGateApplies(
+  passageType: string,
+  questionType: string,
+): boolean {
+  return (
+    passageType === SOLVABILITY_GATED_PASSAGE_TYPE &&
+    SOLVABILITY_GATED_QUESTION_TYPES.includes(questionType)
+  );
+}
 
 export type SolvabilityBatchRunner = GateBatchRunner;
 
 export interface SolvabilityVerdict extends GateRunStats {
   status: 'passed' | 'failed_solvable' | 'unverified';
-  /** Correct picks over the 144 scored valid runs; absent when unverified. */
+  /** Correct picks over the 24 scored valid runs; absent when unverified. */
   correct?: number;
 }
 
