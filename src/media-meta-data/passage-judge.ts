@@ -3,18 +3,21 @@
  *
  * The inverse check to zero-context solvability: WITH the passage, the
  * question must be reliably answerable. The gate model is shown the passage,
- * question and randomly ordered options 10 times; the question passes only if
- * every valid (parseable) response picks the correct option AND at least 8
- * runs were valid. Invalid/unparseable responses don't count as wrong — they
- * reduce the valid count, and below 8 valid the verdict is 'unverified'
- * (rejected as retriable, like solvability).
+ * question and randomly ordered options until exactly JUDGE_REQUIRED_VALID
+ * (10) valid runs are collected — issued in sequential batches of
+ * GATE_BATCH_SIZE with a hard budget of JUDGE_MAX_CALLS (14) calls (see
+ * collectValidRuns in gate-shared.ts). The question passes only if all 10
+ * valid runs pick the correct option. Invalid runs (transport failures,
+ * unparseable replies) don't count as wrong — they just consume budget; if
+ * the budget is spent before 10 valid runs arrive the verdict is
+ * 'unverified' (rejected as retriable, like solvability; no DB row).
  *
  * On failure the verdict carries which option the gate model picked per miss
  * (original option-array indices). A judge consistently picking the same
  * wrong option means the answer key is wrong — the most valuable diagnostic
  * this gate produces; it is persisted in media_details.gate_failure.
  *
- * Runs cheap-first: DTO shape → this gate (10 calls) → solvability (144
+ * Runs cheap-first: DTO shape → this gate (≤14 calls) → solvability (≤300
  * calls) → TTS enqueue.
  */
 import { SpanStatusCode } from '@opentelemetry/api';
@@ -22,21 +25,24 @@ import { tracer } from '../otel/otel';
 import type { LlmBatchOptions, LlmRequest } from '../interfaces/llm/llm.dto';
 import type { GeneratedQuestion } from './llm-generate.dto';
 import {
+  collectValidRuns,
   GATE_JUDGE_MODEL,
   GateBatchRunner,
+  GateRunStats,
   OPTION_LETTERS,
-  parseAnswerLetter,
+  setGateSpanAttributes,
   shuffled,
 } from './gate-shared';
 
-export const JUDGE_RUNS = 10;
-/** Minimum parseable runs for a verdict; below this → 'unverified'. */
-export const JUDGE_MIN_VALID_RUNS = 8;
+/** The verdict is computed over exactly this many valid runs. */
+export const JUDGE_REQUIRED_VALID = 10;
+/** Hard call budget; spent before 10 valid runs → 'unverified'. */
+export const JUDGE_MAX_CALLS = 14;
 
-export interface PassageJudgeVerdict {
+export interface PassageJudgeVerdict extends GateRunStats {
   status: 'passed' | 'failed_judge' | 'unverified';
-  valid_runs: number;
-  total_runs: number;
+  /** Correct picks over the 10 scored valid runs; absent when unverified. */
+  correct?: number;
   /**
    * Original option-array index the judge picked, one entry per valid run
    * that missed the correct option. Absent unless status is 'failed_judge'.
@@ -80,58 +86,41 @@ export async function runPassageJudge(
   llm: GateBatchRunner,
   passageText: string,
   question: GeneratedQuestion,
-  options?: LlmBatchOptions & { runs?: number },
+  options?: LlmBatchOptions,
 ): Promise<PassageJudgeVerdict> {
   return tracer.startActiveSpan('llm.passage_judge', async (span) => {
     try {
-      const totalRuns = options?.runs ?? JUDGE_RUNS;
       const correctIndex = question.options.findIndex((o) => o.correct);
-      const runs = Array.from({ length: totalRuns }, () =>
-        buildRun(passageText, question),
-      );
-      const items = await llm.completeBatch(
-        runs.map((r) => r.request),
-        options,
-      );
-
-      let valid = 0;
-      const wrongPicks: number[] = [];
-      items.forEach((item, i) => {
-        if (!item.result) return;
-        const picked = parseAnswerLetter(
-          item.result.text,
-          question.options.length,
-        );
-        if (picked === null) return;
-        valid++;
-        const original = runs[i].letterToOriginalIndex[picked];
-        if (original !== correctIndex) wrongPicks.push(original);
+      const { scored, stats } = await collectValidRuns({
+        llm,
+        buildRun: () => buildRun(passageText, question),
+        optionCount: question.options.length,
+        requiredValid: JUDGE_REQUIRED_VALID,
+        maxCalls: JUDGE_MAX_CALLS,
+        batchOptions: options,
       });
 
       let verdict: PassageJudgeVerdict;
-      if (valid < JUDGE_MIN_VALID_RUNS * (totalRuns / JUDGE_RUNS)) {
-        verdict = {
-          status: 'unverified',
-          valid_runs: valid,
-          total_runs: totalRuns,
-        };
-      } else if (wrongPicks.length > 0) {
-        verdict = {
-          status: 'failed_judge',
-          valid_runs: valid,
-          total_runs: totalRuns,
-          wrong_picks: wrongPicks,
-        };
+      if (stats.valid_runs < JUDGE_REQUIRED_VALID) {
+        verdict = { status: 'unverified', ...stats };
       } else {
-        verdict = {
-          status: 'passed',
-          valid_runs: valid,
-          total_runs: totalRuns,
-        };
+        const wrongPicks = scored
+          .map((s) => s.run.letterToOriginalIndex[s.picked])
+          .filter((original) => original !== correctIndex);
+        const correct = stats.valid_runs - wrongPicks.length;
+        verdict =
+          wrongPicks.length > 0
+            ? {
+                status: 'failed_judge',
+                correct,
+                wrong_picks: wrongPicks,
+                ...stats,
+              }
+            : { status: 'passed', correct, ...stats };
       }
 
       span.setAttribute('pp.llm.judge.status', verdict.status);
-      span.setAttribute('pp.llm.judge.valid_runs', verdict.valid_runs);
+      setGateSpanAttributes(span, stats);
       if (verdict.wrong_picks) {
         span.setAttribute(
           'pp.llm.judge.wrong_picks',

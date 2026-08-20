@@ -44,12 +44,17 @@ import {
   validateLlmGenerateRequest,
 } from './llm-generate.dto';
 import {
-  SOLVABILITY_THRESHOLD,
+  SOLVABILITY_REJECT_MIN_CORRECT,
+  SOLVABILITY_REQUIRED_VALID,
   SolvabilityVerdict,
   runZeroContextSolvability,
 } from './zero-context-solvability';
-import { PassageJudgeVerdict, runPassageJudge } from './passage-judge';
-import { GATE_JUDGE_MODEL } from './gate-shared';
+import {
+  JUDGE_REQUIRED_VALID,
+  PassageJudgeVerdict,
+  runPassageJudge,
+} from './passage-judge';
+import { GATE_JUDGE_MODEL, pickGateObservability } from './gate-shared';
 import { createQueue, QUEUE_NAMES } from '../interfaces/redis/queues';
 import type { OtelCarrier } from '../otel/otel.dto';
 import {
@@ -842,8 +847,10 @@ export class MediaMetaDataService {
    * reaches a later one, so the funnel counts are disjoint:
    *   1. validate request → LLM completion
    *   2. parse/validate the untrusted JSON (llm-generate.dto) — DTO shape
-   *   3. passage-judge gate (10× GATE_JUDGE_MODEL, with passage)
-   *   4. zero-context solvability (144× GATE_JUDGE_MODEL, no passage)
+   *   3. passage-judge gate (10 valid GATE_JUDGE_MODEL runs over ≤14 calls,
+   *      with passage)
+   *   4. zero-context solvability (144 valid runs over ≤300 calls, no
+   *      passage)
    *   5. transactional insert of the entity tree (passage → question →
    *      options → explanations + one flow row)
    *   6. ElevenLabs TTS enqueue for EVERY text entity (passage, question,
@@ -929,13 +936,17 @@ export class MediaMetaDataService {
       };
     }
     if (judgeVerdict.status === 'unverified') {
-      const reason = `passage-judge unverified: only ${judgeVerdict.valid_runs}/${judgeVerdict.total_runs} ${GATE_JUDGE_MODEL} runs were parseable — retry`;
+      const reason = `passage-judge unverified: ${judgeVerdict.valid_runs}/${JUDGE_REQUIRED_VALID} valid after ${judgeVerdict.total_calls} ${GATE_JUDGE_MODEL} calls (${judgeVerdict.call_failures} call failures, ${judgeVerdict.unparseable} unparseable) — retry`;
       return {
         status: 'rejected',
         reason,
         retriable: true,
         level,
-        question: { status: 'unverified', reason },
+        question: {
+          status: 'unverified',
+          reason,
+          judge: pickGateObservability(judgeVerdict),
+        },
       };
     }
 
@@ -962,13 +973,18 @@ export class MediaMetaDataService {
         };
       }
       if (solvabilityVerdict.status === 'unverified') {
-        const reason = `solvability unverified: only ${solvabilityVerdict.valid_runs}/${solvabilityVerdict.total_runs} ${GATE_JUDGE_MODEL} runs were parseable — retry`;
+        const reason = `solvability unverified: ${solvabilityVerdict.valid_runs}/${SOLVABILITY_REQUIRED_VALID} valid after ${solvabilityVerdict.total_calls} ${GATE_JUDGE_MODEL} calls (${solvabilityVerdict.call_failures} call failures, ${solvabilityVerdict.unparseable} unparseable) — retry`;
         return {
           status: 'rejected',
           reason,
           retriable: true,
           level,
-          question: { status: 'unverified', reason },
+          question: {
+            status: 'unverified',
+            reason,
+            judge: pickGateObservability(judgeVerdict),
+            solvability: pickGateObservability(solvabilityVerdict),
+          },
         };
       }
     }
@@ -987,17 +1003,16 @@ export class MediaMetaDataService {
         // Original option-array indices per miss: a judge consistently
         // picking the same wrong option means the answer key is wrong.
         judge_picks: judgeVerdict.wrong_picks,
-        valid_runs: judgeVerdict.valid_runs,
-        total_runs: judgeVerdict.total_runs,
+        ...pickGateObservability(judgeVerdict),
         model: GATE_JUDGE_MODEL,
       };
     } else if (solvabilityVerdict!.status === 'failed_solvable') {
+      const minCorrect =
+        SOLVABILITY_REJECT_MIN_CORRECT[question.options.length as 2 | 3 | 4];
       gateFailure = {
         gate: 'solvability',
-        reason: `zero-context solvable: correct answer picked ${Math.round(solvabilityVerdict!.rate! * 100)}% of ${solvabilityVerdict!.valid_runs} runs (threshold ${SOLVABILITY_THRESHOLD * 100}%)`,
-        rate: solvabilityVerdict!.rate,
-        valid_runs: solvabilityVerdict!.valid_runs,
-        total_runs: solvabilityVerdict!.total_runs,
+        reason: `zero-context solvable: correct answer picked ${solvabilityVerdict!.correct} of ${solvabilityVerdict!.valid_runs} valid runs (rejection minimum ${minCorrect} for ${question.options.length} options)`,
+        ...pickGateObservability(solvabilityVerdict!),
         model: GATE_JUDGE_MODEL,
       };
     }
@@ -1062,14 +1077,12 @@ export class MediaMetaDataService {
           question_type: question.question_type,
           model: request.model,
           judge: {
-            valid_runs: judgeVerdict.valid_runs,
-            total_runs: judgeVerdict.total_runs,
+            ...pickGateObservability(judgeVerdict),
             model: GATE_JUDGE_MODEL,
           },
           ...(solvabilityVerdict && {
             solvability: {
-              rate: solvabilityVerdict.rate,
-              valid_runs: solvabilityVerdict.valid_runs,
+              ...pickGateObservability(solvabilityVerdict),
               model: GATE_JUDGE_MODEL,
             },
           }),
@@ -1186,8 +1199,9 @@ export class MediaMetaDataService {
           status: 'discarded',
           reason: gateFailure.reason,
           question_id: questionId,
-          ...(solvabilityVerdict?.rate !== undefined && {
-            solvability_rate: solvabilityVerdict.rate,
+          judge: pickGateObservability(judgeVerdict),
+          ...(solvabilityVerdict && {
+            solvability: pickGateObservability(solvabilityVerdict),
           }),
         },
       };
@@ -1207,7 +1221,8 @@ export class MediaMetaDataService {
       question: {
         status: 'created',
         question_id: questionId,
-        solvability_rate: solvabilityVerdict!.rate,
+        judge: pickGateObservability(judgeVerdict),
+        solvability: pickGateObservability(solvabilityVerdict!),
       },
     };
     try {
