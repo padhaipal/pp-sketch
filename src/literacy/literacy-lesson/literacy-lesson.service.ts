@@ -48,8 +48,10 @@ const MAX_LESSON_LEVEL = 12;
 // metric as words, new thresholds. A perfect passage lesson costs 3 rows
 // (selection row + sentence-read row + comprehension 'done' row), so the
 // position of the 3rd most recent done row within the last 18 rows encodes
-// how cleanly the last three lessons went: within 9 rows → +2, within
-// 10-12 → +1, 13-17 → hold, deeper than 17 → −1.
+// how cleanly the last three lessons went: within 12 rows → +1, 13-17 →
+// hold, deeper than 17 → −1. Sentence-band moves are capped at ±1 per
+// selection (2026-08; the ≤9-row tier previously awarded +2 and now also
+// awards +1 — kept as a distinct tier so the signal stays tunable).
 const SENTENCE_RECENT_ROWS_WINDOW = 18;
 const SENTENCE_DONE_ROWS_FOR_SIGNAL = 3;
 const SENTENCE_PLUS_TWO_MAX_ROWS = 9;
@@ -713,7 +715,10 @@ export class LiteracyLessonService {
           if (thirdDoneRn === null) {
             maxLength = base; // fewer than 3 completions in window — hold
           } else if (thirdDoneRn <= SENTENCE_PLUS_TWO_MAX_ROWS) {
-            maxLength = base + 2;
+            // 2026-08: sentence-band moves are capped at ±1 per selection —
+            // this tier used to award +2; the two-tier structure is kept so
+            // the row-position signal stays observable/tunable.
+            maxLength = base + 1;
           } else if (thirdDoneRn <= SENTENCE_PLUS_ONE_MAX_ROWS) {
             maxLength = base + 1;
           } else if (thirdDoneRn <= SENTENCE_HOLD_MAX_ROWS) {
