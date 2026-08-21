@@ -646,7 +646,8 @@ describe('MediaMetaDataService.markRolledBack', () => {
       const m = {
         query: jest
           .fn()
-          .mockResolvedValueOnce([[], 1]) // UPDATE media_metadata
+          .mockResolvedValueOnce([[], 1]) // UPDATE media_metadata (root)
+          .mockResolvedValueOnce([[], 0]) // recursive descendant soft-flag
           .mockResolvedValueOnce([[], 0]) // UPDATE outbound_messages (audit flip)
           .mockResolvedValueOnce([{ sql: 'DELETE FROM x WHERE y = $1' }]) // FK stmts
           .mockResolvedValueOnce(undefined), // delete via FK
@@ -687,9 +688,10 @@ describe('MediaMetaDataService.markRolledBack', () => {
       return cb({
         query: jest
           .fn()
-          .mockResolvedValueOnce([[], 1])
-          .mockResolvedValueOnce([[], 0])
-          .mockResolvedValueOnce([]),
+          .mockResolvedValueOnce([[], 1]) // root flag
+          .mockResolvedValueOnce([[], 0]) // descendant flag
+          .mockResolvedValueOnce([[], 0]) // outbound flip
+          .mockResolvedValueOnce([]), // FK stmts
       });
     });
     const bucket = {
@@ -717,9 +719,10 @@ describe('MediaMetaDataService.markRolledBack', () => {
       return cb({
         query: jest
           .fn()
-          .mockResolvedValueOnce([[], 1])
-          .mockResolvedValueOnce([[], 0])
-          .mockResolvedValueOnce([]),
+          .mockResolvedValueOnce([[], 1]) // root flag
+          .mockResolvedValueOnce([[], 0]) // descendant flag
+          .mockResolvedValueOnce([[], 0]) // outbound flip
+          .mockResolvedValueOnce([]), // FK stmts
       });
     });
     const cache = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
@@ -1139,15 +1142,18 @@ describe('markRolledBack — exact SQL + params + cache keys', () => {
       state_transition_id: string | null;
     } | null;
     updateAffected?: number;
+    descendantRows?: { id: string; state_transition_id: string | null }[];
     fkRows?: { sql: string }[];
     bucketDelete?: jest.Mock;
     cacheDel?: jest.Mock;
   }) {
     const repo = makeRepo();
     repo.findOneBy.mockResolvedValue(opts.entity ?? null);
+    const descendantRows = opts.descendantRows ?? [];
     const txQuery = jest
       .fn()
-      .mockResolvedValueOnce([[], opts.updateAffected ?? 1]) // UPDATE media_metadata
+      .mockResolvedValueOnce([[], opts.updateAffected ?? 1]) // UPDATE media_metadata (root)
+      .mockResolvedValueOnce([descendantRows, descendantRows.length]) // recursive descendant soft-flag
       .mockResolvedValueOnce([[], 0]) // UPDATE outbound_messages (audit flip)
       .mockResolvedValueOnce(opts.fkRows ?? []); // format() SELECT
     for (const _ of opts.fkRows ?? []) {
@@ -1209,13 +1215,22 @@ describe('markRolledBack — exact SQL + params + cache keys', () => {
       fkRows: [],
     });
     await service.markRolledBack('mm-1');
-    // calls[1] is the outbound_messages audit flip; the discovery SELECT
-    // moved to calls[2].
-    expect(txQuery.mock.calls[1]).toEqual([
+    // calls[1] is the recursive descendant soft-flag, calls[2] the
+    // outbound_messages audit flip; the discovery SELECT sits at calls[3].
+    const descendantUpdate = txQuery.mock.calls[1][0] as string;
+    expect(descendantUpdate).toContain('WITH RECURSIVE subtree AS');
+    expect(descendantUpdate).toContain('m.input_media_id = s.id');
+    expect(descendantUpdate).toContain(
+      'UPDATE media_metadata SET rolled_back = true',
+    );
+    expect(descendantUpdate).toContain('rolled_back = false');
+    expect(descendantUpdate).toContain('RETURNING id, state_transition_id');
+    expect(txQuery.mock.calls[1][1]).toEqual(['mm-1']);
+    expect(txQuery.mock.calls[2]).toEqual([
       "UPDATE outbound_messages SET status = 'rolled_back' WHERE user_message_id = $1",
       ['mm-1'],
     ]);
-    const select = txQuery.mock.calls[2][0] as string;
+    const select = txQuery.mock.calls[3][0] as string;
     expect(select).toContain('FROM pg_constraint con');
     expect(select).toContain('JOIN pg_attribute att');
     expect(select).toContain("con.confrelid = 'media_metadata'::regclass");
@@ -1226,6 +1241,11 @@ describe('markRolledBack — exact SQL + params + cache keys', () => {
     );
     // Audit rows are never deleted — the sweep must exclude outbound_messages.
     expect(select).toContain("con.conrelid <> 'outbound_messages'::regclass");
+    // Provenance-only: the sweep is restricted to unit-of-work columns so
+    // reference FKs (passage_id, input_media_id, letters.media_metadata_id)
+    // are never hard-deleted.
+    expect(select).toContain('att.attname = ANY($1::text[])');
+    expect(txQuery.mock.calls[3][1]).toEqual([['user_message_id']]);
   });
 
   it('executes every discovered FK-cleanup statement with [mediaId]', async () => {
@@ -1239,14 +1259,44 @@ describe('markRolledBack — exact SQL + params + cache keys', () => {
       ],
     });
     await service.markRolledBack('mm-1');
-    expect(txQuery.mock.calls[3]).toEqual([
+    expect(txQuery.mock.calls[4]).toEqual([
       'DELETE FROM scores WHERE user_message_id = $1',
       ['mm-1'],
     ]);
-    expect(txQuery.mock.calls[4]).toEqual([
+    expect(txQuery.mock.calls[5]).toEqual([
       'DELETE FROM literacy_lesson_states WHERE user_message_id = $1',
       ['mm-1'],
     ]);
+  });
+
+  it('invalidates the stid cache for every soft-flagged descendant plus the root, and still deletes only the root S3 object', async () => {
+    const cacheDel = jest.fn().mockResolvedValue(undefined);
+    const bucketDelete = jest.fn().mockResolvedValue(undefined);
+    const { service } = rolledBackRun({
+      entity: {
+        id: 'mm-1',
+        s3_key: 'root/key',
+        state_transition_id: 'root-stid',
+      },
+      descendantRows: [
+        { id: 'child-1', state_transition_id: 'p1-sentence-comprehension' },
+        { id: 'child-2', state_transition_id: null }, // e.g. TTS audio
+        { id: 'child-3', state_transition_id: 'opt1-comprehension-complete' },
+      ],
+      fkRows: [],
+      cacheDel,
+      bucketDelete,
+    });
+    await service.markRolledBack('mm-1');
+    expect(cacheDel.mock.calls.map((c) => c[0]).sort()).toEqual([
+      'media:stid:opt1-comprehension-complete',
+      'media:stid:p1-sentence-comprehension',
+      'media:stid:root-stid',
+    ]);
+    // Descendant S3 objects are handled by per-row markRolledBack calls in
+    // deleteByStateTransitionId — never by the recursive flag.
+    expect(bucketDelete).toHaveBeenCalledTimes(1);
+    expect(bucketDelete).toHaveBeenCalledWith('root/key');
   });
 });
 

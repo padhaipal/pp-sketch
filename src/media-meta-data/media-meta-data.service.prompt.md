@@ -115,32 +115,42 @@ Generic key derivation: replace the substring before the first `-` with `_`. Exa
 
 ## markRolledBack(mediaId: string): Promise<void>
 
-Atomically tags the media_metadata row as rolled back AND deletes every row in every table that references it via a foreign key. Both operations happen inside a single transaction so the tag and the deletions are all-or-nothing.
+Rollback is a TRUE SOFT DELETE: `rolled_back = true` is the single
+visibility flag, and no row that merely REFERENCES the rolled-back media is
+ever hard-deleted. The FK sweep covers PROVENANCE FKs only — the inbound
+unit-of-work convention where rows caused by processing a user message all
+carry `user_message_id` (scores, literacy_lesson_states) and are removed
+with it. Reference FKs that must never be swept:
+`literacy_lesson_states.passage_id` (student lesson history),
+`media_metadata.input_media_id` (derived children), and
+`letters.media_metadata_id` (letter catalog). `outbound_messages` (audit
+log) is excluded by table and gets `status = 'rolled_back'` instead.
 
 1.) If `mediaId` is not a valid non-empty string, throw BadRequestException.
-2.) Fetch the `s3_key` from the media_metadata row before the DB transaction.
-3.) Execute the following as a single database call using a plpgsql anonymous block (or a stored function):
-  * `UPDATE media_metadata SET rolled_back = true WHERE id = $1`. If no row was updated (rowCount = 0), raise an exception (NotFoundException).
-  * Dynamically discover all foreign key constraints that reference `media_metadata.id` by querying `pg_constraint` + `pg_attribute`:
-    ```sql
-    SELECT con.conrelid::regclass AS referencing_table,
-           att.attname            AS referencing_column
-    FROM pg_constraint con
-    JOIN pg_attribute att
-      ON att.attrelid = con.conrelid AND att.attnum = ANY(con.conkey)
-    WHERE con.confrelid = 'media_metadata'::regclass
-      AND con.contype = 'f'
-      AND EXISTS (
-        SELECT 1 FROM pg_attribute pa
-        WHERE pa.attrelid = con.confrelid
-          AND pa.attnum = ANY(con.confkey)
-          AND pa.attname = 'id'
-      )
-    ```
-  * For each discovered FK column/table pair, execute `EXECUTE format('DELETE FROM %I WHERE %I = $1', referencing_table, referencing_column) USING mediaId` — the `%I` specifier in plpgsql's `format()` quotes identifiers safely.
-  * All of the above runs inside a single transaction — if any step fails, the entire operation rolls back (neither the tag nor the deletes persist).
-4.) This approach is schema-aware: when a new table adds a FK to `media_metadata.id`, it is automatically covered without code changes.
-5.) After DB commit, if `s3_key` exists, delete the S3 object via `mediaBucket.delete(s3_key)`. Best-effort: on failure, log WARN but do not throw (worst case is an orphaned S3 object).
+2.) Fetch `s3_key` + `state_transition_id` before the DB transaction.
+3.) Inside one transaction:
+  * `UPDATE media_metadata SET rolled_back = true WHERE id = $1` —
+    unconditional so a re-rollback stays a 200; rowCount 0 →
+    NotFoundException.
+  * Soft-flag the derivation subtree: `WITH RECURSIVE` over
+    `input_media_id` from `$1`, `UPDATE … SET rolled_back = true WHERE
+    rolled_back = false RETURNING id, state_transition_id`. Returned stids
+    join the cache-invalidation set. Descendants' S3 objects are NOT
+    deleted here (deleteByStateTransitionId calls markRolledBack per
+    subtree row for that; inbound STT transcripts have no S3 object).
+  * `UPDATE outbound_messages SET status = 'rolled_back' WHERE
+    user_message_id = $1`.
+  * Discover FK cleanup statements from `pg_constraint` + `pg_attribute`
+    with `format('DELETE FROM %s WHERE %I = $1', …)`, filtered to
+    `con.conrelid <> 'outbound_messages'::regclass` AND
+    `att.attname = ANY(ROLLBACK_SWEEP_COLUMNS)` (currently just
+    `user_message_id`); execute each with `[mediaId]`.
+4.) Schema-aware for provenance: a new table whose FK column is named
+    `user_message_id` is swept automatically; any other FK to
+    `media_metadata.id` is treated as a reference and left alone.
+5.) After commit: invalidate the stid cache for the root and every returned
+    descendant stid; if `s3_key` exists, delete the S3 object (best-effort,
+    WARN on failure).
 
 
 createHeygenMedia(options: CreateHeygenMediaOptions, otel_carrier: Record<string, string>): Promise<MediaMetaData[]>
@@ -358,8 +368,10 @@ After all items processed:
   "Filter failures" list.
 - `deleteByStateTransitionId(stid)` — rolls back every row carrying the stid;
   for `…-sentence-comprehension` the whole passage family (prefix = passage
-  id), deepest-first because markRolledBack's FK sweep hard-deletes
-  referencing rows. TTS audio is reached by the `input_media_id` CTE walk —
-  the old orphan-audio-by-stid sweep is gone.
+  id). Pure soft delete; the per-row markRolledBack calls handle each row's
+  S3 object + stid cache. Deepest-first ordering retained but no longer
+  load-bearing (rollback never hard-deletes children). TTS audio is reached
+  by the `input_media_id` CTE walk — the old orphan-audio-by-stid sweep is
+  gone.
 - findMediaByStateTransitionId now also serves `media_type='flow'` rows (no
   wa_media_url required — flows are never preloaded to WhatsApp).
