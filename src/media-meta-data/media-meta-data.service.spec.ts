@@ -3273,7 +3273,7 @@ describe('createLlmGeneratedMedia', () => {
 });
 
 describe('listComprehensionStids', () => {
-  it('returns parsed rows with clamped pagination', async () => {
+  it('returns parsed rows with clamped pagination and passage meta', async () => {
     const dsQuery = jest
       .fn()
       .mockResolvedValueOnce([
@@ -3283,7 +3283,17 @@ describe('listComprehensionStids', () => {
           created_at: new Date('2026-07-01'),
         },
       ])
-      .mockResolvedValueOnce([{ total: '42' }]);
+      .mockResolvedValueOnce([{ total: '42' }])
+      // Passage-prefix meta lookup (no explanation stids on this page, so
+      // the option-prefix lookup never fires).
+      .mockResolvedValueOnce([
+        {
+          key: 'p1',
+          level: 9,
+          passage_type: 'narrative',
+          question_type: 'R1.2',
+        },
+      ]);
     const { service } = makeService({ dsQuery });
     const result = await service.listComprehensionStids({
       limit: 9999,
@@ -3292,11 +3302,165 @@ describe('listComprehensionStids', () => {
     expect(result.limit).toBe(500);
     expect(result.offset).toBe(0);
     expect(result.total).toBe(42);
-    expect(result.rows[0].media_count).toBe(3);
+    expect(result.rows[0]).toEqual({
+      state_transition_id: 'p1-sentence-comprehension',
+      media_count: 3,
+      created_at: new Date('2026-07-01'),
+      level: 9,
+      passage_type: 'narrative',
+      question_type: 'R1.2',
+    });
     const [sql, params] = dsQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('-sentence-comprehension');
     expect(sql).toContain('-comprehension-complete');
     expect(params).toEqual([500, 0]);
+    expect(dsQuery).toHaveBeenCalledTimes(3);
+    // The meta lookup receives the stripped passage-id prefix.
+    expect(dsQuery.mock.calls[2][1]).toEqual([['p1']]);
+  });
+
+  it('resolves explanation stids through option → question → passage, nulls when family is gone', async () => {
+    const dsQuery = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          state_transition_id: 'opt1-comprehension-complete',
+          media_count: '2',
+          created_at: new Date('2026-07-02'),
+        },
+        {
+          state_transition_id: 'opt2-comprehension-complete',
+          media_count: '2',
+          created_at: new Date('2026-07-01'),
+        },
+      ])
+      .mockResolvedValueOnce([{ total: '2' }])
+      // Option-prefix lookup: opt1 resolves, opt2's family is gone.
+      .mockResolvedValueOnce([
+        {
+          key: 'opt1',
+          level: 10,
+          passage_type: 'expository',
+          question_type: 'R2.1',
+        },
+      ]);
+    const { service } = makeService({ dsQuery });
+    const result = await service.listComprehensionStids({});
+    expect(result.rows[0]).toMatchObject({
+      level: 10,
+      passage_type: 'expository',
+      question_type: 'R2.1',
+    });
+    expect(result.rows[1]).toMatchObject({
+      level: null,
+      passage_type: null,
+      question_type: null,
+    });
+    const metaSql = dsQuery.mock.calls[2][0] as string;
+    expect(metaSql).toContain('o.input_media_id'); // 2-hop chain
+    expect(dsQuery.mock.calls[2][1]).toEqual([['opt1', 'opt2']]);
+  });
+});
+
+describe('getPassageStats', () => {
+  it('counts ready live passages per (level, passage_type, question_type)', async () => {
+    const dsQuery = jest.fn().mockResolvedValueOnce([
+      {
+        level: 9,
+        passage_type: 'narrative',
+        question_type: 'R1.2',
+        passages: '4',
+      },
+      {
+        level: 12,
+        passage_type: 'narrative',
+        question_type: null,
+        passages: '1',
+      },
+    ]);
+    const { service } = makeService({ dsQuery });
+    const result = await service.getPassageStats();
+    expect(result.rows).toEqual([
+      {
+        level: 9,
+        passage_type: 'narrative',
+        question_type: 'R1.2',
+        passages: 4,
+      },
+      {
+        level: 12,
+        passage_type: 'narrative',
+        question_type: null,
+        passages: 1,
+      },
+    ]);
+    const sql = dsQuery.mock.calls[0][0] as string;
+    // Visibility re-derived: live, ready passages; live question join.
+    expect(sql).toContain("p.status = 'ready'");
+    expect(sql).toContain('p.rolled_back = false');
+    expect(sql).toContain("p.media_details->>'role' = 'passage'");
+    expect(sql).toContain('q.rolled_back = false');
+  });
+});
+
+describe('searchPassages', () => {
+  const row = {
+    id: 'p-1',
+    level: 9,
+    passage_type: 'narrative',
+    question_type: 'R1.1',
+    model: 'gpt-4.1',
+    preview: 'नीली पहाड़ी…',
+    created_at: new Date('2026-08-20'),
+  };
+
+  it('searches by escaped ILIKE substring with clamped pagination', async () => {
+    const dsQuery = jest
+      .fn()
+      .mockResolvedValueOnce([row])
+      .mockResolvedValueOnce([{ total: '7' }]);
+    const { service } = makeService({ dsQuery });
+    const result = await service.searchPassages({
+      q: '50%_off\\',
+      limit: 9999,
+      offset: -1,
+    });
+    expect(result).toEqual({ rows: [row], total: 7, limit: 100, offset: 0 });
+    const [sql, params] = dsQuery.mock.calls[0] as [string, unknown[]];
+    // User wildcards neutralized inside the %…% pattern.
+    expect(params[0]).toBe('%50\\%\\_off\\\\%');
+    expect(params).toEqual(['%50\\%\\_off\\\\%', null, null, 100, 0]);
+    expect(sql).toContain("ILIKE $1 ESCAPE '\\'");
+    expect(sql).toContain('ORDER BY p.created_at DESC');
+    // Count query reuses the same filters.
+    expect(dsQuery.mock.calls[1][1]).toEqual(['%50\\%\\_off\\\\%', null, null]);
+  });
+
+  it('passes type filters through and matches all on empty q', async () => {
+    const dsQuery = jest
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ total: '0' }]);
+    const { service } = makeService({ dsQuery });
+    await service.searchPassages({
+      passage_type: 'expository',
+      question_type: 'R2.2',
+    });
+    expect(dsQuery.mock.calls[0][1]).toEqual([
+      '%%',
+      'expository',
+      'R2.2',
+      20,
+      0,
+    ]);
+  });
+
+  it.each([
+    [{ passage_type: 'poem' }, 'passage_type must be one of'],
+    [{ question_type: 'R9.9' }, 'question_type must be one of'],
+  ])('rejects invalid filters: %o', async (options, message) => {
+    const { service } = makeService({ dsQuery: jest.fn() });
+    await expect(service.searchPassages(options)).rejects.toThrow(message);
   });
 });
 

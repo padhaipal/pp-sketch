@@ -108,6 +108,32 @@ export class MediaMetaDataController {
     });
   }
 
+  // Live passage counts per (level, passage_type, question_type) for the
+  // dashboard's seeding counters. Declared before @Get(':id').
+  @Get('passage-stats')
+  async getPassageStats() {
+    return this.mediaMetaDataService.getPassageStats();
+  }
+
+  // Paginated passage search (text substring + type filters) for the
+  // dashboard. Declared before @Get(':id').
+  @Get('passages')
+  async searchPassages(
+    @Query('q') q?: string,
+    @Query('passage_type') passageType?: string,
+    @Query('question_type') questionType?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.mediaMetaDataService.searchPassages({
+      q,
+      passage_type: passageType,
+      question_type: questionType,
+      limit: limit !== undefined ? parseInt(limit, 10) : undefined,
+      offset: offset !== undefined ? parseInt(offset, 10) : undefined,
+    });
+  }
+
   // Recent gate-failed generations (soft-deleted question rows carrying
   // media_details.gate_failure) for the dashboard's read-only "Filter
   // failures" list.
