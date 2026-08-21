@@ -32,11 +32,15 @@ import {
   LLM_PROVIDER_TO_MEDIA_SOURCE,
 } from '../interfaces/llm/llm.dto';
 import {
+  COMPREHENSION_COMPLETE_STID_SUFFIX,
   COMPREHENSION_RUNTIME_STID_RE,
   FlowMediaPayload,
   GeneratedContent,
   LlmGenerateResponse,
   LlmOutputInvalidError,
+  SENTENCE_COMPREHENSION_STID_SUFFIX,
+  VALID_PASSAGE_TYPES,
+  VALID_QUESTION_TYPES,
   comprehensionCompleteStid,
   comprehensionFlowStid,
   parseGeneratedContent,
@@ -1387,6 +1391,9 @@ export class MediaMetaDataService {
       state_transition_id: string;
       media_count: number;
       created_at: Date;
+      level: number | null;
+      passage_type: string | null;
+      question_type: string | null;
     }>;
     total: number;
     limit: number;
@@ -1419,12 +1426,233 @@ export class MediaMetaDataService {
        WHERE ${where}`,
     );
 
+    const meta = await this.comprehensionStidMeta(
+      rows.map((r) => r.state_transition_id),
+    );
+
+    return {
+      rows: rows.map((r) => {
+        const m = meta.get(r.state_transition_id);
+        return {
+          state_transition_id: r.state_transition_id,
+          media_count: parseInt(r.media_count, 10),
+          created_at: r.created_at,
+          level: m?.level ?? null,
+          passage_type: m?.passage_type ?? null,
+          question_type: m?.question_type ?? null,
+        };
+      }),
+      total: parseInt(totals[0]?.total ?? '0', 10),
+      limit,
+      offset,
+    };
+  }
+
+  /**
+   * Passage level/type + question type per comprehension stid, so the
+   * dashboard table can badge rows. Two batch lookups keyed on the stid
+   * prefix: a `…-sentence-comprehension` prefix IS the passage id (1 hop to
+   * its question), a `…-comprehension-complete` prefix is the tapped
+   * option's id (2 hops up: option → question → passage). Missing family
+   * rows (partially deleted content) resolve to nulls, never an error.
+   */
+  private async comprehensionStidMeta(stids: string[]): Promise<
+    Map<
+      string,
+      {
+        level: number | null;
+        passage_type: string | null;
+        question_type: string | null;
+      }
+    >
+  > {
+    const FLOW_SUFFIX = `-${SENTENCE_COMPREHENSION_STID_SUFFIX}`;
+    const EXPL_SUFFIX = `-${COMPREHENSION_COMPLETE_STID_SUFFIX}`;
+    const passageIds: string[] = [];
+    const optionIds: string[] = [];
+    for (const stid of stids) {
+      if (stid.endsWith(FLOW_SUFFIX)) {
+        passageIds.push(stid.slice(0, -FLOW_SUFFIX.length));
+      } else if (stid.endsWith(EXPL_SUFFIX)) {
+        optionIds.push(stid.slice(0, -EXPL_SUFFIX.length));
+      }
+    }
+    interface MetaRow {
+      key: string;
+      level: number | null;
+      passage_type: string | null;
+      question_type: string | null;
+    }
+    const meta = new Map<string, Omit<MetaRow, 'key'>>();
+    if (passageIds.length > 0) {
+      const found: MetaRow[] = await this.dataSource.query(
+        `SELECT p.id::text AS key,
+                (p.media_details->>'level')::int AS level,
+                p.media_details->>'passage_type' AS passage_type,
+                q.media_details->>'question_type' AS question_type
+         FROM media_metadata p
+         LEFT JOIN media_metadata q
+           ON q.input_media_id = p.id
+          AND q.media_details->>'role' = 'question'
+          AND q.rolled_back = false
+         WHERE p.id::text = ANY($1::text[]) AND p.rolled_back = false`,
+        [passageIds],
+      );
+      for (const m of found) meta.set(m.key + FLOW_SUFFIX, m);
+    }
+    if (optionIds.length > 0) {
+      const found: MetaRow[] = await this.dataSource.query(
+        `SELECT o.id::text AS key,
+                (p.media_details->>'level')::int AS level,
+                p.media_details->>'passage_type' AS passage_type,
+                q.media_details->>'question_type' AS question_type
+         FROM media_metadata o
+         JOIN media_metadata q ON q.id = o.input_media_id
+         LEFT JOIN media_metadata p ON p.id = q.input_media_id
+         WHERE o.id::text = ANY($1::text[]) AND o.rolled_back = false`,
+        [optionIds],
+      );
+      for (const m of found) meta.set(m.key + EXPL_SUFFIX, m);
+    }
+    return meta;
+  }
+
+  /**
+   * Live passage inventory for the dashboard's seeding counters: ready,
+   * non-rolled-back passages counted per (level, passage_type,
+   * question_type). question_type lives on the linked question row
+   * (q.input_media_id = passage id; 1:1 for live content).
+   */
+  async getPassageStats(): Promise<{
+    rows: Array<{
+      level: number | null;
+      passage_type: string | null;
+      question_type: string | null;
+      passages: number;
+    }>;
+  }> {
+    const rows: Array<{
+      level: number | null;
+      passage_type: string | null;
+      question_type: string | null;
+      passages: string;
+    }> = await this.dataSource.query(
+      `SELECT (p.media_details->>'level')::int  AS level,
+              p.media_details->>'passage_type'  AS passage_type,
+              q.media_details->>'question_type' AS question_type,
+              COUNT(*)                          AS passages
+       FROM media_metadata p
+       LEFT JOIN media_metadata q
+         ON q.input_media_id = p.id
+        AND q.media_details->>'role' = 'question'
+        AND q.rolled_back = false
+       WHERE p.media_type = 'text'
+         AND p.status = 'ready'
+         AND p.rolled_back = false
+         AND p.media_details->>'role' = 'passage'
+       GROUP BY 1, 2, 3
+       ORDER BY 1, 2, 3`,
+    );
     return {
       rows: rows.map((r) => ({
-        state_transition_id: r.state_transition_id,
-        media_count: parseInt(r.media_count, 10),
-        created_at: r.created_at,
+        level: r.level,
+        passage_type: r.passage_type,
+        question_type: r.question_type,
+        passages: parseInt(r.passages, 10),
       })),
+    };
+  }
+
+  /**
+   * Paginated passage search for the dashboard: substring match on the
+   * passage text (ILIKE, wildcards escaped) plus optional passage_type /
+   * question_type filters, newest first. Same visibility rules as
+   * getPassageStats; same pagination contract as listComprehensionStids.
+   */
+  async searchPassages(options: {
+    q?: string;
+    passage_type?: string;
+    question_type?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{
+    rows: Array<{
+      id: string;
+      level: number | null;
+      passage_type: string | null;
+      question_type: string | null;
+      model: string | null;
+      preview: string;
+      created_at: Date;
+    }>;
+    total: number;
+    limit: number;
+    offset: number;
+  }> {
+    const limit = Math.min(Math.max(options.limit ?? 20, 1), 100);
+    const offset = Math.max(options.offset ?? 0, 0);
+    const passageType = options.passage_type?.trim() || null;
+    if (
+      passageType !== null &&
+      !(VALID_PASSAGE_TYPES as readonly string[]).includes(passageType)
+    ) {
+      throw new BadRequestException(
+        `passage_type must be one of: ${VALID_PASSAGE_TYPES.join(', ')}`,
+      );
+    }
+    const questionType = options.question_type?.trim() || null;
+    if (
+      questionType !== null &&
+      !(VALID_QUESTION_TYPES as readonly string[]).includes(questionType)
+    ) {
+      throw new BadRequestException(
+        `question_type must be one of: ${VALID_QUESTION_TYPES.join(', ')}`,
+      );
+    }
+    // ILIKE pattern with user wildcards neutralized; empty q → match all.
+    const q = (options.q ?? '').trim().slice(0, 200);
+    const pattern = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
+
+    const joins = `FROM media_metadata p
+       LEFT JOIN media_metadata q
+         ON q.input_media_id = p.id
+        AND q.media_details->>'role' = 'question'
+        AND q.rolled_back = false`;
+    const where = `p.media_type = 'text'
+         AND p.status = 'ready'
+         AND p.rolled_back = false
+         AND p.media_details->>'role' = 'passage'
+         AND p.text ILIKE $1 ESCAPE '\\'
+         AND ($2::text IS NULL OR p.media_details->>'passage_type' = $2)
+         AND ($3::text IS NULL OR q.media_details->>'question_type' = $3)`;
+    const rows: Array<{
+      id: string;
+      level: number | null;
+      passage_type: string | null;
+      question_type: string | null;
+      model: string | null;
+      preview: string;
+      created_at: Date;
+    }> = await this.dataSource.query(
+      `SELECT p.id,
+              (p.media_details->>'level')::int  AS level,
+              p.media_details->>'passage_type'  AS passage_type,
+              q.media_details->>'question_type' AS question_type,
+              p.media_details->>'model'         AS model,
+              left(p.text, 200)                 AS preview,
+              p.created_at
+       ${joins}
+       WHERE ${where}
+       ORDER BY p.created_at DESC, p.id
+       LIMIT $4 OFFSET $5`,
+      [pattern, passageType, questionType, limit, offset],
+    );
+    const totals: Array<{ total: string }> = await this.dataSource.query(
+      `SELECT COUNT(*) AS total ${joins} WHERE ${where}`,
+      [pattern, passageType, questionType],
+    );
+    return {
+      rows,
       total: parseInt(totals[0]?.total ?? '0', 10),
       limit,
       offset,

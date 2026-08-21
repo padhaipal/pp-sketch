@@ -65,3 +65,11 @@ uploadStaticMedia()
   comprehension modal fetching the stid-less passage row by the
   `…-sentence-comprehension` prefix). Declared after every named `@Get`;
   a uuid guard rejects route-capture strays like `coverage`.
+- `GET /media-meta-data/passage-stats` — live passage counts per (level,
+  passage_type, question_type) for the dashboard's seeding counters.
+- `GET /media-meta-data/passages?q&passage_type&question_type&limit&offset`
+  — paginated passage search (ILIKE substring on text, wildcards escaped;
+  type filters validated against VALID_PASSAGE_TYPES/VALID_QUESTION_TYPES).
+- `GET /media-meta-data/comprehension-stids` rows now carry `level`,
+  `passage_type`, `question_type` resolved from the stid prefix (passage id
+  for flow stids; option → question → passage for explanation stids).

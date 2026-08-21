@@ -198,6 +198,47 @@ describe('MediaMetaDataController.listByStateTransitionId', () => {
   });
 });
 
+describe('MediaMetaDataController.getPassageStats', () => {
+  it('delegates to the service', async () => {
+    const getPassageStats = jest.fn().mockResolvedValue({ rows: [] });
+    const { ctrl } = makeController({ mediaSvc: { getPassageStats } });
+    await expect(ctrl.getPassageStats()).resolves.toEqual({ rows: [] });
+    expect(getPassageStats).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('MediaMetaDataController.searchPassages', () => {
+  it('parses pagination and forwards filters', async () => {
+    const searchPassages = jest
+      .fn()
+      .mockResolvedValue({ rows: [], total: 0, limit: 20, offset: 0 });
+    const { ctrl } = makeController({ mediaSvc: { searchPassages } });
+    await ctrl.searchPassages('कहानी', 'narrative', 'R1.1', '25', '50');
+    expect(searchPassages).toHaveBeenCalledWith({
+      q: 'कहानी',
+      passage_type: 'narrative',
+      question_type: 'R1.1',
+      limit: 25,
+      offset: 50,
+    });
+  });
+
+  it('leaves absent params undefined', async () => {
+    const searchPassages = jest
+      .fn()
+      .mockResolvedValue({ rows: [], total: 0, limit: 20, offset: 0 });
+    const { ctrl } = makeController({ mediaSvc: { searchPassages } });
+    await ctrl.searchPassages();
+    expect(searchPassages).toHaveBeenCalledWith({
+      q: undefined,
+      passage_type: undefined,
+      question_type: undefined,
+      limit: undefined,
+      offset: undefined,
+    });
+  });
+});
+
 describe('MediaMetaDataController.getMedia', () => {
   const id = '2f115dd8-6f5a-4b1d-9b6f-67f6c8bb1519';
 
