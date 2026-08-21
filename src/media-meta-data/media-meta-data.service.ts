@@ -569,6 +569,16 @@ export class MediaMetaDataService {
     }
   }
 
+  // Provenance vs reference: the FK sweep in markRolledBack exists for the
+  // inbound unit-of-work rollback — rows CAUSED BY processing a user message
+  // all carry user_message_id and are hard-deleted with it (scores,
+  // literacy_lesson_states). FK columns that merely REFERENCE a media row
+  // must never be swept: literacy_lesson_states.passage_id (student lesson
+  // history), media_metadata.input_media_id (derived children — soft-flagged
+  // recursively instead), letters.media_metadata_id (letter catalog).
+  // outbound_messages (audit log) is excluded by table, not column.
+  private static readonly ROLLBACK_SWEEP_COLUMNS = ['user_message_id'];
+
   async markRolledBack(mediaId: string): Promise<void> {
     if (typeof mediaId !== 'string' || mediaId.length === 0) {
       throw new BadRequestException('mediaId must be a non-empty string');
@@ -578,16 +588,52 @@ export class MediaMetaDataService {
     const entity = await this.mediaRepo.findOneBy({ id: mediaId });
     const s3Key: string | null = entity?.s3_key ?? null;
     const stid: string | null = entity?.state_transition_id ?? null;
+    const stidsToInvalidate = new Set<string>();
+    if (stid) {
+      stidsToInvalidate.add(stid);
+    }
 
     await this.dataSource.transaction(async (manager) => {
       // TypeORM's pg manager.query returns [rowsArray, affectedCount] for
       // UPDATE/INSERT/DELETE — affectedCount is the second element.
+      // Unconditional so a re-rollback stays a 200, not a 404.
       const [, affected]: [unknown[], number] = await manager.query(
         `UPDATE media_metadata SET rolled_back = true WHERE id = $1`,
         [mediaId],
       );
       if (affected === 0) {
         throw new NotFoundException('Media metadata not found');
+      }
+
+      // rolled_back IS the delete: the derivation subtree (questions →
+      // options → explanations → flows, TTS audio, STT transcripts —
+      // everything reachable over input_media_id) is soft-flagged with its
+      // root, never hard-deleted. Hard deletes would destroy provenance and
+      // are blocked anyway by outbound_messages FKs for anything ever sent.
+      // Descendants' S3 objects are deliberately NOT deleted here: direct
+      // callers (deleteByStateTransitionId) invoke markRolledBack per
+      // subtree row for that, and inbound STT transcripts have no S3 object.
+      const [descendants]: [
+        Array<{ id: string; state_transition_id: string | null }>,
+        number,
+      ] = await manager.query(
+        `WITH RECURSIVE subtree AS (
+           SELECT id FROM media_metadata WHERE id = $1
+           UNION ALL
+           SELECT m.id FROM media_metadata m
+           JOIN subtree s ON m.input_media_id = s.id
+         )
+         UPDATE media_metadata SET rolled_back = true
+         WHERE id IN (SELECT id FROM subtree)
+           AND id <> $1
+           AND rolled_back = false
+         RETURNING id, state_transition_id`,
+        [mediaId],
+      );
+      for (const d of descendants) {
+        if (d.state_transition_id) {
+          stidsToInvalidate.add(d.state_transition_id);
+        }
       }
 
       // Audit log: outbound_messages is deliberately EXCLUDED from the
@@ -603,6 +649,8 @@ export class MediaMetaDataService {
 
       // Identifier escaping done by PG via format() — %s for regclass keeps
       // search-path-correct schema qualification; %I quotes the column name.
+      // The attname filter restricts the sweep to provenance FKs (see
+      // ROLLBACK_SWEEP_COLUMNS) — reference FKs must survive a rollback.
       const fkStmts: { sql: string }[] = await manager.query(
         `SELECT format('DELETE FROM %s WHERE %I = $1', con.conrelid::regclass, att.attname) AS sql
          FROM pg_constraint con
@@ -611,12 +659,14 @@ export class MediaMetaDataService {
          WHERE con.confrelid = 'media_metadata'::regclass
            AND con.contype = 'f'
            AND con.conrelid <> 'outbound_messages'::regclass
+           AND att.attname = ANY($1::text[])
            AND EXISTS (
              SELECT 1 FROM pg_attribute pa
              WHERE pa.attrelid = con.confrelid
                AND pa.attnum = ANY(con.confkey)
                AND pa.attname = 'id'
            )`,
+        [MediaMetaDataService.ROLLBACK_SWEEP_COLUMNS],
       );
 
       for (const { sql } of fkStmts) {
@@ -624,9 +674,10 @@ export class MediaMetaDataService {
       }
     });
 
-    // Invalidate STID cache so readers don't keep serving the rolled-back row.
-    if (stid) {
-      await this.cacheService.del(CACHE_KEYS.mediaByStateTransitionId(stid));
+    // Invalidate STID caches (root + every soft-flagged descendant) so
+    // readers don't keep serving rolled-back rows.
+    for (const key of stidsToInvalidate) {
+      await this.cacheService.del(CACHE_KEYS.mediaByStateTransitionId(key));
     }
 
     // Delete S3 object after DB commit (best-effort)
@@ -1382,11 +1433,14 @@ export class MediaMetaDataService {
 
   /**
    * Rolls back every media row carrying the stid. For `…-sentence-
-   * comprehension` stids the whole passage family is torn down (passage →
+   * comprehension` stids the whole passage family is rolled back (passage →
    * questions → options → explanations → flows): the stid prefix IS the
-   * passage id. Descendants are rolled back deepest-first because
-   * markRolledBack's FK sweep hard-deletes referencing rows and the
-   * input_media_id self-FK would otherwise block on grandchildren.
+   * passage id. Rollback is a pure soft delete (rolled_back = true, the
+   * single visibility flag); the per-row markRolledBack calls also handle
+   * each row's S3 object and stid-cache invalidation, which is why the walk
+   * visits every subtree row rather than relying on markRolledBack's own
+   * recursive descendant flag. Deepest-first ordering is retained but no
+   * longer load-bearing (nothing hard-deletes children anymore).
    */
   async deleteByStateTransitionId(
     stateTransitionId: string,
@@ -1438,8 +1492,9 @@ export class MediaMetaDataService {
         await this.markRolledBack(row.id);
         deleted++;
       } catch (err) {
-        // A concurrent markRolledBack (or the FK sweep of an earlier
-        // iteration) may have removed the row already — skip and continue.
+        // Rollback never hard-deletes media rows anymore, so a failure here
+        // means the row vanished some other way (e.g. the user-removal
+        // hard-delete sweep) or a transient DB error — skip and continue.
         this.logger.warn(
           `deleteByStateTransitionId: markRolledBack(${row.id}) failed: ${(err as Error).message}`,
         );
