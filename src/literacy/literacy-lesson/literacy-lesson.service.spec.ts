@@ -2033,7 +2033,7 @@ describe('LiteracyLessonService — difficulty cap ratchet', () => {
     const { maxLength, levelParam } = await runLevel({
       prev_level: 12,
       recent_words: ['अब कमल'],
-      third_done_rn: 5, // wants +2 → clamped at 12
+      third_done_rn: 5, // wants +1 from 12 → clamped at 12
     });
     expect(maxLength).toBe(12);
     expect(levelParam).toBe(12);
@@ -2265,8 +2265,8 @@ describe('LiteracyLessonService — sentence-section thresholds (level ≥ 8)', 
   });
 
   it.each([
-    [9, 11], // 3rd completion within 9 rows → +2
-    [1, 11],
+    [9, 10], // 3rd completion within 9 rows → +1 (±1 cap; was +2)
+    [1, 10],
     [10, 10], // within 10-12 → +1
     [12, 10],
     [13, 9], // within 13-17 → hold

@@ -156,9 +156,11 @@ This enforces the max-length rule and avoids repeating any of the last `RECENT_W
   excluded; falls back to nearest level, then to a level-7 word lesson.
 - Sentence-band progression (base ≥ 8): same done-rows metric, new
   thresholds via `third_done_rn` (position of the 3rd most recent done row in
-  the last 18): ≤9 → +2, ≤12 → +1, ≤17 → hold, >17 → −1; <3 completions →
-  hold. Word-band logic (≤7) unchanged; keep-window is now explicitly
-  bounded at 15 rows (`rn <= $6`).
+  the last 18): ≤12 → +1, ≤17 → hold, >17 → −1; <3 completions → hold.
+  Sentence-band moves are capped at ±1 per selection (2026-08: the ≤9 tier
+  previously awarded +2, now +1; tier kept for tunability). Word-band logic
+  (≤7) unchanged; keep-window is now explicitly bounded at 15 rows
+  (`rn <= $6`).
 - literacy_lesson_states gained `passage_id` (FK → media_metadata, persisted
   from snapshot.context.passageId); `word` is nullable (CHECK word OR
   passage_id).
