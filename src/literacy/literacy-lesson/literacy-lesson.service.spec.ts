@@ -1848,6 +1848,46 @@ describe('LiteracyLessonService.processAnswer — sentence persistence + result'
     expect(out.sentenceText).toBe('अब कमल');
   });
 
+  it('prefers the passage row raw text (punctuation intact) over the token join', async () => {
+    xstateMock.createActor.mockClear();
+    const row = progressed({
+      recent_words: ['चौकीदार'],
+      unique_in_add_window: 3,
+    });
+    const inner = routedDsQuery(row);
+    const dsQuery = jest
+      .fn()
+      .mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('SELECT text FROM media_metadata')) {
+          expect(params).toEqual(['passage-1']);
+          return [{ text: 'अब कमल: अब कमल देखो।' }];
+        }
+        return inner(sql, params);
+      });
+    mockActorGetSnapshot.mockReturnValue(
+      happySnapshot({
+        value: 'sentence',
+        context: {
+          word: '',
+          sentence: ['अब', 'कमल'],
+          passageId: 'passage-1',
+          pendingCorrect: [],
+          pendingIncorrect: [],
+          answer: 'अब कमल',
+          answerCorrect: null,
+          stateTransitionId: 'sentence-start-sentence-initial',
+        },
+      }),
+    );
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue(null);
+    const { svc } = makeService({ repo, dsQuery });
+    const out = await svc.processAnswer({ user, user_message_id: 'mm-1' });
+    expect(out.sentenceText).toBe('अब कमल: अब कमल देखो।');
+    // The persisted word column stays tokenized — only display changes.
+    expect(insertParamsOf(dsQuery)[2]).toBe('अब कमल');
+  });
+
   it('returns no sentenceText while a word is being drilled', async () => {
     const { out } = await freshSentenceStart(
       progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),

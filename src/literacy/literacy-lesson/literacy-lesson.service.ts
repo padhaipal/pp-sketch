@@ -332,10 +332,28 @@ export class LiteracyLessonService {
         // The next prompt is the sentence itself (fresh sentence lesson or a
         // retry after a word drill). Its text is generated at runtime, so the
         // caller must send it as a text message — see ProcessAnswerResult.
-        const sentenceText: string | undefined =
-          snapshot.value === 'sentence' && snapshot.context.sentence?.length
-            ? snapshot.context.sentence.join(' ')
-            : undefined;
+        // Display uses the passage row's RAW text (danda, commas, title
+        // separator intact) — the tokenized join strips punctuation and is
+        // for alignment/scoring only; it remains the fallback for
+        // pre-passage snapshots or a missing/rolled-back passage row.
+        let sentenceText: string | undefined;
+        if (
+          snapshot.value === 'sentence' &&
+          snapshot.context.sentence?.length
+        ) {
+          sentenceText = snapshot.context.sentence.join(' ');
+          if (snapshot.context.passageId) {
+            const passageRows: Array<{ text: string | null }> =
+              await this.dataSource.query(
+                `SELECT text FROM media_metadata
+                 WHERE id = $1 AND rolled_back = false`,
+                [snapshot.context.passageId],
+              );
+            if (passageRows[0]?.text) {
+              sentenceText = passageRows[0].text;
+            }
+          }
+        }
         if (sentenceText !== undefined) {
           span.setAttribute('pp.lesson.sentence', sentenceText);
         }
