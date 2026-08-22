@@ -122,6 +122,9 @@ export class MediaMetaDataController {
     @Query('q') q?: string,
     @Query('passage_type') passageType?: string,
     @Query('question_type') questionType?: string,
+    @Query('media_type') mediaType?: string,
+    @Query('created_after') createdAfter?: string,
+    @Query('created_before') createdBefore?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
@@ -129,6 +132,9 @@ export class MediaMetaDataController {
       q,
       passage_type: passageType,
       question_type: questionType,
+      media_type: mediaType,
+      created_after: createdAfter,
+      created_before: createdBefore,
       limit: limit !== undefined ? parseInt(limit, 10) : undefined,
       offset: offset !== undefined ? parseInt(offset, 10) : undefined,
     });

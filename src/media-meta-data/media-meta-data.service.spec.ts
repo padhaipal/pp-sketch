@@ -3429,11 +3429,27 @@ describe('searchPassages', () => {
     const [sql, params] = dsQuery.mock.calls[0] as [string, unknown[]];
     // User wildcards neutralized inside the %…% pattern.
     expect(params[0]).toBe('%50\\%\\_off\\\\%');
-    expect(params).toEqual(['%50\\%\\_off\\\\%', null, null, 100, 0]);
+    expect(params).toEqual([
+      '%50\\%\\_off\\\\%',
+      null,
+      null,
+      null,
+      null,
+      null,
+      100,
+      0,
+    ]);
     expect(sql).toContain("ILIKE $1 ESCAPE '\\'");
     expect(sql).toContain('ORDER BY p.created_at DESC');
     // Count query reuses the same filters.
-    expect(dsQuery.mock.calls[1][1]).toEqual(['%50\\%\\_off\\\\%', null, null]);
+    expect(dsQuery.mock.calls[1][1]).toEqual([
+      '%50\\%\\_off\\\\%',
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
   });
 
   it('passes type filters through and matches all on empty q', async () => {
@@ -3450,14 +3466,53 @@ describe('searchPassages', () => {
       '%%',
       'expository',
       'R2.2',
+      null,
+      null,
+      null,
       20,
       0,
+    ]);
+  });
+
+  it('filters by subtree media_type and created_at bounds', async () => {
+    const dsQuery = jest
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ total: '0' }]);
+    const { service } = makeService({ dsQuery });
+    await service.searchPassages({
+      media_type: 'flow',
+      created_after: '2026-08-20',
+      created_before: '2026-08-22T00:00:00Z',
+    });
+    const [sql, params] = dsQuery.mock.calls[0] as [string, unknown[]];
+    // Subtree membership, not a stid match: the EXISTS walks input_media_id
+    // and only counts live rows.
+    expect(sql).toContain('WITH RECURSIVE fam AS');
+    expect(sql).toContain('m.input_media_id = f.id');
+    expect(sql).toContain('m.rolled_back = false');
+    expect(sql).toContain('media_type = $4');
+    expect(sql).toContain('p.created_at >= $5');
+    expect(sql).toContain('p.created_at <= $6');
+    expect(params.slice(3, 6)).toEqual([
+      'flow',
+      new Date('2026-08-20'),
+      new Date('2026-08-22T00:00:00Z'),
     ]);
   });
 
   it.each([
     [{ passage_type: 'poem' }, 'passage_type must be one of'],
     [{ question_type: 'R9.9' }, 'question_type must be one of'],
+    [{ media_type: 'hologram' }, 'media_type must be one of'],
+    [
+      { created_after: 'not-a-date' },
+      'created_after must be an ISO date/timestamp',
+    ],
+    [
+      { created_before: 'yesterday-ish' },
+      'created_before must be an ISO date/timestamp',
+    ],
   ])('rejects invalid filters: %o', async (options, message) => {
     const { service } = makeService({ dsQuery: jest.fn() });
     await expect(service.searchPassages(options)).rejects.toThrow(message);
