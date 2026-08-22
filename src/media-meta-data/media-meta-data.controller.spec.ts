@@ -213,11 +213,23 @@ describe('MediaMetaDataController.searchPassages', () => {
       .fn()
       .mockResolvedValue({ rows: [], total: 0, limit: 20, offset: 0 });
     const { ctrl } = makeController({ mediaSvc: { searchPassages } });
-    await ctrl.searchPassages('कहानी', 'narrative', 'R1.1', '25', '50');
+    await ctrl.searchPassages(
+      'कहानी',
+      'narrative',
+      'R1.1',
+      'flow',
+      '2026-08-20',
+      '2026-08-22',
+      '25',
+      '50',
+    );
     expect(searchPassages).toHaveBeenCalledWith({
       q: 'कहानी',
       passage_type: 'narrative',
       question_type: 'R1.1',
+      media_type: 'flow',
+      created_after: '2026-08-20',
+      created_before: '2026-08-22',
       limit: 25,
       offset: 50,
     });
@@ -233,6 +245,9 @@ describe('MediaMetaDataController.searchPassages', () => {
       q: undefined,
       passage_type: undefined,
       question_type: undefined,
+      media_type: undefined,
+      created_after: undefined,
+      created_before: undefined,
       limit: undefined,
       offset: undefined,
     });

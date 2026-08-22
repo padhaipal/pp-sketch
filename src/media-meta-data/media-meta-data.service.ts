@@ -75,6 +75,7 @@ import {
   UploadStaticMediaItem,
   UploadStaticMediaResult,
   UploadStaticMediaItemResult,
+  VALID_MEDIA_TYPES,
   WhatsappPreloadJobDto,
   CreateRenderedImageMediaOptions,
   validateCreateRenderedImageMediaOptions,
@@ -1566,13 +1567,19 @@ export class MediaMetaDataService {
   /**
    * Paginated passage search for the dashboard: substring match on the
    * passage text (ILIKE, wildcards escaped) plus optional passage_type /
-   * question_type filters, newest first. Same visibility rules as
+   * question_type filters, a media_type filter over the passage's live
+   * derivation subtree (e.g. 'flow' = has a sendable comprehension
+   * question), and created_after / created_before bounds on the passage
+   * row's created_at. Newest first. Same visibility rules as
    * getPassageStats; same pagination contract as listComprehensionStids.
    */
   async searchPassages(options: {
     q?: string;
     passage_type?: string;
     question_type?: string;
+    media_type?: string;
+    created_after?: string;
+    created_before?: string;
     limit?: number;
     offset?: number;
   }): Promise<{
@@ -1609,6 +1616,25 @@ export class MediaMetaDataService {
         `question_type must be one of: ${VALID_QUESTION_TYPES.join(', ')}`,
       );
     }
+    const mediaType = options.media_type?.trim() || null;
+    if (
+      mediaType !== null &&
+      !(VALID_MEDIA_TYPES as readonly string[]).includes(mediaType)
+    ) {
+      throw new BadRequestException(
+        `media_type must be one of: ${VALID_MEDIA_TYPES.join(', ')}`,
+      );
+    }
+    const parseDate = (raw: string | undefined, name: string): Date | null => {
+      if (raw === undefined || raw.trim() === '') return null;
+      const parsed = new Date(raw);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new BadRequestException(`${name} must be an ISO date/timestamp`);
+      }
+      return parsed;
+    };
+    const createdAfter = parseDate(options.created_after, 'created_after');
+    const createdBefore = parseDate(options.created_before, 'created_before');
     // ILIKE pattern with user wildcards neutralized; empty q → match all.
     const q = (options.q ?? '').trim().slice(0, 200);
     const pattern = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
@@ -1618,13 +1644,29 @@ export class MediaMetaDataService {
          ON q.input_media_id = p.id
         AND q.media_details->>'role' = 'question'
         AND q.rolled_back = false`;
+    // media_type filter: a passage matches when any LIVE row of its
+    // derivation subtree (question → options → explanations → flows, TTS
+    // audio) carries that media_type — 'flow' answers "which passages have
+    // a sendable comprehension question".
     const where = `p.media_type = 'text'
          AND p.status = 'ready'
          AND p.rolled_back = false
          AND p.media_details->>'role' = 'passage'
          AND p.text ILIKE $1 ESCAPE '\\'
          AND ($2::text IS NULL OR p.media_details->>'passage_type' = $2)
-         AND ($3::text IS NULL OR q.media_details->>'question_type' = $3)`;
+         AND ($3::text IS NULL OR q.media_details->>'question_type' = $3)
+         AND ($4::text IS NULL OR EXISTS (
+           WITH RECURSIVE fam AS (
+             SELECT id, media_type FROM media_metadata WHERE id = p.id
+             UNION ALL
+             SELECT m.id, m.media_type
+             FROM media_metadata m JOIN fam f ON m.input_media_id = f.id
+             WHERE m.rolled_back = false
+           )
+           SELECT 1 FROM fam WHERE media_type = $4
+         ))
+         AND ($5::timestamptz IS NULL OR p.created_at >= $5)
+         AND ($6::timestamptz IS NULL OR p.created_at <= $6)`;
     const rows: Array<{
       id: string;
       level: number | null;
@@ -1644,12 +1686,28 @@ export class MediaMetaDataService {
        ${joins}
        WHERE ${where}
        ORDER BY p.created_at DESC, p.id
-       LIMIT $4 OFFSET $5`,
-      [pattern, passageType, questionType, limit, offset],
+       LIMIT $7 OFFSET $8`,
+      [
+        pattern,
+        passageType,
+        questionType,
+        mediaType,
+        createdAfter,
+        createdBefore,
+        limit,
+        offset,
+      ],
     );
     const totals: Array<{ total: string }> = await this.dataSource.query(
       `SELECT COUNT(*) AS total ${joins} WHERE ${where}`,
-      [pattern, passageType, questionType],
+      [
+        pattern,
+        passageType,
+        questionType,
+        mediaType,
+        createdAfter,
+        createdBefore,
+      ],
     );
     return {
       rows,
