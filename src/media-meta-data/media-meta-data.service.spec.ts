@@ -2486,7 +2486,7 @@ describe('findMediaByStateTransitionId — drill-word auto-create', () => {
     expect(out.text).toBeUndefined();
     expect(
       dsQuery.mock.calls.some(([sql]) =>
-        (sql as string).includes('INSERT INTO media_metadata'),
+        sql.includes('INSERT INTO media_metadata'),
       ),
     ).toBe(false);
   });
