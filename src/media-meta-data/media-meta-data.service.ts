@@ -106,13 +106,17 @@ async function isSttEnabled(provider: string): Promise<boolean> {
   }
 }
 
-// Sentence→word drill hand-off stids ({word}-sentence-word-drillWord). The
-// drilled word can be any Hindi word (not just word-list entries), so its
-// text prompt cannot be pre-seeded — on lookup miss the row is auto-created
-// (source='drill-word-auto') and then served like any other text media. The
-// prefix guard excludes the generic key ('_') and the fixed 'sentence-*'
+// Word-carrying stids whose text media is auto-created on lookup miss
+// (source='drill-word-auto'): the sentence→word drill hand-off plus the six
+// letter-drill→word returns, all prefixed with the word. The word can be any
+// Hindi word (not just word-list entries), so its text cannot be pre-seeded;
+// the auto-created row shows the word alongside the generic (audio/video)
+// prompt — these stids deliberately carry no seeded text (pre-literate
+// pedagogy), so the specific-beats-generic merge cannot shadow anything.
+// The prefix guard excludes the generic key ('_') and the fixed 'sentence-*'
 // prompt stids, whose media is human-seeded.
-const DRILL_WORD_STID_RE = /^([^-]+)-sentence-word-drillWord$/;
+const DRILL_WORD_STID_RE =
+  /^([^-]+)-(?:sentence-word-drillWord|letter-word-correct-last|letterImage-word-(?:correct|maxErrors)-last|letterNoImage-word-(?:correct-first|correct-retry|wrong)-last)$/;
 const DRILL_WORD_EXCLUDED_PREFIXES = new Set(['_', 'sentence']);
 // Backoff for the auto-create write: attempts at ~0/1/2/4/8s (±25% jitter),
 // bounded by a 20s wall-clock budget — by then wabot's timeout fallback has
