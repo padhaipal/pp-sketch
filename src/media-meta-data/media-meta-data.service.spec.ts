@@ -2449,6 +2449,48 @@ describe('findMediaByStateTransitionId — drill-word auto-create', () => {
     );
   });
 
+  it.each([
+    'letter-word-correct-last',
+    'letterImage-word-correct-last',
+    'letterImage-word-maxErrors-last',
+    'letterNoImage-word-correct-first-last',
+    'letterNoImage-word-correct-retry-last',
+    'letterNoImage-word-wrong-last',
+  ])(
+    'also auto-creates the word text for the letter-drill→word return %s',
+    async (suffix) => {
+      const stid = `पीला-${suffix}`;
+      const row = { ...createdRow, state_transition_id: stid };
+      const dsQuery = routedQuery({ lookup: [], insert: () => [row] });
+      const { service } = makeService({ cache: makeCache(), dsQuery });
+
+      const out = await service.findMediaByStateTransitionId(stid);
+
+      expect(out.text).toEqual(row);
+      const insertCall = dsQuery.mock.calls.find(([sql]) =>
+        sql.includes('INSERT INTO media_metadata'),
+      )!;
+      expect(insertCall[1]).toEqual(['gen-uuid', 'पीला', stid]);
+    },
+  );
+
+  it('the generic key of a word-return stid never auto-creates', async () => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const dsQuery = routedQuery({ lookup: [] });
+    const { service } = makeService({ cache: makeCache(), dsQuery });
+
+    const out = await service.findMediaByStateTransitionId(
+      '_-letter-word-correct-last',
+    );
+
+    expect(out.text).toBeUndefined();
+    expect(
+      dsQuery.mock.calls.some(([sql]) =>
+        sql.includes('INSERT INTO media_metadata'),
+      ),
+    ).toBe(false);
+  });
+
   it('does NOT warn "no media found" when the row was auto-created', async () => {
     const warnSpy = jest
       .spyOn(Logger.prototype, 'warn')
