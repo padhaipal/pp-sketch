@@ -18,6 +18,13 @@ const mockCreateQueue = jest.fn(() => ({
   add: mockQueueAdd,
   addBulk: mockQueueAddBulk,
 }));
+// Ogg parsing is unit-tested in audio-duration.utils.spec.ts — here it is
+// mocked so the service tests pin only the wiring (call gating by
+// content_type, media_details placement, null-omission).
+const mockOggOpusDurationMs = jest.fn();
+jest.mock('./audio-duration.utils', () => ({
+  oggOpusDurationMs: (...args: unknown[]) => mockOggOpusDurationMs(...args),
+}));
 jest.mock('../interfaces/redis/queues', () => ({
   createQueue: (...args: unknown[]) => mockCreateQueue(...args),
   QUEUE_NAMES: {
@@ -207,6 +214,84 @@ describe('MediaMetaDataService.createWhatsappAudioMedia', () => {
 
     expect(out.status).toBe('ready');
     expect(out.s3_key).toBe('s3/key');
+  });
+
+  describe('voice-note duration capture', () => {
+    function durationHarness(contentType: string) {
+      const repo = makeRepo();
+      repo.findOneBy.mockResolvedValue(null);
+      repo.save.mockImplementation(async (e) => e);
+      const wabot = {
+        downloadMedia: jest.fn().mockResolvedValue({
+          stream: makeAsyncStream(Buffer.from('audio-bytes')),
+          content_type: contentType,
+        }),
+      };
+      const bucket = { stream: jest.fn().mockResolvedValue('s3/key') };
+      const sarvam = { run: jest.fn().mockResolvedValue({ id: 'stt-1' }) };
+      const azure = { run: jest.fn().mockResolvedValue({ id: 'stt-2' }) };
+      const { service } = makeService({ repo, wabot, bucket, sarvam, azure });
+      return service;
+    }
+
+    it('writes duration_ms into media_details for an ogg/opus content type', async () => {
+      mockOggOpusDurationMs.mockReturnValue(4321);
+      const service = durationHarness('audio/ogg; codecs=opus');
+      const out = await service.createWhatsappAudioMedia({
+        wa_media_url: 'https://wa/m/1',
+        user: { id: 'u1' } as never,
+        otel_carrier: carrier,
+      });
+      expect(mockOggOpusDurationMs).toHaveBeenCalledWith(
+        Buffer.from('audio-bytes'),
+      );
+      expect(out.media_details).toMatchObject({ duration_ms: 4321 });
+    });
+
+    it('omits the key entirely (never null) when the parser returns null, and warns', async () => {
+      const warnSpy = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      mockOggOpusDurationMs.mockReturnValue(null);
+      const service = durationHarness('audio/ogg');
+      const out = await service.createWhatsappAudioMedia({
+        wa_media_url: 'https://wa/m/1',
+        user: { id: 'u1' } as never,
+        otel_carrier: carrier,
+      });
+      expect(out.media_details).not.toHaveProperty('duration_ms');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('could not parse Ogg duration'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('never calls the parser for a non-ogg content type', async () => {
+      mockOggOpusDurationMs.mockClear();
+      const service = durationHarness('audio/mpeg');
+      const out = await service.createWhatsappAudioMedia({
+        wa_media_url: 'https://wa/m/1',
+        user: { id: 'u1' } as never,
+        otel_carrier: carrier,
+      });
+      expect(mockOggOpusDurationMs).not.toHaveBeenCalled();
+      expect(out.media_details).not.toHaveProperty('duration_ms');
+    });
+
+    it('caller-supplied media_details cannot override the measured duration', async () => {
+      mockOggOpusDurationMs.mockReturnValue(4321);
+      const service = durationHarness('audio/ogg; codecs=opus');
+      const out = await service.createWhatsappAudioMedia({
+        wa_media_url: 'https://wa/m/1',
+        user: { id: 'u1' } as never,
+        otel_carrier: carrier,
+        media_details: { duration_ms: 999, note: 'kept' },
+      } as never);
+      expect(out.media_details).toMatchObject({
+        duration_ms: 4321,
+        note: 'kept',
+      });
+    });
   });
 
   it('passes the owner external_id to wabot downloadMedia (load-test prefix gate)', async () => {

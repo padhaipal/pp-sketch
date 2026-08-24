@@ -1951,3 +1951,79 @@ describe('processWabotInboundJob — outbound flow items', () => {
     expect(media.some((m: any) => m.type === 'flow')).toBe(false);
   });
 });
+
+describe('processWabotInboundJob — reading-speed stids', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  function calledStids(mocks: ReturnType<typeof makeMocks>): string[] {
+    return mocks.mediaMetaDataService.findMediaByStateTransitionId.mock.calls.map(
+      (c: unknown[]) => c[0] as string,
+    );
+  }
+
+  // Completed level-8+ reading with two result1 stids and a fresh-lesson
+  // result2 — the reading-speed stid must land exactly between them.
+  function readingMocks(opts: {
+    wordCount?: number;
+    durationMs?: number;
+  }): ReturnType<typeof makeMocks> {
+    const mocks = makeMocks();
+    mocks.mediaMetaDataService.createWhatsappAudioMedia.mockResolvedValue({
+      id: 'audio-entity-1',
+      media_details:
+        opts.durationMs === undefined ? {} : { duration_ms: opts.durationMs },
+    });
+    mocks.literacyLessonService.processAnswer
+      .mockReset()
+      .mockResolvedValueOnce({
+        stateTransitionIds: ['r1-a', 'r1-b'],
+        isComplete: true,
+        ...(opts.wordCount !== undefined && {
+          completedReading: { wordCount: opts.wordCount, level: 9 },
+        }),
+      })
+      .mockResolvedValueOnce({
+        stateTransitionIds: ['r2-a'],
+        isComplete: false,
+      });
+    return mocks;
+  }
+
+  it.each([
+    [63, 60_000, '63-wpm-reading-speed'], // mid-range
+    [200, 60_000, '200-wpm-reading-speed'], // exactly 200 stays numeric
+    [201, 60_000, '200plus-wpm-reading-speed'], // just past the cap
+    [1, 300_000, '0-wpm-reading-speed'], // raw 0.2 → 0 (corrupt-long signal)
+    [2, 300_000, '0-wpm-reading-speed'], // raw 0.4 → 0
+    [1, 120_000, '1-wpm-reading-speed'], // raw 0.5 rounds up to 1
+    [1002, 300_000, '200-wpm-reading-speed'], // raw 200.4 → 200
+    [1003, 300_000, '200plus-wpm-reading-speed'], // raw 200.6 → 201 → cap
+  ])(
+    '%d words in %d ms → %s spliced between result1 and result2 stids',
+    async (wordCount, durationMs, expected) => {
+      const mocks = readingMocks({ wordCount, durationMs });
+      await runJob(createAudioJob(), mocks);
+      expect(calledStids(mocks)).toEqual(['r1-a', 'r1-b', expected, 'r2-a']);
+    },
+  );
+
+  it('emits no stid when duration_ms is missing on the audio entity', async () => {
+    const mocks = readingMocks({ wordCount: 63 });
+    await runJob(createAudioJob(), mocks);
+    expect(calledStids(mocks)).toEqual(['r1-a', 'r1-b', 'r2-a']);
+  });
+
+  it('emits no stid when duration_ms is 0 (guard requires > 0)', async () => {
+    const mocks = readingMocks({ wordCount: 63, durationMs: 0 });
+    await runJob(createAudioJob(), mocks);
+    expect(calledStids(mocks)).toEqual(['r1-a', 'r1-b', 'r2-a']);
+  });
+
+  it('emits no stid when completedReading is absent (word-band or unfinished)', async () => {
+    const mocks = readingMocks({ durationMs: 60_000 });
+    await runJob(createAudioJob(), mocks);
+    expect(calledStids(mocks)).toEqual(['r1-a', 'r1-b', 'r2-a']);
+  });
+});
