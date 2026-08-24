@@ -47,6 +47,7 @@ import {
   passageLevelFromWordCount,
   validateLlmGenerateRequest,
 } from './llm-generate.dto';
+import { oggOpusDurationMs } from './audio-duration.utils';
 import {
   SOLVABILITY_REJECT_MIN_CORRECT,
   SOLVABILITY_REQUIRED_VALID,
@@ -229,6 +230,18 @@ export class MediaMetaDataService {
     }
     const audioBuffer = Buffer.concat(chunks);
 
+    // Voice-note length straight off the Ogg container (no decode).
+    // WhatsApp voice notes are audio/ogg; codecs=opus — other content types
+    // have no cheap container clock, so duration is simply omitted.
+    const isOggOpus =
+      content_type.includes('ogg') || content_type.includes('opus');
+    const durationMs = isOggOpus ? oggOpusDurationMs(audioBuffer) : null;
+    if (isOggOpus && durationMs === null) {
+      this.logger.warn(
+        `createWhatsappAudioMedia: could not parse Ogg duration for ${entity.id} (content_type=${content_type})`,
+      );
+    }
+
     // S3 upload
     let s3Key: string;
     try {
@@ -311,6 +324,9 @@ export class MediaMetaDataService {
       mime_type: content_type,
       byte_size: audioBuffer.length,
       ...validated.media_details,
+      // After the spread so callers cannot override the measured value;
+      // omitted entirely (never null) when the container yielded none.
+      ...(durationMs !== null && { duration_ms: durationMs }),
     };
     entity.status = 'ready';
     const saved = await this.mediaRepo.save(entity);
@@ -481,7 +497,12 @@ export class MediaMetaDataService {
     }
 
     const resultTypes = Object.keys(result);
-    if (resultTypes.length === 0) {
+    // Reading-speed stids are deliberately unseeded for now — an empty
+    // lookup there is the designed no-op, not a missing-content signal.
+    if (
+      resultTypes.length === 0 &&
+      !stateTransitionId.endsWith('-wpm-reading-speed')
+    ) {
       this.logger.warn(
         `findMediaBySTID: no media found for stid="${stateTransitionId}"`,
       );

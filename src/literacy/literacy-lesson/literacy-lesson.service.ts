@@ -360,10 +360,25 @@ export class LiteracyLessonService {
           span.setAttribute('pp.lesson.sentence', sentenceText);
         }
 
+        // This turn finished a sentence-band reading: hand the caller the
+        // token count so it can derive a reading-speed stid. Token array,
+        // never the raw passage text — the count must match what alignment
+        // scored, and punctuation is not a word.
+        const sentenceTokens = snapshot.context.sentence;
+        const completedReading =
+          isComplete &&
+          sentenceTokens != null &&
+          sentenceTokens.length > 0 &&
+          selectedLevel != null &&
+          selectedLevel > SENTENCE_LEVEL_THRESHOLD
+            ? { wordCount: sentenceTokens.length, level: selectedLevel }
+            : undefined;
+
         return {
           stateTransitionIds,
           isComplete,
           sentenceText,
+          completedReading,
         };
       } catch (err) {
         span.setStatus({
