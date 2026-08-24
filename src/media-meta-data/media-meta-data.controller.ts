@@ -108,6 +108,14 @@ export class MediaMetaDataController {
     });
   }
 
+  // Grouped media counts for a whole stid family (suffix match) — one call
+  // for e.g. all 203 `…-wpm-reading-speed` rows. Declared before @Get(':id')
+  // so the literal path is never captured as an id.
+  @Get('stid-counts')
+  async getStidCounts(@Query('suffix') suffix?: string) {
+    return this.mediaMetaDataService.getStidCountsBySuffix(suffix);
+  }
+
   // Live passage counts per (level, passage_type, question_type) for the
   // dashboard's seeding counters. Declared before @Get(':id').
   @Get('passage-stats')

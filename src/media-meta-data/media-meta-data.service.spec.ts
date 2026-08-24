@@ -3530,6 +3530,70 @@ describe('getPassageStats', () => {
   });
 });
 
+describe('getStidCountsBySuffix', () => {
+  it('groups counts per (stid, media_type) from one query, underscore literal', async () => {
+    const dsQuery = jest.fn().mockResolvedValueOnce([
+      {
+        state_transition_id: '_-wpm-reading-speed',
+        media_type: 'audio',
+        count: 2,
+      },
+      {
+        state_transition_id: '_-wpm-reading-speed',
+        media_type: 'text',
+        count: 1,
+      },
+      {
+        state_transition_id: '63-wpm-reading-speed',
+        media_type: 'audio',
+        count: '3',
+      },
+    ]);
+    const { service } = makeService({ dsQuery });
+
+    const rows = await service.getStidCountsBySuffix('-wpm-reading-speed');
+
+    // Multiple media_types on one stid stay separate rows; string counts
+    // from the driver are coerced.
+    expect(rows).toEqual([
+      {
+        state_transition_id: '_-wpm-reading-speed',
+        media_type: 'audio',
+        count: 2,
+      },
+      {
+        state_transition_id: '_-wpm-reading-speed',
+        media_type: 'text',
+        count: 1,
+      },
+      {
+        state_transition_id: '63-wpm-reading-speed',
+        media_type: 'audio',
+        count: 3,
+      },
+    ]);
+    const [sql, params] = dsQuery.mock.calls[0] as [string, unknown[]];
+    // right()/length(), never LIKE: '_' in a suffix is a LIKE wildcard and
+    // must match literally — the suffix is passed through unescaped.
+    expect(sql).toContain('right(state_transition_id, length($1)) = $1');
+    expect(sql).not.toContain('LIKE');
+    expect(sql).toContain('rolled_back = false');
+    expect(sql).toContain('GROUP BY 1, 2');
+    expect(params).toEqual(['-wpm-reading-speed']);
+  });
+
+  it.each([
+    [undefined, 'suffix must be a non-empty string'],
+    ['', 'suffix must be a non-empty string'],
+    ['x'.repeat(65), 'suffix must be at most 64 chars'],
+  ])('rejects invalid suffix %p', async (suffix, message) => {
+    const { service } = makeService({ dsQuery: jest.fn() });
+    await expect(service.getStidCountsBySuffix(suffix)).rejects.toThrow(
+      message,
+    );
+  });
+});
+
 describe('searchPassages', () => {
   const row = {
     id: 'p-1',

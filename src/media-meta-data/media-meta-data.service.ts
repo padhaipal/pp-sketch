@@ -1590,6 +1590,43 @@ export class MediaMetaDataService {
   }
 
   /**
+   * Live media counts grouped by (stid, media_type) for every stid ending in
+   * `suffix` — one query for a whole stid family (e.g. the 203
+   * `…-wpm-reading-speed` rows), so the dashboard never fans out per-stid
+   * requests. Suffix match uses right()/length(), deliberately NOT LIKE:
+   * '_' in a suffix like '_-wpm-reading-speed' is a LIKE wildcard and must
+   * match literally.
+   */
+  async getStidCountsBySuffix(
+    suffix: unknown,
+  ): Promise<
+    Array<{ state_transition_id: string; media_type: string; count: number }>
+  > {
+    if (typeof suffix !== 'string' || suffix.length === 0) {
+      throw new BadRequestException('suffix must be a non-empty string');
+    }
+    if (suffix.length > 64) {
+      throw new BadRequestException('suffix must be at most 64 chars');
+    }
+    const rows: Array<{
+      state_transition_id: string;
+      media_type: string;
+      count: number;
+    }> = await this.dataSource.query(
+      `SELECT state_transition_id, media_type, COUNT(*)::int AS count
+       FROM media_metadata
+       WHERE right(state_transition_id, length($1)) = $1 AND rolled_back = false
+       GROUP BY 1, 2`,
+      [suffix],
+    );
+    return rows.map((r) => ({
+      state_transition_id: r.state_transition_id,
+      media_type: r.media_type,
+      count: Number(r.count),
+    }));
+  }
+
+  /**
    * Paginated passage search for the dashboard: substring match on the
    * passage text (ILIKE, wildcards escaped) plus optional passage_type /
    * question_type filters, a media_type filter over the passage's live

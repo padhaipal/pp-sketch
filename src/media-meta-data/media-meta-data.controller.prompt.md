@@ -65,6 +65,10 @@ uploadStaticMedia()
   comprehension modal fetching the stid-less passage row by the
   `…-sentence-comprehension` prefix). Declared after every named `@Get`;
   a uuid guard rejects route-capture strays like `coverage`.
+- `GET /media-meta-data/stid-counts?suffix=…` — media counts grouped by
+  (stid, media_type) for every stid ending in the suffix (≤64 chars); one
+  query per family via right()/length(), never LIKE ('_' would be a
+  wildcard). Declared before `@Get(':id')`.
 - `GET /media-meta-data/passage-stats` — live passage counts per (level,
   passage_type, question_type) for the dashboard's seeding counters.
 - `GET /media-meta-data/passages?q&passage_type&question_type&media_type&created_after&created_before&limit&offset`

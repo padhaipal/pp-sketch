@@ -198,6 +198,15 @@ describe('MediaMetaDataController.listByStateTransitionId', () => {
   });
 });
 
+describe('MediaMetaDataController.getStidCounts', () => {
+  it('delegates the suffix to the service', async () => {
+    const getStidCountsBySuffix = jest.fn().mockResolvedValue([]);
+    const { ctrl } = makeController({ mediaSvc: { getStidCountsBySuffix } });
+    await expect(ctrl.getStidCounts('-wpm-reading-speed')).resolves.toEqual([]);
+    expect(getStidCountsBySuffix).toHaveBeenCalledWith('-wpm-reading-speed');
+  });
+});
+
 describe('MediaMetaDataController.getPassageStats', () => {
   it('delegates to the service', async () => {
     const getPassageStats = jest.fn().mockResolvedValue({ rows: [] });
