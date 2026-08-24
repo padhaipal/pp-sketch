@@ -475,6 +475,35 @@ export async function processWabotInboundJob(
           sentenceText = result2.sentenceText;
         }
 
+        // Reading-speed stid — synthetic like the milestone stids below (the
+        // machine never emits it). Media rows are unseeded for now: an empty
+        // lookup is expected and simply sends nothing. wpm >= 0 by
+        // construction (wordCount >= 1, durationMs > 0), so no negative
+        // branch exists; 0 doubles as the corrupt-duration signal (absurdly
+        // long container clock), 200plus as the corrupt-short one.
+        const durationMs = (
+          audioEntity.media_details as { duration_ms?: number } | null
+        )?.duration_ms;
+        if (
+          result1.completedReading &&
+          typeof durationMs === 'number' &&
+          durationMs > 0
+        ) {
+          const wpm = Math.round(
+            result1.completedReading.wordCount / (durationMs / 60_000),
+          );
+          const stid =
+            wpm === 0
+              ? '0-wpm-reading-speed'
+              : wpm > 200
+                ? '200plus-wpm-reading-speed'
+                : `${wpm}-wpm-reading-speed`;
+          // After result1's stids (this reading's own outcome media) and
+          // before result2's fresh-lesson prompts, so speed feedback lands
+          // between "well done" and the next passage.
+          stateTransitionIds.splice(result1.stateTransitionIds.length, 0, stid);
+        }
+
         // Voice-turn-driven milestones only — a flow tap adds no active time.
         const { withLatestTurn, withoutLatestTurn } =
           await userActivityService.getTodayActiveTime(user.id);

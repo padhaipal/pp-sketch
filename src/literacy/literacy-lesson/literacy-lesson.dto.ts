@@ -43,6 +43,11 @@ export interface ProcessAnswerResult {
   // one (already answered, or no sentence lesson in flight). Nothing was
   // persisted; the caller should send nothing.
   ignored?: boolean;
+  // Set when THIS turn completed a sentence-band reading (machine reached
+  // 'done', a sentence was in context, selected level > threshold): the
+  // token count of what was read, for the caller's reading-speed stid.
+  // Never set on the comprehension-answer path.
+  completedReading?: { wordCount: number; level: number };
 }
 
 export function validateProcessAnswerOptions(

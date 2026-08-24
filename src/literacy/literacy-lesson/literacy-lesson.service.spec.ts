@@ -1900,6 +1900,57 @@ describe('LiteracyLessonService.processAnswer — sentence persistence + result'
     const { out } = await freshSentenceStart(freshRow());
     expect(out.sentenceText).toBeUndefined();
   });
+
+  describe('completedReading', () => {
+    // Done sentence snapshot: what a finished level-9 reading looks like.
+    const doneSentenceContext = {
+      word: '',
+      sentence: ['अब', 'कमल'],
+      pendingCorrect: [],
+      pendingIncorrect: [],
+      answer: 'अब कमल',
+      answerCorrect: true,
+      stateTransitionId: 'p1-sentence-comprehension-correct-first',
+    };
+    const sentenceRow = () =>
+      progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 });
+
+    it('is set with the TOKEN count and level when done + sentence + level > 7', async () => {
+      const { out } = await freshSentenceStart(
+        sentenceRow(),
+        happySnapshot({ status: 'done', context: doneSentenceContext }),
+      );
+      // Level 8: this harness's progression rows land the sentence band at
+      // its entry level — the value itself is pinned by the threshold specs.
+      expect(out.completedReading).toEqual({ wordCount: 2, level: 8 });
+    });
+
+    it('is undefined while the lesson is still active (status gate)', async () => {
+      const { out } = await freshSentenceStart(
+        sentenceRow(),
+        happySnapshot({ status: 'active', context: doneSentenceContext }),
+      );
+      expect(out.completedReading).toBeUndefined();
+    });
+
+    it('is undefined when done without a sentence in context (sentence gate)', async () => {
+      const { out } = await freshSentenceStart(
+        sentenceRow(),
+        happySnapshot({ status: 'done' }),
+      );
+      expect(out.completedReading).toBeUndefined();
+    });
+
+    it('is undefined for a completed word-band lesson (level gate)', async () => {
+      // Word-path selection (level 2) with a done sentence-shaped snapshot:
+      // only the level gate fails, isolating it from the other two.
+      const { out } = await freshSentenceStart(
+        freshRow(),
+        happySnapshot({ status: 'done', context: doneSentenceContext }),
+      );
+      expect(out.completedReading).toBeUndefined();
+    });
+  });
 });
 
 describe('LiteracyLessonService — sentence observability (kills literal mutants)', () => {
