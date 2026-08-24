@@ -154,13 +154,25 @@ This enforces the max-length rule and avoids repeating any of the last `RECENT_W
   passage (media_details.role='passage', media_details.level = level) instead
   of random word-list sentences; recently-lessoned passages (last 10) are
   excluded; falls back to nearest level, then to a level-7 word lesson.
-- Sentence-band progression (base ≥ 8): same done-rows metric, new
-  thresholds via `third_done_rn` (position of the 3rd most recent done row in
-  the last 18): ≤12 → +1, ≤17 → hold, >17 → −1; <3 completions → hold.
-  Sentence-band moves are capped at ±1 per selection (2026-08: the ≤9 tier
-  previously awarded +2, now +1; tier kept for tunability). Word-band logic
-  (≤7) unchanged; keep-window is now explicitly bounded at 15 rows
-  (`rn <= $6`).
+- Sentence-band progression (base ≥ 8, 2026-08 two-lesson signal): judged on
+  the last TWO completed lessons inside the 18-row scan window. A lesson =
+  a group of consecutive rows ending in a `snapshot->>'status' = 'done'` row
+  (the done row plus everything after the previous done row; group id = the
+  reverse running done-count over `created_at DESC`). Per-lesson booleans
+  from `snapshot->'context'->>'stateTransitionId'`: `first_try_pass` (a row
+  ending `-sentence-comprehension-correct-first`), `entered_image` (a row
+  ending `-letter-image-wrong` — the only entry into the image tier of the
+  drill loop), `failed_out` (the done row is exactly
+  `sentence-sentence-complete-maxErrors`). Decision, BOTH lessons required
+  for every rule: both first-try-pass → +1; else both entered-image → −1;
+  else both failed-out → −1; else hold. Fewer than two completed lessons in
+  the window → hold. Mixed decrement evidence (image in one, failed-out in
+  the other) does NOT combine. Emitted as one SQL round trip
+  (`lesson_groups`/`lesson_flags` CTEs → `done_lesson_count` +
+  `both_*` BOOL_ANDs); span attrs `pp.lesson.sentence.both_first_try_pass` /
+  `both_entered_image` / `both_failed_out`. Moves stay capped at ±1 per
+  selection by construction. Word-band logic (≤7) unchanged; keep-window is
+  explicitly bounded at 15 rows (`rn <= $6`).
 - literacy_lesson_states gained `passage_id` (FK → media_metadata, persisted
   from snapshot.context.passageId); `word` is nullable (CHECK word OR
   passage_id).

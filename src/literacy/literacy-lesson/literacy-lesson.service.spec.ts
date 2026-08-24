@@ -730,7 +730,10 @@ function freshRow(over: Record<string, unknown> = {}): Record<string, unknown> {
     recent_row_count: 0,
     distinct_word_count: 0,
     prev_level: null,
-    third_done_rn: null,
+    done_lesson_count: 0,
+    both_first_try_pass: null,
+    both_entered_image: null,
+    both_failed_out: null,
     recent_passage_ids: [],
     ...over,
   };
@@ -1773,7 +1776,7 @@ describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 
       progressed({
         prev_level: 8,
         recent_words: ['अब कमल'],
-        third_done_rn: 15, // hold at 8
+        // no two-lesson signal → hold at 8
         recent_passage_ids: ['old-p1', 'old-p2'],
       }),
     );
@@ -2084,7 +2087,8 @@ describe('LiteracyLessonService — difficulty cap ratchet', () => {
     const { maxLength, levelParam } = await runLevel({
       prev_level: 12,
       recent_words: ['अब कमल'],
-      third_done_rn: 5, // wants +1 from 12 → clamped at 12
+      done_lesson_count: 2,
+      both_first_try_pass: true, // wants +1 from 12 → clamped at 12
     });
     expect(maxLength).toBe(12);
     expect(levelParam).toBe(12);
@@ -2304,47 +2308,73 @@ describe('LiteracyLessonService — level persistence on the continue path', () 
   });
 });
 
-// ─── sentence-section thresholds (level ≥ 8, 2026-07) ────────────────────────
+// ─── sentence-band two-lesson signal (level ≥ 8, 2026-08) ────────────────────
 
-describe('LiteracyLessonService — sentence-section thresholds (level ≥ 8)', () => {
+describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8)', () => {
+  // Two completed lessons in the window; individual signals default to
+  // "not in both" (null/false) so each test flips exactly one condition.
   const sentenceBand = (over: Record<string, unknown>) => ({
     prev_level: 9,
     recent_words: ['अब कमल'],
     recent_row_count: 18,
     distinct_word_count: 20,
+    done_lesson_count: 2,
     ...over,
   });
 
-  it.each([
-    [9, 10], // 3rd completion within 9 rows → +1 (±1 cap; was +2)
-    [1, 10],
-    [10, 10], // within 10-12 → +1
-    [12, 10],
-    [13, 9], // within 13-17 → hold
-    [17, 9],
-    [18, 8], // deeper than 17 → −1
-  ])('third_done_rn=%d → level %d', async (thirdDoneRn, expected) => {
+  it('both lessons passed the passage first try → +1', async () => {
     const { maxLength } = await runLevel(
-      sentenceBand({ third_done_rn: thirdDoneRn }),
+      sentenceBand({ both_first_try_pass: true }),
     );
-    expect(maxLength).toBe(expected);
+    expect(maxLength).toBe(10);
   });
 
-  it('holds when fewer than 3 completions are in the window', async () => {
-    const { maxLength } = await runLevel(sentenceBand({ third_done_rn: null }));
+  it('only one of two lessons passed first try → hold', async () => {
+    const { maxLength } = await runLevel(
+      sentenceBand({ both_first_try_pass: false }),
+    );
+    expect(maxLength).toBe(9);
+  });
+
+  it('both lessons entered the image tier → −1', async () => {
+    const { maxLength } = await runLevel(
+      sentenceBand({ both_entered_image: true }),
+    );
+    expect(maxLength).toBe(8);
+  });
+
+  it('both lessons failed out on maxErrors → −1', async () => {
+    const { maxLength } = await runLevel(
+      sentenceBand({ both_failed_out: true }),
+    );
+    expect(maxLength).toBe(8);
+  });
+
+  it('mixed decrement signals (image in one, failed-out in the other) do NOT combine → hold', async () => {
+    // Neither signal holds in BOTH lessons, so each BOOL_AND is false.
+    const { maxLength } = await runLevel(
+      sentenceBand({ both_entered_image: false, both_failed_out: false }),
+    );
+    expect(maxLength).toBe(9);
+  });
+
+  it('fewer than 2 completed lessons in the window → hold, even on a perfect signal', async () => {
+    const { maxLength } = await runLevel(
+      sentenceBand({ done_lesson_count: 1, both_first_try_pass: true }),
+    );
     expect(maxLength).toBe(9);
   });
 
   it('a level-8 decrement falls back into word lessons at 7', async () => {
     const { maxLength } = await runLevel(
-      sentenceBand({ prev_level: 8, third_done_rn: 18 }),
+      sentenceBand({ prev_level: 8, both_entered_image: true }),
     );
     expect(maxLength).toBe(7);
   });
 
   it('never applies the word-section accelerator in the sentence band', async () => {
     const { maxLength, accelerated } = await runLevel(
-      sentenceBand({ third_done_rn: 15, unique_in_boost_window: 3 }),
+      sentenceBand({ unique_in_boost_window: 3 }),
     );
     expect(maxLength).toBe(9);
     expect(accelerated).toBeUndefined();
