@@ -730,7 +730,8 @@ function freshRow(over: Record<string, unknown> = {}): Record<string, unknown> {
     recent_row_count: 0,
     distinct_word_count: 0,
     prev_level: null,
-    third_done_rn: null,
+    recent_turns: [],
+    lifetime_done_count: 0,
     recent_passage_ids: [],
     ...over,
   };
@@ -1773,7 +1774,7 @@ describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 
       progressed({
         prev_level: 8,
         recent_words: ['अब कमल'],
-        third_done_rn: 15, // hold at 8
+        // no two-lesson signal → hold at 8
         recent_passage_ids: ['old-p1', 'old-p2'],
       }),
     );
@@ -2084,7 +2085,8 @@ describe('LiteracyLessonService — difficulty cap ratchet', () => {
     const { maxLength, levelParam } = await runLevel({
       prev_level: 12,
       recent_words: ['अब कमल'],
-      third_done_rn: 5, // wants +1 from 12 → clamped at 12
+      // two first-try-pass lessons → wants +1 from 12 → clamped at 12
+      recent_turns: TWO_FIRST_TRY_TURNS,
     });
     expect(maxLength).toBe(12);
     expect(levelParam).toBe(12);
@@ -2304,9 +2306,43 @@ describe('LiteracyLessonService — level persistence on the continue path', () 
   });
 });
 
-// ─── sentence-section thresholds (level ≥ 8, 2026-07) ────────────────────────
+// ─── sentence-band two-lesson signal (level ≥ 8, 2026-08) ────────────────────
 
-describe('LiteracyLessonService — sentence-section thresholds (level ≥ 8)', () => {
+// Raw-turn fixtures for the sentence band (newest first; rn by position).
+// Grouping/decision themselves are pinned in
+// sentence-band-signal.utils.spec.ts — these tests only wire the signal
+// into level selection.
+function sentenceTurns(
+  rows: Array<{ done?: boolean; stid?: string }>,
+): Array<{ rn: number; is_done: boolean; stid: string }> {
+  return rows.map((r, i) => ({
+    rn: i + 1,
+    is_done: r.done ?? false,
+    stid: r.stid ?? 'कमल-start-word-initial',
+  }));
+}
+const passedLessonTurns = (firstTry: boolean) => [
+  { done: true, stid: 'opt1-comprehension-complete' },
+  {
+    stid: firstTry
+      ? 'p1-sentence-comprehension-correct-first'
+      : 'p1-sentence-comprehension-correct-retry',
+  },
+  { stid: 'sentence-start-sentence-initial' },
+];
+const failedLessonTurns = (image: boolean) => [
+  { done: true, stid: 'sentence-sentence-complete-maxErrors' },
+  ...(image ? [{ stid: 'क-letter-image-wrong' }] : []),
+  { stid: 'sentence-start-sentence-initial' },
+];
+const TWO_FIRST_TRY_TURNS = sentenceTurns([
+  ...passedLessonTurns(true),
+  ...passedLessonTurns(true),
+]);
+
+describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8)', () => {
+  // lifetime_done_count defaults to 0 (freshRow), which gates the churn
+  // rule off — tests that exercise it set it explicitly.
   const sentenceBand = (over: Record<string, unknown>) => ({
     prev_level: 9,
     recent_words: ['अब कमल'],
@@ -2315,36 +2351,102 @@ describe('LiteracyLessonService — sentence-section thresholds (level ≥ 8)', 
     ...over,
   });
 
-  it.each([
-    [9, 10], // 3rd completion within 9 rows → +1 (±1 cap; was +2)
-    [1, 10],
-    [10, 10], // within 10-12 → +1
-    [12, 10],
-    [13, 9], // within 13-17 → hold
-    [17, 9],
-    [18, 8], // deeper than 17 → −1
-  ])('third_done_rn=%d → level %d', async (thirdDoneRn, expected) => {
+  it('both lessons passed the passage first try → +1', async () => {
     const { maxLength } = await runLevel(
-      sentenceBand({ third_done_rn: thirdDoneRn }),
+      sentenceBand({ recent_turns: TWO_FIRST_TRY_TURNS }),
     );
-    expect(maxLength).toBe(expected);
+    expect(maxLength).toBe(10);
   });
 
-  it('holds when fewer than 3 completions are in the window', async () => {
-    const { maxLength } = await runLevel(sentenceBand({ third_done_rn: null }));
+  it('only one of two lessons passed first try → hold', async () => {
+    const { maxLength } = await runLevel(
+      sentenceBand({
+        recent_turns: sentenceTurns([
+          ...passedLessonTurns(true),
+          ...passedLessonTurns(false),
+        ]),
+      }),
+    );
+    expect(maxLength).toBe(9);
+  });
+
+  it('both lessons entered the image tier → −1', async () => {
+    const { maxLength } = await runLevel(
+      sentenceBand({
+        recent_turns: sentenceTurns([
+          ...failedLessonTurns(true),
+          ...failedLessonTurns(true),
+        ]),
+      }),
+    );
+    expect(maxLength).toBe(8);
+  });
+
+  it('both lessons failed out on maxErrors → −1', async () => {
+    const { maxLength } = await runLevel(
+      sentenceBand({
+        recent_turns: sentenceTurns([
+          ...failedLessonTurns(false),
+          ...failedLessonTurns(false),
+        ]),
+      }),
+    );
+    expect(maxLength).toBe(8);
+  });
+
+  it('mixed decrement signals (image in one, failed-out in the other) do NOT combine → hold', async () => {
+    const { maxLength } = await runLevel(
+      sentenceBand({
+        recent_turns: sentenceTurns([
+          ...failedLessonTurns(false),
+          { done: true, stid: 'opt1-comprehension-complete' },
+          { stid: 'क-letter-image-wrong' },
+          { stid: 'p1-sentence-comprehension-correct-retry' },
+        ]),
+      }),
+    );
+    expect(maxLength).toBe(9);
+  });
+
+  it('churning (<3 done in window, lifetime ≥3) → −1', async () => {
+    const { maxLength } = await runLevel(
+      sentenceBand({
+        recent_turns: sentenceTurns([
+          ...passedLessonTurns(false),
+          ...Array.from({ length: 15 }, () => ({})),
+        ]),
+        lifetime_done_count: 10,
+      }),
+    );
+    expect(maxLength).toBe(8);
+  });
+
+  it('new student (<3 done in window, lifetime <3) → hold', async () => {
+    const { maxLength } = await runLevel(
+      sentenceBand({
+        recent_turns: sentenceTurns([...passedLessonTurns(false)]),
+        lifetime_done_count: 1,
+      }),
+    );
     expect(maxLength).toBe(9);
   });
 
   it('a level-8 decrement falls back into word lessons at 7', async () => {
     const { maxLength } = await runLevel(
-      sentenceBand({ prev_level: 8, third_done_rn: 18 }),
+      sentenceBand({
+        prev_level: 8,
+        recent_turns: sentenceTurns([
+          ...failedLessonTurns(true),
+          ...failedLessonTurns(true),
+        ]),
+      }),
     );
     expect(maxLength).toBe(7);
   });
 
   it('never applies the word-section accelerator in the sentence band', async () => {
     const { maxLength, accelerated } = await runLevel(
-      sentenceBand({ third_done_rn: 15, unique_in_boost_window: 3 }),
+      sentenceBand({ unique_in_boost_window: 3 }),
     );
     expect(maxLength).toBe(9);
     expect(accelerated).toBeUndefined();

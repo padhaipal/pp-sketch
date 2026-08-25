@@ -154,13 +154,21 @@ This enforces the max-length rule and avoids repeating any of the last `RECENT_W
   passage (media_details.role='passage', media_details.level = level) instead
   of random word-list sentences; recently-lessoned passages (last 10) are
   excluded; falls back to nearest level, then to a level-7 word lesson.
-- Sentence-band progression (base ≥ 8): same done-rows metric, new
-  thresholds via `third_done_rn` (position of the 3rd most recent done row in
-  the last 18): ≤12 → +1, ≤17 → hold, >17 → −1; <3 completions → hold.
-  Sentence-band moves are capped at ±1 per selection (2026-08: the ≤9 tier
-  previously awarded +2, now +1; tier kept for tunability). Word-band logic
-  (≤7) unchanged; keep-window is now explicitly bounded at 15 rows
-  (`rn <= $6`).
+- Sentence-band progression (base ≥ 8, 2026-08): the single round-trip SQL
+  ships only the raw inputs — `recent_turns` (json_agg of {rn, is_done,
+  stid} over the 18-row window, newest first) and `lifetime_done_count`
+  (all-time done rows). Lesson grouping, validity (an unbounded oldest
+  group clipped by the window is ignored, never scored), the per-lesson
+  booleans, and the 6-rule decision (both-first-try +1; churn decrement
+  when done-in-window < 3 with lifetime ≥ 3 — outranked by rule 1, gated
+  off for new students; <2 valid lessons hold; both-image −1; both-failed
+  −1, never combined; else hold) all live in the pure
+  `computeSentenceBandSignal` — see sentence-band-signal.utils.prompt.md.
+  That module also owns SENTENCE_RECENT_ROWS_WINDOW. Span attrs:
+  `pp.lesson.sentence.both_first_try_pass` / `both_entered_image` /
+  `both_failed_out` / `done_in_window` / `low_completion_decrement`. Moves
+  stay capped at ±1 per selection by construction. Word-band logic (≤7)
+  unchanged; keep-window is explicitly bounded at 15 rows (`rn <= $6`).
 - literacy_lesson_states gained `passage_id` (FK → media_metadata, persisted
   from snapshot.context.passageId); `word` is nullable (CHECK word OR
   passage_id).

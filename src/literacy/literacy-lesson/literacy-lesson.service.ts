@@ -19,6 +19,11 @@ import {
   ProcessAnswerResult,
   validateProcessAnswerOptions,
 } from './literacy-lesson.dto';
+import {
+  SENTENCE_RECENT_ROWS_WINDOW,
+  TurnRow,
+  computeSentenceBandSignal,
+} from './sentence-band-signal.utils';
 
 const RECENT_WORDS_TO_EXCLUDE = 10;
 const SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH = 8;
@@ -44,19 +49,12 @@ const SECOND_WORD_ROW_COUNT = 4;
 // <10 words → 8, <40 → 9, <70 → 10, <110 → 11, else 12.
 const SENTENCE_LEVEL_THRESHOLD = 7;
 const MAX_LESSON_LEVEL = 12;
-// Sentence-section (level ≥ 8) progression: same completed-lesson-rows
-// metric as words, new thresholds. A perfect passage lesson costs 3 rows
-// (selection row + sentence-read row + comprehension 'done' row), so the
-// position of the 3rd most recent done row within the last 18 rows encodes
-// how cleanly the last three lessons went: within 12 rows → +1, 13-17 →
-// hold, deeper than 17 → −1. Sentence-band moves are capped at ±1 per
-// selection (2026-08; the ≤9-row tier previously awarded +2 and now also
-// awards +1 — kept as a distinct tier so the signal stays tunable).
-const SENTENCE_RECENT_ROWS_WINDOW = 18;
-const SENTENCE_DONE_ROWS_FOR_SIGNAL = 3;
-const SENTENCE_PLUS_TWO_MAX_ROWS = 9;
-const SENTENCE_PLUS_ONE_MAX_ROWS = 12;
-const SENTENCE_HOLD_MAX_ROWS = 17;
+// Sentence-band (level ≥ 8) progression: the SQL only ships the raw recent
+// turns + a lifetime done count; grouping into lessons and the ±1/hold
+// decision live in the pure computeSentenceBandSignal
+// (sentence-band-signal.utils.ts), which also owns
+// SENTENCE_RECENT_ROWS_WINDOW (the row-scan window doubles as its
+// entire-history-visible threshold).
 // Recently-lessoned passages excluded from re-selection (mirrors
 // RECENT_WORDS_TO_EXCLUDE for words).
 const RECENT_PASSAGES_TO_EXCLUDE = 10;
@@ -585,10 +583,11 @@ export class LiteracyLessonService {
           // every row is null (post-migration cold state) — the caller then
           // derives the base from the most recent word's length.
           prev_level: number | null;
-          // Row-number (1 = newest) of the 3rd most recent completed lesson
-          // within the last 18 rows; null when fewer than 3 completions.
-          // Drives the sentence-section (level ≥ 8) thresholds.
-          third_done_rn: number | null;
+          // Sentence-band (level ≥ 8) inputs: raw window rows (newest
+          // first) + lifetime completion count. Grouping/decision happen in
+          // computeSentenceBandSignal.
+          recent_turns: TurnRow[];
+          lifetime_done_count: number;
           recent_passage_ids: string[];
         }
         const rows: SelectNextWordRow[] = await this.dataSource.query(
@@ -606,7 +605,8 @@ export class LiteracyLessonService {
             -- never get a done row, so they must not count toward progression.
             SELECT word,
                    ROW_NUMBER() OVER (ORDER BY created_at DESC) AS rn,
-                   (snapshot->>'status' = 'done') AS is_done
+                   (snapshot->>'status' = 'done') AS is_done,
+                   snapshot->'context'->>'stateTransitionId' AS stid
             FROM literacy_lesson_states
             WHERE user_id = $1
             ORDER BY created_at DESC
@@ -630,7 +630,7 @@ export class LiteracyLessonService {
             WHERE user_id = $1 AND passage_id IS NOT NULL
             GROUP BY passage_id
             ORDER BY latest_at DESC
-            LIMIT $8
+            LIMIT $7
           )
           SELECT
             COALESCE(
@@ -661,10 +661,14 @@ export class LiteracyLessonService {
               WHERE s.user_id = $1 AND s.level IS NOT NULL
               ORDER BY s.created_at DESC
               LIMIT 1) AS prev_level,
-            (SELECT MAX(rn)::int FROM (
-              SELECT rn FROM recent_rows WHERE is_done ORDER BY rn ASC LIMIT $7
-            ) third WHERE (SELECT COUNT(*) FROM recent_rows WHERE is_done) >= $7
-            ) AS third_done_rn,
+            COALESCE(
+              (SELECT json_agg(json_build_object('rn', rn, 'is_done', is_done, 'stid', stid) ORDER BY rn ASC)
+               FROM recent_rows),
+              '[]'::json
+            ) AS recent_turns,
+            (SELECT COUNT(*)::int FROM literacy_lesson_states
+              WHERE user_id = $1 AND snapshot->>'status' = 'done'
+            ) AS lifetime_done_count,
             COALESCE(
               (SELECT json_agg(passage_id ORDER BY latest_at DESC)
                FROM recent_passages),
@@ -677,7 +681,6 @@ export class LiteracyLessonService {
             SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH,
             LEVEL_BOOST_WINDOW,
             SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME,
-            SENTENCE_DONE_ROWS_FOR_SIGNAL,
             RECENT_PASSAGES_TO_EXCLUDE,
           ],
         );
@@ -720,28 +723,40 @@ export class LiteracyLessonService {
 
         let maxLength: number;
         if (base > SENTENCE_LEVEL_THRESHOLD) {
-          // Sentence section (level ≥ 8): position of the 3rd most recent
-          // completed lesson within the last 18 rows. A perfect passage
-          // lesson costs 3 rows, so ≤9 = three clean lessons in a row.
-          const thirdDoneRn =
-            data.third_done_rn === null || data.third_done_rn === undefined
-              ? null
-              : Number(data.third_done_rn);
-          if (thirdDoneRn === null) {
-            maxLength = base; // fewer than 3 completions in window — hold
-          } else if (thirdDoneRn <= SENTENCE_PLUS_TWO_MAX_ROWS) {
-            // 2026-08: sentence-band moves are capped at ±1 per selection —
-            // this tier used to award +2; the two-tier structure is kept so
-            // the row-position signal stays observable/tunable.
+          // Sentence band (level ≥ 8): grouping + decision live in the pure
+          // signal function (see sentence-band-signal.utils.ts for the
+          // lesson-validity and rule-ordering rationale).
+          const signal = computeSentenceBandSignal(
+            data.recent_turns,
+            Number(data.lifetime_done_count),
+          );
+          if (signal.decision === 'increment') {
             maxLength = base + 1;
-          } else if (thirdDoneRn <= SENTENCE_PLUS_ONE_MAX_ROWS) {
-            maxLength = base + 1;
-          } else if (thirdDoneRn <= SENTENCE_HOLD_MAX_ROWS) {
-            maxLength = base;
-          } else {
+          } else if (signal.decision === 'decrement') {
             maxLength = base - 1;
+          } else {
+            maxLength = base;
           }
-          span.setAttribute('pp.lesson.word.third_done_rn', thirdDoneRn ?? -1);
+          span.setAttribute(
+            'pp.lesson.sentence.both_first_try_pass',
+            signal.bothFirstTryPass,
+          );
+          span.setAttribute(
+            'pp.lesson.sentence.both_entered_image',
+            signal.bothEnteredImage,
+          );
+          span.setAttribute(
+            'pp.lesson.sentence.both_failed_out',
+            signal.bothFailedOut,
+          );
+          span.setAttribute(
+            'pp.lesson.sentence.done_in_window',
+            signal.doneInWindow,
+          );
+          span.setAttribute(
+            'pp.lesson.sentence.low_completion_decrement',
+            signal.lowCompletionDecrement,
+          );
         } else {
           // Word section (level ≤ 7): fast-find accelerator (+3), checked
           // BEFORE the new-user gate so a strong start escapes the level-2
