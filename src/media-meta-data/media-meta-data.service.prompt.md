@@ -311,6 +311,12 @@ After all items processed:
   (`src/interfaces/llm/<provider>`) → parse/validate the untrusted completion
   (DTO shape, question_type ∈ R1.1-R3.2) → passage level from word count
   (<10→8, <40→9, <70→10, <110→11, <250→12, else 13; 13 is storage-only) →
+  passage-quality gate (`passage-quality.ts`: passage TEXT alone, 5 valid
+  strict true/false votes over ≤8 calls, pass = ≥3 true; fail persists the
+  family soft-deleted with gate_failure {gate:'quality'} and SKIPS
+  judge/solvability; verdict + raw runs recorded as
+  passage media_details.quality {version:1,…} on pass and fail;
+  unverified → nothing written, retriable) →
   passage-judge gate (`passage-judge.ts`: collects JUDGE_REQUIRED_VALID = 10
   valid GATE_JUDGE_MODEL runs WITH the passage over ≤ JUDGE_MAX_CALLS = 14
   calls; pass = all 10 valid runs correct; budget spent short of 10 valid →
@@ -366,6 +372,8 @@ After all items processed:
   with role 'option', jsonb_agg in created_at order, no rolled_back filter —
   the options of a gate-failed question are rolled back too); dashboard
   "Filter failures" list.
+- `recordPassageQuality(passageId, quality)` — jsonb-merges a quality record
+  onto a passage row (used by src/scripts/passage-quality-sweep).
 - `deleteByStateTransitionId(stid)` — rolls back every row carrying the stid;
   for `…-sentence-comprehension` the whole passage family (prefix = passage
   id). Pure soft delete; the per-row markRolledBack calls handle each row's

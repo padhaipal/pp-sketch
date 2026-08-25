@@ -60,6 +60,11 @@ import {
   PassageJudgeVerdict,
   runPassageJudge,
 } from './passage-judge';
+import {
+  PassageQualityVerdict,
+  QUALITY_REQUIRED_VALID,
+  runPassageQuality,
+} from './passage-quality';
 import { GATE_JUDGE_MODEL, pickGateObservability } from './gate-shared';
 import { createQueue, QUEUE_NAMES } from '../interfaces/redis/queues';
 import type { OtelCarrier } from '../otel/otel.dto';
@@ -116,6 +121,19 @@ async function isSttEnabled(provider: string): Promise<boolean> {
 // pedagogy), so the specific-beats-generic merge cannot shadow anything.
 // The prefix guard excludes the generic key ('_') and the fixed 'sentence-*'
 // prompt stids, whose media is human-seeded.
+// Passage-search gate filters (quality/judge/solvability), derived from the
+// stored media_details records: quality from the passage row's
+// quality.verdict; judge/solvability from the question row (gate_failure →
+// failed; solvability.skipped → skipped; a stored record → passed; absent →
+// not_run). Live search only shows rolled_back=false rows, so 'failed' is
+// mostly future-proofing — failed families are soft-deleted.
+export const GATE_FILTER_STATES = [
+  'passed',
+  'failed',
+  'skipped',
+  'not_run',
+] as const;
+
 const DRILL_WORD_STID_RE =
   /^([^-]+)-(?:sentence-word-drillWord|letter-word-correct-last|letterImage-word-(?:correct|maxErrors)-last|letterNoImage-word-(?:correct-first|correct-retry|wrong)-last)$/;
 const DRILL_WORD_EXCLUDED_PREFIXES = new Set(['_', 'sentence']);
@@ -997,40 +1015,88 @@ export class MediaMetaDataService {
     const level = passageLevelFromWordCount(content.passage.text);
     span?.setAttribute('pp.llm.passage_level', level);
 
-    // 3. Passage-judge gate (with passage) — the cheaper LLM gate runs first.
-    let judgeVerdict: PassageJudgeVerdict;
+    // 2b. Passage-quality gate — cheapest first: scores the passage TEXT
+    // alone (5 valid true/false votes over ≤8 calls, pass = ≥3 true). A
+    // fail still persists the family soft-deleted like the other gate
+    // failures, but skips the later, more expensive gates.
+    let qualityVerdict: PassageQualityVerdict;
     try {
-      judgeVerdict = await runPassageJudge(
+      qualityVerdict = await runPassageQuality(
         this.sarvamLlmService,
         content.passage.text,
-        question,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return {
         status: 'rejected',
-        reason: `passage-judge gate errored: ${message}`,
+        reason: `passage-quality gate errored: ${message}`,
         retriable: true,
         level,
         question: {
           status: 'unverified',
-          reason: `passage-judge gate errored: ${message}`,
+          reason: `passage-quality gate errored: ${message}`,
         },
       };
     }
-    if (judgeVerdict.status === 'unverified') {
-      const reason = `passage-judge unverified: ${judgeVerdict.valid_runs}/${JUDGE_REQUIRED_VALID} valid after ${judgeVerdict.total_calls} ${GATE_JUDGE_MODEL} calls (${judgeVerdict.call_failures} call failures, ${judgeVerdict.unparseable} unparseable) — retry`;
+    const qualityReport = {
+      ...(qualityVerdict.true_votes !== undefined && {
+        true_votes: qualityVerdict.true_votes,
+      }),
+      valid_runs: qualityVerdict.valid_runs,
+      total_calls: qualityVerdict.total_calls,
+      call_failures: qualityVerdict.call_failures,
+      unparseable: qualityVerdict.unparseable,
+    };
+    if (qualityVerdict.status === 'unverified') {
+      const reason = `passage-quality unverified: ${qualityVerdict.valid_runs}/${QUALITY_REQUIRED_VALID} valid after ${qualityVerdict.total_calls} ${GATE_JUDGE_MODEL} calls (${qualityVerdict.call_failures} call failures, ${qualityVerdict.unparseable} unparseable) — retry`;
       return {
         status: 'rejected',
         reason,
         retriable: true,
         level,
-        question: {
-          status: 'unverified',
-          reason,
-          judge: pickGateObservability(judgeVerdict),
-        },
+        question: { status: 'unverified', reason, quality: qualityReport },
       };
+    }
+    const qualityFailed = qualityVerdict.status === 'failed_quality';
+
+    // 3. Passage-judge gate (with passage) — skipped entirely when quality
+    // already failed the family (cheap-first; funnel counts stay disjoint).
+    let judgeVerdict: PassageJudgeVerdict | null = null;
+    if (!qualityFailed) {
+      try {
+        judgeVerdict = await runPassageJudge(
+          this.sarvamLlmService,
+          content.passage.text,
+          question,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          status: 'rejected',
+          reason: `passage-judge gate errored: ${message}`,
+          retriable: true,
+          level,
+          question: {
+            status: 'unverified',
+            reason: `passage-judge gate errored: ${message}`,
+          },
+        };
+      }
+      if (judgeVerdict.status === 'unverified') {
+        const reason = `passage-judge unverified: ${judgeVerdict.valid_runs}/${JUDGE_REQUIRED_VALID} valid after ${judgeVerdict.total_calls} ${GATE_JUDGE_MODEL} calls (${judgeVerdict.call_failures} call failures, ${judgeVerdict.unparseable} unparseable) — retry`;
+        return {
+          status: 'rejected',
+          reason,
+          retriable: true,
+          level,
+          question: {
+            status: 'unverified',
+            reason,
+            judge: pickGateObservability(judgeVerdict),
+            quality: qualityReport,
+          },
+        };
+      }
     }
 
     // 4. Zero-context solvability (no passage) — only for judge-passed
@@ -1042,7 +1108,11 @@ export class MediaMetaDataService {
       question.question_type,
     );
     let solvabilityVerdict: SolvabilityVerdict | null = null;
-    if (judgeVerdict.status === 'passed' && solvabilityApplies) {
+    if (
+      judgeVerdict !== null &&
+      judgeVerdict.status === 'passed' &&
+      solvabilityApplies
+    ) {
       try {
         solvabilityVerdict = await runZeroContextSolvability(
           this.sarvamLlmService,
@@ -1081,11 +1151,22 @@ export class MediaMetaDataService {
     // The question's fate: live insert, or soft-deleted insert with a
     // gate_failure record for troubleshooting.
     let gateFailure: {
-      gate: 'judge' | 'solvability';
+      gate: 'quality' | 'judge' | 'solvability';
       reason: string;
       [k: string]: unknown;
     } | null = null;
-    if (judgeVerdict.status === 'failed_judge') {
+    if (qualityFailed) {
+      gateFailure = {
+        gate: 'quality',
+        reason: `passage-quality: ${qualityVerdict.true_votes ?? 0}/${QUALITY_REQUIRED_VALID} true`,
+        true_votes: qualityVerdict.true_votes,
+        valid_runs: qualityVerdict.valid_runs,
+        total_calls: qualityVerdict.total_calls,
+        call_failures: qualityVerdict.call_failures,
+        unparseable: qualityVerdict.unparseable,
+        model: GATE_JUDGE_MODEL,
+      };
+    } else if (judgeVerdict && judgeVerdict.status === 'failed_judge') {
       gateFailure = {
         gate: 'judge',
         reason: `passage-judge: ${judgeVerdict.wrong_picks!.length} of ${judgeVerdict.valid_runs} valid runs picked a wrong option`,
@@ -1138,6 +1219,19 @@ export class MediaMetaDataService {
           model: request.model,
           prompt_tokens: completion.prompt_tokens,
           completion_tokens: completion.completion_tokens,
+          // Quality verdict is recorded whatever the outcome that reaches
+          // an insert (pass or fail — unverified never inserts). The
+          // dashboard filters on exactly this shape.
+          quality: {
+            version: 1,
+            verdict: qualityFailed ? 'fail' : 'pass',
+            true_votes: qualityVerdict.true_votes,
+            runs: qualityVerdict.runs,
+            valid_runs: qualityVerdict.valid_runs,
+            total_calls: qualityVerdict.total_calls,
+            call_failures: qualityVerdict.call_failures,
+            unparseable: qualityVerdict.unparseable,
+          },
         },
         generation_request_json: {
           provider: request.provider,
@@ -1165,10 +1259,13 @@ export class MediaMetaDataService {
           role: 'question',
           question_type: question.question_type,
           model: request.model,
-          judge: {
-            ...pickGateObservability(judgeVerdict),
-            model: GATE_JUDGE_MODEL,
-          },
+          // Judge never runs when quality already failed the family.
+          ...(judgeVerdict && {
+            judge: {
+              ...pickGateObservability(judgeVerdict),
+              model: GATE_JUDGE_MODEL,
+            },
+          }),
           ...(solvabilityVerdict
             ? {
                 solvability: {
@@ -1292,7 +1389,8 @@ export class MediaMetaDataService {
           status: 'discarded',
           reason: gateFailure.reason,
           question_id: questionId,
-          judge: pickGateObservability(judgeVerdict),
+          quality: qualityReport,
+          ...(judgeVerdict && { judge: pickGateObservability(judgeVerdict) }),
           ...(solvabilityVerdict && {
             solvability: pickGateObservability(solvabilityVerdict),
           }),
@@ -1314,7 +1412,8 @@ export class MediaMetaDataService {
       question: {
         status: 'created',
         question_id: questionId,
-        judge: pickGateObservability(judgeVerdict),
+        quality: qualityReport,
+        ...(judgeVerdict && { judge: pickGateObservability(judgeVerdict) }),
         ...(solvabilityVerdict && {
           solvability: pickGateObservability(solvabilityVerdict),
         }),
@@ -1590,6 +1689,25 @@ export class MediaMetaDataService {
   }
 
   /**
+   * Merges a passage-quality record into a passage row's media_details.
+   * Used by the retro sweep (src/scripts/passage-quality-sweep.ts) so
+   * re-runs reuse stored verdicts instead of re-judging; the pipeline
+   * writes the same shape inline at insert time.
+   */
+  async recordPassageQuality(
+    passageId: string,
+    quality: Record<string, unknown>,
+  ): Promise<void> {
+    await this.dataSource.query(
+      `UPDATE media_metadata
+       SET media_details = COALESCE(media_details, '{}'::jsonb)
+         || jsonb_build_object('quality', $2::jsonb)
+       WHERE id = $1`,
+      [passageId, JSON.stringify(quality)],
+    );
+  }
+
+  /**
    * Live media counts grouped by (stid, media_type) for every stid ending in
    * `suffix` — one query for a whole stid family (e.g. the 203
    * `…-wpm-reading-speed` rows), so the dashboard never fans out per-stid
@@ -1642,6 +1760,9 @@ export class MediaMetaDataService {
     media_type?: string;
     created_after?: string;
     created_before?: string;
+    quality?: string;
+    judge?: string;
+    solvability?: string;
     limit?: number;
     offset?: number;
   }): Promise<{
@@ -1653,6 +1774,7 @@ export class MediaMetaDataService {
       model: string | null;
       preview: string;
       created_at: Date;
+      quality: Record<string, unknown> | null;
     }>;
     total: number;
     limit: number;
@@ -1697,6 +1819,29 @@ export class MediaMetaDataService {
     };
     const createdAfter = parseDate(options.created_after, 'created_after');
     const createdBefore = parseDate(options.created_before, 'created_before');
+    const parseGateFilter = (
+      raw: string | undefined,
+      name: string,
+    ): string | null => {
+      const value = raw?.trim() || null;
+      if (
+        value !== null &&
+        !GATE_FILTER_STATES.includes(
+          value as (typeof GATE_FILTER_STATES)[number],
+        )
+      ) {
+        throw new BadRequestException(
+          `${name} must be one of: ${GATE_FILTER_STATES.join(', ')}`,
+        );
+      }
+      return value;
+    };
+    const qualityFilter = parseGateFilter(options.quality, 'quality');
+    const judgeFilter = parseGateFilter(options.judge, 'judge');
+    const solvabilityFilter = parseGateFilter(
+      options.solvability,
+      'solvability',
+    );
     // ILIKE pattern with user wildcards neutralized; empty q → match all.
     const q = (options.q ?? '').trim().slice(0, 200);
     const pattern = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
@@ -1728,7 +1873,26 @@ export class MediaMetaDataService {
            SELECT 1 FROM fam WHERE media_type = $4
          ))
          AND ($5::timestamptz IS NULL OR p.created_at >= $5)
-         AND ($6::timestamptz IS NULL OR p.created_at <= $6)`;
+         AND ($6::timestamptz IS NULL OR p.created_at <= $6)
+         AND ($7::text IS NULL OR (
+           CASE
+             WHEN p.media_details->'quality'->>'verdict' = 'pass' THEN 'passed'
+             WHEN p.media_details->'quality'->>'verdict' = 'fail' THEN 'failed'
+             ELSE 'not_run'
+           END) = $7)
+         AND ($8::text IS NULL OR (
+           CASE
+             WHEN q.media_details->'gate_failure'->>'gate' = 'judge' THEN 'failed'
+             WHEN q.media_details ? 'judge' THEN 'passed'
+             ELSE 'not_run'
+           END) = $8)
+         AND ($9::text IS NULL OR (
+           CASE
+             WHEN q.media_details->'gate_failure'->>'gate' = 'solvability' THEN 'failed'
+             WHEN q.media_details->'solvability'->>'skipped' = 'true' THEN 'skipped'
+             WHEN q.media_details ? 'solvability' THEN 'passed'
+             ELSE 'not_run'
+           END) = $9)`;
     const rows: Array<{
       id: string;
       level: number | null;
@@ -1737,6 +1901,7 @@ export class MediaMetaDataService {
       model: string | null;
       preview: string;
       created_at: Date;
+      quality: Record<string, unknown> | null;
     }> = await this.dataSource.query(
       `SELECT p.id,
               (p.media_details->>'level')::int  AS level,
@@ -1744,11 +1909,12 @@ export class MediaMetaDataService {
               q.media_details->>'question_type' AS question_type,
               p.media_details->>'model'         AS model,
               left(p.text, 200)                 AS preview,
-              p.created_at
+              p.created_at,
+              p.media_details->'quality'        AS quality
        ${joins}
        WHERE ${where}
        ORDER BY p.created_at DESC, p.id
-       LIMIT $7 OFFSET $8`,
+       LIMIT $10 OFFSET $11`,
       [
         pattern,
         passageType,
@@ -1756,6 +1922,9 @@ export class MediaMetaDataService {
         mediaType,
         createdAfter,
         createdBefore,
+        qualityFilter,
+        judgeFilter,
+        solvabilityFilter,
         limit,
         offset,
       ],
@@ -1769,6 +1938,9 @@ export class MediaMetaDataService {
         mediaType,
         createdAfter,
         createdBefore,
+        qualityFilter,
+        judgeFilter,
+        solvabilityFilter,
       ],
     );
     return {
