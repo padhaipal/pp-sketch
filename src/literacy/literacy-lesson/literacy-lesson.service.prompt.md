@@ -148,6 +148,23 @@ This enforces the max-length rule and avoids repeating any of the last `RECENT_W
 
 7.) Return the selected word.
 
+## ⚠ TEMPORARY (2026-08): level capped at 7 while the passage bank is seeded
+
+`EFFECTIVE_MAX_LESSON_LEVEL = SENTENCE_LEVEL_THRESHOLD` (7), applied in
+selectNextString as a final `Math.min` clamp AFTER the ratchet base and the
+MAX_LESSON_LEVEL clamp — so a student with stored prev_level 8-12 is pulled
+back to 7. Every student stays in the word band; NOTHING else is disabled:
+the sentence machine states, selectPassage, computeSentenceBandSignal,
+comprehension handling, and passage generation/gates are all live and
+simply unreachable from selection. Mid-lesson students continue at their
+stored level (continue path skips selection), so completedReading at 8+
+still fires.
+
+REVERT: set EFFECTIVE_MAX_LESSON_LEVEL back to MAX_LESSON_LEVEL (or delete
+the constant and its clamp), delete this section, and restore the spec
+assertions marked "TEMP cap" / "TEMPORARY level-7 cap" (or just git-revert
+the "TEMP: cap lesson level at 7" commit).
+
 ## 2026-07: passages, comprehension, new level thresholds
 
 - MAX_LESSON_LEVEL restored to 12. Level ≥ 8 selects a random ready reading
