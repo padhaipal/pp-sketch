@@ -147,6 +147,8 @@ export interface LlmGenerateQuestionResult {
    */
   judge?: GateObservability;
   solvability?: GateObservability;
+  /** Passage-quality gate counters + true-vote tally (absent = never ran). */
+  quality?: GateObservability & { true_votes?: number };
 }
 
 export interface LlmGenerateResponse {

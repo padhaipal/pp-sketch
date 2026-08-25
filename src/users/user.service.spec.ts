@@ -1148,6 +1148,20 @@ describe('UserService.getLiteracyTestScores', () => {
     expect(await svc.getLiteracyTestScores(USER_ID)).toBeNull();
   });
 
+  it('comprehension answers query joins WITHOUT rolled_back filters (retro quality culls must not erase earned history)', async () => {
+    const { svc, dsQuery } = scoreService({});
+    await svc.getLiteracyTestScores(USER_ID);
+    const answersSql = dsQuery.mock.calls
+      .map((c: unknown[]) => c[0] as string)
+      .find((sql) => sql.includes('comprehension-complete'))!;
+    expect(answersSql).toContain('JOIN media_metadata o');
+    expect(answersSql).toContain('JOIN media_metadata q');
+    expect(answersSql).toContain('JOIN media_metadata p');
+    // The word appears in an explanatory SQL comment — the PREDICATE must
+    // be gone from all three joins.
+    expect(answersSql).not.toContain('rolled_back = false');
+  });
+
   it('reports insufficient data across the board for a fresh user', async () => {
     const { svc } = scoreService({});
     const scores = (await svc.getLiteracyTestScores(USER_ID))!;

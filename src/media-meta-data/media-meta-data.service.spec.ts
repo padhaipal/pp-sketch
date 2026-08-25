@@ -2808,9 +2808,36 @@ function generatedJson(overrides?: {
 // line matches that text (option order is shuffled per run); 'invalid'
 // answers unparseable text so the run doesn't count as valid.
 type GateAnswer = 'correct' | 'wrong' | 'invalid' | 'error';
-function gateStub(opts: { judge?: GateAnswer; solvability?: GateAnswer }) {
+type QualityAnswer = 'pass' | 'fail' | 'invalid' | 'error';
+function gateStub(opts: {
+  judge?: GateAnswer;
+  solvability?: GateAnswer;
+  quality?: QualityAnswer;
+}) {
   return jest.fn().mockImplementation(async (requests: LlmReq[]) =>
     requests.map((request) => {
+      // Quality requests are single-message (passage above the rubric) and
+      // run before every other gate.
+      if (request.messages[0].content.includes('Score the above passage')) {
+        const quality = opts.quality ?? 'pass';
+        if (quality === 'error') {
+          return { result: null, error: { message: 'down', retriable: true } };
+        }
+        return {
+          result: {
+            text:
+              quality === 'pass'
+                ? 'true'
+                : quality === 'fail'
+                  ? 'false'
+                  : 'True', // strictness violation → unparseable
+            model: 'sarvam-105b',
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            duration_ms: 1,
+          },
+        };
+      }
       const content = request.messages[1].content;
       const mode =
         (content.includes(PASSAGE_TEXT) ? opts.judge : opts.solvability) ??
@@ -2917,17 +2944,23 @@ describe('createLlmGeneratedMedia', () => {
       unparseable: 0,
     });
 
-    // Gate order + shapes: judge first (10 valid WITH the passage), then
-    // solvability (24 valid without it) — all single-call batches
-    // (GATE_BATCH_SIZE = 1). All calls valid here, so both issue exactly
-    // their target.
+    // Gate order + shapes: quality first (5 valid on the passage text
+    // alone), then judge (10 valid WITH the passage), then solvability
+    // (24 valid without it) — all single-call batches (GATE_BATCH_SIZE=1).
+    // All calls valid here, so each issues exactly its target.
     const batches = completeBatch.mock.calls.map((c) => c[0] as LlmReq[]);
-    expect(batches.map((b) => b.length)).toEqual(Array(10 + 24).fill(1));
-    const judgeRequests = batches.slice(0, 10).flat();
+    expect(batches.map((b) => b.length)).toEqual(Array(5 + 10 + 24).fill(1));
+    const qualityRequests = batches.slice(0, 5).flat();
+    expect(
+      qualityRequests.every((r) =>
+        r.messages[0].content.startsWith(PASSAGE_TEXT),
+      ),
+    ).toBe(true);
+    const judgeRequests = batches.slice(5, 15).flat();
     expect(
       judgeRequests.every((r) => r.messages[1].content.includes(PASSAGE_TEXT)),
     ).toBe(true);
-    const solvabilityRequests = batches.slice(10).flat();
+    const solvabilityRequests = batches.slice(15).flat();
     expect(solvabilityRequests).toHaveLength(24);
     expect(
       solvabilityRequests.every(
@@ -3194,12 +3227,12 @@ describe('createLlmGeneratedMedia', () => {
       unparseable: 0,
     });
 
-    // Only the judge's 10 single-call batches (all valid) — a failed
-    // question never reaches gate 4.
-    expect(completeBatch).toHaveBeenCalledTimes(10);
+    // Quality's 5 + the judge's 10 single-call batches (all valid) — a
+    // failed question never reaches gate 4.
+    expect(completeBatch).toHaveBeenCalledTimes(15);
     expect(
       completeBatch.mock.calls.map((c) => (c[0] as LlmReq[]).length),
-    ).toEqual(Array(10).fill(1));
+    ).toEqual(Array(15).fill(1));
 
     expect(dsTransaction).toHaveBeenCalledTimes(1);
     expect(saved.every((e) => e.rolled_back === true)).toBe(true);
@@ -3225,6 +3258,93 @@ describe('createLlmGeneratedMedia', () => {
     });
     expect(details.solvability).toBeUndefined();
 
+    expect(mockQueueAddBulk).not.toHaveBeenCalled();
+  });
+
+  it('quality failure: persists the family soft-deleted and never runs judge/solvability', async () => {
+    const completeBatch = gateStub({ quality: 'fail' });
+    const { service, saved, dsTransaction } = gateFailureSetup(completeBatch);
+
+    const result = await service.createLlmGeneratedMedia(request, carrier);
+
+    expect(result.status).toBe('rejected');
+    expect(result.retriable).toBe(true);
+    expect(result.reason).toBe('passage-quality: 0/5 true');
+    expect(result.question!.status).toBe('discarded');
+    expect(result.question!.quality).toMatchObject({
+      true_votes: 0,
+      valid_runs: 5,
+      total_calls: 5,
+    });
+    // Later gates never ran → only quality's 5 single-call batches.
+    expect(completeBatch).toHaveBeenCalledTimes(5);
+    expect(result.question!.judge).toBeUndefined();
+    expect(result.question!.solvability).toBeUndefined();
+
+    expect(dsTransaction).toHaveBeenCalledTimes(1);
+    expect(saved.every((e) => e.rolled_back === true)).toBe(true);
+    const passage = saved.find(
+      (e) => (e.media_details as { role?: string })?.role === 'passage',
+    )!;
+    expect(
+      (passage.media_details as { quality: Record<string, unknown> }).quality,
+    ).toMatchObject({
+      version: 1,
+      verdict: 'fail',
+      true_votes: 0,
+      runs: Array(5).fill('false'),
+    });
+    const question = saved.find(
+      (e) => (e.media_details as { role?: string })?.role === 'question',
+    )!;
+    const details = question.media_details as {
+      gate_failure: Record<string, unknown>;
+      judge?: unknown;
+    };
+    expect(details.gate_failure).toMatchObject({
+      gate: 'quality',
+      reason: 'passage-quality: 0/5 true',
+      true_votes: 0,
+      model: 'sarvam-105b',
+    });
+    expect(details.judge).toBeUndefined();
+    expect(mockQueueAddBulk).not.toHaveBeenCalled();
+  });
+
+  it('quality pass: records the verdict + raw runs on the live passage row', async () => {
+    const completeBatch = gateStub({ quality: 'pass', solvability: 'wrong' });
+    const { service, saved } = gateFailureSetup(completeBatch);
+
+    const result = await service.createLlmGeneratedMedia(request, carrier);
+
+    expect(result.status).toBe('created');
+    const passage = saved.find(
+      (e) => (e.media_details as { role?: string })?.role === 'passage',
+    )!;
+    expect(passage.rolled_back).toBe(false);
+    expect(
+      (passage.media_details as { quality: Record<string, unknown> }).quality,
+    ).toMatchObject({
+      version: 1,
+      verdict: 'pass',
+      true_votes: 5,
+      runs: Array(5).fill('true'),
+    });
+  });
+
+  it('quality unverified (strictness violations): inserts nothing, rejects retriable', async () => {
+    const completeBatch = gateStub({ quality: 'invalid' });
+    const { service, saved, dsTransaction } = gateFailureSetup(completeBatch);
+
+    const result = await service.createLlmGeneratedMedia(request, carrier);
+
+    expect(result.status).toBe('rejected');
+    expect(result.retriable).toBe(true);
+    expect(result.reason).toContain('passage-quality unverified: 0/5 valid');
+    expect(result.question!.status).toBe('unverified');
+    expect(completeBatch).toHaveBeenCalledTimes(8); // budget spent
+    expect(dsTransaction).not.toHaveBeenCalled();
+    expect(saved).toHaveLength(0);
     expect(mockQueueAddBulk).not.toHaveBeenCalled();
   });
 
@@ -3320,13 +3440,16 @@ describe('createLlmGeneratedMedia', () => {
     // No solvability verdict on the response when the gate is out of scope.
     expect(result.question!.solvability).toBeUndefined();
 
-    // Only the judge's 10 single-call batches — never a zero-context call.
-    expect(completeBatch).toHaveBeenCalledTimes(10);
+    // Quality's 5 + the judge's 10 single-call batches — never a
+    // zero-context call.
+    expect(completeBatch).toHaveBeenCalledTimes(15);
     const gateRequests = completeBatch.mock.calls.flatMap(
       (c) => c[0] as LlmReq[],
     );
     expect(
-      gateRequests.every((r) => r.messages[1].content.includes(PASSAGE_TEXT)),
+      gateRequests.every((r) =>
+        r.messages[r.messages.length - 1].content.includes(PASSAGE_TEXT),
+      ),
     ).toBe(true);
 
     // Rows are live, and the question records the skip for the funnel.
@@ -3347,7 +3470,7 @@ describe('createLlmGeneratedMedia', () => {
 
     expect(result.status).toBe('rejected');
     expect(result.retriable).toBe(true);
-    expect(result.reason).toContain('passage-judge gate errored');
+    expect(result.reason).toContain('passage-quality gate errored');
     expect(result.question!.status).toBe('unverified');
     expect(dsTransaction).not.toHaveBeenCalled();
   });
@@ -3627,6 +3750,9 @@ describe('searchPassages', () => {
       null,
       null,
       null,
+      null,
+      null,
+      null,
       100,
       0,
     ]);
@@ -3635,6 +3761,9 @@ describe('searchPassages', () => {
     // Count query reuses the same filters.
     expect(dsQuery.mock.calls[1][1]).toEqual([
       '%50\\%\\_off\\\\%',
+      null,
+      null,
+      null,
       null,
       null,
       null,
@@ -3660,9 +3789,34 @@ describe('searchPassages', () => {
       null,
       null,
       null,
+      null,
+      null,
+      null,
       20,
       0,
     ]);
+  });
+
+  it('filters by per-gate outcome and selects the stored quality record', async () => {
+    const dsQuery = jest
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ total: '0' }]);
+    const { service } = makeService({ dsQuery });
+    await service.searchPassages({
+      quality: 'passed',
+      judge: 'not_run',
+      solvability: 'skipped',
+    });
+    const [sql, params] = dsQuery.mock.calls[0] as [string, unknown[]];
+    expect(params.slice(6, 9)).toEqual(['passed', 'not_run', 'skipped']);
+    // Outcomes derive from the stored media_details records.
+    expect(sql).toContain("p.media_details->'quality'->>'verdict' = 'pass'");
+    expect(sql).toContain("q.media_details->'gate_failure'->>'gate' = 'judge'");
+    expect(sql).toContain(
+      "q.media_details->'solvability'->>'skipped' = 'true'",
+    );
+    expect(sql).toContain("p.media_details->'quality'        AS quality");
   });
 
   it('filters by subtree media_type and created_at bounds', async () => {
@@ -3696,6 +3850,9 @@ describe('searchPassages', () => {
     [{ passage_type: 'poem' }, 'passage_type must be one of'],
     [{ question_type: 'R9.9' }, 'question_type must be one of'],
     [{ media_type: 'hologram' }, 'media_type must be one of'],
+    [{ quality: 'maybe' }, 'quality must be one of'],
+    [{ judge: 'meh' }, 'judge must be one of'],
+    [{ solvability: 'nope' }, 'solvability must be one of'],
     [
       { created_after: 'not-a-date' },
       'created_after must be an ISO date/timestamp',

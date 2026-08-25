@@ -133,6 +133,9 @@ export class MediaMetaDataController {
     @Query('media_type') mediaType?: string,
     @Query('created_after') createdAfter?: string,
     @Query('created_before') createdBefore?: string,
+    @Query('quality') quality?: string,
+    @Query('judge') judge?: string,
+    @Query('solvability') solvability?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
@@ -143,6 +146,9 @@ export class MediaMetaDataController {
       media_type: mediaType,
       created_after: createdAfter,
       created_before: createdBefore,
+      quality,
+      judge,
+      solvability,
       limit: limit !== undefined ? parseInt(limit, 10) : undefined,
       offset: offset !== undefined ? parseInt(offset, 10) : undefined,
     });
