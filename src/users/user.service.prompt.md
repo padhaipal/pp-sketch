@@ -51,6 +51,12 @@ create(options: CreateUserOptions): Promise<User>
 
 ## getLiteracyTestScores (2026-07, reworked 2026-08)
 
+NOTE (2026-08): the comprehension first-attempts query's three
+media_metadata joins (option o → question q → passage p) deliberately carry
+NO rolled_back filter — a retroactively quality-culled passage must not
+erase a student's already-earned comprehension history (NIPUN grades 2/3,
+MPL-B). NIPUN grade 1 and its query are untouched.
+
 Digital-proxy literacy test scores:
 - NIPUN g1 (unchanged rolling window): last 2 level-8 sentence FIRST read
   attempts (success = the `…-sentence-comprehension-correct-first` stid;

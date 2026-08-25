@@ -660,11 +660,12 @@ export class UserService {
               q.media_details->>'question_type' AS question_type,
               (p.media_details->>'level')::int AS level
        FROM literacy_lesson_states s
-       JOIN media_metadata o ON o.id::text = s.answer AND o.rolled_back = false
-       JOIN media_metadata q
-         ON q.id = o.input_media_id AND q.rolled_back = false
-       JOIN media_metadata p
-         ON p.id = q.input_media_id AND p.rolled_back = false
+       -- Deliberately NO rolled_back filter on these joins (2026-08): a
+       -- retroactively quality-culled passage must not erase the student's
+       -- already-earned comprehension history (NIPUN grades 2/3, MPL-B).
+       JOIN media_metadata o ON o.id::text = s.answer
+       JOIN media_metadata q ON q.id = o.input_media_id
+       JOIN media_metadata p ON p.id = q.input_media_id
        WHERE s.user_id = $1
          AND s.answer_correct IS NOT NULL
          AND (s.snapshot->'context'->>'stateTransitionId')
