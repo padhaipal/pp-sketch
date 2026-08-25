@@ -19,6 +19,11 @@ import {
   ProcessAnswerResult,
   validateProcessAnswerOptions,
 } from './literacy-lesson.dto';
+import {
+  SENTENCE_RECENT_ROWS_WINDOW,
+  TurnRow,
+  computeSentenceBandSignal,
+} from './sentence-band-signal.utils';
 
 const RECENT_WORDS_TO_EXCLUDE = 10;
 const SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH = 8;
@@ -44,16 +49,12 @@ const SECOND_WORD_ROW_COUNT = 4;
 // <10 words → 8, <40 → 9, <70 → 10, <110 → 11, else 12.
 const SENTENCE_LEVEL_THRESHOLD = 7;
 const MAX_LESSON_LEVEL = 12;
-// Sentence-band (level ≥ 8) progression (2026-08 rewrite): judged on the
-// student's last TWO completed lessons inside the row-scan window below. A
-// lesson = a done row plus every row after the previous done row. Per
-// lesson: first_try_pass (a `…-sentence-comprehension-correct-first` row),
-// entered_image (a `…-letter-image-wrong` row — the sole entry into the
-// image tier of the drill loop), failed_out (done row is exactly
-// 'sentence-sentence-complete-maxErrors'). Both-first-try → +1; both
-// entered image OR both failed out → −1; anything else, or fewer than two
-// completed lessons, holds.
-const SENTENCE_RECENT_ROWS_WINDOW = 18;
+// Sentence-band (level ≥ 8) progression: the SQL only ships the raw recent
+// turns + a lifetime done count; grouping into lessons and the ±1/hold
+// decision live in the pure computeSentenceBandSignal
+// (sentence-band-signal.utils.ts), which also owns
+// SENTENCE_RECENT_ROWS_WINDOW (the row-scan window doubles as its
+// entire-history-visible threshold).
 // Recently-lessoned passages excluded from re-selection (mirrors
 // RECENT_WORDS_TO_EXCLUDE for words).
 const RECENT_PASSAGES_TO_EXCLUDE = 10;
@@ -582,13 +583,11 @@ export class LiteracyLessonService {
           // every row is null (post-migration cold state) — the caller then
           // derives the base from the most recent word's length.
           prev_level: number | null;
-          // Sentence-band (level ≥ 8) signal: aggregated over the user's
-          // last TWO completed lessons inside the row-scan window. The
-          // BOOL_ANDs are null when no completed lesson exists.
-          done_lesson_count: number;
-          both_first_try_pass: boolean | null;
-          both_entered_image: boolean | null;
-          both_failed_out: boolean | null;
+          // Sentence-band (level ≥ 8) inputs: raw window rows (newest
+          // first) + lifetime completion count. Grouping/decision happen in
+          // computeSentenceBandSignal.
+          recent_turns: TurnRow[];
+          lifetime_done_count: number;
           recent_passage_ids: string[];
         }
         const rows: SelectNextWordRow[] = await this.dataSource.query(
@@ -612,32 +611,6 @@ export class LiteracyLessonService {
             WHERE user_id = $1
             ORDER BY created_at DESC
             LIMIT $3
-          ),
-          lesson_groups AS (
-            -- A lesson is a group of consecutive rows ending in a done row:
-            -- the done row plus every row after the previous done row. The
-            -- reverse running done-count IS the group id (rn 1 = newest), so
-            -- grp 1/2 are the two most recent COMPLETED lessons and grp 0 is
-            -- the still-open turn.
-            SELECT stid, is_done,
-                   SUM(CASE WHEN is_done THEN 1 ELSE 0 END)
-                     OVER (ORDER BY rn ASC ROWS UNBOUNDED PRECEDING) AS grp
-            FROM recent_rows
-          ),
-          lesson_flags AS (
-            -- Per-lesson booleans for the sentence-band signal. Suffix
-            -- matches: correct-first = passage read right on attempt one;
-            -- letter-image-wrong = the only entry transition into the image
-            -- tier of the word drill loop; failed_out = the lesson ENDED on
-            -- the two-strikes sentence exit (exact stid from
-            -- literacy-lesson.machine.ts).
-            SELECT grp,
-                   BOOL_OR(COALESCE(stid, '') LIKE '%-sentence-comprehension-correct-first') AS first_try_pass,
-                   BOOL_OR(COALESCE(stid, '') LIKE '%-letter-image-wrong') AS entered_image,
-                   BOOL_OR(is_done AND stid = 'sentence-sentence-complete-maxErrors') AS failed_out
-            FROM lesson_groups
-            WHERE grp IN (1, 2)
-            GROUP BY grp
           ),
           latest_scores AS (
             SELECT DISTINCT ON (s.letter_id) l.grapheme, s.score
@@ -688,10 +661,14 @@ export class LiteracyLessonService {
               WHERE s.user_id = $1 AND s.level IS NOT NULL
               ORDER BY s.created_at DESC
               LIMIT 1) AS prev_level,
-            COALESCE((SELECT COUNT(*)::int FROM lesson_flags), 0) AS done_lesson_count,
-            (SELECT BOOL_AND(first_try_pass) FROM lesson_flags) AS both_first_try_pass,
-            (SELECT BOOL_AND(entered_image) FROM lesson_flags) AS both_entered_image,
-            (SELECT BOOL_AND(failed_out) FROM lesson_flags) AS both_failed_out,
+            COALESCE(
+              (SELECT json_agg(json_build_object('rn', rn, 'is_done', is_done, 'stid', stid) ORDER BY rn ASC)
+               FROM recent_rows),
+              '[]'::json
+            ) AS recent_turns,
+            (SELECT COUNT(*)::int FROM literacy_lesson_states
+              WHERE user_id = $1 AND snapshot->>'status' = 'done'
+            ) AS lifetime_done_count,
             COALESCE(
               (SELECT json_agg(passage_id ORDER BY latest_at DESC)
                FROM recent_passages),
@@ -746,35 +723,39 @@ export class LiteracyLessonService {
 
         let maxLength: number;
         if (base > SENTENCE_LEVEL_THRESHOLD) {
-          // Sentence band (level ≥ 8): judged on the last TWO completed
-          // lessons — BOTH must agree before the level moves, so one lucky
-          // or unlucky lesson never swings it. Mixed decrement evidence
-          // (image tier in one lesson, failed-out in the other) does NOT
-          // combine — each signal must hold in both lessons on its own.
-          const doneLessonCount = Number(data.done_lesson_count);
-          const bothFirstTryPass = data.both_first_try_pass === true;
-          const bothEnteredImage = data.both_entered_image === true;
-          const bothFailedOut = data.both_failed_out === true;
-          if (doneLessonCount < 2) {
-            maxLength = base; // not enough history — hold
-          } else if (bothFirstTryPass) {
+          // Sentence band (level ≥ 8): grouping + decision live in the pure
+          // signal function (see sentence-band-signal.utils.ts for the
+          // lesson-validity and rule-ordering rationale).
+          const signal = computeSentenceBandSignal(
+            data.recent_turns,
+            Number(data.lifetime_done_count),
+          );
+          if (signal.decision === 'increment') {
             maxLength = base + 1;
-          } else if (bothEnteredImage || bothFailedOut) {
+          } else if (signal.decision === 'decrement') {
             maxLength = base - 1;
           } else {
             maxLength = base;
           }
           span.setAttribute(
             'pp.lesson.sentence.both_first_try_pass',
-            bothFirstTryPass,
+            signal.bothFirstTryPass,
           );
           span.setAttribute(
             'pp.lesson.sentence.both_entered_image',
-            bothEnteredImage,
+            signal.bothEnteredImage,
           );
           span.setAttribute(
             'pp.lesson.sentence.both_failed_out',
-            bothFailedOut,
+            signal.bothFailedOut,
+          );
+          span.setAttribute(
+            'pp.lesson.sentence.done_in_window',
+            signal.doneInWindow,
+          );
+          span.setAttribute(
+            'pp.lesson.sentence.low_completion_decrement',
+            signal.lowCompletionDecrement,
           );
         } else {
           // Word section (level ≤ 7): fast-find accelerator (+3), checked

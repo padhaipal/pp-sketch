@@ -730,10 +730,8 @@ function freshRow(over: Record<string, unknown> = {}): Record<string, unknown> {
     recent_row_count: 0,
     distinct_word_count: 0,
     prev_level: null,
-    done_lesson_count: 0,
-    both_first_try_pass: null,
-    both_entered_image: null,
-    both_failed_out: null,
+    recent_turns: [],
+    lifetime_done_count: 0,
     recent_passage_ids: [],
     ...over,
   };
@@ -2087,8 +2085,8 @@ describe('LiteracyLessonService — difficulty cap ratchet', () => {
     const { maxLength, levelParam } = await runLevel({
       prev_level: 12,
       recent_words: ['अब कमल'],
-      done_lesson_count: 2,
-      both_first_try_pass: true, // wants +1 from 12 → clamped at 12
+      // two first-try-pass lessons → wants +1 from 12 → clamped at 12
+      recent_turns: TWO_FIRST_TRY_TURNS,
     });
     expect(maxLength).toBe(12);
     expect(levelParam).toBe(12);
@@ -2310,64 +2308,138 @@ describe('LiteracyLessonService — level persistence on the continue path', () 
 
 // ─── sentence-band two-lesson signal (level ≥ 8, 2026-08) ────────────────────
 
+// Raw-turn fixtures for the sentence band (newest first; rn by position).
+// Grouping/decision themselves are pinned in
+// sentence-band-signal.utils.spec.ts — these tests only wire the signal
+// into level selection.
+function sentenceTurns(
+  rows: Array<{ done?: boolean; stid?: string }>,
+): Array<{ rn: number; is_done: boolean; stid: string }> {
+  return rows.map((r, i) => ({
+    rn: i + 1,
+    is_done: r.done ?? false,
+    stid: r.stid ?? 'कमल-start-word-initial',
+  }));
+}
+const passedLessonTurns = (firstTry: boolean) => [
+  { done: true, stid: 'opt1-comprehension-complete' },
+  {
+    stid: firstTry
+      ? 'p1-sentence-comprehension-correct-first'
+      : 'p1-sentence-comprehension-correct-retry',
+  },
+  { stid: 'sentence-start-sentence-initial' },
+];
+const failedLessonTurns = (image: boolean) => [
+  { done: true, stid: 'sentence-sentence-complete-maxErrors' },
+  ...(image ? [{ stid: 'क-letter-image-wrong' }] : []),
+  { stid: 'sentence-start-sentence-initial' },
+];
+const TWO_FIRST_TRY_TURNS = sentenceTurns([
+  ...passedLessonTurns(true),
+  ...passedLessonTurns(true),
+]);
+
 describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8)', () => {
-  // Two completed lessons in the window; individual signals default to
-  // "not in both" (null/false) so each test flips exactly one condition.
+  // lifetime_done_count defaults to 0 (freshRow), which gates the churn
+  // rule off — tests that exercise it set it explicitly.
   const sentenceBand = (over: Record<string, unknown>) => ({
     prev_level: 9,
     recent_words: ['अब कमल'],
     recent_row_count: 18,
     distinct_word_count: 20,
-    done_lesson_count: 2,
     ...over,
   });
 
   it('both lessons passed the passage first try → +1', async () => {
     const { maxLength } = await runLevel(
-      sentenceBand({ both_first_try_pass: true }),
+      sentenceBand({ recent_turns: TWO_FIRST_TRY_TURNS }),
     );
     expect(maxLength).toBe(10);
   });
 
   it('only one of two lessons passed first try → hold', async () => {
     const { maxLength } = await runLevel(
-      sentenceBand({ both_first_try_pass: false }),
+      sentenceBand({
+        recent_turns: sentenceTurns([
+          ...passedLessonTurns(true),
+          ...passedLessonTurns(false),
+        ]),
+      }),
     );
     expect(maxLength).toBe(9);
   });
 
   it('both lessons entered the image tier → −1', async () => {
     const { maxLength } = await runLevel(
-      sentenceBand({ both_entered_image: true }),
+      sentenceBand({
+        recent_turns: sentenceTurns([
+          ...failedLessonTurns(true),
+          ...failedLessonTurns(true),
+        ]),
+      }),
     );
     expect(maxLength).toBe(8);
   });
 
   it('both lessons failed out on maxErrors → −1', async () => {
     const { maxLength } = await runLevel(
-      sentenceBand({ both_failed_out: true }),
+      sentenceBand({
+        recent_turns: sentenceTurns([
+          ...failedLessonTurns(false),
+          ...failedLessonTurns(false),
+        ]),
+      }),
     );
     expect(maxLength).toBe(8);
   });
 
   it('mixed decrement signals (image in one, failed-out in the other) do NOT combine → hold', async () => {
-    // Neither signal holds in BOTH lessons, so each BOOL_AND is false.
     const { maxLength } = await runLevel(
-      sentenceBand({ both_entered_image: false, both_failed_out: false }),
+      sentenceBand({
+        recent_turns: sentenceTurns([
+          ...failedLessonTurns(false),
+          { done: true, stid: 'opt1-comprehension-complete' },
+          { stid: 'क-letter-image-wrong' },
+          { stid: 'p1-sentence-comprehension-correct-retry' },
+        ]),
+      }),
     );
     expect(maxLength).toBe(9);
   });
 
-  it('fewer than 2 completed lessons in the window → hold, even on a perfect signal', async () => {
+  it('churning (<3 done in window, lifetime ≥3) → −1', async () => {
     const { maxLength } = await runLevel(
-      sentenceBand({ done_lesson_count: 1, both_first_try_pass: true }),
+      sentenceBand({
+        recent_turns: sentenceTurns([
+          ...passedLessonTurns(false),
+          ...Array.from({ length: 15 }, () => ({})),
+        ]),
+        lifetime_done_count: 10,
+      }),
+    );
+    expect(maxLength).toBe(8);
+  });
+
+  it('new student (<3 done in window, lifetime <3) → hold', async () => {
+    const { maxLength } = await runLevel(
+      sentenceBand({
+        recent_turns: sentenceTurns([...passedLessonTurns(false)]),
+        lifetime_done_count: 1,
+      }),
     );
     expect(maxLength).toBe(9);
   });
 
   it('a level-8 decrement falls back into word lessons at 7', async () => {
     const { maxLength } = await runLevel(
-      sentenceBand({ prev_level: 8, both_entered_image: true }),
+      sentenceBand({
+        prev_level: 8,
+        recent_turns: sentenceTurns([
+          ...failedLessonTurns(true),
+          ...failedLessonTurns(true),
+        ]),
+      }),
     );
     expect(maxLength).toBe(7);
   });
