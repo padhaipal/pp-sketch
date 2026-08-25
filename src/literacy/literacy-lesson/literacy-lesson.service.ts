@@ -49,6 +49,11 @@ const SECOND_WORD_ROW_COUNT = 4;
 // <10 words → 8, <40 → 9, <70 → 10, <110 → 11, else 12.
 const SENTENCE_LEVEL_THRESHOLD = 7;
 const MAX_LESSON_LEVEL = 12;
+// TEMPORARY (2026-08): hold every student in the word band while the
+// production passage bank is seeded. Set back to MAX_LESSON_LEVEL (or
+// delete this constant and the clamp below) to re-enable reading
+// passages. Nothing else about the sentence layer is disabled.
+const EFFECTIVE_MAX_LESSON_LEVEL = SENTENCE_LEVEL_THRESHOLD; // 7
 // Sentence-band (level ≥ 8) progression: the SQL only ships the raw recent
 // turns + a lifetime done count; grouping into lessons and the ±1/hold
 // decision live in the pure computeSentenceBandSignal
@@ -793,6 +798,9 @@ export class LiteracyLessonService {
         }
         maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR);
         maxLength = Math.min(maxLength, MAX_LESSON_LEVEL);
+        // TEMPORARY cap (see EFFECTIVE_MAX_LESSON_LEVEL above): also pulls a
+        // student with stored prev_level 8-12 back down to 7.
+        maxLength = Math.min(maxLength, EFFECTIVE_MAX_LESSON_LEVEL);
         span.setAttribute('pp.lesson.word.max_length', maxLength);
         span.setAttribute('pp.lesson.word.prev_level', prevLevel ?? -1);
 

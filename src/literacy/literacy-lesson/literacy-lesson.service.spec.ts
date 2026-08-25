@@ -1709,28 +1709,26 @@ const progressed = (over: Record<string, unknown>) =>
 // passage pool is mocked via routedDsQuery; an empty pool exercises the
 // word-lesson fallback.
 describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 8)', () => {
-  it('a would-be level 8 (7-grapheme word + progression) becomes a passage lesson', async () => {
+  it('a would-be level 8 (7-grapheme word + progression) becomes a passage lesson (TEMP cap: held at 7)', async () => {
     const { input, dsQuery } = await freshSentenceStart(
       progressed({
         recent_words: ['चौकीदार'], // 7 graphemes → level 7, +1 → 8
         unique_in_add_window: 3,
       }),
     );
-    expect(input.word).toBe('');
-    expect(input.sentence).toEqual(['अब', 'कमल']);
-    expect(input.passageId).toBe('passage-1');
+    // TEMPORARY level-7 cap (EFFECTIVE_MAX_LESSON_LEVEL): a would-be 8 is
+    // clamped to a level-7 word lesson and the passage pool is never
+    // queried. Restore the original passage assertions on revert.
+    expect(input.sentence).toBeUndefined();
+    expect(TEST_WORD_LIST).toContain(input.word);
     expect(
       dsQuery.mock.calls.some((c) =>
         (c[0] as string).includes("media_details->>'role' = 'passage'"),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(mockSpanSetAttribute.mock.calls).toContainEqual([
       'pp.lesson.word.max_length',
-      8,
-    ]);
-    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
-      'pp.lesson.word.selection',
-      'passage',
+      7,
     ]);
   });
 
@@ -1763,7 +1761,10 @@ describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 
     );
     expect(input.sentence).toBeUndefined();
     expect(TEST_WORD_LIST).toContain(input.word);
-    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+    // TEMPORARY level-7 cap (EFFECTIVE_MAX_LESSON_LEVEL): the passage
+    // branch (and so its missing-passage fallback attribute) is
+    // unreachable from selection. Restore toContainEqual on revert.
+    expect(mockSpanSetAttribute.mock.calls).not.toContainEqual([
       'pp.lesson.word.selection',
       'passage-missing-word-fallback',
     ]);
@@ -1778,10 +1779,13 @@ describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 
         recent_passage_ids: ['old-p1', 'old-p2'],
       }),
     );
+    // TEMPORARY level-7 cap (EFFECTIVE_MAX_LESSON_LEVEL): stored
+    // prev_level 8 is pulled down to 7, so no passage query fires. Restore
+    // the [8, ['old-p1', 'old-p2']] parameter assertion on revert.
     const passageCall = dsQuery.mock.calls.find((c) =>
       (c[0] as string).includes("media_details->>'role' = 'passage'"),
-    )!;
-    expect(passageCall[1]).toEqual([8, ['old-p1', 'old-p2']]);
+    );
+    expect(passageCall).toBeUndefined();
   });
 
   it('recency exclusion still sees each word inside a stored sentence (word path)', async () => {
@@ -1917,12 +1921,27 @@ describe('LiteracyLessonService.processAnswer — sentence persistence + result'
       progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 });
 
     it('is set with the TOKEN count and level when done + sentence + level > 7', async () => {
-      const { out } = await freshSentenceStart(
-        sentenceRow(),
+      // TEMPORARY level-7 cap (EFFECTIVE_MAX_LESSON_LEVEL): fresh selection
+      // can no longer land at 8, so drive the CONTINUE path — a student
+      // already mid-reading keeps their stored level 8 and still gets
+      // completedReading on finishing. Restore the freshSentenceStart
+      // version on revert.
+      const repo = makeRepo();
+      repo.findOne.mockResolvedValue({
+        created_at: new Date(), // age ~0 → continue (rehydrate)
+        snapshot: { status: 'active', context: { word: 'कमल' } },
+        level: 8,
+      });
+      mockActorGetSnapshot.mockReturnValue(
         happySnapshot({ status: 'done', context: doneSentenceContext }),
       );
-      // Level 8: this harness's progression rows land the sentence band at
-      // its entry level — the value itself is pinned by the threshold specs.
+      const dsQuery = jest.fn().mockResolvedValueOnce([{ id: 'lls-1' }]);
+      const { svc } = makeService({ repo, dsQuery });
+      const out = await svc.processAnswer({
+        user,
+        user_message_id: 'mm-1',
+        transcripts: [{ id: 't1', text: 'अब कमल' }] as never,
+      });
       expect(out.completedReading).toEqual({ wordCount: 2, level: 8 });
     });
 
@@ -1959,11 +1978,14 @@ describe('LiteracyLessonService — sentence observability (kills literal mutant
   // cap (the branch is unreachable from the selector) — restore them from git
   // history alongside the 12 ceiling. Machine-driven sentence states are
   // still live (snapshot resume), so the result-side tag keeps its test.
-  it('tags the passage id when a passage lesson is selected', async () => {
+  it('tags the passage id when a passage lesson is selected (TEMP cap: never tagged)', async () => {
     await freshSentenceStart(
       progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
     );
-    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+    // TEMPORARY level-7 cap (EFFECTIVE_MAX_LESSON_LEVEL): passage selection
+    // is unreachable, so the tag never fires. Restore toContainEqual on
+    // revert.
+    expect(mockSpanSetAttribute.mock.calls).not.toContainEqual([
       'pp.lesson.passage_id',
       'passage-1',
     ]);
@@ -2070,26 +2092,30 @@ describe('LiteracyLessonService — difficulty cap ratchet', () => {
     expect(maxLength).toBe(6);
   });
 
-  it('crosses into the passage band when the add-window pushes past 7', async () => {
+  it('crosses into the passage band when the add-window pushes past 7 (TEMP cap: held at 7)', async () => {
     const { maxLength, levelParam } = await runLevel({
       prev_level: 7,
       recent_words: ['अब'],
       unique_in_add_window: 3, // wants 8 — no cap anymore
       unique_in_keep_window: 3,
     });
-    expect(maxLength).toBe(8);
-    expect(levelParam).toBe(8);
+    // TEMPORARY level-7 cap (EFFECTIVE_MAX_LESSON_LEVEL): a signal that
+    // would give 8 is capped to 7. Restore 8/8 on revert.
+    expect(maxLength).toBe(7);
+    expect(levelParam).toBe(7);
   });
 
-  it('clamps at the level-12 ceiling', async () => {
+  it('clamps at the level-12 ceiling (TEMP cap: held at 7)', async () => {
     const { maxLength, levelParam } = await runLevel({
       prev_level: 12,
       recent_words: ['अब कमल'],
       // two first-try-pass lessons → wants +1 from 12 → clamped at 12
       recent_turns: TWO_FIRST_TRY_TURNS,
     });
-    expect(maxLength).toBe(12);
-    expect(levelParam).toBe(12);
+    // TEMPORARY level-7 cap (EFFECTIVE_MAX_LESSON_LEVEL): stored
+    // prev_level 12 is pulled down to 7. Restore 12/12 on revert.
+    expect(maxLength).toBe(7);
+    expect(levelParam).toBe(7);
   });
 
   it('clamps a decrease at the floor of 2', async () => {
@@ -2116,6 +2142,51 @@ describe('LiteracyLessonService — difficulty cap ratchet', () => {
   });
 });
 
+// TEMPORARY level-7 cap (EFFECTIVE_MAX_LESSON_LEVEL) — delete this whole
+// describe on revert. It pins the ONLY behavioural change: the level a
+// student can be assigned.
+describe('LiteracyLessonService — TEMPORARY level-7 cap', () => {
+  it('a signal that would give level 8 is capped to 7', async () => {
+    const { maxLength, levelParam } = await runLevel({
+      prev_level: 7,
+      recent_words: ['अब'],
+      unique_in_add_window: 3, // +1 → would be 8
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(7);
+    expect(levelParam).toBe(7);
+  });
+
+  it('a stored prev_level of 10 is pulled down to 7', async () => {
+    const { maxLength, levelParam } = await runLevel({
+      prev_level: 10,
+      recent_words: ['अब कमल'],
+      // no two-lesson signal → the band would hold at 10
+    });
+    expect(maxLength).toBe(7);
+    expect(levelParam).toBe(7);
+  });
+
+  it('word-band behaviour below the cap is unchanged (hold at 6)', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 6,
+      recent_words: ['अब'],
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(6);
+  });
+
+  it('word-band behaviour below the cap is unchanged (+1 to 5)', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 4,
+      recent_words: ['अब'],
+      unique_in_add_window: 3,
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(5);
+  });
+});
+
 describe('LiteracyLessonService — cap cold-start (all levels null)', () => {
   it('derives the base from the most recent single word length', async () => {
     const { maxLength } = await runLevel({
@@ -2134,8 +2205,10 @@ describe('LiteracyLessonService — cap cold-start (all levels null)', () => {
       recent_words: ['अब कमल'],
       unique_in_keep_window: 3,
     });
-    expect(maxLength).toBe(8);
-    expect(levelParam).toBe(8);
+    // TEMPORARY level-7 cap (EFFECTIVE_MAX_LESSON_LEVEL): derived base 8
+    // is capped to 7. Restore 8/8 on revert.
+    expect(maxLength).toBe(7);
+    expect(levelParam).toBe(7);
   });
 
   it('tolerates punctuation in the sentence when deriving the cold-start base', async () => {
@@ -2145,7 +2218,9 @@ describe('LiteracyLessonService — cap cold-start (all levels null)', () => {
       recent_words: ['अब, कमल। पानी'],
       unique_in_keep_window: 3,
     });
-    expect(maxLength).toBe(9);
+    // TEMPORARY level-7 cap (EFFECTIVE_MAX_LESSON_LEVEL): derived base 9
+    // is capped to 7. Restore 9 on revert.
+    expect(maxLength).toBe(7);
   });
 
   it('emits prev_level = -1 on the span when there is no stored level', async () => {
@@ -2261,13 +2336,15 @@ describe('LiteracyLessonService — fast-find accelerator (+3)', () => {
     expect(maxLength).toBe(6);
   });
 
-  it('a boost can cross into the passage band', async () => {
+  it('a boost can cross into the passage band (TEMP cap: held at 7)', async () => {
     const { maxLength } = await runLevel({
       prev_level: 6, // +3 → 9 (passage lesson)
       recent_words: ['अब'],
       unique_in_boost_window: 3,
     });
-    expect(maxLength).toBe(9);
+    // TEMPORARY level-7 cap (EFFECTIVE_MAX_LESSON_LEVEL): the +3 boost is
+    // capped to 7. Restore 9 on revert.
+    expect(maxLength).toBe(7);
   });
 });
 
@@ -2343,6 +2420,12 @@ const TWO_FIRST_TRY_TURNS = sentenceTurns([
 describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8)', () => {
   // lifetime_done_count defaults to 0 (freshRow), which gates the churn
   // rule off — tests that exercise it set it explicitly.
+  //
+  // TEMPORARY level-7 cap (EFFECTIVE_MAX_LESSON_LEVEL): the signal branch
+  // still runs (base 9 > 7) and its decision is unchanged, but the final
+  // clamp pulls every outcome to 7 — each expect below notes its real
+  // (pre-cap) value inline; restore those on revert. The ±1/hold decisions
+  // themselves stay pinned by sentence-band-signal.utils.spec.ts.
   const sentenceBand = (over: Record<string, unknown>) => ({
     prev_level: 9,
     recent_words: ['अब कमल'],
@@ -2355,7 +2438,7 @@ describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8
     const { maxLength } = await runLevel(
       sentenceBand({ recent_turns: TWO_FIRST_TRY_TURNS }),
     );
-    expect(maxLength).toBe(10);
+    expect(maxLength).toBe(7); // TEMP cap: was 10
   });
 
   it('only one of two lessons passed first try → hold', async () => {
@@ -2367,7 +2450,7 @@ describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8
         ]),
       }),
     );
-    expect(maxLength).toBe(9);
+    expect(maxLength).toBe(7); // TEMP cap: was 9
   });
 
   it('both lessons entered the image tier → −1', async () => {
@@ -2379,7 +2462,7 @@ describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8
         ]),
       }),
     );
-    expect(maxLength).toBe(8);
+    expect(maxLength).toBe(7); // TEMP cap: was 8
   });
 
   it('both lessons failed out on maxErrors → −1', async () => {
@@ -2391,7 +2474,7 @@ describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8
         ]),
       }),
     );
-    expect(maxLength).toBe(8);
+    expect(maxLength).toBe(7); // TEMP cap: was 8
   });
 
   it('mixed decrement signals (image in one, failed-out in the other) do NOT combine → hold', async () => {
@@ -2405,7 +2488,7 @@ describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8
         ]),
       }),
     );
-    expect(maxLength).toBe(9);
+    expect(maxLength).toBe(7); // TEMP cap: was 9
   });
 
   it('churning (<3 done in window, lifetime ≥3) → −1', async () => {
@@ -2418,7 +2501,7 @@ describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8
         lifetime_done_count: 10,
       }),
     );
-    expect(maxLength).toBe(8);
+    expect(maxLength).toBe(7); // TEMP cap: was 8
   });
 
   it('new student (<3 done in window, lifetime <3) → hold', async () => {
@@ -2428,7 +2511,7 @@ describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8
         lifetime_done_count: 1,
       }),
     );
-    expect(maxLength).toBe(9);
+    expect(maxLength).toBe(7); // TEMP cap: was 9
   });
 
   it('a level-8 decrement falls back into word lessons at 7', async () => {
@@ -2448,7 +2531,7 @@ describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8
     const { maxLength, accelerated } = await runLevel(
       sentenceBand({ unique_in_boost_window: 3 }),
     );
-    expect(maxLength).toBe(9);
+    expect(maxLength).toBe(7); // TEMP cap: was 9
     expect(accelerated).toBeUndefined();
   });
 });
