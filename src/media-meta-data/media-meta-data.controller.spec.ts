@@ -229,6 +229,9 @@ describe('MediaMetaDataController.searchPassages', () => {
       'flow',
       '2026-08-20',
       '2026-08-22',
+      'passed',
+      'not_run',
+      'skipped',
       '25',
       '50',
     );
@@ -239,6 +242,9 @@ describe('MediaMetaDataController.searchPassages', () => {
       media_type: 'flow',
       created_after: '2026-08-20',
       created_before: '2026-08-22',
+      quality: 'passed',
+      judge: 'not_run',
+      solvability: 'skipped',
       limit: 25,
       offset: 50,
     });
@@ -257,6 +263,9 @@ describe('MediaMetaDataController.searchPassages', () => {
       media_type: undefined,
       created_after: undefined,
       created_before: undefined,
+      quality: undefined,
+      judge: undefined,
+      solvability: undefined,
       limit: undefined,
       offset: undefined,
     });

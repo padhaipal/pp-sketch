@@ -71,12 +71,16 @@ uploadStaticMedia()
   wildcard). Declared before `@Get(':id')`.
 - `GET /media-meta-data/passage-stats` — live passage counts per (level,
   passage_type, question_type) for the dashboard's seeding counters.
-- `GET /media-meta-data/passages?q&passage_type&question_type&media_type&created_after&created_before&limit&offset`
+- `GET /media-meta-data/passages?q&passage_type&question_type&media_type&created_after&created_before&quality&judge&solvability&limit&offset`
   — paginated passage search (ILIKE substring on text, wildcards escaped;
   type filters validated against VALID_PASSAGE_TYPES/VALID_QUESTION_TYPES/
   VALID_MEDIA_TYPES — media_type matches any live row of the passage's
   derivation subtree, e.g. 'flow'; created_* are ISO bounds on the passage
-  row's created_at).
+  row's created_at; quality/judge/solvability ∈
+  passed|failed|skipped|not_run, derived from stored media_details —
+  quality from the passage row's quality.verdict, judge/solvability from
+  the question row's records/gate_failure; rows now also carry the passage's
+  stored quality record).
 - `GET /media-meta-data/comprehension-stids` rows now carry `level`,
   `passage_type`, `question_type` resolved from the stid prefix (passage id
   for flow stids; option → question → passage for explanation stids).
