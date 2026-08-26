@@ -2840,7 +2840,7 @@ function generatedJson(overrides?: {
     },
     question: overrides?.question ?? {
       text: 'कहानी किसके लिए है?',
-      question_type: 'R1.1',
+      question_type: 'R1.2',
       send_as_flow: true,
       options: [
         {
@@ -3051,7 +3051,7 @@ describe('createLlmGeneratedMedia', () => {
       solvability: Record<string, unknown>;
       gate_failure?: unknown;
     };
-    expect(questionDetails.question_type).toBe('R1.1');
+    expect(questionDetails.question_type).toBe('R1.2');
     expect(questionDetails.judge).toEqual({
       valid_runs: 10,
       correct: 10,
@@ -3495,7 +3495,7 @@ describe('createLlmGeneratedMedia', () => {
     expect(mockQueueAddBulk).not.toHaveBeenCalled();
   });
 
-  it('skips the solvability gate outside narrative R1.1–R1.3 and creates on the judge alone', async () => {
+  it('skips the solvability gate outside narrative R1.2/R1.3 and creates on the judge alone', async () => {
     seq();
     const saved: Record<string, unknown>[] = [];
     const dsTransaction = jest

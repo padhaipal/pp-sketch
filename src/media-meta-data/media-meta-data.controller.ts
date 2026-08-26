@@ -178,7 +178,7 @@ export class MediaMetaDataController {
 
   // Synchronous seeding endpoint (no queue): LLM generation → validation →
   // passage-judge gate → zero-context solvability filter (narrative
-  // R1.1–R1.3 only) → entity tree insert (one passage, one question). Slow
+  // R1.2/R1.3 only) → entity tree insert (one passage, one question). Slow
   // by nature: gate calls are paced 2s apart (Sarvam rate limit) — 10 valid
   // judge runs over ≤14 calls, then 24 valid solvability runs over ≤50
   // calls, ~1-2.5 min per gated item; the dashboard sends one generation

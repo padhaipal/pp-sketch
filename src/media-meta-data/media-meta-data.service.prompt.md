@@ -321,7 +321,7 @@ After all items processed:
   valid GATE_JUDGE_MODEL runs WITH the passage over ≤ JUDGE_MAX_CALLS = 14
   calls; pass = all 10 valid runs correct; budget spent short of 10 valid →
   'unverified') → zero-context solvability (`zero-context-solvability.ts`:
-  narrative R1.1–R1.3 questions ONLY (`solvabilityGateApplies`; everything
+  narrative R1.2/R1.3 questions ONLY (`solvabilityGateApplies`; everything
   else skips the gate and the question row records
   `media_details.solvability = { skipped: true }`); collects
   SOLVABILITY_REQUIRED_VALID = 24 valid runs (= the 4! orderings of a

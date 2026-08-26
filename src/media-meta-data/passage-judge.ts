@@ -19,7 +19,7 @@
  * this gate produces; it is persisted in media_details.gate_failure.
  *
  * Runs cheap-first: DTO shape → this gate (≤14 calls) → solvability (≤50
- * calls, narrative R1.1–R1.3 only) → TTS enqueue.
+ * calls, narrative R1.2/R1.3 only) → TTS enqueue.
  */
 import { SpanStatusCode } from '@opentelemetry/api';
 import { tracer } from '../otel/otel';
