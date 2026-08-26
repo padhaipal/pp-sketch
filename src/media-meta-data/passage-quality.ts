@@ -4,7 +4,7 @@
  * Runs BEFORE the passage-judge gate (cheapest first: judges the passage
  * TEXT alone — no question, options, or explanations). The gate model reads
  * the passage above a fixed scoring rubric and must answer with the exact
- * word 'true' (score ≥ 4) or 'false'. A run is VALID only when the trimmed
+ * word 'true' (per the rubric's pass rule) or 'false'. A run is VALID only when the trimmed
  * response is exactly one of those two words — 'True', 'TRUE', '"true"',
  * '{true}' and every other variation count as unparseable, per the rubric's
  * own strictness clause.
@@ -34,21 +34,75 @@ export const QUALITY_MAX_CALLS = 8;
 export const QUALITY_PASS_MIN_TRUE = 3;
 
 // The exact rubric — the passage text is prepended above it, nothing else.
-export const QUALITY_PROMPT = `Score the above passage based on the following criteria:
-- spelling & grammatical correctness (-1 for each error)
-- naturalness of language (0 = feels unnatural. 1 = medium. 2 = reads
-  smoothly & naturally)
-- readability (simple vocab, fairly short sentences). (0 = quite dense.
-  1 = medium. 2 = appropriate for 8-10 year olds)
-- (if its a narrative passage) literary quality. (0 = boring or confusing
-  plot. 1 = moderately interesting. 2 = well-crafted plot)
-- (if its an expository passage) interestingness. (0 = only obvious facts.
-  1 = well structured. 2 = very interesting)
-If the passage scores 4 or more, then return true. If it scores less than
-4 return false. Only return the exact word true or the exact word false.
-Do not return "true". Do not return {true}. Do not return True. Do not
-return TRUE. Or any other variation. Failure to return exactly true or
-false will result in a strictly failed response.`;
+export const QUALITY_PROMPT = `You are evaluating a short passage intended for children aged 8–10.
+
+Judge whether this passage is good enough to be included in a children's reading book.
+
+Evaluate the passage using these criteria:
+
+1. Language accuracy
+• Count spelling and grammar errors.
+• Deduct 1 point for each clear error.
+
+2. Naturalness of language
+Score:
+0 = unnatural, translated-sounding, or awkward
+1 = understandable but some sentences feel forced
+2 = smooth, child-friendly, and natural
+
+3. Readability
+Consider vocabulary, sentence length, and cognitive load.
+Score:
+0 = too difficult or dense for 8–10 year olds
+1 = acceptable but occasionally difficult
+2 = appropriate for independent reading by 8–10 year olds
+
+4. Narrative quality (for stories)
+Score:
+0 = boring, confusing, unrealistic, has no clear problem or resolution
+1 = has a basic story but limited interest, weak conflict, or predictable ending
+2 = engaging plot with clear characters, a meaningful problem, curiosity/suspense, and satisfying resolution
+
+A narrative MUST FAIL if:
+• the sequence of events is confusing
+• the conflict feels artificial or unnecessary
+• the ending does not resolve the problem
+• characters act in ways that children would find unbelievable
+
+5. Educational/value quality (for expository passages)
+Score:
+0 = no meaningful idea, emotion, or learning value
+1 = some value or relatable idea
+2 = strong emotional, social, or learning value
+
+6. Question quality
+Score:
+0 = irrelevant or tests only copying
+1 = relevant and checks understanding
+2 = interesting questions requiring thinking
+
+7. Distractor quality
+Score:
+0 = obviously wrong options
+1 = some plausible options
+2 = all options require thinking
+
+Note that of question 4 & 5, only one will be marked. You decide whether the passage is a narrative or expository.
+
+PASS RULE:
+
+Return true only if ALL of the following are satisfied:
+• Total score is at least 9 points
+• Narrative quality score is at least 1 for narrative
+• Educational/value quality score is at least 1 for expository
+• No fatal narrative flaws are present
+
+Otherwise return false.
+
+Only return exactly:
+true
+or
+false`;
 
 export type PassageQualityBatchRunner = GateBatchRunner;
 
