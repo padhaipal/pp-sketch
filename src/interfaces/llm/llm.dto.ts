@@ -35,12 +35,26 @@ export interface LlmMessage {
   content: string;
 }
 
+/**
+ * Sampling temperature every call falls back to, as a fraction of the
+ * provider's maximum (LlmProviderConfig.temperatureMax): the mid point.
+ * Call sites that want something else set LlmRequest.temperatureRatio
+ * alongside model/messages — the transport never special-cases callers.
+ */
+export const DEFAULT_TEMPERATURE_RATIO = 0.5;
+
 export interface LlmRequest {
   /** Provider-native model id, e.g. "claude-fable-5" or "sarvam-105b". */
   model: string;
   messages: LlmMessage[];
   max_tokens?: number;
-  temperature?: number;
+  /**
+   * Sampling temperature as a fraction (0–1) of the provider's maximum —
+   * providers disagree on the absolute scale (Anthropic 0–1, OpenAI/Sarvam
+   * 0–2), so callers express intent and llm-client scales it. Defaults to
+   * DEFAULT_TEMPERATURE_RATIO; the wire request ALWAYS carries a temperature.
+   */
+  temperatureRatio?: number;
 }
 
 export interface LlmResult {
@@ -80,6 +94,11 @@ export interface LlmProviderConfig {
   authHeader?: string;
   /** Auth value prefix; defaults to "Bearer ". */
   authPrefix?: string;
+  /**
+   * Largest `temperature` the provider accepts; LlmRequest.temperatureRatio
+   * is multiplied by this before it goes on the wire.
+   */
+  temperatureMax: number;
   /** Extra body fields merged into every request (provider quirks). */
   extraBody?: Record<string, unknown>;
 }

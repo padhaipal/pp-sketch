@@ -33,6 +33,7 @@ import {
   OPTION_LETTERS,
   setGateSpanAttributes,
   shuffled,
+  GATE_TEMPERATURE_RATIO,
 } from './gate-shared';
 
 /**
@@ -82,6 +83,7 @@ function buildRun(
     request: {
       model: GATE_JUDGE_MODEL,
       max_tokens: 10,
+      temperatureRatio: GATE_TEMPERATURE_RATIO,
       messages: [
         {
           role: 'system',

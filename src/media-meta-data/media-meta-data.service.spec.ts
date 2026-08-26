@@ -2969,22 +2969,28 @@ describe('createLlmGeneratedMedia', () => {
     // Judge (with passage) always right; zero-context guessing always wrong
     // → judge passes, solvability 0 correct < the rejection minimum, passes.
     const completeBatch = gateStub({ judge: 'correct', solvability: 'wrong' });
+    const complete = jest.fn().mockResolvedValue({
+      text: generatedJson(),
+      model: 'gpt-4.1',
+      prompt_tokens: 100,
+      completion_tokens: 200,
+      duration_ms: 5,
+    });
     const { service } = makeService({
       repo,
       dsTransaction,
-      openaiLlm: {
-        complete: jest.fn().mockResolvedValue({
-          text: generatedJson(),
-          model: 'gpt-4.1',
-          prompt_tokens: 100,
-          completion_tokens: 200,
-          duration_ms: 5,
-        }),
-      },
+      openaiLlm: { complete },
       sarvamLlm: { completeBatch } as never,
     });
 
     const result = await service.createLlmGeneratedMedia(request, carrier);
+
+    // Generation runs hot (80% of the provider max); gates run cold (20%).
+    expect(complete).toHaveBeenCalledWith({
+      model: request.model,
+      messages: request.messages,
+      temperatureRatio: 0.8,
+    });
 
     expect(result.status).toBe('created');
     expect(result.level).toBe(9); // <40 words

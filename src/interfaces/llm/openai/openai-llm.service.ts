@@ -15,6 +15,8 @@ export class OpenaiLlmService {
     provider: 'openai',
     baseUrl: 'https://api.openai.com/v1',
     envKey: 'OPENAI_API_KEY',
+    // OpenAI chat completions accept 0–2.
+    temperatureMax: 2,
   };
 
   complete(request: LlmRequest, options?: LlmCallOptions): Promise<LlmResult> {

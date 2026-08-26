@@ -6,7 +6,11 @@ import {
   SolvabilityBatchRunner,
   solvabilityGateApplies,
 } from './zero-context-solvability';
-import { GATE_BATCH_SIZE, GATE_JUDGE_MODEL } from './gate-shared';
+import {
+  GATE_BATCH_SIZE,
+  GATE_JUDGE_MODEL,
+  GATE_TEMPERATURE_RATIO,
+} from './gate-shared';
 import type { LlmBatchItem, LlmRequest } from '../interfaces/llm/llm.dto';
 import type { GeneratedQuestion } from './llm-generate.dto';
 
@@ -167,6 +171,7 @@ describe('runZeroContextSolvability', () => {
     expect(firstLetters.size).toBeGreaterThan(1); // shuffled
     for (const r of requests) {
       expect(r.model).toBe(GATE_JUDGE_MODEL);
+      expect(r.temperatureRatio).toBe(GATE_TEMPERATURE_RATIO); // cold
       expect(r.messages[1].content).toContain(question.text);
       expect(r.messages[1].content).not.toContain('कहानी है।'); // no passage
     }

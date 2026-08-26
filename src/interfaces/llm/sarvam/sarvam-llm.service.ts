@@ -30,6 +30,8 @@ export class SarvamLlmService {
     // Sarvam models default to reasoning; null disables it (matches the
     // pp-dashboard /llm playground's extraBody).
     extraBody: { reasoning_effort: null },
+    // Sarvam accepts 0–2 (its own default is 0.2).
+    temperatureMax: 2,
   };
 
   complete(request: LlmRequest, options?: LlmCallOptions): Promise<LlmResult> {

@@ -15,6 +15,8 @@ export class GoogleLlmService {
     provider: 'google',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     envKey: 'GEMINI_API_KEY',
+    // Gemini's OpenAI-compatible endpoint accepts 0–2.
+    temperatureMax: 2,
   };
 
   complete(request: LlmRequest, options?: LlmCallOptions): Promise<LlmResult> {

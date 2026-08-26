@@ -31,6 +31,7 @@ import {
   LlmProviderConfig,
   LlmRequest,
   LlmResult,
+  DEFAULT_TEMPERATURE_RATIO,
 } from './llm.dto';
 
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -128,9 +129,11 @@ async function singleCall(
         ...(request.max_tokens !== undefined
           ? { max_tokens: request.max_tokens }
           : {}),
-        ...(request.temperature !== undefined
-          ? { temperature: request.temperature }
-          : {}),
+        // Always specified — scaled from the caller's ratio to this
+        // provider's range. extraBody still wins (provider quirks by data).
+        temperature:
+          (request.temperatureRatio ?? DEFAULT_TEMPERATURE_RATIO) *
+          config.temperatureMax,
         ...config.extraBody,
       }),
       signal: controller.signal,
