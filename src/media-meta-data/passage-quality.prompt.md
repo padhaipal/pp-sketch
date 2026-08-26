@@ -7,10 +7,11 @@ true/false parser instead of option letters (collectValidRuns is hard-wired
 to letters, so the loop lives here).
 
 - Request: one user message — the passage text prepended above the exact
-  QUALITY_PROMPT rubric (v2, 2026-08: children's-book framing — language
-  accuracy, naturalness, readability, narrative OR educational value,
-  question + distractor quality; total ≥ 9 AND no fatal narrative flaw →
-  true).
+  QUALITY_PROMPT rubric (v3, 2026-08: children's-book framing — passages
+  ≤ 50 words are checked for spelling/grammar ONLY (any clear error →
+  false); longer passages score language accuracy, naturalness,
+  readability, narrative OR educational value, question + distractor
+  quality; total ≥ 9 AND no fatal narrative flaw → true).
 - A run is VALID only when the trimmed response is exactly `true` or
   `false`. `True`, `TRUE`, `"true"`, `{true}` and every other variation are
   unparseable, per the rubric's own strictness clause.

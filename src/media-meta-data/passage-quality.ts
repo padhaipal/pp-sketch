@@ -36,12 +36,19 @@ export const QUALITY_PASS_MIN_TRUE = 3;
 // The exact rubric — the passage text is prepended above it, nothing else.
 export const QUALITY_PROMPT = `You are evaluating a short passage intended for children aged 8–10.
 
-Judge whether this passage is good enough to be included in a children's reading book.
+FIRST STEP: Count the total number of words in the passage.
 
-Evaluate the passage using these criteria:
+IF THE PASSAGE IS 50 WORDS OR LESS:
+• Do not evaluate literary quality, educational value, questions, or distractors.
+• Check only language accuracy.
+• If there are any clear spelling or grammar errors, return false.
+• If there are no spelling or grammar errors, return true.
+
+IF THE PASSAGE IS MORE THAN 50 WORDS:
+Evaluate the passage using the criteria below.
 
 1. Language accuracy
-• Count spelling and grammar errors.
+• Count clear spelling and grammar errors.
 • Deduct 1 point for each clear error.
 
 2. Naturalness of language
@@ -51,55 +58,63 @@ Score:
 2 = smooth, child-friendly, and natural
 
 3. Readability
-Consider vocabulary, sentence length, and cognitive load.
+Consider vocabulary, sentence length, sentence structure, and cognitive load.
+
 Score:
 0 = too difficult or dense for 8–10 year olds
 1 = acceptable but occasionally difficult
 2 = appropriate for independent reading by 8–10 year olds
 
-4. Narrative quality (for stories)
+4. Narrative quality (only if the passage is a story/narrative)
+
 Score:
 0 = boring, confusing, unrealistic, has no clear problem or resolution
 1 = has a basic story but limited interest, weak conflict, or predictable ending
-2 = engaging plot with clear characters, a meaningful problem, curiosity/suspense, and satisfying resolution
+2 = engaging plot with clear characters, meaningful conflict, curiosity/suspense, and satisfying resolution
 
 A narrative MUST FAIL if:
 • the sequence of events is confusing
-• the conflict feels artificial or unnecessary
+• the problem/conflict feels artificial or unnecessary
 • the ending does not resolve the problem
-• characters act in ways that children would find unbelievable
+• characters behave in ways children would find unrealistic
+• the reader has no reason to care about what happens
 
-5. Educational/value quality (for expository passages)
-Score:
-0 = no meaningful idea, emotion, or learning value
-1 = some value or relatable idea
-2 = strong emotional, social, or learning value
+5. Educational/value quality (only if the passage is expository/informational)
 
-6. Question quality
 Score:
-0 = irrelevant or tests only copying
+0 = only obvious facts, no meaningful idea or connection
+1 = useful information or relatable idea
+2 = highly engaging, meaningful, or thought-provoking
+
+Decide whether the passage is narrative or expository.
+Only score criterion 4 OR criterion 5, never both.
+
+6. Question quality (only if questions are provided)
+
+Score:
+0 = irrelevant, confusing, or only tests copying
 1 = relevant and checks understanding
-2 = interesting questions requiring thinking
+2 = encourages thinking or application
 
-7. Distractor quality
+7. Distractor quality (only if multiple-choice questions are provided)
+
 Score:
 0 = obviously wrong options
 1 = some plausible options
-2 = all options require thinking
+2 = all options are plausible and require thinking
 
-Note that of question 4 & 5, only one will be marked. You decide whether the passage is a narrative or expository.
+PASS RULE FOR PASSAGES OVER 50 WORDS:
 
-PASS RULE:
-
-Return true only if ALL of the following are satisfied:
+Return true only if ALL conditions are met:
 • Total score is at least 9 points
-• Narrative quality score is at least 1 for narrative
-• Educational/value quality score is at least 1 for expository
+• Language accuracy has no serious errors
+• Narrative quality is at least 1 for narratives
+• Educational/value quality is at least 1 for expository passages
 • No fatal narrative flaws are present
 
 Otherwise return false.
 
-Only return exactly:
+Return ONLY:
 true
 or
 false`;
