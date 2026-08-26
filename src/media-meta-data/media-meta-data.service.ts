@@ -1468,7 +1468,7 @@ export class MediaMetaDataService {
       created_at: Date;
     }> = await this.dataSource.query(
       `SELECT q.id AS question_id, q.text AS question_text, q.media_details,
-              p.id AS passage_id, LEFT(p.text, 300) AS passage_preview,
+              p.id AS passage_id, p.text AS passage_preview,
               p.media_details->>'level' AS level, q.created_at,
               (SELECT COALESCE(jsonb_agg(jsonb_build_object(
                         'text', o.text,
