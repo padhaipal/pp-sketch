@@ -1240,6 +1240,11 @@ describe('machine — level-8 sentence skips comprehension', () => {
     expect(snap.context.stateTransitionId).toBe(
       `${PASSAGE_ID}-sentence-complete-correct-retry`,
     );
+    // Same convention as the level-9 comprehension-correct-retry branch: a
+    // passing retry credits every letter of every word.
+    expect(snap.context.answerCorrect).toBe(true);
+    expect(snap.context.pendingCorrect).toEqual(['न', 'ल', 'घ', 'र']);
+    expect(snap.context.pendingIncorrect).toEqual([]);
     a.stop();
   });
 
