@@ -2818,7 +2818,11 @@ function gateStub(opts: {
     requests.map((request) => {
       // Quality requests are single-message (passage above the rubric) and
       // run before every other gate.
-      if (request.messages[0].content.includes('Score the above passage')) {
+      if (
+        request.messages[0].content.includes(
+          'You are evaluating a short passage',
+        )
+      ) {
         const quality = opts.quality ?? 'pass';
         if (quality === 'error') {
           return { result: null, error: { message: 'down', retriable: true } };
