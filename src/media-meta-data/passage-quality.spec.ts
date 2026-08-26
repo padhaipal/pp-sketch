@@ -6,7 +6,7 @@ import {
   runPassageQuality,
   PassageQualityBatchRunner,
 } from './passage-quality';
-import { GATE_JUDGE_MODEL } from './gate-shared';
+import { GATE_JUDGE_MODEL, GATE_TEMPERATURE_RATIO } from './gate-shared';
 import type { LlmBatchItem, LlmRequest } from '../interfaces/llm/llm.dto';
 
 const PASSAGE = 'नीली पहाड़ी गाँव में अमन नाम का लड़का रहता था।';
@@ -73,6 +73,7 @@ describe('runPassageQuality', () => {
     expect(requests).toHaveLength(QUALITY_REQUIRED_VALID);
     for (const request of requests) {
       expect(request.model).toBe(GATE_JUDGE_MODEL);
+      expect(request.temperatureRatio).toBe(GATE_TEMPERATURE_RATIO); // cold
       expect(request.messages).toHaveLength(1);
       expect(request.messages[0].content).toBe(
         `${PASSAGE}\n\n${QUALITY_PROMPT}`,

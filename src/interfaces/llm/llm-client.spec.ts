@@ -5,12 +5,18 @@ process.env.LLM_TIME_CAP = '45';
 process.env.SARVAM_LLM_MIN_SEND_INTERVAL_MS = '0';
 
 import { callChatCompletions, runCompletionBatch } from './llm-client';
-import { LlmError, LlmProviderConfig, LlmRequest } from './llm.dto';
+import {
+  DEFAULT_TEMPERATURE_RATIO,
+  LlmError,
+  LlmProviderConfig,
+  LlmRequest,
+} from './llm.dto';
 
 const config: LlmProviderConfig = {
   provider: 'openai',
   baseUrl: 'https://example.test/v1',
   envKey: 'TEST_API_KEY',
+  temperatureMax: 2,
 };
 
 const request: LlmRequest = {
@@ -135,18 +141,53 @@ describe('callChatCompletions', () => {
     }
   });
 
-  it('passes max_tokens and temperature through when set', async () => {
+  it('passes max_tokens through and scales temperatureRatio by the provider max', async () => {
     const fetchMock = jest.fn().mockResolvedValue(okResponse());
     global.fetch = fetchMock;
     await callChatCompletions(
       config,
-      { ...request, max_tokens: 100, temperature: 0.5 },
+      { ...request, max_tokens: 100, temperatureRatio: 0.8 },
       fast,
     );
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(body.max_tokens).toBe(100);
-    expect(body.temperature).toBe(0.5);
+    expect(body.temperature).toBeCloseTo(1.6); // 0.8 × 2
+  });
+
+  it('ALWAYS sends a temperature: the mid point of the provider range by default', async () => {
+    const fetchMock = jest.fn().mockResolvedValue(okResponse());
+    global.fetch = fetchMock;
+    await callChatCompletions(config, request, fast);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(DEFAULT_TEMPERATURE_RATIO).toBe(0.5);
+    expect(body.temperature).toBe(1); // 0.5 × 2
+    expect(body).not.toHaveProperty('max_tokens');
+  });
+
+  it('scales against a provider whose max is 1 (Anthropic-style) and lets extraBody override', async () => {
+    const fetchMock = jest.fn().mockResolvedValue(okResponse());
+    global.fetch = fetchMock;
+    await callChatCompletions(
+      { ...config, temperatureMax: 1 },
+      { ...request, temperatureRatio: 0.2 },
+      fast,
+    );
+    let body = JSON.parse(
+      (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string,
+    ) as Record<string, unknown>;
+    expect(body.temperature).toBeCloseTo(0.2);
+
+    await callChatCompletions(
+      { ...config, extraBody: { temperature: 1 } },
+      { ...request, temperatureRatio: 0.2 },
+      fast,
+    );
+    body = JSON.parse(
+      (fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string,
+    ) as Record<string, unknown>;
+    expect(body.temperature).toBe(1); // provider quirk by data wins
   });
 
   it('throws non-retriable when the API key env var is missing', async () => {

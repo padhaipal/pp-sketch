@@ -69,6 +69,13 @@ import {
   runPassageQuality,
 } from './passage-quality';
 import { GATE_JUDGE_MODEL, pickGateObservability } from './gate-shared';
+
+/**
+ * Sampling temperature for the reading-passage generation call as a fraction
+ * of the chosen provider's maximum — 80%: we want varied, creative passages
+ * (the gates below run cold, see GATE_TEMPERATURE_RATIO).
+ */
+const PASSAGE_GENERATION_TEMPERATURE_RATIO = 0.8;
 import { createQueue, QUEUE_NAMES } from '../interfaces/redis/queues';
 import type { OtelCarrier } from '../otel/otel.dto';
 import {
@@ -1003,6 +1010,7 @@ export class MediaMetaDataService {
       completion = await llmService.complete({
         model: request.model,
         messages: request.messages,
+        temperatureRatio: PASSAGE_GENERATION_TEMPERATURE_RATIO,
       });
     } catch (err) {
       if (err instanceof LlmError) {

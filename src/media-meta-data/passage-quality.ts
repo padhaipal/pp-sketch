@@ -24,6 +24,7 @@ import {
   GateBatchRunner,
   GateRunStats,
   setGateSpanAttributes,
+  GATE_TEMPERATURE_RATIO,
 } from './gate-shared';
 
 /** The verdict is computed over exactly this many valid runs. */
@@ -145,6 +146,7 @@ function buildRequest(passageText: string): LlmRequest {
   return {
     model: GATE_JUDGE_MODEL,
     max_tokens: 10,
+    temperatureRatio: GATE_TEMPERATURE_RATIO,
     messages: [
       { role: 'user', content: `${passageText}\n\n${QUALITY_PROMPT}` },
     ],

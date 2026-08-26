@@ -17,6 +17,8 @@ export class AnthropicLlmService {
     provider: 'anthropic',
     baseUrl: 'https://api.anthropic.com/v1',
     envKey: 'ANTHROPIC_API_KEY',
+    // Anthropic's OpenAI-compat layer accepts 0–1 (caps anything higher).
+    temperatureMax: 1,
   };
 
   complete(request: LlmRequest, options?: LlmCallOptions): Promise<LlmResult> {

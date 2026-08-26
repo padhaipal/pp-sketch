@@ -19,6 +19,12 @@ import type {
  * pattern looks model-shaped.
  */
 export const GATE_JUDGE_MODEL = 'sarvam-105b';
+/**
+ * Sampling temperature for every QA gate call (quality, judge, solvability)
+ * as a fraction of the gate model's maximum — 20%: near-deterministic so a
+ * vote reflects the question, not sampling noise (LlmRequest.temperatureRatio).
+ */
+export const GATE_TEMPERATURE_RATIO = 0.2;
 
 export const OPTION_LETTERS = ['A', 'B', 'C', 'D'] as const;
 

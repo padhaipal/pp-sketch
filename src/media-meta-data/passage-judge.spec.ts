@@ -8,6 +8,7 @@ import {
 import {
   GATE_BATCH_SIZE,
   GATE_JUDGE_MODEL,
+  GATE_TEMPERATURE_RATIO,
   GateBatchRunner,
 } from './gate-shared';
 import type { LlmBatchItem, LlmRequest } from '../interfaces/llm/llm.dto';
@@ -95,6 +96,7 @@ describe('runPassageJudge', () => {
     expect(correctLetters.size).toBeGreaterThan(1); // shuffled per run
     for (const r of requests) {
       expect(r.model).toBe(GATE_JUDGE_MODEL);
+      expect(r.temperatureRatio).toBe(GATE_TEMPERATURE_RATIO); // cold
       expect(r.messages[1].content).toContain(passageText);
       expect(r.messages[1].content).toContain(question.text);
     }
