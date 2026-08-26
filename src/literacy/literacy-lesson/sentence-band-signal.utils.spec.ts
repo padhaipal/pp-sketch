@@ -32,6 +32,22 @@ function passedLesson(
   ];
 }
 
+// A completed LEVEL-8 passage lesson (2 rows, newest first): the read itself
+// is the done row — no comprehension state at level 8.
+function passedLevel8Lesson(
+  firstTry = true,
+): Array<{ done?: boolean; stid?: string }> {
+  return [
+    {
+      done: true,
+      stid: firstTry
+        ? 'p1-sentence-complete-correct-first'
+        : 'p1-sentence-complete-correct-retry',
+    },
+    { stid: 'sentence-start-sentence-initial' },
+  ];
+}
+
 // A failed-out lesson that also visited the image tier of the drill loop.
 function failedLesson(opts: { image?: boolean } = {}): Array<{
   done?: boolean;
@@ -103,6 +119,30 @@ describe('computeSentenceBandSignal', () => {
       10,
     );
     expect(signal.decision).toBe('increment');
+  });
+
+  it('level-8 first-try passes (no comprehension row) count → increment', () => {
+    const signal = computeSentenceBandSignal(
+      turns([
+        ...passedLevel8Lesson(true),
+        ...passedLesson(true),
+        ...passedLevel8Lesson(false),
+      ]),
+      10,
+    );
+    expect(signal.decision).toBe('increment');
+  });
+
+  it('a level-8 retry pass is not a first-try pass → hold', () => {
+    const signal = computeSentenceBandSignal(
+      turns([
+        ...passedLevel8Lesson(false),
+        ...passedLesson(true),
+        ...passedLesson(true),
+      ]),
+      10,
+    );
+    expect(signal.decision).toBe('hold');
   });
 
   it('one of two first-try passes → hold', () => {

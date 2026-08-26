@@ -35,6 +35,20 @@ import {
   shuffled,
 } from './gate-shared';
 
+/**
+ * Passage level whose questions skip BOTH the judge and the solvability
+ * gate: level 8 (<10 words) passages end the lesson on a correct read
+ * without a comprehension question (literacy-lesson.machine.ts), so the
+ * question family is still generated and stored but never shown — gating
+ * it would only burn gate calls. Mirrors SENTENCE_COMPLETE_LEVEL there.
+ */
+export const JUDGE_SKIPPED_PASSAGE_LEVEL = 8;
+
+/** Whether the passage-judge gate applies to a passage of this level. */
+export function judgeGateApplies(level: number): boolean {
+  return level !== JUDGE_SKIPPED_PASSAGE_LEVEL;
+}
+
 /** The verdict is computed over exactly this many valid runs. */
 export const JUDGE_REQUIRED_VALID = 10;
 /** Hard call budget; spent before 10 valid runs → 'unverified'. */

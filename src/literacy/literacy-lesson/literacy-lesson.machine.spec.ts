@@ -84,6 +84,7 @@ function makeActor(input: {
   userMessageId: string;
   sentence?: string[];
   passageId?: string;
+  level?: number;
 }): ActorHandle {
   const actor = createActor(machine, { input });
   actor.start();
@@ -1189,6 +1190,106 @@ function makeSentenceActor(sentence: string[] = SENTENCE): ActorHandle {
     passageId: PASSAGE_ID,
   });
 }
+
+// Level-8 passages (<10 words) end on a correct read — no comprehension.
+function makeLevel8SentenceActor(): ActorHandle {
+  return makeActor({
+    word: '',
+    userMessageId: 'mm-1',
+    sentence: SENTENCE,
+    passageId: PASSAGE_ID,
+    level: 8,
+  });
+}
+
+describe('machine — level-8 sentence skips comprehension', () => {
+  it('correct on the first attempt → complete + sentence-complete-correct-first stid', () => {
+    mockAssessSentence.mockReturnValue(sentenceAssessment(true));
+    const a = makeLevel8SentenceActor();
+    a.send(ANSWER('नल घर'));
+    const snap = a.snap();
+    expect(snap.value).toBe('complete');
+    expect(snap.status).toBe('done');
+    expect(snap.context.level).toBe(8);
+    expect(snap.context.answerCorrect).toBe(true);
+    expect(snap.context.stateTransitionId).toBe(
+      `${PASSAGE_ID}-sentence-complete-correct-first`,
+    );
+    expect(snap.context.pendingCorrect).toEqual(['न', 'ल', 'घ', 'र']);
+    expect(snap.context.pendingIncorrect).toEqual([]);
+    a.stop();
+  });
+
+  it('correct on the retry → complete + sentence-complete-correct-retry stid', () => {
+    const failedWords = [
+      { target: 'नल', heard: 'नल', status: 'correct' },
+      { target: 'घर', heard: null, status: 'omitted' },
+    ];
+    mockAssessSentence.mockReturnValueOnce(
+      sentenceAssessment(false, failedWords),
+    );
+    mockSelectDrillWord.mockReturnValue(null); // no drill word → wrong-retry
+    const a = makeLevel8SentenceActor();
+    a.send(ANSWER('नल'));
+    expect(a.snap().value).toBe('sentence');
+    expect(a.snap().context.sentenceErrors).toBe(1);
+    mockAssessSentence.mockReturnValue(sentenceAssessment(true));
+    a.send(ANSWER('नल घर'));
+    const snap = a.snap();
+    expect(snap.value).toBe('complete');
+    expect(snap.context.stateTransitionId).toBe(
+      `${PASSAGE_ID}-sentence-complete-correct-retry`,
+    );
+    // Same convention as the level-9 comprehension-correct-retry branch: a
+    // passing retry credits every letter of every word.
+    expect(snap.context.answerCorrect).toBe(true);
+    expect(snap.context.pendingCorrect).toEqual(['न', 'ल', 'घ', 'र']);
+    expect(snap.context.pendingIncorrect).toEqual([]);
+    a.stop();
+  });
+
+  it('level 9 still goes to comprehension', () => {
+    mockAssessSentence.mockReturnValue(sentenceAssessment(true));
+    const a = makeActor({
+      word: '',
+      userMessageId: 'mm-1',
+      sentence: SENTENCE,
+      passageId: PASSAGE_ID,
+      level: 9,
+    });
+    a.send(ANSWER('नल घर'));
+    expect(a.snap().value).toBe('comprehension');
+    expect(a.snap().context.level).toBe(9);
+    a.stop();
+  });
+
+  it('no level (pre-field snapshot / legacy input) still goes to comprehension', () => {
+    mockAssessSentence.mockReturnValue(sentenceAssessment(true));
+    const a = makeSentenceActor();
+    expect(a.snap().context.level).toBeNull();
+    a.send(ANSWER('नल घर'));
+    expect(a.snap().value).toBe('comprehension');
+    a.stop();
+  });
+
+  it('a failed second attempt at level 8 still fails out via maxErrors', () => {
+    mockAssessSentence.mockReturnValue(
+      sentenceAssessment(false, [
+        { target: 'नल', heard: null, status: 'omitted' },
+        { target: 'घर', heard: null, status: 'omitted' },
+      ]),
+    );
+    mockSelectDrillWord.mockReturnValue(null);
+    const a = makeLevel8SentenceActor();
+    a.send(ANSWER(''));
+    a.send(ANSWER(''));
+    expect(a.snap().value).toBe('complete');
+    expect(a.snap().context.stateTransitionId).toBe(
+      'sentence-sentence-complete-maxErrors',
+    );
+    a.stop();
+  });
+});
 
 describe('machine — start router', () => {
   it('routes to `sentence` when input.sentence is set, with the fixed initial stid', () => {

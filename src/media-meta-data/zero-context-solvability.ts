@@ -40,6 +40,7 @@ import {
   setGateSpanAttributes,
   shuffled,
 } from './gate-shared';
+import { judgeGateApplies } from './passage-judge';
 
 /** The verdict is computed over exactly this many valid runs. */
 export const SOLVABILITY_REQUIRED_VALID = 24;
@@ -67,13 +68,17 @@ export const SOLVABILITY_GATED_QUESTION_TYPES: readonly string[] = [
 /**
  * Whether the zero-context solvability gate applies to a generated question.
  * Everything outside narrative R1.1–R1.3 skips the gate (2026-08 scope-down;
- * the question row then carries media_details.solvability.skipped = true).
+ * the question row then carries media_details.solvability.skipped = true),
+ * as does every level-8 passage (its question is never shown — see
+ * judgeGateApplies in passage-judge.ts).
  */
 export function solvabilityGateApplies(
   passageType: string,
   questionType: string,
+  level?: number,
 ): boolean {
   return (
+    (level === undefined || judgeGateApplies(level)) &&
     passageType === SOLVABILITY_GATED_PASSAGE_TYPE &&
     SOLVABILITY_GATED_QUESTION_TYPES.includes(questionType)
   );

@@ -82,6 +82,11 @@ interface NextString {
   level: number;
   // media_metadata id of the selected reading passage; null for word lessons.
   passageId: string | null;
+  // The passage's own word-count level (media_details.level). Can differ
+  // from `level` when selectPassage fell back to the nearest level; the
+  // lesson machine keys its level-8 skip-comprehension guard on THIS value
+  // because the generation gates are keyed on it too. Null for word lessons.
+  passageLevel: number | null;
 }
 
 // Splits a persisted `word` column value into its component words. Sentences
@@ -212,6 +217,7 @@ export class LiteracyLessonService {
               word: lesson.word,
               sentence: lesson.sentence ?? undefined,
               passageId: lesson.passageId ?? undefined,
+              level: lesson.passageLevel ?? undefined,
               userMessageId: validated.user_message_id,
             },
           });
@@ -500,10 +506,11 @@ export class LiteracyLessonService {
   private async selectPassage(
     level: number,
     excludePassageIds: string[],
-  ): Promise<{ id: string; text: string } | null> {
+  ): Promise<{ id: string; text: string; level: number } | null> {
     interface PassageRow {
       id: string;
       text: string;
+      level: number;
     }
     const exclude = excludePassageIds.length > 0 ? excludePassageIds : [];
     const base = `FROM media_metadata
@@ -513,7 +520,7 @@ export class LiteracyLessonService {
          AND NOT (id = ANY($2::uuid[]))`;
     // 1. Exact level, non-recent.
     let rows: PassageRow[] = await this.dataSource.query(
-      `SELECT id, text ${base}
+      `SELECT id, text, (media_details->>'level')::int AS level ${base}
          AND (media_details->>'level')::int = $1
        ORDER BY random() LIMIT 1`,
       [level, exclude],
@@ -521,7 +528,7 @@ export class LiteracyLessonService {
     // 2. Exact level, recency ignored (small pools).
     if (rows.length === 0 && exclude.length > 0) {
       rows = await this.dataSource.query(
-        `SELECT id, text ${base}
+        `SELECT id, text, (media_details->>'level')::int AS level ${base}
            AND (media_details->>'level')::int = $1
          ORDER BY random() LIMIT 1`,
         [level, []],
@@ -530,7 +537,7 @@ export class LiteracyLessonService {
     // 3. Nearest level in the sentence band, non-recent.
     if (rows.length === 0) {
       rows = await this.dataSource.query(
-        `SELECT id, text ${base}
+        `SELECT id, text, (media_details->>'level')::int AS level ${base}
            AND (media_details->>'level')::int BETWEEN ${SENTENCE_LEVEL_THRESHOLD + 1} AND ${MAX_LESSON_LEVEL}
          ORDER BY ABS((media_details->>'level')::int - $1), random() LIMIT 1`,
         [level, exclude],
@@ -826,6 +833,7 @@ export class LiteracyLessonService {
               sentence,
               level: maxLength,
               passageId: passage.id,
+              passageLevel: passage.level,
             };
           }
           this.logger.warn(
@@ -910,6 +918,7 @@ export class LiteracyLessonService {
             sentence: null,
             level: maxLength,
             passageId: null,
+            passageLevel: null,
           };
         }
 
@@ -957,6 +966,7 @@ export class LiteracyLessonService {
           sentence: null,
           level: maxLength,
           passageId: null,
+          passageLevel: null,
         };
       } catch (err) {
         span.setStatus({

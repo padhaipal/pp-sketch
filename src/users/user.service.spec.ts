@@ -1148,6 +1148,18 @@ describe('UserService.getLiteracyTestScores', () => {
     expect(await svc.getLiteracyTestScores(USER_ID)).toBeNull();
   });
 
+  it('grade-1 first-attempt query counts level-8 sentence-complete-correct-first as a success', async () => {
+    const { svc, dsQuery } = scoreService({});
+    await svc.getLiteracyTestScores(USER_ID);
+    const sql = dsQuery.mock.calls
+      .map((c: unknown[]) => c[0] as string)
+      .find((q) => q.includes('sentence-comprehension-correct-first'))!;
+    expect(sql).toContain(
+      "LIKE '%-sentence-complete-correct-first') AS correct",
+    );
+    expect(sql).toContain('s.level = 8');
+  });
+
   it('comprehension answers query joins WITHOUT rolled_back filters (retro quality culls must not erase earned history)', async () => {
     const { svc, dsQuery } = scoreService({});
     await svc.getLiteracyTestScores(USER_ID);

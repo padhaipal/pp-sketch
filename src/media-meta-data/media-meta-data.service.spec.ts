@@ -667,6 +667,62 @@ describe('MediaMetaDataService.findMediaByStateTransitionId', () => {
     expect(cache.set).toHaveBeenCalledTimes(1);
   });
 
+  it('level-8 sentence-complete runtime stid → fixed sentence-* specific key + `_` generic (UUID prefix never split)', async () => {
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(undefined),
+      del: jest.fn(),
+    };
+    const stid =
+      '11111111-2222-4333-8444-555555555555-sentence-complete-correct-first';
+    const dsQuery = jest.fn().mockResolvedValue([
+      {
+        id: 'gen-1',
+        media_type: 'audio',
+        state_transition_id: '_-sentence-complete-correct-first',
+      },
+      {
+        id: 'spec-1',
+        media_type: 'audio',
+        state_transition_id: 'sentence-sentence-complete-correct-first',
+      },
+      {
+        id: 'gen-text-1',
+        media_type: 'text',
+        state_transition_id: '_-sentence-complete-correct-first',
+      },
+    ]);
+    const { service } = makeService({ cache, dsQuery });
+
+    const out = await service.findMediaByStateTransitionId(stid);
+
+    const keys = dsQuery.mock.calls[0][1][0] as string[];
+    expect(keys).toContain(stid);
+    expect(keys).toContain('sentence-sentence-complete-correct-first');
+    expect(keys).toContain('_-sentence-complete-correct-first');
+    // The naive split-at-first-dash generic key would cut inside the uuid.
+    expect(keys.some((k) => k.startsWith('_-2222'))).toBe(false);
+    expect(out.audio?.id).toBe('spec-1'); // fixed sentence-* row is SPECIFIC
+    expect(out.text?.id).toBe('gen-text-1');
+  });
+
+  it('level-8 retry runtime stid maps to the -retry rows', async () => {
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn(),
+      del: jest.fn(),
+    };
+    const dsQuery = jest.fn().mockResolvedValue([]);
+    const { service } = makeService({ cache, dsQuery });
+    await service.findMediaByStateTransitionId(
+      '11111111-2222-4333-8444-555555555555-sentence-complete-correct-retry',
+    );
+    const keys = dsQuery.mock.calls[0][1][0] as string[];
+    expect(keys).toContain('sentence-sentence-complete-correct-retry');
+    expect(keys).toContain('_-sentence-complete-correct-retry');
+    expect(keys).not.toContain('sentence-sentence-complete-correct-first');
+  });
+
   it('uses only the specific key when there is no dash', async () => {
     const cache = {
       get: jest.fn().mockResolvedValue(null),
@@ -3081,6 +3137,61 @@ describe('createLlmGeneratedMedia', () => {
         `${explanation.input_media_id as string}-comprehension-complete`,
       );
     }
+  });
+
+  it('level 8 (<10 words): quality only — judge + solvability skipped, recorded on the question row, family live', async () => {
+    seq();
+    const saved: Record<string, unknown>[] = [];
+    const dsTransaction = jest
+      .fn()
+      .mockImplementation(async (cb: (m: unknown) => Promise<void>) =>
+        cb({
+          save: jest.fn(async (entities: Record<string, unknown>[]) => {
+            saved.push(...entities);
+            return entities;
+          }),
+        }),
+      );
+    const repo = makeRepo();
+    repo.save.mockImplementation(async (e: unknown) => e);
+    // Judge would FAIL and solvability would FAIL if they ran — proves the
+    // skip, not just the absence of calls.
+    const completeBatch = gateStub({ judge: 'wrong', solvability: 'correct' });
+    const { service } = makeService({
+      repo,
+      dsTransaction,
+      openaiLlm: {
+        complete: jest.fn().mockResolvedValue({
+          text: generatedJson({ passageText: 'राम ने नीली मछली खरीदी।' }),
+          model: 'gpt-4.1',
+          prompt_tokens: 100,
+          completion_tokens: 200,
+          duration_ms: 5,
+        }),
+      },
+      sarvamLlm: { completeBatch } as never,
+    });
+
+    const result = await service.createLlmGeneratedMedia(request, carrier);
+
+    expect(result.status).toBe('created');
+    expect(result.level).toBe(8);
+    expect(result.question!.status).toBe('created');
+    expect(result.question!.judge).toBeUndefined();
+    expect(result.question!.solvability).toBeUndefined();
+    // Exactly the 5 quality calls — nothing else.
+    expect(completeBatch).toHaveBeenCalledTimes(5);
+
+    const question = saved.find(
+      (e) => (e.media_details as { role?: string })?.role === 'question',
+    )!;
+    const details = question.media_details as Record<string, unknown>;
+    expect(details.judge).toEqual({ skipped: true });
+    expect(details.solvability).toEqual({ skipped: true });
+    expect(details.gate_failure).toBeUndefined();
+    expect(question.rolled_back).toBe(false);
+    // Question/options/explanations are still generated + voiced.
+    expect(saved.some((e) => e.media_type === 'flow')).toBe(true);
   });
 
   it('routes to the provider named in the request', async () => {

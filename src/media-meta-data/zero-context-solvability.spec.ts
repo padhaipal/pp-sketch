@@ -219,4 +219,12 @@ describe('solvabilityGateApplies', () => {
   ])('skips %s %s questions', (passageType, questionType) => {
     expect(solvabilityGateApplies(passageType, questionType)).toBe(false);
   });
+
+  it('skips level-8 passages even for narrative R1.1 (question never shown)', () => {
+    expect(solvabilityGateApplies('narrative', 'R1.1', 8)).toBe(false);
+  });
+
+  it.each([9, 12])('applies at level %i for narrative R1.1', (level) => {
+    expect(solvabilityGateApplies('narrative', 'R1.1', level)).toBe(true);
+  });
 });

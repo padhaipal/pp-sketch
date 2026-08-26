@@ -607,8 +607,10 @@ export class UserService {
    *
    * Grade 1 is unchanged: a rolling window over level-8 sentence FIRST read
    * attempts (complex query #1 — the stid is either
-   * `…-sentence-comprehension-correct-first` (success) or a drill/wrong-retry
-   * stid (failure); retry successes deliberately never appear).
+   * `…-sentence-complete-correct-first` / `…-sentence-comprehension-correct-first`
+   * (success; level-8 passages skip comprehension, see
+   * literacy-lesson.machine.ts) or a drill/wrong-retry stid (failure); retry
+   * successes deliberately never appear).
    *
    * Grades 2/3 and MPL-B are snapshot tests over comprehension answers
    * (complex query #2 — the tapped option is joined to its question and the
@@ -630,7 +632,9 @@ export class UserService {
     const firstAttempts: FirstAttemptRow[] = await this.dataSource.query(
       `SELECT s.created_at,
               ((s.snapshot->'context'->>'stateTransitionId')
-                LIKE '%-sentence-comprehension-correct-first') AS correct
+                LIKE '%-sentence-comprehension-correct-first'
+               OR (s.snapshot->'context'->>'stateTransitionId')
+                LIKE '%-sentence-complete-correct-first') AS correct
        FROM literacy_lesson_states s
        WHERE s.user_id = $1
          AND s.level = 8
@@ -638,6 +642,8 @@ export class UserService {
          AND (
            (s.snapshot->'context'->>'stateTransitionId')
              LIKE '%-sentence-comprehension-correct-first'
+           OR (s.snapshot->'context'->>'stateTransitionId')
+             LIKE '%-sentence-complete-correct-first'
            OR (s.snapshot->'context'->>'stateTransitionId')
              LIKE '%-sentence-word-drillWord'
            OR (s.snapshot->'context'->>'stateTransitionId')
