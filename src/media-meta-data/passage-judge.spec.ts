@@ -2,6 +2,8 @@ import {
   JUDGE_MAX_CALLS,
   JUDGE_REQUIRED_VALID,
   runPassageJudge,
+  judgeGateApplies,
+  JUDGE_SKIPPED_PASSAGE_LEVEL,
 } from './passage-judge';
 import {
   GATE_BATCH_SIZE,
@@ -151,5 +153,15 @@ describe('runPassageJudge', () => {
       call_failures: 3,
       unparseable: 2,
     });
+  });
+});
+
+describe('judgeGateApplies', () => {
+  it('skips level 8 (question never shown — lesson ends on the read)', () => {
+    expect(JUDGE_SKIPPED_PASSAGE_LEVEL).toBe(8);
+    expect(judgeGateApplies(8)).toBe(false);
+  });
+  it.each([9, 10, 11, 12])('applies at level %i', (level) => {
+    expect(judgeGateApplies(level)).toBe(true);
   });
 });

@@ -35,6 +35,19 @@ export const COMPREHENSION_RUNTIME_STID_RE =
   /^(.+)-sentence-comprehension-correct-(?:first|retry)$/;
 export const COMPREHENSION_COMPLETE_STID_SUFFIX = 'comprehension-complete';
 
+// Level-8 passages (<10 words) skip the comprehension state: a correct read
+// emits `${passageId}-sentence-complete-correct-first|retry` and the lesson
+// ends. Media for those runtime stids is NOT passage-specific — it lives
+// under the fixed-prefix `sentence-sentence-complete-correct-first|retry`
+// rows (plus the `_-sentence-complete-correct-*` generic fallback), which
+// findMediaByStateTransitionId resolves via this regex.
+export const SENTENCE_COMPLETE_RUNTIME_STID_RE =
+  /^(.+)-sentence-complete-correct-(first|retry)$/;
+
+export function sentenceCompleteMediaStid(attempt: 'first' | 'retry'): string {
+  return `sentence-sentence-complete-correct-${attempt}`;
+}
+
 export function comprehensionFlowStid(passageId: string): string {
   return `${passageId}-${SENTENCE_COMPREHENSION_STID_SUFFIX}`;
 }

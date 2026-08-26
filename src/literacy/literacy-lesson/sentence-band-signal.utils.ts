@@ -25,8 +25,13 @@
 // visible" threshold for validating the oldest lesson group.
 export const SENTENCE_RECENT_ROWS_WINDOW = 18;
 
-// Marks a passage read correctly on the first attempt.
-const FIRST_TRY_PASS_SUFFIX = '-sentence-comprehension-correct-first';
+// Marks a passage read correctly on the first attempt: level 9+ passages go
+// on to the comprehension state, level-8 passages (<10 words) end the lesson
+// directly (literacy-lesson.machine.ts) — both count as a first-try pass.
+const FIRST_TRY_PASS_SUFFIXES = [
+  '-sentence-comprehension-correct-first',
+  '-sentence-complete-correct-first',
+];
 // The only entry transition into the image tier of the word drill loop.
 const ENTERED_IMAGE_SUFFIX = '-letter-image-wrong';
 // The two-strikes sentence exit (literacy-lesson.machine.ts); a lesson
@@ -58,7 +63,9 @@ function flagsOf(rows: TurnRow[]): LessonFlags {
   // rows[0] is the group's done row (newest of the group by construction).
   const stids = rows.map((r) => r.stid ?? '');
   return {
-    firstTryPass: stids.some((s) => s.endsWith(FIRST_TRY_PASS_SUFFIX)),
+    firstTryPass: stids.some((s) =>
+      FIRST_TRY_PASS_SUFFIXES.some((suffix) => s.endsWith(suffix)),
+    ),
     enteredImage: stids.some((s) => s.endsWith(ENTERED_IMAGE_SUFFIX)),
     failedOut: stids[0] === FAILED_OUT_STID,
   };

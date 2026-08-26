@@ -39,6 +39,8 @@ import {
   LlmGenerateResponse,
   LlmOutputInvalidError,
   SENTENCE_COMPREHENSION_STID_SUFFIX,
+  SENTENCE_COMPLETE_RUNTIME_STID_RE,
+  sentenceCompleteMediaStid,
   VALID_PASSAGE_TYPES,
   VALID_QUESTION_TYPES,
   comprehensionCompleteStid,
@@ -59,6 +61,7 @@ import {
   JUDGE_REQUIRED_VALID,
   PassageJudgeVerdict,
   runPassageJudge,
+  judgeGateApplies,
 } from './passage-judge';
 import {
   PassageQualityVerdict,
@@ -452,6 +455,19 @@ export class MediaMetaDataService {
       ? comprehensionFlowStid(comprehensionMatch[1])
       : null;
 
+    // Level-8 sentence completion runtime stids (`${passageId}-sentence-
+    // complete-correct-first|retry`, UUID prefix again) resolve to the fixed
+    // `sentence-sentence-complete-correct-*` rows as their SPECIFIC key and
+    // `_-sentence-complete-correct-*` as their generic fallback.
+    const sentenceCompleteMatch =
+      SENTENCE_COMPLETE_RUNTIME_STID_RE.exec(stateTransitionId);
+    const sentenceCompleteKey = sentenceCompleteMatch
+      ? sentenceCompleteMediaStid(sentenceCompleteMatch[2] as 'first' | 'retry')
+      : null;
+    const sentenceCompleteGenericKey = sentenceCompleteMatch
+      ? `_-sentence-complete-correct-${sentenceCompleteMatch[2]}`
+      : null;
+
     const cached =
       await this.cacheService.get<FindMediaByStateTransitionIdResult>(
         CACHE_KEYS.mediaByStateTransitionId(stateTransitionId),
@@ -462,8 +478,12 @@ export class MediaMetaDataService {
 
     // Raw SQL — uses ANY($1::text[]) for multi-key lookup
     const keys = [stateTransitionId];
-    if (genericKey) keys.push(genericKey);
+    // The split-at-first-dash generic key is meaningless for the UUID-
+    // prefixed level-8 stid (its real generic key is derived above).
+    if (genericKey && !sentenceCompleteMatch) keys.push(genericKey);
     if (flowKey) keys.push(flowKey);
+    if (sentenceCompleteKey) keys.push(sentenceCompleteKey);
+    if (sentenceCompleteGenericKey) keys.push(sentenceCompleteGenericKey);
     const rows: MediaMetaData[] = await this.dataSource.query(
       `SELECT * FROM media_metadata
        WHERE state_transition_id = ANY($1::text[])
@@ -478,7 +498,9 @@ export class MediaMetaDataService {
       // flowKey rows are passage-specific, not generic fallbacks.
       const bucket =
         row.state_transition_id === stateTransitionId ||
-        (flowKey !== null && row.state_transition_id === flowKey)
+        (flowKey !== null && row.state_transition_id === flowKey) ||
+        (sentenceCompleteKey !== null &&
+          row.state_transition_id === sentenceCompleteKey)
           ? specificByType
           : genericByType;
       const existing = bucket.get(row.media_type) ?? [];
@@ -1060,9 +1082,12 @@ export class MediaMetaDataService {
     const qualityFailed = qualityVerdict.status === 'failed_quality';
 
     // 3. Passage-judge gate (with passage) — skipped entirely when quality
-    // already failed the family (cheap-first; funnel counts stay disjoint).
+    // already failed the family (cheap-first; funnel counts stay disjoint),
+    // and for level-8 passages whose question is never shown to a student
+    // (judgeGateApplies; the question row records judge.skipped = true).
+    const judgeApplies = judgeGateApplies(level);
     let judgeVerdict: PassageJudgeVerdict | null = null;
-    if (!qualityFailed) {
+    if (!qualityFailed && judgeApplies) {
       try {
         judgeVerdict = await runPassageJudge(
           this.sarvamLlmService,
@@ -1106,6 +1131,7 @@ export class MediaMetaDataService {
     const solvabilityApplies = solvabilityGateApplies(
       content.passage.passage_type,
       question.question_type,
+      level,
     );
     let solvabilityVerdict: SolvabilityVerdict | null = null;
     if (
@@ -1259,13 +1285,16 @@ export class MediaMetaDataService {
           role: 'question',
           question_type: question.question_type,
           model: request.model,
-          // Judge never runs when quality already failed the family.
-          ...(judgeVerdict && {
-            judge: {
-              ...pickGateObservability(judgeVerdict),
-              model: GATE_JUDGE_MODEL,
-            },
-          }),
+          // Judge never runs when quality already failed the family;
+          // level-8 passages skip it by design (judge.skipped = true).
+          ...(judgeVerdict
+            ? {
+                judge: {
+                  ...pickGateObservability(judgeVerdict),
+                  model: GATE_JUDGE_MODEL,
+                },
+              }
+            : !judgeApplies && { judge: { skipped: true } }),
           ...(solvabilityVerdict
             ? {
                 solvability: {
@@ -1883,6 +1912,7 @@ export class MediaMetaDataService {
          AND ($8::text IS NULL OR (
            CASE
              WHEN q.media_details->'gate_failure'->>'gate' = 'judge' THEN 'failed'
+             WHEN q.media_details->'judge'->>'skipped' = 'true' THEN 'skipped'
              WHEN q.media_details ? 'judge' THEN 'passed'
              ELSE 'not_run'
            END) = $8)

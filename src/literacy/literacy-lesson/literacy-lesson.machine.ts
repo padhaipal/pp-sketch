@@ -21,6 +21,10 @@ export const STALE_LESSON_RESTART_STATE_TRANSITION_ID = 'stale-lesson-restart';
 export const SENTENCE_WRONG_RETRY_STATE_TRANSITION_ID =
   'sentence-sentence-wrong-retry';
 
+// Passage level whose correct read goes straight to `complete` instead of
+// the comprehension state (<10 words — see passageLevelFromWordCount).
+export const SENTENCE_COMPLETE_LEVEL = 8;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Context {
@@ -31,6 +35,11 @@ interface Context {
   // Null for word lessons (and for pre-passage snapshots, which can no longer
   // reach the comprehension state anyway). Drives the comprehension stids.
   passageId: string | null;
+  // Lesson level the passage was selected at (word-count level, 8–12). Null
+  // for word lessons and for snapshots persisted before this field existed
+  // (those rehydrate with `level: undefined`, so guards use `=== 8` only).
+  // Level 8 (<10 words) skips the comprehension state entirely.
+  level: number | null;
   sentenceErrors: number;
   wrongLetters: string[];
   wordErrors: number;
@@ -96,6 +105,7 @@ export const machine = setup({
       userMessageId: string;
       sentence?: string[];
       passageId?: string;
+      level?: number;
     },
   },
 
@@ -162,6 +172,7 @@ export const machine = setup({
       word: input.word,
       sentence,
       passageId: input.passageId ?? null,
+      level: input.level ?? null,
       sentenceErrors: 0,
       wrongLetters: [],
       wordErrors: 0,
@@ -203,6 +214,59 @@ export const machine = setup({
       ],
       on: {
         ANSWER: [
+          // Level 8 (<10 words): a correct read ends the lesson — no
+          // comprehension question (too short to ask one that isn't
+          // guessable). The `${passageId}-sentence-complete-correct-*` stids
+          // resolve to the fixed `sentence-sentence-complete-correct-*` media
+          // (see findMediaByStateTransitionId) and count as a first-try pass
+          // for sentence-band progression (sentence-band-signal.utils.ts).
+          {
+            guard: and([
+              ({ context, event }) =>
+                assessSentence({
+                  words: context.sentence ?? [],
+                  transcripts: transcriptsOf(event),
+                }).passed,
+              ({ context }) => context.sentenceErrors === 0,
+              ({ context }) => context.level === SENTENCE_COMPLETE_LEVEL,
+            ]),
+            target: 'complete',
+            actions: [
+              { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
+              assign({
+                stateTransitionId: ({ context }) =>
+                  `${context.passageId}-sentence-complete-correct-first`,
+              }),
+              assign({
+                pendingCorrect: ({ context }) =>
+                  Array.from((context.sentence ?? []).join('')),
+              }),
+            ],
+          },
+          {
+            guard: and([
+              ({ context, event }) =>
+                assessSentence({
+                  words: context.sentence ?? [],
+                  transcripts: transcriptsOf(event),
+                }).passed,
+              ({ context }) => context.level === SENTENCE_COMPLETE_LEVEL,
+            ]),
+            target: 'complete',
+            actions: [
+              { type: 'clearPendingScores' },
+              assign({ answerCorrect: () => true }),
+              assign({
+                stateTransitionId: ({ context }) =>
+                  `${context.passageId}-sentence-complete-correct-retry`,
+              }),
+              assign({
+                pendingCorrect: ({ context }) =>
+                  Array.from((context.sentence ?? []).join('')),
+              }),
+            ],
+          },
           // Student read the whole sentence correctly on the first attempt —
           // mark every letter of every word correct and move on to the
           // comprehension question (the flow media lives under the passage's
