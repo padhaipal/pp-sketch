@@ -204,7 +204,7 @@ describe('runZeroContextSolvability', () => {
 });
 
 describe('solvabilityGateApplies', () => {
-  it.each(['R1.1', 'R1.2', 'R1.3'])(
+  it.each(['R1.2', 'R1.3'])(
     'applies to narrative %s questions',
     (questionType) => {
       expect(solvabilityGateApplies('narrative', questionType)).toBe(true);
@@ -212,7 +212,8 @@ describe('solvabilityGateApplies', () => {
   );
 
   it.each([
-    ['expository', 'R1.1'], // right question type, wrong passage type
+    ['expository', 'R1.2'], // right question type, wrong passage type
+    ['narrative', 'R1.1'], // word-meaning retrieve: out of scope since 2026-08-26
     ['narrative', 'R2.1'], // right passage type, non-retrieve question
     ['narrative', 'R3.1'],
     ['expository', 'R2.2'],
@@ -220,11 +221,11 @@ describe('solvabilityGateApplies', () => {
     expect(solvabilityGateApplies(passageType, questionType)).toBe(false);
   });
 
-  it('skips level-8 passages even for narrative R1.1 (question never shown)', () => {
-    expect(solvabilityGateApplies('narrative', 'R1.1', 8)).toBe(false);
+  it('skips level-8 passages even for narrative R1.2 (question never shown)', () => {
+    expect(solvabilityGateApplies('narrative', 'R1.2', 8)).toBe(false);
   });
 
-  it.each([9, 12])('applies at level %i for narrative R1.1', (level) => {
-    expect(solvabilityGateApplies('narrative', 'R1.1', level)).toBe(true);
+  it.each([9, 12])('applies at level %i for narrative R1.2', (level) => {
+    expect(solvabilityGateApplies('narrative', 'R1.2', level)).toBe(true);
   });
 });

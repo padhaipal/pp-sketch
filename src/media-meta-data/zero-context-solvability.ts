@@ -13,7 +13,7 @@
  * weight in the verdict (position-bias control). Scaled down from 144×/300
  * (2026-08) to fit sarvam-105b's 40 req/min Starter-tier rate limit.
  *
- * The gate only applies to narrative R1.1/R1.2/R1.3 questions (see
+ * The gate only applies to narrative R1.2/R1.3 questions (see
  * solvabilityGateApplies); all other passage/question types skip it and are
  * created on the passage-judge verdict alone.
  *
@@ -60,14 +60,14 @@ export const SOLVABILITY_REJECT_MIN_CORRECT: Record<2 | 3 | 4, number> = {
 export const SOLVABILITY_GATED_PASSAGE_TYPE = 'narrative';
 /** …combined with these (retrieve-subconstruct) question types. */
 export const SOLVABILITY_GATED_QUESTION_TYPES: readonly string[] = [
-  'R1.1',
   'R1.2',
   'R1.3',
 ];
 
 /**
  * Whether the zero-context solvability gate applies to a generated question.
- * Everything outside narrative R1.1–R1.3 skips the gate (2026-08 scope-down;
+ * Everything outside narrative R1.2/R1.3 skips the gate (2026-08 scope-down,
+ * R1.1 word-meaning questions dropped from the gate 2026-08-26;
  * the question row then carries media_details.solvability.skipped = true),
  * as does every level-8 passage (its question is never shown — see
  * judgeGateApplies in passage-judge.ts).

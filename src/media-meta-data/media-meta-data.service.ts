@@ -972,7 +972,7 @@ export class MediaMetaDataService {
    *   3. passage-judge gate (10 valid GATE_JUDGE_MODEL runs over ≤14 calls,
    *      with passage)
    *   4. zero-context solvability (24 valid runs over ≤50 calls, no
-   *      passage; narrative R1.1–R1.3 questions only — everything else
+   *      passage; narrative R1.2/R1.3 questions only — everything else
    *      skips it with media_details.solvability.skipped = true)
    *   5. transactional insert of the entity tree (passage → question →
    *      options → explanations + one flow row)
@@ -1126,7 +1126,7 @@ export class MediaMetaDataService {
 
     // 4. Zero-context solvability (no passage) — only for judge-passed
     // questions, so the funnel counts stay disjoint, and only for narrative
-    // R1.1–R1.3 questions (2026-08 scope-down); everything else records
+    // R1.2/R1.3 questions (2026-08 scope-down); everything else records
     // media_details.solvability.skipped = true instead of a verdict.
     const solvabilityApplies = solvabilityGateApplies(
       content.passage.passage_type,
