@@ -72,10 +72,12 @@ import { GATE_JUDGE_MODEL, pickGateObservability } from './gate-shared';
 
 /**
  * Sampling temperature for the reading-passage generation call as a fraction
- * of the chosen provider's maximum — 80%: we want varied, creative passages
- * (the gates below run cold, see GATE_TEMPERATURE_RATIO).
+ * of the chosen provider's maximum — 40%. 80% (gpt-4o 1.6, Mistral 1.2)
+ * degenerated into control-character noise that ran to the 90s cap on every
+ * call (2026-08-27); the gates below run colder still, see
+ * GATE_TEMPERATURE_RATIO.
  */
-const PASSAGE_GENERATION_TEMPERATURE_RATIO = 0.8;
+const PASSAGE_GENERATION_TEMPERATURE_RATIO = 0.4;
 import { createQueue, QUEUE_NAMES } from '../interfaces/redis/queues';
 import type { OtelCarrier } from '../otel/otel.dto';
 import {
@@ -1007,11 +1009,16 @@ export class MediaMetaDataService {
     // 1. Generation call.
     let completion: LlmResult;
     try {
-      completion = await llmService.complete({
-        model: request.model,
-        messages: request.messages,
-        temperatureRatio: PASSAGE_GENERATION_TEMPERATURE_RATIO,
-      });
+      completion = await llmService.complete(
+        {
+          model: request.model,
+          messages: request.messages,
+          temperatureRatio: PASSAGE_GENERATION_TEMPERATURE_RATIO,
+        },
+        // One shot: a timed-out generation is not transient, and 3 × 90s
+        // outlives the dashboard's proxied request ("Failed to fetch").
+        { maxAttempts: 1 },
+      );
     } catch (err) {
       if (err instanceof LlmError) {
         this.logger.warn(

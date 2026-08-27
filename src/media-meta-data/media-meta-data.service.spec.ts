@@ -2985,12 +2985,15 @@ describe('createLlmGeneratedMedia', () => {
 
     const result = await service.createLlmGeneratedMedia(request, carrier);
 
-    // Generation runs hot (80% of the provider max); gates run cold (20%).
-    expect(complete).toHaveBeenCalledWith({
-      model: request.model,
-      messages: request.messages,
-      temperatureRatio: 0.8,
-    });
+    // Generation at 40% of the provider max, single attempt; gates run at 20%.
+    expect(complete).toHaveBeenCalledWith(
+      {
+        model: request.model,
+        messages: request.messages,
+        temperatureRatio: 0.4,
+      },
+      { maxAttempts: 1 },
+    );
 
     expect(result.status).toBe('created');
     expect(result.level).toBe(9); // <40 words
