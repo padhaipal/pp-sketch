@@ -333,8 +333,9 @@ After all items processed:
   sarvam-105b's 40 req/min Starter-tier limit) → transactional
   insert of passage → question → options →
   explanations (+ one `media_type='flow'` row when `send_as_flow`) →
-  ElevenLabs TTS enqueue for EVERY text entity (one audio row per text row,
-  `input_media_id` = source text row, stid only on explanation audio).
+  ElevenLabs TTS enqueue for each EXPLANATION only (`input_media_id` =
+  explanation text row, stid `${optionId}-comprehension-complete`);
+  passage/question/option rows are text-only (2026-08).
   Gate failures are NOT discarded: the whole family is inserted
   `rolled_back = true` with `media_details.gate_failure` on the question row
   ({gate, reason, judge_picks?, valid_runs, correct, total_calls,
