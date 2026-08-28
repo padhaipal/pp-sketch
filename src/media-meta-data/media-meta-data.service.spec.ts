@@ -3109,35 +3109,28 @@ describe('createLlmGeneratedMedia', () => {
       options.map((o) => o.id as string).sort(),
     );
 
-    // TTS: ONE createElevenlabsMedia call with one item per text entity —
-    // passage, question, both options, both explanations.
+    // TTS: ONE createElevenlabsMedia call with one item per EXPLANATION —
+    // passage, question and options are text-only (2026-08).
     expect(mockQueueAddBulk).toHaveBeenCalledTimes(1);
     const jobs = mockQueueAddBulk.mock.calls[0][0] as {
       data: { elevenlabs_params: { script_text: string } };
     }[];
-    expect(jobs).toHaveLength(6);
+    expect(jobs).toHaveLength(2);
     const scripts = jobs.map((j) => j.data.elevenlabs_params.script_text);
     expect(scripts.sort()).toEqual(
-      [
-        PASSAGE_TEXT,
-        'कहानी किसके लिए है?',
-        CORRECT_OPTION_TEXT,
-        WRONG_OPTION_TEXT,
-        'सही! कहानी बच्चों के लिए है।',
-        'नहीं, फिर से सोचो।',
-      ].sort(),
+      ['सही! कहानी बच्चों के लिए है।', 'नहीं, फिर से सोचो।'].sort(),
     );
 
-    // Every audio row links to its source text row; only explanation audio
-    // carries the `${optionId}-comprehension-complete` stid.
+    // Only explanation audio rows exist, each linked to its source text row
+    // and carrying the `${optionId}-comprehension-complete` stid.
     const audioRows = repo.create.mock.calls
       .map((c) => c[0] as Record<string, unknown>)
       .filter((r) => r.source === 'elevenlabs');
-    expect(audioRows).toHaveLength(6);
+    expect(audioRows).toHaveLength(2);
     for (const textEntity of [passage, question, ...options]) {
-      const audio = audioRows.find((a) => a.input_media_id === textEntity.id)!;
-      expect(audio).toBeDefined();
-      expect(audio.state_transition_id).toBeNull();
+      expect(
+        audioRows.find((a) => a.input_media_id === textEntity.id),
+      ).toBeUndefined();
     }
     for (const explanation of explanations) {
       const audio = audioRows.find((a) => a.input_media_id === explanation.id)!;

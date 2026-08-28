@@ -985,10 +985,10 @@ export class MediaMetaDataService {
    *      skips it with media_details.solvability.skipped = true)
    *   5. transactional insert of the entity tree (passage → question →
    *      options → explanations + one flow row)
-   *   6. ElevenLabs TTS enqueue for EVERY text entity (passage, question,
-   *      each option, each explanation) — one audio row per text entity,
-   *      never concatenated clips (options are shuffled per send, so a
-   *      combined question+options clip would contradict runtime ordering).
+   *   6. ElevenLabs TTS enqueue for each EXPLANATION only — the one audio
+   *      that is ever delivered (`${optionId}-comprehension-complete`).
+   *      Passage/question/option rows stay text-only (2026-08: they were
+   *      generation-only audio nobody read, at ~⅔ of the TTS spend).
    *
    * A question failing gate 3 or 4 is NOT discarded: the whole family is
    * persisted with rolled_back = true and a media_details.gate_failure record
@@ -1235,10 +1235,9 @@ export class MediaMetaDataService {
     const passageId = uuid();
     const questionId = uuid();
     const entities: MediaMetaDataEntity[] = [];
-    // One audio row per text entity. state_transition_id only where the
-    // source text row has one (explanations); every audio row links to its
-    // source text row via input_media_id — symmetric with the STT direction
-    // (sarvam/reverie transcripts link to their source audio the same way).
+    // Explanations only get audio (see step 6 above); each audio row links
+    // to its source text row via input_media_id — symmetric with the STT
+    // direction (sarvam/reverie transcripts link to their source audio).
     const ttsItems: Array<{
       state_transition_id: string | null;
       script_text: string;
@@ -1281,12 +1280,6 @@ export class MediaMetaDataService {
         },
       }),
     );
-    ttsItems.push({
-      state_transition_id: null,
-      script_text: content.passage.text,
-      input_media_id: passageId,
-    });
-
     entities.push(
       this.mediaRepo.create({
         id: questionId,
@@ -1324,12 +1317,6 @@ export class MediaMetaDataService {
         },
       }),
     );
-    ttsItems.push({
-      state_transition_id: null,
-      script_text: question.text,
-      input_media_id: questionId,
-    });
-
     const flowOptions: FlowMediaPayload['options'] = [];
     for (const option of question.options) {
       const optionId = uuid();
@@ -1354,12 +1341,6 @@ export class MediaMetaDataService {
           },
         }),
       );
-      ttsItems.push({
-        state_transition_id: null,
-        script_text: option.text,
-        input_media_id: optionId,
-      });
-
       const explanationId = uuid();
       entities.push(
         this.mediaRepo.create({
@@ -1377,9 +1358,8 @@ export class MediaMetaDataService {
           },
         }),
       );
-      // Explanation audio keeps the stid — it is the only audio delivered
-      // today (via `${optionId}-comprehension-complete`); passage/question/
-      // option audio is generation-only (input_media_id, no stid).
+      // The only TTS in the family — delivered via
+      // `${optionId}-comprehension-complete`.
       ttsItems.push({
         state_transition_id: comprehensionCompleteStid(optionId),
         script_text: option.explanation.text,
