@@ -122,3 +122,55 @@ describe('INTERACTIONS_BATCH_SIZE', () => {
     expect(INTERACTIONS_BATCH_SIZE).toBeLessThanOrEqual(10000);
   });
 });
+
+// Formula-injection hardening: Excel/Sheets execute cells that start with
+// these characters, and names/transcripts are attacker-influenced text.
+describe('csvEscape — formula-injection hardening', () => {
+  it.each([
+    ['=1+2', "'=1+2"],
+    ['+919876', "'+919876"],
+    ['-0.5', "'-0.5"],
+    ['@SUM(A1)', "'@SUM(A1)"],
+  ])('neutralizes leading formula char in %j', (input, expected) => {
+    expect(csvEscape(input)).toBe(expected);
+  });
+
+  it('hardens before quoting so both protections compose', () => {
+    expect(csvEscape('=cmd,x')).toBe('"\'=cmd,x"');
+  });
+
+  it('does not touch mid-cell formula characters', () => {
+    expect(csvEscape('a=b+c')).toBe('a=b+c');
+  });
+
+  it('a negative score_change row cell carries the apostrophe prefix', () => {
+    const line = interactionRowToCsvLine(
+      // reuse the fixture from above via a minimal inline row
+      {
+        lesson_state_id: 'l',
+        created_at: new Date('2026-08-31T05:00:00Z'),
+        timestamp_ist: '2026-08-31 10:30:00',
+        student_name: null,
+        phone: 'p',
+        referred_by_name: null,
+        referred_by_phone: null,
+        level: null,
+        lesson_type: 'word',
+        content: null,
+        correct_answer: null,
+        answer_correct: null,
+        sarvam_transcript: null,
+        azure_transcript: null,
+        reverie_transcript: null,
+        score_change: '-0.5',
+        letters_touched: null,
+        starting_state: null,
+        final_state: null,
+        state_transition_id: null,
+        passage_id: null,
+        user_message_id: 'm',
+      },
+    );
+    expect(line).toContain("'-0.5");
+  });
+});

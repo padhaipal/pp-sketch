@@ -67,8 +67,19 @@ export const INTERACTIONS_CSV_HEADER = [
   'lesson_state_id',
 ] as const;
 
+/**
+ * Escapes one cell: RFC-4180 quoting, plus spreadsheet formula-injection
+ * hardening — a leading =, +, - or @ would otherwise execute as a formula
+ * when the CSV is opened in Excel/Sheets (student names and transcripts are
+ * attacker-influenced text), so such cells get a leading apostrophe. This
+ * also prefixes legitimately negative numbers (score_change -0.5 → '-0.5):
+ * accepted cost of the mitigation.
+ */
 export function csvEscape(cell: string): string {
-  return /[",\r\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell;
+  const hardened = /^[=+\-@]/.test(cell) ? `'${cell}` : cell;
+  return /[",\r\n]/.test(hardened)
+    ? `"${hardened.replace(/"/g, '""')}"`
+    : hardened;
 }
 
 function answerStatus(answerCorrect: boolean | null): string {
