@@ -1403,3 +1403,57 @@ describe('UserService.getLiteracyTestScores', () => {
     expect(scores.nipun_grade_2.attempts_available).toBe(0);
   });
 });
+
+describe('UserService.findInteractionsPage', () => {
+  const to = new Date('2026-08-31T00:00:00Z');
+  const from = new Date('2026-08-01T00:00:00Z');
+
+  function svcWith(dsQuery: jest.Mock) {
+    const cache = makeCache();
+    cache.get.mockResolvedValue(null);
+    return makeService(makeRepo(), dsQuery, cache, makeScore());
+  }
+
+  it('keyset page: ordering, bounds, cursor and limit params', async () => {
+    const rows = [{ lesson_state_id: 'a' }];
+    const dsQuery = jest.fn().mockResolvedValue(rows);
+    const svc = svcWith(dsQuery);
+    const cursor = { created_at: new Date('2026-08-15T00:00:00Z'), id: 'c1' };
+    await expect(
+      svc.findInteractionsPage({ from, to, cursor, limit: 5000 }),
+    ).resolves.toBe(rows);
+    const [sql, params] = dsQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('ORDER BY l.created_at, l.id');
+    expect(sql).toContain('l.created_at <= $1');
+    expect(sql).toContain('(l.created_at, l.id) > ($3, $4::uuid)');
+    expect(sql).toContain('LIMIT $5');
+    expect(params).toEqual([to, from, cursor.created_at, 'c1', 5000]);
+  });
+
+  it('first page (no cursor, no from) passes nulls', async () => {
+    const dsQuery = jest.fn().mockResolvedValue([]);
+    const svc = svcWith(dsQuery);
+    await svc.findInteractionsPage({ from: null, to, cursor: null, limit: 10 });
+    expect((dsQuery.mock.calls[0] as unknown[])[1]).toEqual([
+      to,
+      null,
+      null,
+      null,
+      10,
+    ]);
+  });
+
+  it('re-derives visibility + pivots transcripts + IST timestamps in SQL', async () => {
+    const dsQuery = jest.fn().mockResolvedValue([]);
+    const svc = svcWith(dsQuery);
+    await svc.findInteractionsPage({ from: null, to, cursor: null, limit: 1 });
+    const sql = (dsQuery.mock.calls[0] as [string])[0];
+    expect(sql).toContain('m.rolled_back = false'); // convention: inline reads re-derive
+    expect(sql).toContain("FILTER (WHERE m.source = 'sarvam')");
+    expect(sql).toContain("FILTER (WHERE m.source = 'azure')");
+    expect(sql).toContain("FILTER (WHERE m.source = 'reverie')");
+    expect(sql).toContain("AT TIME ZONE 'Asia/Kolkata'");
+    expect(sql).toContain('r.id = u.referrer_user_id');
+    expect(sql).toContain("l.snapshot->'context'->>'stateTransitionId'");
+  });
+});

@@ -7,12 +7,15 @@ import {
   Param,
   Query,
   Body,
+  Res,
   UnauthorizedException,
   NotFoundException,
   BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
+import { once } from 'events';
 import * as bcrypt from 'bcrypt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -36,6 +39,12 @@ import {
 } from './user.dto';
 import { UserActivityService } from './user-activity.service';
 import { UserService } from './user.service';
+import {
+  INTERACTIONS_BATCH_SIZE,
+  interactionRowToCsvLine,
+  interactionsCsvFooterLine,
+  interactionsCsvHeaderLine,
+} from './interactions-csv';
 import {
   addDays,
   istDateIso,
@@ -69,6 +78,68 @@ export class UserController {
 
   // Declared before the ':id/*' routes so 'dashboard' is never captured as an
   // id. Cached inside the service — see getDashboardSummary.
+  // Full student-interaction export, streamed as CSV (dev-role only — the
+  // dashboard proxy's admin allowlist does not include this path). Keyset
+  // batches keep memory constant; rows are oldest-first so a cut-off
+  // download is still a valid file, and the trailing "# export complete"
+  // marker distinguishes complete from truncated (resume = re-run with
+  // from = the last row's timestamp).
+  @Get('interactions.csv')
+  async interactionsCsv(
+    @Res() res: Response,
+    @Query('from') fromRaw?: string,
+    @Query('to') toRaw?: string,
+  ): Promise<void> {
+    const parse = (label: string, v?: string): Date | null => {
+      if (v === undefined || v === '') return null;
+      const d = new Date(v);
+      if (isNaN(d.getTime())) {
+        throw new BadRequestException(`${label} must be an ISO date`);
+      }
+      return d;
+    };
+    const from = parse('from', fromRaw);
+    const requestedTo = parse('to', toRaw);
+    // Pin the upper bound at request start so rows written mid-stream can
+    // never shift the keyset ordering under us.
+    const now = new Date();
+    const to = requestedTo === null || requestedTo > now ? now : requestedTo;
+    if (from !== null && from > to) {
+      throw new BadRequestException('from must not be after to');
+    }
+
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('Content-Disposition', 'attachment; filename="interactions.csv"');
+
+    const write = async (chunk: string): Promise<void> => {
+      if (!res.write(chunk)) await once(res, 'drain');
+    };
+
+    await write(interactionsCsvHeaderLine());
+    let cursor: { created_at: Date; id: string } | null = null;
+    let total = 0;
+    for (;;) {
+      const rows = await this.userService.findInteractionsPage({
+        from,
+        to,
+        cursor,
+        limit: INTERACTIONS_BATCH_SIZE,
+      });
+      for (const row of rows) {
+        await write(interactionRowToCsvLine(row));
+      }
+      total += rows.length;
+      if (rows.length < INTERACTIONS_BATCH_SIZE) break;
+      const last = rows[rows.length - 1];
+      cursor = { created_at: last.created_at, id: last.lesson_state_id };
+    }
+    await write(interactionsCsvFooterLine(total));
+    res.end();
+    this.logger.log(
+      `interactions.csv: streamed ${total} rows (from=${fromRaw ?? 'all'}, to=${to.toISOString()})`,
+    );
+  }
+
   @Get('dashboard/summary')
   async dashboardSummary(): Promise<DashboardSummaryResponse> {
     return this.userActivityService.getDashboardSummary();
