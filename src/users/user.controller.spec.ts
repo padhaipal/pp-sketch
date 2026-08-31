@@ -22,6 +22,7 @@ import {
 import * as bcrypt from 'bcrypt';
 import type { Repository } from 'typeorm';
 import { UserController } from './user.controller';
+import { INTERACTIONS_BATCH_SIZE } from './interactions-csv';
 import type { UserEntity } from './user.entity';
 import type { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
 import type { ScoreEntity } from '../literacy/score/score.entity';
@@ -1192,5 +1193,123 @@ describe('UserController.login + patchUser — bcrypt args', () => {
     expect(userRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ password_hash: 'newhash' }),
     );
+  });
+});
+
+describe('UserController.interactionsCsv', () => {
+  function makeRes() {
+    return {
+      set: jest.fn(),
+      write: jest.fn().mockReturnValue(true),
+      end: jest.fn(),
+    };
+  }
+
+  function written(res: { write: jest.Mock }): string {
+    return res.write.mock.calls.map((c: unknown[]) => c[0] as string).join('');
+  }
+
+  const baseRow = {
+    lesson_state_id: 'lls-1',
+    created_at: new Date('2026-08-30T05:00:00Z'),
+    timestamp_ist: '2026-08-30 10:30:00',
+    student_name: 'अमन',
+    phone: '919876543210',
+    referred_by_name: null,
+    referred_by_phone: null,
+    level: 8,
+    lesson_type: 'word' as const,
+    content: 'कमल',
+    correct_answer: 'कमल',
+    answer_correct: true,
+    sarvam_transcript: null,
+    azure_transcript: null,
+    reverie_transcript: null,
+    score_change: null,
+    letters_touched: null,
+    starting_state: null,
+    final_state: 'complete',
+    state_transition_id: 'कमल-word-complete-correct-first',
+    passage_id: null,
+    user_message_id: 'mm-1',
+  };
+
+  it('streams BOM header, rows across keyset pages, and the completion footer', async () => {
+    const page1 = Array.from({ length: INTERACTIONS_BATCH_SIZE }, (_, i) => ({
+      ...baseRow,
+      lesson_state_id: `lls-${i}`,
+    }));
+    const page2 = [{ ...baseRow, lesson_state_id: 'lls-last' }];
+    const findInteractionsPage = jest
+      .fn()
+      .mockResolvedValueOnce(page1)
+      .mockResolvedValueOnce(page2);
+    const ctrl = makeController({ userSvc: { findInteractionsPage } });
+    const res = makeRes();
+
+    await ctrl.interactionsCsv(res as never, undefined, undefined);
+
+    expect(res.set).toHaveBeenCalledWith(
+      'Content-Type',
+      'text/csv; charset=utf-8',
+    );
+    expect(res.set).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'attachment; filename="interactions.csv"',
+    );
+    const out = written(res);
+    expect(out.startsWith('\uFEFFtimestamp_ist,')).toBe(true);
+    expect(
+      out
+        .trimEnd()
+        .endsWith(
+          `# export complete, ${INTERACTIONS_BATCH_SIZE + 1} rows`.trimEnd(),
+        ),
+    ).toBe(true);
+    expect(res.end).toHaveBeenCalled();
+
+    // Second page resumes from the last row of the first.
+    expect(findInteractionsPage).toHaveBeenCalledTimes(2);
+    const secondArgs = findInteractionsPage.mock.calls[1][0] as {
+      cursor: { id: string };
+    };
+    expect(secondArgs.cursor.id).toBe(`lls-${INTERACTIONS_BATCH_SIZE - 1}`);
+  });
+
+  it('clamps to = min(now, requested to) and forwards from', async () => {
+    const findInteractionsPage = jest.fn().mockResolvedValue([]);
+    const ctrl = makeController({ userSvc: { findInteractionsPage } });
+    const res = makeRes();
+    const before = Date.now();
+    await ctrl.interactionsCsv(
+      res as never,
+      '2026-01-01T00:00:00Z',
+      '2999-01-01T00:00:00Z',
+    );
+    const args = findInteractionsPage.mock.calls[0][0] as {
+      from: Date;
+      to: Date;
+    };
+    expect(args.from.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+    expect(args.to.getTime()).toBeGreaterThanOrEqual(before);
+    expect(args.to.getTime()).toBeLessThanOrEqual(Date.now());
+    // Empty result still yields header + zero-row footer.
+    expect(written(res)).toContain('# export complete, 0 rows');
+  });
+
+  it('rejects malformed dates and from > to', async () => {
+    const ctrl = makeController({
+      userSvc: { findInteractionsPage: jest.fn() },
+    });
+    await expect(
+      ctrl.interactionsCsv(makeRes() as never, 'not-a-date', undefined),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      ctrl.interactionsCsv(
+        makeRes() as never,
+        '2026-08-02T00:00:00Z',
+        '2026-08-01T00:00:00Z',
+      ),
+    ).rejects.toThrow(BadRequestException);
   });
 });

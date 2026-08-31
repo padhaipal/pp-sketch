@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { validate as isUuid } from 'uuid';
 import { UserEntity } from './user.entity';
+import { InteractionRow } from './interactions-csv';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
 import { ScoreService } from '../literacy/score/score.service';
@@ -195,6 +196,80 @@ function snapshotSeries(
 @Injectable()
 export class UserService {
   private readonly logger = new Logger(UserService.name);
+
+  /**
+   * One keyset page of the interactions CSV export (oldest first). Inline
+   * raw-SQL read; re-derives rolled_back = false on the transcript join per
+   * the repo conventions. `to` is the caller-clamped upper bound; `cursor`
+   * is the (created_at, id) of the last row already emitted.
+   */
+  async findInteractionsPage(options: {
+    from: Date | null;
+    to: Date;
+    cursor: { created_at: Date; id: string } | null;
+    limit: number;
+  }): Promise<InteractionRow[]> {
+    const { from, to, cursor, limit } = options;
+    return await this.dataSource.query(
+      `SELECT l.id AS lesson_state_id,
+              l.created_at,
+              to_char(l.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS timestamp_ist,
+              u.name AS student_name,
+              u.external_id AS phone,
+              r.name AS referred_by_name,
+              r.external_id AS referred_by_phone,
+              l.level,
+              CASE WHEN l.passage_id IS NULL THEN 'word' ELSE 'passage' END AS lesson_type,
+              l.word AS content,
+              l.answer AS correct_answer,
+              l.answer_correct,
+              t.sarvam AS sarvam_transcript,
+              t.azure AS azure_transcript,
+              t.reverie AS reverie_transcript,
+              sc.score_change,
+              sc.letters_touched,
+              prev.final_state AS starting_state,
+              l.snapshot->>'value' AS final_state,
+              l.snapshot->'context'->>'stateTransitionId' AS state_transition_id,
+              l.passage_id,
+              l.user_message_id
+       FROM literacy_lesson_states l
+       JOIN users u ON u.id = l.user_id
+       LEFT JOIN users r ON r.id = u.referrer_user_id
+       -- The snapshot stores the post-turn state, so this turn's starting
+       -- state is the previous turn's final state ((user_id, created_at)
+       -- index walk).
+       LEFT JOIN LATERAL (
+         SELECT p.snapshot->>'value' AS final_state
+         FROM literacy_lesson_states p
+         WHERE p.user_id = l.user_id
+           AND (p.created_at, p.id) < (l.created_at, l.id)
+         ORDER BY p.created_at DESC, p.id DESC
+         LIMIT 1
+       ) prev ON true
+       -- STT transcripts of the child's voice note, pivoted per engine.
+       LEFT JOIN LATERAL (
+         SELECT MAX(m.text) FILTER (WHERE m.source = 'sarvam') AS sarvam,
+                MAX(m.text) FILTER (WHERE m.source = 'azure') AS azure,
+                MAX(m.text) FILTER (WHERE m.source = 'reverie') AS reverie
+         FROM media_metadata m
+         WHERE m.input_media_id = l.user_message_id
+           AND m.source IN ('sarvam', 'azure', 'reverie')
+           AND m.rolled_back = false
+       ) t ON true
+       LEFT JOIN LATERAL (
+         SELECT SUM(s.score) AS score_change, COUNT(*) AS letters_touched
+         FROM scores s
+         WHERE s.user_message_id = l.user_message_id AND s.user_id = l.user_id
+       ) sc ON true
+       WHERE l.created_at <= $1
+         AND ($2::timestamptz IS NULL OR l.created_at >= $2)
+         AND ($3::timestamptz IS NULL OR (l.created_at, l.id) > ($3, $4::uuid))
+       ORDER BY l.created_at, l.id
+       LIMIT $5`,
+      [to, from, cursor?.created_at ?? null, cursor?.id ?? null, limit],
+    );
+  }
 
   constructor(
     @InjectRepository(UserEntity)
