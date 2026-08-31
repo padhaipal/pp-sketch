@@ -49,6 +49,18 @@ const SECOND_WORD_ROW_COUNT = 4;
 // <10 words → 8, <40 → 9, <70 → 10, <110 → 11, else 12.
 const SENTENCE_LEVEL_THRESHOLD = 7;
 const MAX_LESSON_LEVEL = 12;
+// Ops lever: MAX_LESSON_LEVEL_CAP (env) lowers the selection ceiling — e.g. 7
+// holds every student in the word band while the passage bank is re-seeded
+// (the 2026-08 TEMP cap of #65/#72, now toggled via Railway instead of a
+// code revert). Unset or outside [MIN_WORD_LENGTH_FLOOR, MAX_LESSON_LEVEL]
+// means no extra cap. Read per selection so specs can toggle it; in prod a
+// Railway variable change redeploys the service.
+function effectiveMaxLessonLevel(): number {
+  const cap = parseInt(process.env.MAX_LESSON_LEVEL_CAP ?? '', 10);
+  return cap >= MIN_WORD_LENGTH_FLOOR && cap <= MAX_LESSON_LEVEL
+    ? cap
+    : MAX_LESSON_LEVEL;
+}
 // Sentence-band (level ≥ 8) progression: the SQL only ships the raw recent
 // turns + a lifetime done count; grouping into lessons and the ±1/hold
 // decision live in the pure computeSentenceBandSignal
@@ -800,6 +812,7 @@ export class LiteracyLessonService {
         }
         maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR);
         maxLength = Math.min(maxLength, MAX_LESSON_LEVEL);
+        maxLength = Math.min(maxLength, effectiveMaxLessonLevel());
         span.setAttribute('pp.lesson.word.max_length', maxLength);
         span.setAttribute('pp.lesson.word.prev_level', prevLevel ?? -1);
 
