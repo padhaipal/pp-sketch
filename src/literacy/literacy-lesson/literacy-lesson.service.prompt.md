@@ -148,6 +148,27 @@ This enforces the max-length rule and avoids repeating any of the last `RECENT_W
 
 7.) Return the selected word.
 
+## MAX_LESSON_LEVEL_CAP — ops-toggleable level ceiling (2026-08)
+
+Env var `MAX_LESSON_LEVEL_CAP` (integer). When set to a value in
+`[MIN_WORD_LENGTH_FLOOR, MAX_LESSON_LEVEL]`, `effectiveMaxLessonLevel()`
+applies it in selectNextString as a final `Math.min` clamp AFTER the ratchet
+base and the MAX_LESSON_LEVEL clamp. Unset, non-numeric, or out-of-range
+means no extra cap. Read per selection (Railway redeploys on variable change,
+so no restart step; specs toggle `process.env` directly).
+
+Setting it to 7 reproduces the 2026-08 TEMP level-7 cap (#65, reverted in
+#72): every student is held in the word band; NOTHING else is disabled — the
+sentence machine states, selectPassage, computeSentenceBandSignal,
+comprehension handling, and passage generation/gates are all live and simply
+unreachable from selection. Mid-lesson students continue at their stored
+level (continue path skips selection), so completedReading at 8+ still
+fires. While capped, new lesson rows are written at the capped level, so
+prev_level ratchets down; on lifting the cap students re-climb (the +3
+accelerator can jump 7→10 in one selection).
+
+TOGGLE: set/unset the Railway variable. No code change in either direction.
+
 ## 2026-07: passages, comprehension, new level thresholds
 
 - MAX_LESSON_LEVEL restored to 12. Level ≥ 8 selects a random ready reading

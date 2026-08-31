@@ -2116,6 +2116,80 @@ describe('LiteracyLessonService — difficulty cap ratchet', () => {
   });
 });
 
+// MAX_LESSON_LEVEL_CAP (env) — the ops-toggleable selection ceiling. These
+// pin the ONLY behavioural change when the cap is set: the level a student
+// can be assigned. Every other suite runs with the var unset (no cap).
+describe('LiteracyLessonService — MAX_LESSON_LEVEL_CAP env cap', () => {
+  beforeEach(() => {
+    process.env.MAX_LESSON_LEVEL_CAP = '7';
+  });
+  afterEach(() => {
+    delete process.env.MAX_LESSON_LEVEL_CAP;
+  });
+
+  it('a signal that would give level 8 is capped to 7', async () => {
+    const { maxLength, levelParam } = await runLevel({
+      prev_level: 7,
+      recent_words: ['अब'],
+      unique_in_add_window: 3, // +1 → would be 8
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(7);
+    expect(levelParam).toBe(7);
+  });
+
+  it('a stored prev_level of 10 is pulled down to 7', async () => {
+    const { maxLength, levelParam } = await runLevel({
+      prev_level: 10,
+      recent_words: ['अब कमल'],
+      // no two-lesson signal → the band would hold at 10
+    });
+    expect(maxLength).toBe(7);
+    expect(levelParam).toBe(7);
+  });
+
+  it('a +3 boost that would cross into the passage band is held at 7', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 6, // +3 → 9 (passage lesson)
+      recent_words: ['अब'],
+      unique_in_boost_window: 3,
+    });
+    expect(maxLength).toBe(7);
+  });
+
+  it('word-band behaviour below the cap is unchanged (hold at 6)', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 6,
+      recent_words: ['अब'],
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(6);
+  });
+
+  it('an out-of-range value (13) is ignored — level 8 stays reachable', async () => {
+    process.env.MAX_LESSON_LEVEL_CAP = '13';
+    const { maxLength, levelParam } = await runLevel({
+      prev_level: 7,
+      recent_words: ['अब'],
+      unique_in_add_window: 3,
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(8);
+    expect(levelParam).toBe(8);
+  });
+
+  it('a non-numeric value is ignored — level 8 stays reachable', async () => {
+    process.env.MAX_LESSON_LEVEL_CAP = 'seven';
+    const { maxLength } = await runLevel({
+      prev_level: 7,
+      recent_words: ['अब'],
+      unique_in_add_window: 3,
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(8);
+  });
+});
+
 describe('LiteracyLessonService — cap cold-start (all levels null)', () => {
   it('derives the base from the most recent single word length', async () => {
     const { maxLength } = await runLevel({
