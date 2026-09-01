@@ -1418,5 +1418,12 @@ describe('UserService.findInteractionsPage', () => {
     expect(sql).toContain("AT TIME ZONE 'Asia/Kolkata'");
     expect(sql).toContain('r.id = u.referrer_user_id');
     expect(sql).toContain("l.snapshot->'context'->>'stateTransitionId'");
+    // Real container-parsed voice-note length, straight off the audio row.
+    expect(sql).toContain(
+      'LEFT JOIN media_metadata um ON um.id = l.user_message_id',
+    );
+    expect(sql).toContain(
+      "(um.media_details->>'duration_ms')::int AS audio_duration_ms",
+    );
   });
 });

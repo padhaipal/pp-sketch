@@ -34,6 +34,10 @@ export interface InteractionRow {
   sarvam_transcript: string | null;
   azure_transcript: string | null;
   reverie_transcript: string | null;
+  /** Real container-parsed voice-note length (media_details.duration_ms,
+   * see audio-duration.utils.ts) — never a file-size estimate. Null for
+   * flow-tap turns (no recording) and pre-capture historic rows. */
+  audio_duration_ms: number | null;
   score_change: string | null;
   letters_touched: string | null;
   starting_state: string | null;
@@ -56,6 +60,7 @@ export const INTERACTIONS_CSV_HEADER = [
   'sarvam_transcript',
   'azure_transcript',
   'reverie_transcript',
+  'audio_duration_ms',
   'answer_status',
   'score_change',
   'letters_touched',
@@ -102,6 +107,7 @@ export function interactionRowToCsvLine(row: InteractionRow): string {
     row.sarvam_transcript,
     row.azure_transcript,
     row.reverie_transcript,
+    row.audio_duration_ms,
     answerStatus(row.answer_correct),
     row.score_change === null
       ? ''

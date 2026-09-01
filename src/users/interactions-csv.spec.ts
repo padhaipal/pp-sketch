@@ -27,6 +27,7 @@ function row(over: Partial<InteractionRow> = {}): InteractionRow {
     sarvam_transcript: 'क्या तुम इसे पढ़ सकते हो',
     azure_transcript: null,
     reverie_transcript: null,
+    audio_duration_ms: 5230,
     score_change: '1.5',
     letters_touched: '12',
     starting_state: 'sentence',
@@ -74,6 +75,17 @@ describe('interactionRowToCsvLine', () => {
     );
     expect(cells[INTERACTIONS_CSV_HEADER.indexOf('lesson_state_id')]).toBe(
       'lls-1',
+    );
+    expect(cells[INTERACTIONS_CSV_HEADER.indexOf('audio_duration_ms')]).toBe(
+      '5230',
+    );
+  });
+
+  it('audio_duration_ms null (flow tap / pre-capture row) → blank cell', () => {
+    const line = interactionRowToCsvLine(row({ audio_duration_ms: null }));
+    const cells = line.slice(0, -CSV_EOL.length).split(',');
+    expect(cells[INTERACTIONS_CSV_HEADER.indexOf('audio_duration_ms')]).toBe(
+      '',
     );
   });
 
@@ -162,6 +174,7 @@ describe('csvEscape — formula-injection hardening', () => {
         sarvam_transcript: null,
         azure_transcript: null,
         reverie_transcript: null,
+        audio_duration_ms: null,
         score_change: '-0.5',
         letters_touched: null,
         starting_state: null,
