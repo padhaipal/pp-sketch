@@ -193,6 +193,7 @@ export class UserService {
               t.sarvam AS sarvam_transcript,
               t.azure AS azure_transcript,
               t.reverie AS reverie_transcript,
+              (um.media_details->>'duration_ms')::int AS audio_duration_ms,
               sc.score_change,
               sc.letters_touched,
               prev.final_state AS starting_state,
@@ -203,6 +204,11 @@ export class UserService {
        FROM literacy_lesson_states l
        JOIN users u ON u.id = l.user_id
        LEFT JOIN users r ON r.id = u.referrer_user_id
+       -- The turn's voice note (user_message_id IS its media row). No
+       -- rolled_back filter: the child's recording length is factual
+       -- history. duration_ms is container-parsed at ingest
+       -- (audio-duration.utils.ts); flow taps have no audio row → NULL.
+       LEFT JOIN media_metadata um ON um.id = l.user_message_id
        -- The snapshot stores the post-turn state, so this turn's starting
        -- state is the previous turn's final state ((user_id, created_at)
        -- index walk).
