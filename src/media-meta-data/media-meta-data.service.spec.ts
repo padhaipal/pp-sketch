@@ -3870,6 +3870,7 @@ describe('searchPassages', () => {
       null,
       null,
       null,
+      null,
       100,
       0,
     ]);
@@ -3878,6 +3879,7 @@ describe('searchPassages', () => {
     // Count query reuses the same filters.
     expect(dsQuery.mock.calls[1][1]).toEqual([
       '%50\\%\\_off\\\\%',
+      null,
       null,
       null,
       null,
@@ -3898,8 +3900,13 @@ describe('searchPassages', () => {
     await service.searchPassages({
       passage_type: 'expository',
       question_type: 'R2.2',
+      level: 9,
     });
-    expect(dsQuery.mock.calls[0][1]).toEqual([
+    const [sql, params] = dsQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain(
+      "($10::int IS NULL OR (p.media_details->>'level')::int = $10)",
+    );
+    expect(params).toEqual([
       '%%',
       'expository',
       'R2.2',
@@ -3909,6 +3916,7 @@ describe('searchPassages', () => {
       null,
       null,
       null,
+      9,
       20,
       0,
     ]);
@@ -3965,6 +3973,8 @@ describe('searchPassages', () => {
 
   it.each([
     [{ passage_type: 'poem' }, 'passage_type must be one of'],
+    [{ level: 8.5 }, 'level must be a positive integer'],
+    [{ level: 0 }, 'level must be a positive integer'],
     [{ question_type: 'R9.9' }, 'question_type must be one of'],
     [{ media_type: 'hologram' }, 'media_type must be one of'],
     [{ quality: 'maybe' }, 'quality must be one of'],

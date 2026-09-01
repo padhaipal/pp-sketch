@@ -225,6 +225,7 @@ describe('MediaMetaDataController.searchPassages', () => {
     await ctrl.searchPassages(
       'कहानी',
       'narrative',
+      '9',
       'R1.1',
       'flow',
       '2026-08-20',
@@ -238,6 +239,7 @@ describe('MediaMetaDataController.searchPassages', () => {
     expect(searchPassages).toHaveBeenCalledWith({
       q: 'कहानी',
       passage_type: 'narrative',
+      level: 9,
       question_type: 'R1.1',
       media_type: 'flow',
       created_after: '2026-08-20',
