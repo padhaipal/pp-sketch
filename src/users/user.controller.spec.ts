@@ -448,6 +448,80 @@ describe('UserController.userMedia', () => {
     expect(m3.starting_state).toBeNull();
     expect(m3.answer).toBe('papa');
     expect(m3.level).toBeNull(); // pre-migration row surfaces as null
+    // No passage read in this fixture → wpm null everywhere.
+    expect(out.media.map((m) => m.wpm)).toEqual([null, null, null]);
+  });
+
+  it('wpm: words ÷ container-parsed duration for passage reads; null for single words and missing duration', async () => {
+    const user = { id: 'u1', name: 'A', external_id: '919999990001' };
+    const media = [
+      // 4-word sentence read in 12s → 20 wpm.
+      {
+        id: 'm-passage',
+        created_at: new Date('2026-04-27T12:00:00Z'),
+        s3_key: 's3',
+        media_details: { duration_ms: 12_000 },
+      },
+      // Sentence but no duration captured (old row) → null, never estimated.
+      {
+        id: 'm-no-duration',
+        created_at: new Date('2026-04-27T11:00:00Z'),
+        s3_key: 's3',
+        media_details: {},
+      },
+      // Single word with duration → null (not a passage read).
+      {
+        id: 'm-word',
+        created_at: new Date('2026-04-27T10:00:00Z'),
+        s3_key: 's3',
+        media_details: { duration_ms: 5_000 },
+      },
+    ];
+    const lessonStates = [
+      {
+        user_message_id: 'm-passage',
+        word: 'अब कमल इधर आ',
+        answer: null,
+        answer_correct: true,
+        snapshot: {},
+        level: 8,
+      },
+      {
+        user_message_id: 'm-no-duration',
+        word: 'अब कमल इधर आ',
+        answer: null,
+        answer_correct: true,
+        snapshot: {},
+        level: 8,
+      },
+      {
+        user_message_id: 'm-word',
+        word: 'कमल',
+        answer: null,
+        answer_correct: true,
+        snapshot: {},
+        level: 4,
+      },
+    ];
+    const ctrl = makeController({
+      userRepo: makeRepo({ findOneBy: jest.fn().mockResolvedValue(user) }),
+      mediaRepo: makeRepo({
+        find: jest.fn().mockResolvedValue(media),
+        createQueryBuilder: jest.fn().mockReturnValue(makeQB([])),
+      }),
+      lessonStateRepo: makeRepo({
+        createQueryBuilder: jest.fn().mockReturnValue(makeQB(lessonStates)),
+      }),
+      scoreRepo: makeRepo({
+        manager: { query: jest.fn().mockResolvedValue([]) },
+      }),
+    });
+
+    const out = await ctrl.userMedia('u1');
+    const byId = new Map(out.media.map((m) => [m.id, m.wpm]));
+    expect(byId.get('m-passage')).toBe(20);
+    expect(byId.get('m-no-duration')).toBeNull();
+    expect(byId.get('m-word')).toBeNull();
   });
 });
 

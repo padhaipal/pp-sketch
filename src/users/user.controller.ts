@@ -479,6 +479,17 @@ export class UserController {
       user: { name: user.name, phone: user.external_id },
       media: media.map((m) => {
         const lesson = lessonMap.get(m.id);
+        // Reading speed for passage-read turns only: the lesson row's word
+        // column stores the joined sentence there (>= 2 tokens; drill turns
+        // store a single word), and duration_ms is the container-parsed
+        // voice-note length captured at ingest (audio-duration.utils.ts).
+        const words = (lesson?.word ?? '').split(/\s+/).filter(Boolean).length;
+        const durationMs = (m.media_details as { duration_ms?: number } | null)
+          ?.duration_ms;
+        const wpm =
+          words >= 2 && typeof durationMs === 'number' && durationMs > 0
+            ? Math.round(words / (durationMs / 60_000))
+            : null;
         return {
           id: m.id,
           created_at: m.created_at,
@@ -491,6 +502,7 @@ export class UserController {
           score_changes: scoreChangeMap.get(m.id) ?? [],
           final_state: lesson?.final_state ?? null,
           level: lesson?.level ?? null,
+          wpm,
         };
       }),
     };
