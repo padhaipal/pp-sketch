@@ -129,6 +129,7 @@ export class MediaMetaDataController {
   async searchPassages(
     @Query('q') q?: string,
     @Query('passage_type') passageType?: string,
+    @Query('level') level?: string,
     @Query('question_type') questionType?: string,
     @Query('media_type') mediaType?: string,
     @Query('created_after') createdAfter?: string,
@@ -142,6 +143,7 @@ export class MediaMetaDataController {
     return this.mediaMetaDataService.searchPassages({
       q,
       passage_type: passageType,
+      level: level !== undefined ? parseInt(level, 10) : undefined,
       question_type: questionType,
       media_type: mediaType,
       created_after: createdAfter,

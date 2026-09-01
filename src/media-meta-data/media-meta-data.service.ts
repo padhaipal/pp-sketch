@@ -1780,6 +1780,7 @@ export class MediaMetaDataService {
   async searchPassages(options: {
     q?: string;
     passage_type?: string;
+    level?: number;
     question_type?: string;
     media_type?: string;
     created_after?: string;
@@ -1814,6 +1815,12 @@ export class MediaMetaDataService {
       throw new BadRequestException(
         `passage_type must be one of: ${VALID_PASSAGE_TYPES.join(', ')}`,
       );
+    }
+    // Passage word-count level (media_details.level): 8–13 today, but any
+    // positive integer is accepted so a future band re-cut needs no edit.
+    const level = options.level ?? null;
+    if (level !== null && (!Number.isInteger(level) || level < 1)) {
+      throw new BadRequestException('level must be a positive integer');
     }
     const questionType = options.question_type?.trim() || null;
     if (
@@ -1896,6 +1903,7 @@ export class MediaMetaDataService {
            )
            SELECT 1 FROM fam WHERE media_type = $4
          ))
+         AND ($10::int IS NULL OR (p.media_details->>'level')::int = $10)
          AND ($5::timestamptz IS NULL OR p.created_at >= $5)
          AND ($6::timestamptz IS NULL OR p.created_at <= $6)
          AND ($7::text IS NULL OR (
@@ -1939,7 +1947,7 @@ export class MediaMetaDataService {
        ${joins}
        WHERE ${where}
        ORDER BY p.created_at DESC, p.id
-       LIMIT $10 OFFSET $11`,
+       LIMIT $11 OFFSET $12`,
       [
         pattern,
         passageType,
@@ -1950,6 +1958,7 @@ export class MediaMetaDataService {
         qualityFilter,
         judgeFilter,
         solvabilityFilter,
+        level,
         limit,
         offset,
       ],
@@ -1966,6 +1975,7 @@ export class MediaMetaDataService {
         qualityFilter,
         judgeFilter,
         solvabilityFilter,
+        level,
       ],
     );
     return {
