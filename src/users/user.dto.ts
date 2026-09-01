@@ -174,6 +174,9 @@ export interface MediaRow {
   answer_correct: boolean | null;
   score_changes: ScoreChangeRow[];
   final_state: string | null;
+  // Reading speed of a passage-read recording (words / container-parsed
+  // duration); null for word/drill turns and rows without duration_ms.
+  wpm: number | null;
 }
 
 export interface UserInfoRow {
