@@ -22,43 +22,10 @@ import {
   validateUpdateUserOptions,
   validateCreateUserOptions,
   partitionUserIdentifiers,
-  LiteracyTestScore,
   LiteracyTestScores,
   SnapshotTestScore,
   TestSnapshotPoint,
 } from './user.dto';
-
-// Rolling fraction-correct over a fixed window: one history point per attempt
-// from the moment the window first fills. O(n) single pass. NIPUN grade 1
-// only — grades 2/3 and MPL-B use snapshot scoring below.
-function rollingScore(
-  attempts: { at: Date; correct: boolean }[],
-  windowSize: number,
-): LiteracyTestScore {
-  if (attempts.length < windowSize) {
-    return {
-      status: 'insufficient_data',
-      window_size: windowSize,
-      attempts_available: attempts.length,
-    };
-  }
-  const history: { at: Date; score: number }[] = [];
-  let sum = 0;
-  for (let i = 0; i < attempts.length; i++) {
-    sum += attempts[i].correct ? 1 : 0;
-    if (i >= windowSize) sum -= attempts[i - windowSize].correct ? 1 : 0;
-    if (i >= windowSize - 1) {
-      history.push({ at: attempts[i].at, score: sum / windowSize });
-    }
-  }
-  return {
-    status: 'ok',
-    window_size: windowSize,
-    attempts_available: attempts.length,
-    latest_score: history[history.length - 1].score,
-    history,
-  };
-}
 
 // ─── Snapshot scoring (NIPUN grades 2/3 + MPL-B) ─────────────────────────────
 
@@ -676,20 +643,13 @@ export class UserService {
   }
 
   /**
-   * Digital-proxy literacy test scores (NIPUN grades 1-3 + MPL-B). Returns
+   * Digital-proxy literacy test scores (NIPUN grades 2/3 + MPL-B). Returns
    * null when the user does not exist; per-test status 'insufficient_data'
    * when there is not enough answer history yet.
    *
-   * Grade 1 is unchanged: a rolling window over level-8 sentence FIRST read
-   * attempts (complex query #1 — the stid is either
-   * `…-sentence-complete-correct-first` / `…-sentence-comprehension-correct-first`
-   * (success; level-8 passages skip comprehension, see
-   * literacy-lesson.machine.ts) or a drill/wrong-retry stid (failure); retry
-   * successes deliberately never appear).
-   *
-   * Grades 2/3 and MPL-B are snapshot tests over comprehension answers
-   * (complex query #2 — the tapped option is joined to its question and the
-   * question's passage). Only a student's FIRST attempt at each question
+   * All three are snapshot tests over comprehension answers (the
+   * comprehension query below — the tapped option is joined to its question
+   * and the question's passage). Only a student's FIRST attempt at each question
    * counts: after seeing the explanation, repeats are invalidated. The
    * question's level is the passage's media_details.level (word-count level);
    * level-13 questions never qualify.
@@ -699,34 +659,6 @@ export class UserService {
   ): Promise<LiteracyTestScores | null> {
     const user = await this.findByIdOrExternalId(input);
     if (!user) return null;
-
-    interface FirstAttemptRow {
-      created_at: Date;
-      correct: boolean;
-    }
-    const firstAttempts: FirstAttemptRow[] = await this.dataSource.query(
-      `SELECT s.created_at,
-              ((s.snapshot->'context'->>'stateTransitionId')
-                LIKE '%-sentence-comprehension-correct-first'
-               OR (s.snapshot->'context'->>'stateTransitionId')
-                LIKE '%-sentence-complete-correct-first') AS correct
-       FROM literacy_lesson_states s
-       WHERE s.user_id = $1
-         AND s.level = 8
-         AND s.passage_id IS NOT NULL
-         AND (
-           (s.snapshot->'context'->>'stateTransitionId')
-             LIKE '%-sentence-comprehension-correct-first'
-           OR (s.snapshot->'context'->>'stateTransitionId')
-             LIKE '%-sentence-complete-correct-first'
-           OR (s.snapshot->'context'->>'stateTransitionId')
-             LIKE '%-sentence-word-drillWord'
-           OR (s.snapshot->'context'->>'stateTransitionId')
-             = 'sentence-sentence-wrong-retry'
-         )
-       ORDER BY s.created_at ASC`,
-      [user.id],
-    );
 
     interface ComprehensionRow {
       created_at: Date;
@@ -770,15 +702,6 @@ export class UserService {
       });
     }
 
-    const NIPUN_G1_WINDOW = 2;
-    const nipunGrade1 = rollingScore(
-      firstAttempts.map((r) => ({
-        at: r.created_at,
-        correct: r.correct === true,
-      })),
-      NIPUN_G1_WINDOW,
-    );
-
     const nipunGrade2Pool = dedupedAttempts.filter(
       (a) =>
         a.level !== null &&
@@ -798,7 +721,6 @@ export class UserService {
     );
 
     return {
-      nipun_grade_1: nipunGrade1,
       nipun_grade_2: snapshotSeries(nipunGrade2Pool, (prefix) =>
         nipunSnapshot(prefix, NIPUN_QUESTION_COUNT),
       ),
