@@ -477,17 +477,6 @@ export function validateCreateUserOptions(options: unknown): CreateUserOptions {
 
 // ─── Literacy proxy test scores (2026-07, reworked 2026-08) ──────────────────
 
-// Rolling-window score for the NIPUN grade 1 digital-proxy test. score values
-// are fractions correct in [0, 1]; history is one point per attempt from the
-// moment the window first fills, so callers can chart the score over time.
-export interface LiteracyTestScore {
-  status: 'ok' | 'insufficient_data';
-  window_size: number;
-  attempts_available: number;
-  latest_score?: number;
-  history?: { at: Date; score: number }[];
-}
-
 export interface TestSnapshotPoint {
   at: Date;
   score: number;
@@ -508,9 +497,6 @@ export interface SnapshotTestScore {
 }
 
 export interface LiteracyTestScores {
-  // Grade 1: last 2 level-8 sentence FIRST-time read attempts (a retry
-  // success does not count). Unchanged rolling-window output.
-  nipun_grade_1: LiteracyTestScore;
   // Grade 2: most recent 4 first attempts at level-10 R1.1/R1.2/R1.3
   // questions; pass at score > 0.5.
   nipun_grade_2: SnapshotTestScore;

@@ -1087,10 +1087,7 @@ describe('UserService.getLiteracyTestScores', () => {
 
   const day = (n: number) => new Date(2026, 6, n);
 
-  function firstAttempt(n: number, correct: boolean) {
-    return { created_at: day(n), correct };
-  }
-  // One comprehension-answer row as returned by complex query #2. question_id
+  // One comprehension-answer row as returned by the comprehension query. question_id
   // defaults to a per-day unique id; pass it explicitly to model repeats.
   function answer(
     n: number,
@@ -1122,11 +1119,7 @@ describe('UserService.getLiteracyTestScores', () => {
   }
   const rep = (type: string, count: number) => Array<string>(count).fill(type);
 
-  function scoreService(opts: {
-    firstAttempts?: unknown[];
-    answers?: unknown[];
-    user?: unknown;
-  }) {
+  function scoreService(opts: { answers?: unknown[]; user?: unknown }) {
     const repo = makeRepo();
     repo.findOneBy.mockResolvedValue(
       opts.user === undefined ? userRow : opts.user,
@@ -1134,9 +1127,6 @@ describe('UserService.getLiteracyTestScores', () => {
     const cache = makeCache();
     cache.get.mockResolvedValue(null);
     const dsQuery = jest.fn().mockImplementation(async (sql: string) => {
-      if (sql.includes('sentence-comprehension-correct-first')) {
-        return opts.firstAttempts ?? [];
-      }
       if (sql.includes('comprehension-complete')) return opts.answers ?? [];
       return [];
     });
@@ -1146,18 +1136,6 @@ describe('UserService.getLiteracyTestScores', () => {
   it('returns null for an unknown user', async () => {
     const { svc } = scoreService({ user: null });
     expect(await svc.getLiteracyTestScores(USER_ID)).toBeNull();
-  });
-
-  it('grade-1 first-attempt query counts level-8 sentence-complete-correct-first as a success', async () => {
-    const { svc, dsQuery } = scoreService({});
-    await svc.getLiteracyTestScores(USER_ID);
-    const sql = dsQuery.mock.calls
-      .map((c: unknown[]) => c[0] as string)
-      .find((q) => q.includes('sentence-comprehension-correct-first'))!;
-    expect(sql).toContain(
-      "LIKE '%-sentence-complete-correct-first') AS correct",
-    );
-    expect(sql).toContain('s.level = 8');
   });
 
   it('comprehension answers query joins WITHOUT rolled_back filters (retro quality culls must not erase earned history)', async () => {
@@ -1177,31 +1155,16 @@ describe('UserService.getLiteracyTestScores', () => {
   it('reports insufficient data across the board for a fresh user', async () => {
     const { svc } = scoreService({});
     const scores = (await svc.getLiteracyTestScores(USER_ID))!;
-    expect(scores.nipun_grade_1.status).toBe('insufficient_data');
-    expect(scores.nipun_grade_1.attempts_available).toBe(0);
     expect(scores.nipun_grade_2.status).toBe('insufficient_data');
     expect(scores.nipun_grade_2.attempts_available).toBe(0);
     expect(scores.nipun_grade_3.status).toBe('insufficient_data');
     expect(scores.mpl_b.status).toBe('insufficient_data');
     expect(scores.mpl_b.attempts_available).toBe(0);
-  });
-
-  it('computes NIPUN grade 1 over the last two level-8 first attempts with history', async () => {
-    const { svc } = scoreService({
-      firstAttempts: [
-        firstAttempt(1, false),
-        firstAttempt(2, true),
-        firstAttempt(3, true),
-      ],
-    });
-    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
-    const g1 = scores.nipun_grade_1;
-    expect(g1.status).toBe('ok');
-    expect(g1.window_size).toBe(2);
-    expect(g1.latest_score).toBe(1); // last two both correct
-    expect(g1.history).toEqual([
-      { at: day(2), score: 0.5 },
-      { at: day(3), score: 1 },
+    // The three-key response contract: nipun_grade_1 must never come back.
+    expect(Object.keys(scores).sort()).toEqual([
+      'mpl_b',
+      'nipun_grade_2',
+      'nipun_grade_3',
     ]);
   });
 

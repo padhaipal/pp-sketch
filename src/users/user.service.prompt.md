@@ -55,13 +55,10 @@ NOTE (2026-08): the comprehension first-attempts query's three
 media_metadata joins (option o → question q → passage p) deliberately carry
 NO rolled_back filter — a retroactively quality-culled passage must not
 erase a student's already-earned comprehension history (NIPUN grades 2/3,
-MPL-B). NIPUN grade 1 and its query are untouched.
+MPL-B).
 
 Digital-proxy literacy test scores:
-- NIPUN g1 (unchanged rolling window): last 2 level-8 sentence FIRST read
-  attempts (success = the `…-sentence-comprehension-correct-first` stid;
-  drill/wrong-retry rows are the failures; retry successes never count).
-- Everything else counts only a student's FIRST attempt per question (deduped
+- Every test counts only a student's FIRST attempt per question (deduped
   by question id — after seeing the explanation, repeats are invalidated).
   The question's level is its passage's media_details.level; level 13 never
   qualifies. Question types are the reading subconstructs R1.1-R3.2.
@@ -75,5 +72,5 @@ Digital-proxy literacy test scores:
   history[] = the snapshot replayed over every chronological prefix
   (insufficient prefixes skipped); latest = final history entry.
 Question types/levels come from media_details on the option's question row
-and its parent passage row (complex queries #1/#2 in the method). Exposed
+and its parent passage row (the comprehension query in the method). Exposed
 at GET /users/:id/literacy-test-scores.

@@ -256,9 +256,9 @@ export class UserController {
     });
   }
 
-  // Digital-proxy literacy test scores (NIPUN grades 1-3 + AMPL-B): latest
-  // rolling-window score + score-over-time history per test, or
-  // 'insufficient_data' while a window has not filled.
+  // Digital-proxy literacy test scores (NIPUN grades 2-3 + MPL-B): latest
+  // snapshot score + score-over-time history per test, or
+  // 'insufficient_data' while there is not enough answer history yet.
   @Get(':id/literacy-test-scores')
   async literacyTestScores(@Param('id') id: string) {
     const scores = await this.userService.getLiteracyTestScores(id);
