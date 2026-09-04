@@ -2335,13 +2335,22 @@ describe('LiteracyLessonService — fast-find accelerator (+3)', () => {
     expect(maxLength).toBe(6);
   });
 
-  it('a boost can cross into the passage band', async () => {
+  it('a boost crossing into the passage band lands on level 8, never higher', async () => {
     const { maxLength } = await runLevel({
-      prev_level: 6, // +3 → 9 (passage lesson)
+      prev_level: 6, // +3 would be 9 — the band-entry cap lands it on 8
       recent_words: ['अब'],
       unique_in_boost_window: 3,
     });
-    expect(maxLength).toBe(9);
+    expect(maxLength).toBe(8);
+  });
+
+  it('a level-7 boost enters the sentence band at exactly 8 (no level skipping)', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 7, // +3 would be 10 — capped to the band entry level
+      recent_words: ['अब'],
+      unique_in_boost_window: 3,
+    });
+    expect(maxLength).toBe(8);
   });
 });
 
