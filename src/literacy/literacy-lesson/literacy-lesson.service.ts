@@ -808,6 +808,11 @@ export class LiteracyLessonService {
           } else {
             maxLength = base - 1;
           }
+          // Entering the sentence band always lands on level 8: the
+          // accelerator must never skip the short-passage levels
+          // (7 + 3 → 8, not 10; 6 + 3 → 8, not 9). Sentence-band
+          // progression (base ≥ 8, the branch above) is untouched.
+          maxLength = Math.min(maxLength, SENTENCE_LEVEL_THRESHOLD + 1);
           span.setAttribute('pp.lesson.word.accelerated', accelerate);
         }
         maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR);
