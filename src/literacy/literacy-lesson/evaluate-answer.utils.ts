@@ -10,6 +10,7 @@ const VOWEL_MATRA_SET = new Set(
 );
 
 const LONG_A = 'ा';
+const O_MATRA = 'ो';
 
 const FAMILIES: string[][] = [
   ['क', 'ख', 'क़', 'ख़'],
@@ -140,6 +141,24 @@ class EvaluateAnswer {
       .trim()
       .replace(/[^\p{L}\p{M}\p{N}]/gu, '')
       .toLocaleLowerCase();
+  }
+  /**
+   * True when consecutive tokens of the student's answer concatenate to the
+   * target. Recovers words the transcription engine split ("पन घट" -> "पनघट")
+   * without the substring false-positives that .includes() would allow on short
+   * targets.
+   */
+  private static tokensJoinTo(studentWords: string[], target: string): boolean {
+    const cleaned = studentWords.map((w) => this.clean(w)).filter(Boolean);
+    for (let i = 0; i < cleaned.length; i++) {
+      let joined = '';
+      for (let j = i; j < cleaned.length; j++) {
+        joined += cleaned[j];
+        if (joined.length > target.length) break;
+        if (joined === target) return true;
+      }
+    }
+    return false;
   }
 
   /* public APIs --------------------------------------------------- */
@@ -333,6 +352,57 @@ class EvaluateAnswer {
       cleanedFullStudentAnswer.includes('अचिकन')
     )
       return true;
+// Short targets the engine split across tokens. tokensJoinTo() is used
+    // instead of .includes() because e.g. 'जम' would otherwise match inside
+    // 'जमीन'.
+    if (
+      ['आओ', 'आए', 'गई', 'भय', 'नए', 'ऊन', 'गए', 'चख', 'जम'].includes(
+        cleanedCorrectAnswer,
+      ) &&
+      this.tokensJoinTo(studentWords, cleanedCorrectAnswer)
+    )
+      return true;
+
+    if (
+      cleanedCorrectAnswer === 'पनघट' &&
+      cleanedFullStudentAnswer.includes('पनघट')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'खटमल' &&
+      cleanedFullStudentAnswer.includes('कटमें')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'नटखट' &&
+      cleanedFullStudentAnswer.includes('नेटघट')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'नटखट' &&
+      cleanedFullStudentAnswer.includes('नेटखट')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'टीवी' &&
+      cleanedFullStudentAnswer.includes('टीवी')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'भजन' &&
+      cleanedFullStudentAnswer.includes('भजन')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'औसत' &&
+      cleanedFullStudentAnswer.includes('औसत')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'औसत' &&
+      cleanedFullStudentAnswer.includes('असत')
+    )
+      return true;
 
     return studentWords.some((studentWord) => {
       const cleanedStudentWord = this.clean(studentWord);
@@ -443,6 +513,73 @@ class EvaluateAnswer {
         return true;
       if (cleanedCorrectAnswer === 'इडली' && cleanedStudentWord === 'इटली')
         return true;
+      
+      // Nuqta and nasal-mark variants of the same word.
+      if (cleanedCorrectAnswer === 'माफ' && cleanedStudentWord === 'माफ़')
+        return true;
+      if (cleanedCorrectAnswer === 'गज' && cleanedStudentWord === 'गाज')
+        return true;
+      if (cleanedCorrectAnswer === 'गज' && cleanedStudentWord === 'गाज़')
+        return true;
+      if (cleanedCorrectAnswer === 'गज' && cleanedStudentWord === 'गज्ज')
+        return true;
+      if (cleanedCorrectAnswer === 'दरवाजा' && cleanedStudentWord === 'दरवाज़ा')
+        return true;
+      if (cleanedCorrectAnswer === 'सफेद' && cleanedStudentWord === 'सफ़ेद')
+        return true;
+      if (cleanedCorrectAnswer === 'जहाज' && cleanedStudentWord === 'जहाज़')
+        return true;
+      if (cleanedCorrectAnswer === 'दुख' && cleanedStudentWord === 'दुःख')
+        return true;
+      if (cleanedCorrectAnswer === 'दुख' && cleanedStudentWord === 'दुखी')
+        return true;
+      if (cleanedCorrectAnswer === 'यश' && cleanedStudentWord === 'यशः')
+        return true;
+      if (cleanedCorrectAnswer === 'आए' && cleanedStudentWord === 'आएँ')
+        return true;
+      if (cleanedCorrectAnswer === 'पोछा' && cleanedStudentWord === 'पोंछा')
+        return true;
+      if (cleanedCorrectAnswer === 'पूछ' && cleanedStudentWord === 'पूंछ')
+        return true;
+      if (cleanedCorrectAnswer === 'डोसा' && cleanedStudentWord === 'डोंसा')
+        return true;
+      if (cleanedCorrectAnswer === 'घटा' && cleanedStudentWord === 'घंटा')
+        return true;
+
+      // Doubled consonant produced by the engine.
+      if (cleanedCorrectAnswer === 'ठप' && cleanedStudentWord === 'ठप्प')
+        return true;
+      if (cleanedCorrectAnswer === 'ठप' && cleanedStudentWord === 'ठप्पू')
+        return true;
+      if (cleanedCorrectAnswer === 'ठप' && cleanedStudentWord === 'थाप')
+        return true;
+      if (cleanedCorrectAnswer === 'तन' && cleanedStudentWord === 'तन्न')
+        return true;
+      if (cleanedCorrectAnswer === 'छत' && cleanedStudentWord === 'छत्त')
+        return true;
+      if (cleanedCorrectAnswer === 'फट' && cleanedStudentWord === 'फट्ट')
+        return true;
+      if (cleanedCorrectAnswer === 'घट' && cleanedStudentWord === 'घट्ट')
+        return true;
+      if (cleanedCorrectAnswer === 'शक' && cleanedStudentWord === 'शक्क')
+        return true;
+      if (cleanedCorrectAnswer === 'जम' && cleanedStudentWord === 'जम्म')
+        return true;
+      if (cleanedCorrectAnswer === 'सच' && cleanedStudentWord === 'सच्च')
+        return true;
+      if (cleanedCorrectAnswer === 'चुन' && cleanedStudentWord === 'चुन्न')
+        return true;
+      if (cleanedCorrectAnswer === 'हजम' && cleanedStudentWord === 'हज्जम')
+        return true;
+
+      // Other recurring engine substitutions.
+      if (cleanedCorrectAnswer === 'नए' && cleanedStudentWord === 'नहीं')
+        return true;
+      if (cleanedCorrectAnswer === 'ढोल' && cleanedStudentWord === 'धौल')
+        return true;
+      if (cleanedCorrectAnswer === 'ढक' && cleanedStudentWord === 'डक')
+        return true;
+
       if (cleanedCorrectAnswer === 'सास' && cleanedStudentWord === 'साँस')
         return true;
       if (cleanedCorrectAnswer === 'सास' && cleanedStudentWord === 'सांस')
@@ -576,6 +713,22 @@ class EvaluateAnswer {
     const rawTarget = cleanedExampleChars[0];
     const target = MATRA_TO_VOWEL[rawTarget] ?? rawTarget;
 
+    // Hard coding: picture answers the first-grapheme rule cannot reach.
+    // ऋषि is heard as रि / री / रिशि, which start with र, not ऋ, and र is not
+    // in ऋ's family row. भालू loses its initial consonant. ओखली is mangled
+    // wholesale by both engines.
+    const IMAGE_HARDCODES: Record<string, string[]> = {
+      'ऋषि': ['रि', 'री', 'रिशि', 'रिषि', 'ऋषी'],
+      'भालू': ['आलू'],
+      'ओखली': ['अखली', 'आखली', 'पोखली', 'उखली', 'खल्ली'],
+    };
+    const imageAccepted = IMAGE_HARDCODES[cleanedExampleWord];
+    if (imageAccepted) {
+      for (const studentWord of studentAnswer.split(/\s+/)) {
+        if (imageAccepted.includes(this.clean(studentWord))) return true;
+      }
+    }
+    
     const splitStudentAnswer = studentAnswer.split(/\s+/);
     for (const studentWord of splitStudentAnswer) {
       const cleanedStudentWord = this.clean(studentWord);
@@ -682,6 +835,11 @@ class EvaluateAnswer {
       if (cleanedCorrectAnswer === 'ं' && cleaned === 'आं') return true;
       if (cleanedCorrectAnswer === 'ं' && cleaned === 'हं') return true;
 
+      // ऋ is transcribed as a bare 'ji'/'li' more often than as रि or री.
+      if (cleanedCorrectAnswer === 'ऋ' && cleaned === 'जी') return true;
+      if (cleanedCorrectAnswer === 'ऋ' && cleaned === 'ली') return true;
+      if (cleanedCorrectAnswer === 'ज' && cleaned === 'क्या') return true;
+
       // Bare-matra echo: cCount === 0 skips markPhoneme's exact-match path.
       if (
         VOWEL_MATRA_SET.has(cleanedCorrectAnswer) &&
@@ -708,7 +866,12 @@ class EvaluateAnswer {
 
     if (baseMatches) {
       if (word.slice(1) === correctAnswer.slice(1)) return true;
-      if (word.slice(1) === LONG_A && correctAnswer.slice(1) === '')
+      // A bare consonant read with a trailing long-आ or ो. Both are common
+      // dialectal renderings of the consonant on its own.
+      if (
+        (word.slice(1) === LONG_A || word.slice(1) === O_MATRA) &&
+        correctAnswer.slice(1) === ''
+      )
         return true;
     }
     return false;
