@@ -70,6 +70,14 @@ function effectiveMaxLessonLevel(): number {
 // Recently-lessoned passages excluded from re-selection (mirrors
 // RECENT_WORDS_TO_EXCLUDE for words).
 const RECENT_PASSAGES_TO_EXCLUDE = 10;
+// The three machine transitions that land in the `sentence` state — the
+// student is holding the reading passage and expected to record a full read
+// (see literacy-lesson.machine.ts). Extends the stale-restart window only.
+const PASSAGE_READ_STIDS = new Set([
+  'sentence-start-sentence-initial',
+  'sentence-sentence-wrong-retry',
+  'sentence-word-sentence-correct-retrySentence',
+]);
 // Joins the per-engine STT transcripts for the word-lesson evaluators. The
 // tilde is stripped by their clean() step so it can never match anything,
 // but it stops the tail of one engine's transcript and the head of the
@@ -194,10 +202,19 @@ export class LiteracyLessonService {
           lessonPath = 'fresh';
         } else {
           const age = Date.now() - new Date(currentState.created_at).getTime();
+          // Staleness window: reading (and rehearsing) a full passage takes
+          // far longer than a single-word answer, so the three transitions
+          // that leave the student holding the passage awaiting a read get
+          // 4 min 58 s; everything else keeps 2 min. The 15-min hard
+          // restart above is unchanged.
+          const awaitingPassageRead = PASSAGE_READ_STIDS.has(
+            currentState.snapshot?.context?.stateTransitionId ?? '',
+          );
+          const staleMs = awaitingPassageRead ? 298_000 : 120_000;
           if (age > 900_000) {
             startFresh = true;
             lessonPath = 'fresh';
-          } else if (age > 120_000) {
+          } else if (age > staleMs) {
             startFresh = true;
             isStaleRestart = true;
             lessonPath = 'stale-restart';

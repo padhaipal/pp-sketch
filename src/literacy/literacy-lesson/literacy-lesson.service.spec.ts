@@ -740,16 +740,21 @@ const seed = (graphemes: string[], score: number) =>
   graphemes.map((grapheme) => ({ grapheme, score })); // integer*2 → "seed"
 
 describe('LiteracyLessonService.processAnswer — lesson-path age boundaries', () => {
-  function stateAt(ageMs: number, status = 'active') {
+  function stateAt(ageMs: number, status = 'active', stid?: string) {
     const T = 1_900_000_000_000;
     const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(T);
     const repo = makeRepo();
     repo.findOne.mockResolvedValue({
       created_at: new Date(T - ageMs),
-      snapshot: { status, context: { word: 'कमल' } },
+      snapshot: { status, context: { word: 'कमल', stateTransitionId: stid } },
     });
     return { nowSpy, repo };
   }
+  const PASSAGE_READ_STIDS = [
+    'sentence-start-sentence-initial',
+    'sentence-sentence-wrong-retry',
+    'sentence-word-sentence-correct-retrySentence',
+  ];
 
   it('age exactly 900_000 ms → stale-restart, NOT fresh (kills >900000 → >=900000)', async () => {
     const { nowSpy, repo } = stateAt(900_000);
@@ -803,6 +808,88 @@ describe('LiteracyLessonService.processAnswer — lesson-path age boundaries', (
 
   it('age 120_001 ms → stale-restart', async () => {
     const { nowSpy, repo } = stateAt(120_001);
+    const dsQuery = jest
+      .fn()
+      .mockResolvedValueOnce([freshRow()])
+      .mockResolvedValueOnce([{ id: 'lls-1' }]);
+    mockActorGetSnapshot.mockReturnValue(happySnapshot());
+    const { svc } = makeService({ repo, dsQuery });
+    await svc.processAnswer({ user, user_message_id: 'mm-1' });
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.path',
+      'stale-restart',
+    ]);
+    nowSpy.mockRestore();
+  });
+
+  // ── passage-read staleness: 4 min 58 s while the student is holding the
+  //    passage awaiting a full read (the three sentence-state stids) ──
+  it.each(PASSAGE_READ_STIDS)(
+    'awaiting a passage read (%s): age exactly 298_000 ms → continue, NOT stale-restart',
+    async (stid) => {
+      const { nowSpy, repo } = stateAt(298_000, 'active', stid);
+      const dsQuery = jest.fn().mockResolvedValueOnce([{ id: 'lls-1' }]); // only the INSERT (continue path)
+      mockActorGetSnapshot.mockReturnValue(happySnapshot());
+      const { svc } = makeService({ repo, dsQuery });
+      await svc.processAnswer({
+        user,
+        user_message_id: 'mm-1',
+        transcripts: [{ id: 't1', text: 'कमल' }] as never,
+      });
+      expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+        'pp.lesson.path',
+        'continue',
+      ]);
+      nowSpy.mockRestore();
+    },
+  );
+
+  it('awaiting a passage read: age 298_001 ms → stale-restart', async () => {
+    const { nowSpy, repo } = stateAt(
+      298_001,
+      'active',
+      'sentence-start-sentence-initial',
+    );
+    const dsQuery = jest
+      .fn()
+      .mockResolvedValueOnce([freshRow()])
+      .mockResolvedValueOnce([{ id: 'lls-1' }]);
+    mockActorGetSnapshot.mockReturnValue(happySnapshot());
+    const { svc } = makeService({ repo, dsQuery });
+    await svc.processAnswer({ user, user_message_id: 'mm-1' });
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.path',
+      'stale-restart',
+    ]);
+    nowSpy.mockRestore();
+  });
+
+  it('awaiting a passage read: the 15-minute hard restart is unchanged (900_001 → fresh)', async () => {
+    const { nowSpy, repo } = stateAt(
+      900_001,
+      'active',
+      'sentence-start-sentence-initial',
+    );
+    const dsQuery = jest
+      .fn()
+      .mockResolvedValueOnce([freshRow()])
+      .mockResolvedValueOnce([{ id: 'lls-1' }]);
+    mockActorGetSnapshot.mockReturnValue(happySnapshot());
+    const { svc } = makeService({ repo, dsQuery });
+    await svc.processAnswer({ user, user_message_id: 'mm-1' });
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.path',
+      'fresh',
+    ]);
+    nowSpy.mockRestore();
+  });
+
+  it('a NON-passage stid (mid-lesson drill) keeps the 2-minute window', async () => {
+    const { nowSpy, repo } = stateAt(
+      120_001,
+      'active',
+      'घर-sentence-word-drillWord',
+    );
     const dsQuery = jest
       .fn()
       .mockResolvedValueOnce([freshRow()])
