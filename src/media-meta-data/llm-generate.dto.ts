@@ -77,6 +77,11 @@ const REQUEST_MAX_MESSAGES = 50;
 // children over WhatsApp and the ElevenLabs TTS pathway.
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS_RE = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F]/;
+// Digits are ambiguous to read aloud (1984 = "nineteen eighty-four" =
+// "one nine eight four" = …), so passages must spell numbers as words.
+// Covers ASCII 0-9 and Devanagari ०-९. Passage text only — questions,
+// options and explanations ride the tap-to-answer flow, never a read.
+export const PASSAGE_DIGITS_RE = /[0-9\u0966-\u096F]/;
 
 // Reading subconstructs from "SDG 4.1.1 Minimum Proficiency Levels:
 // Definition and blueprint for assessment" (ACER GEM / UNESCO UIS),
@@ -325,6 +330,11 @@ export function parseGeneratedContent(raw: string): GeneratedContent {
     ),
     passage_type: passageType as PassageType,
   };
+  if (PASSAGE_DIGITS_RE.test(passage.text)) {
+    throw new LlmOutputInvalidError(
+      'passage.text must not contain digits (0-9 / ०-९) — write numbers as words',
+    );
+  }
 
   const rawQuestion = root.question;
   if (!rawQuestion || typeof rawQuestion !== 'object') {

@@ -83,6 +83,27 @@ describe('parseGeneratedContent', () => {
     expect(content.question.options[0].explanation.text).toBe('यह सही है');
   });
 
+  it.each(['In 1984 it rained', 'गिनती १९ तक', 'Room 5'])(
+    'rejects a passage containing digits: %s',
+    (text) => {
+      const value = validContent();
+      (value.passage as Record<string, unknown>).text = text;
+      expect(() => parseGeneratedContent(JSON.stringify(value))).toThrow(
+        'must not contain digits',
+      );
+    },
+  );
+
+  it('accepts numbers written as words, and digits outside the passage', () => {
+    const value = validContent();
+    (value.passage as Record<string, unknown>).text =
+      'उन्नीस सौ चौरासी में eighty five बच्चे पढ़ते थे';
+    (value.question as Record<string, unknown>).text = 'Question with 1984?';
+    const content = parseGeneratedContent(JSON.stringify(value));
+    expect(content.passage.text).toContain('eighty five');
+    expect(content.question.text).toContain('1984');
+  });
+
   it('tolerates a ```json fenced block', () => {
     const raw = '```json\n' + JSON.stringify(validContent()) + '\n```';
     expect(parseGeneratedContent(raw).question.options).toHaveLength(2);
