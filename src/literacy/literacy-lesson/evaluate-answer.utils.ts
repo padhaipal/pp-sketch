@@ -699,7 +699,7 @@ class EvaluateAnswer {
     const cleanedExampleChars = this.splitWord(cleanedExampleWord);
     const rawTarget = cleanedExampleChars[0];
     const target = MATRA_TO_VOWEL[rawTarget] ?? rawTarget;
-// Hard coding: picture answers the first-grapheme rule cannot reach.
+    // Hard coding: picture answers the first-grapheme rule cannot reach.
     // ऋषि is heard as रि / री / रिशि, which start with र, not ऋ, and र is not
     // in ऋ's family row. भालू loses its initial consonant. ओखली is mangled
     // wholesale by both engines.
@@ -820,12 +820,12 @@ class EvaluateAnswer {
       if (cleanedCorrectAnswer === 'ं' && cleaned === 'अं') return true;
       if (cleanedCorrectAnswer === 'ं' && cleaned === 'आं') return true;
       if (cleanedCorrectAnswer === 'ं' && cleaned === 'हं') return true;
-      
+
       // ऋ is transcribed as a bare 'ji' / 'li' more often than as रि or री.
       if (cleanedCorrectAnswer === 'ऋ' && cleaned === 'जी') return true;
       if (cleanedCorrectAnswer === 'ऋ' && cleaned === 'ली') return true;
       if (cleanedCorrectAnswer === 'ज' && cleaned === 'क्या') return true;
-      
+
       // A bare consonant read with a trailing ो, as some dialects do.
       if (cleanedCorrectAnswer === 'त' && cleaned === 'तो') return true;
 
