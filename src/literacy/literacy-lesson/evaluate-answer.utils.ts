@@ -10,7 +10,6 @@ const VOWEL_MATRA_SET = new Set(
 );
 
 const LONG_A = 'ा';
-const O_MATRA = 'ो';
 
 const FAMILIES: string[][] = [
   ['क', 'ख', 'क़', 'ख़'],
@@ -718,17 +717,16 @@ class EvaluateAnswer {
     // in ऋ's family row. भालू loses its initial consonant. ओखली is mangled
     // wholesale by both engines.
     const IMAGE_HARDCODES: Record<string, string[]> = {
-      'ऋषि': ['रि', 'री', 'रिशि', 'रिषि', 'ऋषी'],
-      'भालू': ['आलू'],
-      'ओखली': ['अखली', 'आखली', 'पोखली', 'उखली', 'खल्ली'],
+      ऋषि: ['रि', 'री', 'रिशि', 'रिषि', 'ऋषी'],
+      भालू: ['आलू'],
+      ओखली: ['अखली', 'आखली', 'पोखली', 'उखली', 'खल्ली'],
     };
     const imageAccepted = IMAGE_HARDCODES[cleanedExampleWord];
     if (imageAccepted) {
       for (const studentWord of studentAnswer.split(/\s+/)) {
         if (imageAccepted.includes(this.clean(studentWord))) return true;
       }
-    }
-    
+        
     const splitStudentAnswer = studentAnswer.split(/\s+/);
     for (const studentWord of splitStudentAnswer) {
       const cleanedStudentWord = this.clean(studentWord);
