@@ -333,6 +333,66 @@ class EvaluateAnswer {
       cleanedFullStudentAnswer.includes('अचिकन')
     )
       return true;
+    // Word split by the transcription engine into separate words.
+    if (
+      cleanedCorrectAnswer === 'पनघट' &&
+      cleanedFullStudentAnswer.includes('पनघट')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'खटमल' &&
+      cleanedFullStudentAnswer.includes('कटमें')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'नटखट' &&
+      cleanedFullStudentAnswer.includes('नेटघट')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'नटखट' &&
+      cleanedFullStudentAnswer.includes('नेटखट')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'टीवी' &&
+      cleanedFullStudentAnswer.includes('टीवी')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'भजन' &&
+      cleanedFullStudentAnswer.includes('भजन')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'औसत' &&
+      cleanedFullStudentAnswer.includes('औसत')
+    )
+      return true;
+    if (
+      cleanedCorrectAnswer === 'औसत' &&
+      cleanedFullStudentAnswer.includes('असत')
+    )
+      return true;
+
+    // Two-letter words the engine split. Exact equality rather than .includes()
+    // because a two-letter target would otherwise match inside a longer word.
+    if (cleanedCorrectAnswer === 'आओ' && cleanedFullStudentAnswer === 'आओ')
+      return true;
+    if (cleanedCorrectAnswer === 'आए' && cleanedFullStudentAnswer === 'आए')
+      return true;
+    if (cleanedCorrectAnswer === 'गई' && cleanedFullStudentAnswer === 'गई')
+      return true;
+    if (cleanedCorrectAnswer === 'गए' && cleanedFullStudentAnswer === 'गए')
+      return true;
+    if (cleanedCorrectAnswer === 'नए' && cleanedFullStudentAnswer === 'नए')
+      return true;
+    if (cleanedCorrectAnswer === 'भय' && cleanedFullStudentAnswer === 'भय')
+      return true;
+    if (cleanedCorrectAnswer === 'ऊन' && cleanedFullStudentAnswer === 'ऊन')
+      return true;
+    if (cleanedCorrectAnswer === 'चख' && cleanedFullStudentAnswer === 'चख')
+      return true;
 
     return studentWords.some((studentWord) => {
       const cleanedStudentWord = this.clean(studentWord);
@@ -443,6 +503,70 @@ class EvaluateAnswer {
         return true;
       if (cleanedCorrectAnswer === 'इडली' && cleanedStudentWord === 'इटली')
         return true;
+      // Nuqta and nasal-mark variants of the same word.
+      if (cleanedCorrectAnswer === 'माफ' && cleanedStudentWord === 'माफ़')
+        return true;
+      if (cleanedCorrectAnswer === 'गज' && cleanedStudentWord === 'गाज')
+        return true;
+      if (cleanedCorrectAnswer === 'गज' && cleanedStudentWord === 'गाज़')
+        return true;
+      if (cleanedCorrectAnswer === 'गज' && cleanedStudentWord === 'गज्ज')
+        return true;
+      if (cleanedCorrectAnswer === 'दरवाजा' && cleanedStudentWord === 'दरवाज़ा')
+        return true;
+      if (cleanedCorrectAnswer === 'सफेद' && cleanedStudentWord === 'सफ़ेद')
+        return true;
+      if (cleanedCorrectAnswer === 'जहाज' && cleanedStudentWord === 'जहाज़')
+        return true;
+      if (cleanedCorrectAnswer === 'दुख' && cleanedStudentWord === 'दुःख')
+        return true;
+      if (cleanedCorrectAnswer === 'दुख' && cleanedStudentWord === 'दुखी')
+        return true;
+      if (cleanedCorrectAnswer === 'यश' && cleanedStudentWord === 'यशः')
+        return true;
+      if (cleanedCorrectAnswer === 'आए' && cleanedStudentWord === 'आएँ')
+        return true;
+      if (cleanedCorrectAnswer === 'पोछा' && cleanedStudentWord === 'पोंछा')
+        return true;
+      if (cleanedCorrectAnswer === 'पूछ' && cleanedStudentWord === 'पूंछ')
+        return true;
+      if (cleanedCorrectAnswer === 'डोसा' && cleanedStudentWord === 'डोंसा')
+        return true;
+      if (cleanedCorrectAnswer === 'घटा' && cleanedStudentWord === 'घंटा')
+        return true;
+
+      // Doubled consonant produced by the engine.
+      if (cleanedCorrectAnswer === 'ठप' && cleanedStudentWord === 'ठप्प')
+        return true;
+      if (cleanedCorrectAnswer === 'ठप' && cleanedStudentWord === 'ठप्पू')
+        return true;
+      if (cleanedCorrectAnswer === 'ठप' && cleanedStudentWord === 'थाप')
+        return true;
+      if (cleanedCorrectAnswer === 'तन' && cleanedStudentWord === 'तन्न')
+        return true;
+      if (cleanedCorrectAnswer === 'छत' && cleanedStudentWord === 'छत्त')
+        return true;
+      if (cleanedCorrectAnswer === 'फट' && cleanedStudentWord === 'फट्ट')
+        return true;
+      if (cleanedCorrectAnswer === 'घट' && cleanedStudentWord === 'घट्ट')
+        return true;
+      if (cleanedCorrectAnswer === 'शक' && cleanedStudentWord === 'शक्क')
+        return true;
+      if (cleanedCorrectAnswer === 'सच' && cleanedStudentWord === 'सच्च')
+        return true;
+      if (cleanedCorrectAnswer === 'चुन' && cleanedStudentWord === 'चुन्न')
+        return true;
+      if (cleanedCorrectAnswer === 'हजम' && cleanedStudentWord === 'हज्जम')
+        return true;
+
+      // Other recurring engine substitutions.
+      if (cleanedCorrectAnswer === 'नए' && cleanedStudentWord === 'नहीं')
+        return true;
+      if (cleanedCorrectAnswer === 'ढोल' && cleanedStudentWord === 'धौल')
+        return true;
+      if (cleanedCorrectAnswer === 'ढक' && cleanedStudentWord === 'डक')
+        return true;
+
       if (cleanedCorrectAnswer === 'सास' && cleanedStudentWord === 'साँस')
         return true;
       if (cleanedCorrectAnswer === 'सास' && cleanedStudentWord === 'सांस')
@@ -575,6 +699,21 @@ class EvaluateAnswer {
     const cleanedExampleChars = this.splitWord(cleanedExampleWord);
     const rawTarget = cleanedExampleChars[0];
     const target = MATRA_TO_VOWEL[rawTarget] ?? rawTarget;
+// Hard coding: picture answers the first-grapheme rule cannot reach.
+    // ऋषि is heard as रि / री / रिशि, which start with र, not ऋ, and र is not
+    // in ऋ's family row. भालू loses its initial consonant. ओखली is mangled
+    // wholesale by both engines.
+    const IMAGE_HARDCODES: Record<string, string[]> = {
+      ऋषि: ['रि', 'री', 'रिशि', 'रिषि', 'ऋषी'],
+      भालू: ['आलू'],
+      ओखली: ['अखली', 'आखली', 'पोखली', 'उखली', 'खल्ली'],
+    };
+    const imageAccepted = IMAGE_HARDCODES[cleanedExampleWord];
+    if (imageAccepted) {
+      for (const studentWord of studentAnswer.split(/\s+/)) {
+        if (imageAccepted.includes(this.clean(studentWord))) return true;
+      }
+    }
 
     const splitStudentAnswer = studentAnswer.split(/\s+/);
     for (const studentWord of splitStudentAnswer) {
@@ -681,6 +820,14 @@ class EvaluateAnswer {
       if (cleanedCorrectAnswer === 'ं' && cleaned === 'अं') return true;
       if (cleanedCorrectAnswer === 'ं' && cleaned === 'आं') return true;
       if (cleanedCorrectAnswer === 'ं' && cleaned === 'हं') return true;
+      
+      // ऋ is transcribed as a bare 'ji' / 'li' more often than as रि or री.
+      if (cleanedCorrectAnswer === 'ऋ' && cleaned === 'जी') return true;
+      if (cleanedCorrectAnswer === 'ऋ' && cleaned === 'ली') return true;
+      if (cleanedCorrectAnswer === 'ज' && cleaned === 'क्या') return true;
+      
+      // A bare consonant read with a trailing ो, as some dialects do.
+      if (cleanedCorrectAnswer === 'त' && cleaned === 'तो') return true;
 
       // Bare-matra echo: cCount === 0 skips markPhoneme's exact-match path.
       if (
