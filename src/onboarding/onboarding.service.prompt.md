@@ -17,9 +17,13 @@ step 4a).
 
 - `ONBOARDING_CUTOFF` — ISO timestamp; users created before it are
   grandfathered. Set to the deploy timestamp of the onboarding release.
-- `ONBOARDING_LLM_PROVIDER` — openai | anthropic | google | mistral. Sarvam
-  is refused (its 2 s process-wide send pacing breaks the 5 s budget).
-- `ONBOARDING_LLM_MODEL` — provider-native model id for the classifier.
+- `ONBOARDING_LLM_PROVIDER` — production `google`, which is reserved for
+  this classifier (llm-generate rejects it, see
+  src/interfaces/llm/llm.prompt.md). Sarvam is refused (its 2 s process-wide
+  send pacing breaks the 5 s budget).
+- `ONBOARDING_LLM_MODEL` — production `gemini-2.5-flash-lite`, pinned;
+  reasoning models are refused at boot. Details, the API-key boot check and
+  the migration notes: onboarding.config.prompt.md.
 
 ## handleTurn({ user, transcripts?, user_message_id }) → { stateTransitionIds, texts }
 
@@ -37,7 +41,7 @@ step 4a).
    `REPLY { value, istYear: istYear() }` (Asia/Kolkata calendar year).
 5. One transaction: INSERT the new row; if the machine is now `done`, also
    `UserService.update({ id, new_birth_year, new_birth_month,
-   new_recording_permissions_obtained_at: now, new_name? }, manager)` —
+new_recording_permissions_obtained_at: now, new_name? }, manager)` —
    `new_name` only when a name was extracted (never clobber a name with
    null). Inside the transaction update() only evicts the cache.
 6. After commit, done only: `UserService.invalidateCache(user)` (closes the
@@ -61,7 +65,9 @@ the lesson-one rows. Called by the processor on a BullMQ retry
 
 Single `complete()` through src/interfaces/llm on the env provider/model:
 system prompt below, user message = every transcript as
-`Transcript n: <text>` lines, `temperatureRatio: 0`, `max_tokens: 40`,
+`Transcript n: <text>` lines, `temperatureRatio: 0`, `max_tokens: 200`
+(headroom for a chatty prefix — normalization finds the answer inside it;
+at temperature 0 with a one-token target the budget is never spent),
 options `{ timeoutMs: 5000, maxAttempts: 1 }` — never the batch pool. An
 LlmError propagates (the job retries the whole turn).
 
@@ -73,13 +79,18 @@ System prompts (verbatim):
 - name: `Extract the person's name from these transcripts, in the script it appears in. Reply with the name only, or NONE.`
 
 `normalizeClassification(text, interpret)` collapses the output onto the
-allowed set — the machine never sees raw model text:
+allowed set — the machine never sees raw model text. Tolerant of a prefix
+or suffix (an unnecessary UNINTELLIGIBLE costs the parent a whole retry
+turn) but never guesses between two candidates:
 
-- enum: trim, upper-case, strip non-letters at both ends; must equal one
-  option, else UNINTELLIGIBLE.
-- integer: `^\d{1,3}\.?$` → the integer (leading zeros dropped), else
-  UNINTELLIGIBLE. Range is the MACHINE's job (askAge retry).
-- month: `^\d{1,2}\.?$` in 1–12 → the number, else NONE.
+- enum: an option present as a whole word, case-insensitive ("The answer
+  is yes" → YES; "nobody" / "NONE" never mean no). Exactly one DISTINCT
+  option must match: "yes yes" → YES, "No, yes" → UNINTELLIGIBLE.
+- integer: Devanagari digits ०–९ normalized to 0–9, then exactly one
+  number token anywhere ("I think 8" → 8, "८" → 8, "7 or 8" →
+  UNINTELLIGIBLE, word numerals → UNINTELLIGIBLE). Range is the MACHINE's
+  job (askAge retry).
+- month: same single-token rule; 1–12 → the number, else NONE.
 - name: strip surrounding quotes/trailing period; empty, >60 chars,
   multi-line, `none` or `unintelligible` → NONE.
 

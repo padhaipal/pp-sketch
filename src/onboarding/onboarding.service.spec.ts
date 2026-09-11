@@ -1,5 +1,7 @@
 process.env.ONBOARDING_LLM_PROVIDER = 'openai';
 process.env.ONBOARDING_LLM_MODEL = 'test-classifier';
+// onboardingLlm() asserts the provider's key at read time (boot check).
+process.env.OPENAI_API_KEY = 'test-key';
 
 // ESM-only package; UserService imports it (see user.service.spec.ts).
 jest.mock('uuid', () => ({
@@ -417,7 +419,7 @@ describe('OnboardingService.classify', () => {
         },
       ],
       temperatureRatio: 0,
-      max_tokens: 40,
+      max_tokens: 200,
     });
     expect(options).toEqual({ timeoutMs: 5000, maxAttempts: 1 });
     expect(logSpy.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
@@ -490,9 +492,20 @@ describe('normalizeClassification', () => {
     ['yes', 'YES'],
     ['  No.', 'NO'],
     ['"information"', 'INFORMATION'],
+    // Whole-word match inside a prefix/suffix.
+    ['The answer is yes', 'YES'],
+    ['yes.', 'YES'],
+    ['yes, definitely', 'YES'],
+    ['Information, please', 'INFORMATION'],
+    // Repeated single option is one match; two distinct options is a guess.
+    ['yes yes', 'YES'],
+    ['No, yes', UNINTELLIGIBLE],
+    ['yes and no', UNINTELLIGIBLE],
+    // Substrings are not words: "nobody" / "NONE" never mean no.
+    ['nobody knows', UNINTELLIGIBLE],
+    ['NONE', UNINTELLIGIBLE],
     ['UNINTELLIGIBLE', UNINTELLIGIBLE],
     ['maybe', UNINTELLIGIBLE],
-    ['yes, definitely', UNINTELLIGIBLE],
     ['', UNINTELLIGIBLE],
   ])('enum: %j → %s', (text, expected) => {
     expect(normalizeClassification(text, yesNoInfo)).toBe(expected);
@@ -503,11 +516,20 @@ describe('normalizeClassification', () => {
     ['08.', '8'],
     [' 12 ', '12'],
     ['150', '150'],
+    // Exactly one number token, wherever it sits; range is the machine's job.
+    ['I think 8', '8'],
+    ['8 years', '8'],
+    ['1234', '1234'],
+    // Devanagari digits normalized.
+    ['८', '8'],
+    ['वह ८ साल की है', '8'],
+    // Word numerals are not parsed — the model should emit digits.
+    ['वह सात साल की है', UNINTELLIGIBLE],
     ['eight', UNINTELLIGIBLE],
-    ['8 years', UNINTELLIGIBLE],
-    ['-3', UNINTELLIGIBLE],
-    ['1234', UNINTELLIGIBLE],
+    // Two candidates is a guess.
+    ['7 or 8', UNINTELLIGIBLE],
     ['UNINTELLIGIBLE', UNINTELLIGIBLE],
+    ['', UNINTELLIGIBLE],
   ])('integer: %j → %s', (text, expected) => {
     expect(
       normalizeClassification(text, { kind: 'integer', min: 3, max: 18 }),
@@ -517,8 +539,11 @@ describe('normalizeClassification', () => {
   it.each([
     ['1', '1'],
     ['12.', '12'],
+    ['Month 7', '7'],
+    ['८', '8'],
     ['0', NONE],
     ['13', NONE],
+    ['3 or 4', NONE],
     ['March', NONE],
     ['NONE', NONE],
   ])('month: %j → %s', (text, expected) => {

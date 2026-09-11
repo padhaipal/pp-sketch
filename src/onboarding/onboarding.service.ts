@@ -40,8 +40,28 @@ export interface HandleTurnResult {
 // slow provider: one attempt, 5 s. A failure fails the job; BullMQ's retry
 // re-runs the whole turn (rollback + handleTurn).
 const CLASSIFY_TIMEOUT_MS = 5000;
-const CLASSIFY_MAX_TOKENS = 40;
+// Headroom for a chatty prefix ("The answer is: yes") — normalization below
+// finds the answer inside it; at temperature 0 with a one-token target the
+// extra budget is never spent.
+const CLASSIFY_MAX_TOKENS = 200;
 const NAME_MAX_LENGTH = 60;
+
+const DEVANAGARI_DIGITS = '०१२३४५६७८९';
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// The one number in the text (Devanagari digits normalized — a Hindi
+// transcript makes "८" a plausible reply); null when there are zero or
+// several number tokens.
+function singleNumberToken(text: string): number | null {
+  const ascii = text.replace(/[०-९]/g, (d) =>
+    String(DEVANAGARI_DIGITS.indexOf(d)),
+  );
+  const tokens = ascii.match(/\d+/g) ?? [];
+  return tokens.length === 1 ? parseInt(tokens[0], 10) : null;
+}
 
 // Same URL the morning-update notifier uses.
 export function referralText(externalId: string): string {
@@ -76,7 +96,9 @@ export function systemPrompt(interpret: Interpret): string {
 
 // Collapses the model's free text onto the allowed set for the Interpret.
 // Anything outside it is UNINTELLIGIBLE (month / name: NONE) — the machine
-// never sees raw model output.
+// never sees raw model output. Tolerant of a prefix or suffix ("The answer
+// is yes", "I think 8") — an unnecessary UNINTELLIGIBLE costs a parent a
+// whole retry turn — but never guesses between two candidates.
 export function normalizeClassification(
   text: string,
   interpret: Interpret,
@@ -84,21 +106,24 @@ export function normalizeClassification(
   const trimmed = text.trim();
   switch (interpret.kind) {
     case 'enum': {
-      const token = trimmed
-        .toUpperCase()
-        .replace(/^[^A-Z]+/, '')
-        .replace(/[^A-Z]+$/, '');
-      const options = interpret.options.map((o) => o.toUpperCase());
-      return options.includes(token) ? token : UNINTELLIGIBLE;
+      // Exactly one DISTINCT option present as a whole word: "yes yes" is
+      // YES, "No, yes" is UNINTELLIGIBLE.
+      const matched = new Set<string>();
+      for (const option of interpret.options) {
+        if (new RegExp(`\\b${escapeRegExp(option)}\\b`, 'i').test(trimmed)) {
+          matched.add(option.toUpperCase());
+        }
+      }
+      return matched.size === 1 ? [...matched][0] : UNINTELLIGIBLE;
     }
     case 'integer': {
-      const m = /^(\d{1,3})\.?$/.exec(trimmed);
-      return m ? String(parseInt(m[1], 10)) : UNINTELLIGIBLE;
+      const n = singleNumberToken(trimmed);
+      // Range is the machine's job (askAge retry), not the parser's.
+      return n === null ? UNINTELLIGIBLE : String(n);
     }
     case 'month': {
-      const m = /^(\d{1,2})\.?$/.exec(trimmed);
-      const month = m ? parseInt(m[1], 10) : NaN;
-      return month >= 1 && month <= 12 ? String(month) : NONE;
+      const month = singleNumberToken(trimmed);
+      return month !== null && month >= 1 && month <= 12 ? String(month) : NONE;
     }
     case 'name': {
       const name = trimmed
