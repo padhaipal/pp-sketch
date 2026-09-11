@@ -1,12 +1,13 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, EntityManager } from 'typeorm';
-import { validate as isUuid } from 'uuid';
+import { validate as isUuid, v4 as uuidv4 } from 'uuid';
 import { UserEntity } from './user.entity';
 import { InteractionRow } from './interactions-csv';
 import { CacheService } from '../interfaces/redis/cache';
@@ -19,6 +20,8 @@ import {
   FindUserOptions,
   UpdateUserOptions,
   CreateUserOptions,
+  CreateStaffOptions,
+  STAFF_ROLES,
   validateFindUserOptions,
   validateUpdateUserOptions,
   validateCreateUserOptions,
@@ -27,6 +30,9 @@ import {
   SnapshotTestScore,
   TestSnapshotPoint,
 } from './user.dto';
+
+// StaffUserRow before the dashboard link is attached (the controller adds it).
+export type StaffLookupRow = Omit<import('./user.dto').StaffUserRow, 'link'>;
 
 // ─── Snapshot scoring (NIPUN grades 2/3 + MPL-B) ─────────────────────────────
 
@@ -339,6 +345,27 @@ export class UserService {
         validated.new_recording_permissions_obtained_at;
     }
 
+    if (validated.new_role !== undefined) {
+      updateFields.role = validated.new_role;
+    }
+    if (validated.new_password_hash !== undefined) {
+      updateFields.password_hash = validated.new_password_hash;
+    }
+    if (validated.new_geo_entity_id !== undefined) {
+      updateFields.geo_entity_id = validated.new_geo_entity_id;
+    }
+    if (validated.new_role_title !== undefined) {
+      updateFields.role_title = validated.new_role_title;
+    }
+    if (validated.new_staff_notes !== undefined) {
+      updateFields.staff_notes = validated.new_staff_notes;
+    }
+    if (validated.deactivate) {
+      updateFields.deleted_at = new Date();
+    } else if (validated.reactivate) {
+      updateFields.deleted_at = null;
+    }
+
     if (validated.new_referrer_user_id !== undefined) {
       updateFields.referrer_user_id = validated.new_referrer_user_id;
     } else if (validated.new_referrer_external_id !== undefined) {
@@ -542,6 +569,74 @@ export class UserService {
     await this.scoreService.createSeedScores(user.id);
     await this.populateUserCache(user);
     return user;
+  }
+
+  // ─── Staff accounts (education officials) ─────────────────────────────
+
+  // POST /users/staff-create. The caller has already normalised the phone and
+  // checked the geo entity (422). One INSERT: the id is generated here so
+  // avatar_seed can equal it without a second write. Throws
+  // ConflictException when the phone belongs to any user, any role.
+  async createStaff(options: CreateStaffOptions): Promise<User> {
+    const existing = await this.userRepo.findOneBy({
+      external_id: options.external_id,
+    });
+    if (existing) {
+      throw new ConflictException(
+        'A user with this phone number already exists',
+      );
+    }
+    const id = uuidv4();
+    const user = this.userRepo.create({
+      id,
+      external_id: options.external_id,
+      name: options.name,
+      role: 'education_official',
+      geo_entity_id: options.geo_entity_id,
+      role_title: options.role_title,
+      staff_notes: options.staff_notes ?? null,
+      avatar_seed: id,
+    });
+    const saved = await this.userRepo.save(user);
+    await this.scoreService.createSeedScores(saved.id);
+    await this.populateUserCache(saved);
+    return saved;
+  }
+
+  // GET /users/lookup: staff-role accounts only, soft-deleted included.
+  async lookupStaff(q: string, limit = 20): Promise<StaffLookupRow[]> {
+    const trimmed = q.trim();
+    if (trimmed.length === 0) return [];
+    const digits = trimmed.replace(/\D/g, '');
+    return await this.dataSource.query(
+      `SELECT u.id, u.external_id, u.name, u.role, u.role_title, u.staff_notes,
+              u.geo_entity_id, g.name AS geo_entity_name, g.type AS geo_entity_type,
+              u.deleted_at
+       FROM users u
+       LEFT JOIN geo_entity g ON g.id = u.geo_entity_id
+       WHERE u.role = ANY($1::text[])
+         AND (u.name ILIKE '%' || $2 || '%'
+              OR ($3 <> '' AND u.external_id LIKE '%' || $3 || '%'))
+       ORDER BY u.deleted_at IS NOT NULL, u.name NULLS LAST, u.created_at DESC
+       LIMIT $4`,
+      [[...STAFF_ROLES], trimmed, digits, limit],
+    );
+  }
+
+  // GET /users/:id: one staff-role account (soft-deleted included) with its
+  // geo entity's name/type; null for any other role or unknown id.
+  async getStaff(id: string): Promise<StaffLookupRow | null> {
+    if (!isUuid(id)) return null;
+    const rows: StaffLookupRow[] = await this.dataSource.query(
+      `SELECT u.id, u.external_id, u.name, u.role, u.role_title, u.staff_notes,
+              u.geo_entity_id, g.name AS geo_entity_name, g.type AS geo_entity_type,
+              u.deleted_at
+       FROM users u
+       LEFT JOIN geo_entity g ON g.id = u.geo_entity_id
+       WHERE u.id = $1 AND u.role = ANY($2::text[])`,
+      [id, [...STAFF_ROLES]],
+    );
+    return rows[0] ?? null;
   }
 
   // Per-user atomic delete. Each user runs in its own transaction so one

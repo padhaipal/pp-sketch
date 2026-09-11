@@ -1,3 +1,4 @@
+process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.padhaipal.com';
 process.env.LOG_PII_HMAC_KEY = process.env.LOG_PII_HMAC_KEY ?? 'a'.repeat(64);
 
 import { Job } from 'bullmq';

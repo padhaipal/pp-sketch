@@ -1,4 +1,5 @@
 import { Logger, NotFoundException } from '@nestjs/common';
+import { referralUrl as buildReferralUrl } from '../interfaces/dashboard/dashboard-url';
 import { SpanStatusCode } from '@opentelemetry/api';
 import type { Job } from 'bullmq';
 import type { DataSource, Repository } from 'typeorm';
@@ -297,7 +298,7 @@ export async function processMorningUpdateSendJob(
       );
     }
 
-    const referralUrl = `https://dashboard.padhaipal.com/r/${job.data.user_external_id}`;
+    const referralUrl = buildReferralUrl(job.data.user_external_id);
     const fullMedia: OutboundMediaItem[] = [
       ...job.data.media,
       {

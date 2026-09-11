@@ -121,6 +121,20 @@ describe('migrations — foreign keys onto users / media_metadata', () => {
     expect(wrong).toEqual([]);
   });
 
+  // Not a guarded target (geo_entity), so the cascade rule above never sees
+  // it — but deleting a school must not delete its teacher.
+  it('users.geo_entity_id → geo_entity is ON DELETE SET NULL', () => {
+    const fk = [...constraints.values()].find(
+      (c) => c.table === 'users' && c.column === 'geo_entity_id',
+    );
+    expect(fk).toEqual(
+      expect.objectContaining({
+        references: 'geo_entity',
+        onDelete: 'SET NULL',
+      }),
+    );
+  });
+
   it('the allow-list only names FKs that exist', () => {
     const existing = new Set(guarded.map((fk) => `${fk.table}.${fk.column}`));
     for (const key of ALLOWED_NO_ACTION) {

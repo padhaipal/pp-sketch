@@ -10,6 +10,7 @@ import { UserController } from './user.controller';
 import { CacheService } from '../interfaces/redis/cache';
 import { ScoreModule } from '../literacy/score/score.module';
 import { MediaBucketModule } from '../interfaces/media-bucket/outbound/outbound.module';
+import { GeoEntityModule } from '../geo-entities/geo-entity.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { MediaBucketModule } from '../interfaces/media-bucket/outbound/outbound.
     ]),
     ScoreModule,
     MediaBucketModule,
+    GeoEntityModule,
   ],
   controllers: [UserController],
   providers: [UserService, UserActivityService, CacheService],

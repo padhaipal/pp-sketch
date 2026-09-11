@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { referralUrl } from '../../interfaces/dashboard/dashboard-url';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import sharp from 'sharp';
@@ -112,7 +113,7 @@ export class ReportCardService {
 
     return {
       user_external_id: user.external_id,
-      referral_url: `https://dashboard.padhaipal.com/r/${user.external_id}`,
+      referral_url: referralUrl(user.external_id),
       letters_learnt: learntEndOfYesterday,
       letters_learnt_yesterday: yesterdayDelta,
       letters_currently_learning: currentlyLearning,

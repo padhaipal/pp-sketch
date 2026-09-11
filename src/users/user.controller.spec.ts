@@ -1,5 +1,6 @@
 process.env.LOG_PII_HMAC_KEY =
   '0000000000000000000000000000000000000000000000000000000000000000';
+process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.padhaipal.com';
 
 jest.mock('bcrypt', () => ({
   compare: jest.fn(),
@@ -16,8 +17,11 @@ jest.mock('uuid', () => ({
 
 import {
   BadRequestException,
+  ConflictException,
+  ForbiddenException,
   NotFoundException,
   UnauthorizedException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import type { Repository } from 'typeorm';
@@ -29,6 +33,7 @@ import type { ScoreEntity } from '../literacy/score/score.entity';
 import type { LiteracyLessonStateEntity } from '../literacy/literacy-lesson/literacy-lesson-state.entity';
 import type { UserActivityService } from './user-activity.service';
 import type { UserService } from './user.service';
+import type { GeoEntityService } from '../geo-entities/geo-entity.service';
 
 type SimpleRepo = {
   findOneBy: jest.Mock;
@@ -87,6 +92,7 @@ function makeController(opts: {
   lessonStateRepo?: SimpleRepo;
   activitySvc?: Partial<UserActivityService>;
   userSvc?: Partial<UserService>;
+  geoSvc?: Partial<GeoEntityService>;
 }): UserController {
   return new UserController(
     (opts.userRepo ?? makeRepo()) as unknown as Repository<UserEntity>,
@@ -97,7 +103,22 @@ function makeController(opts: {
       makeRepo()) as unknown as Repository<LiteracyLessonStateEntity>,
     (opts.activitySvc ?? {}) as UserActivityService,
     (opts.userSvc ?? { delete: jest.fn() }) as UserService,
+    (opts.geoSvc ?? {}) as GeoEntityService,
   );
+}
+
+// A UserService.update mock that applies the options to `user` the way the
+// real service does (enough for the controller's response mapping).
+function updateMock(user: Record<string, unknown>) {
+  return jest.fn(async (options: Record<string, unknown>) => {
+    if (options.new_external_id !== undefined)
+      user.external_id = options.new_external_id;
+    if (options.new_name !== undefined) user.name = options.new_name;
+    if (options.new_role !== undefined) user.role = options.new_role;
+    if (options.new_password_hash !== undefined)
+      user.password_hash = options.new_password_hash;
+    return user;
+  });
 }
 
 describe('UserController.activityTime', () => {
@@ -664,7 +685,7 @@ describe('UserController.patchUser', () => {
     );
   });
 
-  it('applies each provided field and bcrypt-hashes password', async () => {
+  it('applies each provided field through UserService.update (cache-evicting path) and bcrypt-hashes password', async () => {
     (bcrypt.hash as jest.Mock).mockResolvedValueOnce('hashed-pw');
     const user = {
       id: 'u1',
@@ -675,9 +696,9 @@ describe('UserController.patchUser', () => {
     };
     const userRepo = makeRepo({
       findOneBy: jest.fn().mockResolvedValue(user),
-      save: jest.fn().mockImplementation(async (u) => u),
     });
-    const ctrl = makeController({ userRepo });
+    const update = updateMock(user);
+    const ctrl = makeController({ userRepo, userSvc: { update } });
 
     const out = await ctrl.patchUser('u1', {
       phone: 'new-phone',
@@ -687,12 +708,303 @@ describe('UserController.patchUser', () => {
     });
 
     expect(bcrypt.hash).toHaveBeenCalledWith('pw', 10);
+    expect(update).toHaveBeenCalledWith({
+      id: 'u1',
+      new_external_id: 'new-phone',
+      new_name: 'Alice',
+      new_password_hash: 'hashed-pw',
+      new_role: 'dev',
+    });
+    // Never the direct repo write that skipped cache eviction.
+    expect(userRepo.save).not.toHaveBeenCalled();
     expect(out).toEqual({
       id: 'u1',
       external_id: 'new-phone',
       name: 'Alice',
       role: 'dev',
     });
+  });
+
+  it('refuses the staff fields on a dev/admin target (403) but still allows name/password/role there', async () => {
+    const admin = { id: 'a1', external_id: 'x', name: 'Admin', role: 'admin' };
+    const userRepo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue(admin),
+    });
+    const update = updateMock(admin);
+    const ctrl = makeController({ userRepo, userSvc: { update } });
+
+    for (const body of [
+      { new_role_title: 'BEO' },
+      { new_staff_notes: 'x' },
+      { new_geo_entity_id: '11111111-1111-4111-8111-111111111111' },
+      { deactivate: true as const },
+      { reactivate: true as const },
+    ]) {
+      await expect(ctrl.patchUser('a1', body as never)).rejects.toThrow(
+        ForbiddenException,
+      );
+    }
+    expect(update).not.toHaveBeenCalled();
+
+    await ctrl.patchUser('a1', { name: 'Root' } as never);
+    expect(update).toHaveBeenCalledWith({ id: 'a1', new_name: 'Root' });
+  });
+
+  it('applies staff fields on an education_official: validates the geo entity (422 otherwise) and maps deactivate/reactivate', async () => {
+    const official = {
+      id: 's1',
+      external_id: '919999990001',
+      name: 'Asha',
+      role: 'education_official',
+    };
+    const userRepo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue(official),
+    });
+    const update = updateMock(official);
+    const geoId = '11111111-1111-4111-8111-111111111111';
+    const getById = jest
+      .fn()
+      .mockResolvedValueOnce({ id: geoId, status: 'closed', deleted_at: null })
+      .mockResolvedValue({
+        id: geoId,
+        status: 'operational',
+        deleted_at: null,
+      });
+    const ctrl = makeController({
+      userRepo,
+      userSvc: { update },
+      geoSvc: { getById },
+    });
+
+    await expect(
+      ctrl.patchUser('s1', { new_geo_entity_id: geoId } as never),
+    ).rejects.toThrow(UnprocessableEntityException);
+
+    await ctrl.patchUser('s1', {
+      new_geo_entity_id: geoId,
+      new_role_title: '  BEO ',
+      new_staff_notes: '',
+      deactivate: true,
+    } as never);
+    expect(update).toHaveBeenLastCalledWith({
+      id: 's1',
+      new_geo_entity_id: geoId,
+      new_role_title: 'BEO',
+      new_staff_notes: null,
+      deactivate: true,
+    });
+
+    await ctrl.patchUser('s1', { reactivate: true } as never);
+    expect(update).toHaveBeenLastCalledWith({ id: 's1', reactivate: true });
+  });
+});
+
+describe('UserController.staffCreate', () => {
+  const geoId = '22222222-2222-4222-8222-222222222222';
+  function setup(
+    geo: unknown = {
+      id: geoId,
+      type: 'school',
+      code: '01010100101',
+      name: 'PS Kupwara',
+      status: 'operational',
+      deleted_at: null,
+    },
+  ) {
+    const created = {
+      id: 'u-new',
+      external_id: '919876543210',
+      name: 'Asha',
+      role: 'education_official',
+      role_title: 'Teacher',
+      staff_notes: null,
+      deleted_at: null,
+    };
+    const createStaff = jest.fn().mockResolvedValue(created);
+    const getById = jest.fn().mockResolvedValue(geo);
+    const ctrl = makeController({
+      userSvc: { createStaff },
+      geoSvc: { getById },
+    });
+    return { ctrl, createStaff, getById };
+  }
+
+  it('normalises a 10-digit number to 91…, defaults role_title by geo type, returns {user, link}', async () => {
+    const { ctrl, createStaff } = setup();
+    const out = await ctrl.staffCreate({
+      name: ' Asha ',
+      external_id: '98765-43210',
+      geo_entity_id: geoId,
+    });
+    expect(createStaff).toHaveBeenCalledWith({
+      name: 'Asha',
+      external_id: '919876543210',
+      geo_entity_id: geoId,
+      role_title: 'Teacher',
+      staff_notes: null,
+    });
+    expect(out.link).toBe('https://dashboard.padhaipal.com/d/u-new');
+    expect(out.user).toEqual(
+      expect.objectContaining({
+        id: 'u-new',
+        geo_entity_name: 'PS Kupwara',
+        geo_entity_type: 'school',
+        link: 'https://dashboard.padhaipal.com/d/u-new',
+      }),
+    );
+  });
+
+  it('keeps a full 12-digit number and an explicit role_title', async () => {
+    const { ctrl, createStaff } = setup({
+      id: geoId,
+      type: 'block',
+      code: '010101',
+      name: 'Kupwara',
+      status: 'operational',
+      deleted_at: null,
+    });
+    await ctrl.staffCreate({
+      name: 'Ravi',
+      external_id: '+91 98765 43210',
+      geo_entity_id: geoId,
+      role_title: 'Block Officer',
+      staff_notes: ' note ',
+    });
+    expect(createStaff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        external_id: '919876543210',
+        role_title: 'Block Officer',
+        staff_notes: 'note',
+      }),
+    );
+  });
+
+  it('400s on a phone that is not a valid number', async () => {
+    const { ctrl, createStaff } = setup();
+    await expect(
+      ctrl.staffCreate({
+        name: 'x',
+        external_id: '12345',
+        geo_entity_id: geoId,
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(createStaff).not.toHaveBeenCalled();
+  });
+
+  it('409s when the phone already exists in any role (surfaced from UserService)', async () => {
+    const { ctrl, createStaff } = setup();
+    createStaff.mockRejectedValue(new ConflictException('exists'));
+    await expect(
+      ctrl.staffCreate({
+        name: 'x',
+        external_id: '9876543210',
+        geo_entity_id: geoId,
+      }),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it.each([
+    ['missing', null],
+    [
+      'closed',
+      { id: geoId, type: 'school', status: 'closed', deleted_at: null },
+    ],
+    [
+      'deleted',
+      {
+        id: geoId,
+        type: 'school',
+        status: 'operational',
+        deleted_at: new Date(),
+      },
+    ],
+  ])('422s when the geo entity is %s', async (_label, geo) => {
+    const { ctrl, createStaff } = setup(geo);
+    await expect(
+      ctrl.staffCreate({
+        name: 'x',
+        external_id: '9876543210',
+        geo_entity_id: geoId,
+      }),
+    ).rejects.toThrow(UnprocessableEntityException);
+    expect(createStaff).not.toHaveBeenCalled();
+  });
+});
+
+describe('UserController.lookup + getStaff', () => {
+  it('lookup passes q through and attaches the dashboard link, soft-deleted rows included', async () => {
+    const lookupStaff = jest.fn().mockResolvedValue([
+      {
+        id: 'u1',
+        external_id: '919999990001',
+        name: 'A',
+        role: 'education_official',
+        deleted_at: null,
+      },
+      {
+        id: 'u2',
+        external_id: '919999990002',
+        name: 'B',
+        role: 'staff',
+        deleted_at: new Date('2026-09-01'),
+      },
+    ]);
+    const ctrl = makeController({ userSvc: { lookupStaff } });
+    const out = await ctrl.lookup('a');
+    expect(lookupStaff).toHaveBeenCalledWith('a');
+    expect(out.map((r) => r.link)).toEqual([
+      'https://dashboard.padhaipal.com/d/u1',
+      'https://dashboard.padhaipal.com/d/u2',
+    ]);
+    expect(out[1].deleted_at).toEqual(new Date('2026-09-01'));
+    await ctrl.lookup(undefined);
+    expect(lookupStaff).toHaveBeenLastCalledWith('');
+  });
+
+  it('getStaff returns the record with geo_entity + ancestors; 404 for non-staff / unknown', async () => {
+    const getStaff = jest
+      .fn()
+      .mockResolvedValueOnce({
+        id: 'u1',
+        external_id: 'x',
+        role: 'education_official',
+        geo_entity_id: 'g1',
+        deleted_at: new Date('2026-09-01'),
+      })
+      .mockResolvedValueOnce(null);
+    const getById = jest.fn().mockResolvedValue({ id: 'g1', type: 'school' });
+    const ancestors = jest.fn().mockResolvedValue([{ id: 'in' }, { id: 'st' }]);
+    const ctrl = makeController({
+      userSvc: { getStaff },
+      geoSvc: { getById, ancestors },
+    });
+    const out = await ctrl.getStaff('u1');
+    expect(out.geo_entity).toEqual({ id: 'g1', type: 'school' });
+    expect(out.ancestors).toHaveLength(2);
+    expect(out.deleted_at).toEqual(new Date('2026-09-01'));
+    expect(out.link).toBe('https://dashboard.padhaipal.com/d/u1');
+    await expect(ctrl.getStaff('admin-id')).rejects.toThrow(NotFoundException);
+  });
+});
+
+describe('UserController.login — soft delete', () => {
+  it('rejects a deactivated account even with a valid password', async () => {
+    const userRepo = makeRepo({
+      findOneBy: jest.fn().mockResolvedValue({
+        id: 'u1',
+        external_id: '919999990001',
+        password_hash: 'hash',
+        role: 'education_official',
+        deleted_at: new Date(),
+      }),
+    });
+    (bcrypt.compare as jest.Mock).mockClear();
+    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+    const ctrl = makeController({ userRepo });
+    await expect(
+      ctrl.login({ phone: '919999990001', password: 'pw' } as never),
+    ).rejects.toThrow(UnauthorizedException);
+    expect(bcrypt.compare).not.toHaveBeenCalled();
   });
 });
 
@@ -1254,19 +1566,20 @@ describe('UserController.login + patchUser — bcrypt args', () => {
     expect(bcrypt.compare).toHaveBeenCalledWith('pw', 'hash');
   });
 
-  it('patchUser bcrypts the new password with rounds=10', async () => {
+  it('patchUser bcrypts the new password with rounds=10 and hands the hash to UserService.update', async () => {
     const user = { id: 'u1', external_id: 'x', name: null, role: 'admin' };
     const userRepo = makeRepo({
       findOneBy: jest.fn().mockResolvedValue(user),
-      save: jest.fn().mockResolvedValue(undefined),
     });
     (bcrypt.hash as jest.Mock).mockResolvedValue('newhash');
-    const ctrl = makeController({ userRepo });
+    const update = updateMock(user);
+    const ctrl = makeController({ userRepo, userSvc: { update } });
     await ctrl.patchUser('u1', { password: 'newpw' } as never);
     expect(bcrypt.hash).toHaveBeenCalledWith('newpw', 10);
-    expect(userRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({ password_hash: 'newhash' }),
-    );
+    expect(update).toHaveBeenCalledWith({
+      id: 'u1',
+      new_password_hash: 'newhash',
+    });
   });
 });
 
