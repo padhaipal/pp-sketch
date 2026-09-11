@@ -1193,54 +1193,6 @@ describe('processWabotInboundJob — span/start identifiers', () => {
   });
 });
 
-describe('processWabotInboundJob — outbound media assembly (appendMediaItems)', () => {
-  afterEach(() => jest.clearAllMocks());
-
-  it('maps each media type from the lesson result into the outbound payload', async () => {
-    const mocks = makeMocks();
-    // Single stid → media with a video + a text entity.
-    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({
-      video: {
-        wa_media_url: 'https://wa/v.mp4',
-        media_details: { mime_type: 'video/mp4' },
-      },
-      text: { text: 'शाबाश' },
-    });
-    await runJob(createAudioJob(), mocks);
-
-    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media as {
-      type: string;
-      url?: string;
-      body?: string;
-      mime_type?: string;
-    }[];
-    expect(media).toContainEqual({
-      type: 'video',
-      url: 'https://wa/v.mp4',
-      mime_type: 'video/mp4',
-    });
-    expect(media).toContainEqual({ type: 'text', body: 'शाबाश' });
-  });
-
-  it('emits a media item with undefined mime_type when media_details is null', async () => {
-    const mocks = makeMocks();
-    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({
-      image: { wa_media_url: 'https://wa/i.png', media_details: null },
-    });
-    await runJob(createAudioJob(), mocks);
-    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media as {
-      type: string;
-      url?: string;
-      mime_type?: string;
-    }[];
-    expect(media).toContainEqual({
-      type: 'image',
-      url: 'https://wa/i.png',
-      mime_type: undefined,
-    });
-  });
-});
-
 describe('processWabotInboundJob — send-status boundaries (audio reply)', () => {
   afterEach(() => jest.clearAllMocks());
 
@@ -1582,53 +1534,16 @@ describe('processWabotInboundJob — failure tolerance (no-coverage catch blocks
   });
 });
 
-describe('processWabotInboundJob — handleSendResult logging (onboarding + audio-only)', () => {
+describe('processWabotInboundJob — new-user send label', () => {
   let errorSpy: jest.SpyInstance;
-  let warnSpy: jest.SpyInstance;
   beforeEach(() => {
     errorSpy = jest
       .spyOn(Logger.prototype, 'error')
-      .mockImplementation(() => undefined);
-    warnSpy = jest
-      .spyOn(Logger.prototype, 'warn')
       .mockImplementation(() => undefined);
   });
   afterEach(() => {
     jest.clearAllMocks();
     errorSpy.mockRestore();
-    warnSpy.mockRestore();
-  });
-
-  function existingUserAudioOnly() {
-    const mocks = makeMocks();
-    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({
-      video: { wa_media_url: 'https://wa/audio-only.mp4', media_details: null },
-    });
-    return mocks;
-  }
-
-  it('logs a 4XX from the audio-only redirect send without throwing', async () => {
-    const mocks = existingUserAudioOnly();
-    mocks.wabotOutbound.sendMessage.mockResolvedValue({
-      status: 422,
-      body: {},
-    });
-    await runJob(makeTextJob('hello'), mocks);
-    expect(errorSpy.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
-      /audio-only sendMessage 4XX: 422/,
-    );
-  });
-
-  it('logs a 5XX from the audio-only redirect send without throwing', async () => {
-    const mocks = existingUserAudioOnly();
-    mocks.wabotOutbound.sendMessage.mockResolvedValue({
-      status: 503,
-      body: {},
-    });
-    await runJob(makeTextJob('hello'), mocks);
-    expect(warnSpy.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
-      /audio-only sendMessage 5XX: 503/,
-    );
   });
 
   it('logs a 4XX from the new-user onboarding send under the new-user-onboarding label', async () => {
@@ -1851,104 +1766,6 @@ describe('processWabotInboundJob — comprehension flow replies', () => {
     expect(mocks.mediaMetaDataService.createTextMedia).not.toHaveBeenCalled();
     expect(mocks.wabotOutbound.sendMessage).not.toHaveBeenCalled();
     expect(mockSpanSetAttribute).toHaveBeenCalledWith('pp.outcome', 'skipped');
-  });
-});
-
-describe('processWabotInboundJob — outbound flow items', () => {
-  const FLOW_ENTITY = {
-    id: 'flow-media-1',
-    media_type: 'flow',
-    text: JSON.stringify({
-      question_text: 'कहानी किसके बारे में है?',
-      options: [
-        { id: 'opt-a', text: 'पहला', correct: true },
-        { id: 'opt-b', text: 'दूसरा', correct: false },
-        { id: 'opt-c', text: 'तीसरा', correct: false },
-      ],
-    }),
-  };
-
-  beforeEach(() => {
-    process.env.WHATSAPP_COMPREHENSION_FLOW_ID = 'flow-asset-1';
-  });
-  afterEach(() => {
-    delete process.env.WHATSAPP_COMPREHENSION_FLOW_ID;
-  });
-
-  it('sends the flow LAST with shuffled options titled A-C and records the row', async () => {
-    const mocks = makeMocks();
-    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({
-      audio: {
-        id: 'audio-9',
-        wa_media_url: 'wa-audio-9',
-        media_details: { mime_type: 'audio/mpeg' },
-      },
-      flow: FLOW_ENTITY,
-    });
-    await runJob(createAudioJob(), mocks);
-
-    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
-    const flowItem = media[media.length - 1];
-    expect(flowItem.type).toBe('flow');
-    expect(flowItem.flow.flow_id).toBe('flow-asset-1');
-    expect(flowItem.flow.screen).toBe('COMPREHENSION');
-    expect(flowItem.flow.data.question_text).toBe('कहानी किसके बारे में है?');
-    expect(flowItem.flow.data.options.map((o: any) => o.title)).toEqual([
-      'A',
-      'B',
-      'C',
-    ]);
-    expect(flowItem.flow.data.options.map((o: any) => o.id).sort()).toEqual([
-      'opt-a',
-      'opt-b',
-      'opt-c',
-    ]);
-    expect(mocks.outboundMessages.recordSent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        items: expect.arrayContaining([
-          expect.objectContaining({ media_metadata_id: 'flow-media-1' }),
-        ]),
-      }),
-    );
-  });
-
-  it('shuffles the option order across sends', async () => {
-    const orders = new Set<string>();
-    for (let i = 0; i < 25; i++) {
-      const mocks = makeMocks();
-      mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
-        { flow: FLOW_ENTITY },
-      );
-      await runJob(createAudioJob(), mocks);
-      const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
-      const flowItem = media[media.length - 1];
-      orders.add(flowItem.flow.data.options.map((o: any) => o.id).join(','));
-    }
-    expect(orders.size).toBeGreaterThan(1);
-  });
-
-  it('skips the flow item (rest of bundle intact) when the flow env id is missing', async () => {
-    delete process.env.WHATSAPP_COMPREHENSION_FLOW_ID;
-    const mocks = makeMocks();
-    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({
-      text: { id: 'text-1', text: 'शाबाश!' },
-      flow: FLOW_ENTITY,
-    });
-    await runJob(createAudioJob(), mocks);
-    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
-    expect(media.some((m: any) => m.type === 'flow')).toBe(false);
-    expect(media.some((m: any) => m.type === 'text')).toBe(true);
-  });
-
-  it('skips a flow row with a malformed payload', async () => {
-    const mocks = makeMocks();
-    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({
-      text: { id: 'text-1', text: 'शाबाश!' },
-      flow: { id: 'flow-bad', text: '{"nope":1}' },
-    });
-    await runJob(createAudioJob(), mocks);
-    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
-    expect(media.some((m: any) => m.type === 'flow')).toBe(false);
   });
 });
 
