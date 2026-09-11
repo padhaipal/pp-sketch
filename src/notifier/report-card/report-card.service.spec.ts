@@ -1,3 +1,4 @@
+process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.padhaipal.com';
 // Unit tests for ReportCardService.buildData and the SVG renderer.
 // These avoid the database — collaborator services are mocked. Edge cases:
 //   (a) 0 letters learnt yesterday → no highlights

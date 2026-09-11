@@ -12,6 +12,7 @@ import { MistralLlmService } from '../interfaces/llm/mistral/mistral-llm.service
 import { SarvamLlmService } from '../interfaces/llm/sarvam/sarvam-llm.service';
 import type { LlmProvider } from '../interfaces/llm/llm.dto';
 import { onboardingLlm } from './onboarding.config';
+import { referralUrl } from '../interfaces/dashboard/dashboard-url';
 import {
   machine,
   interpretFor,
@@ -63,9 +64,9 @@ function singleNumberToken(text: string): number | null {
   return tokens.length === 1 ? parseInt(tokens[0], 10) : null;
 }
 
-// Same URL the morning-update notifier uses.
+// Same URL the morning-update notifier uses (dashboard-url.ts).
 export function referralText(externalId: string): string {
-  return `PadhaiPal अपने दोस्तों के साथ शेयर करें बस उन्हें यह लिंक भेजें। https://dashboard.padhaipal.com/r/${externalId}`;
+  return `PadhaiPal अपने दोस्तों के साथ शेयर करें बस उन्हें यह लिंक भेजें। ${referralUrl(externalId)}`;
 }
 
 // Calendar year in Asia/Kolkata — birth_year = this − the stated age.

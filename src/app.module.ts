@@ -18,6 +18,7 @@ import { CacheService } from './interfaces/redis/cache';
 import { MirrorModule } from './mirror/mirror.module';
 import { OutboundMessageModule } from './outbound-messages/outbound-message.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
+import { GeoEntityModule } from './geo-entities/geo-entity.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { OnboardingModule } from './onboarding/onboarding.module';
     MirrorModule.register(),
     OutboundMessageModule,
     OnboardingModule,
+    GeoEntityModule,
   ],
   controllers: [
     AppController,

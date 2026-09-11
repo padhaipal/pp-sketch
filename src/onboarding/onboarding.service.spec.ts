@@ -1,3 +1,4 @@
+process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.padhaipal.com';
 process.env.ONBOARDING_LLM_PROVIDER = 'openai';
 process.env.ONBOARDING_LLM_MODEL = 'test-classifier';
 // onboardingLlm() asserts the provider's key at read time (boot check).

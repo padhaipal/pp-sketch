@@ -41,6 +41,8 @@ update(options: UpdateUserOptions, manager?: EntityManager): Promise<User | null
   - new_referrer_user_id sets the user's referrer_user_id directly by UUID (pass null to remove the referral).
   - new_referrer_external_id looks up the referrer by external_id and sets referrer_user_id to the found user's id.
   - new_birth_year (integer | null), new_birth_month (1–12 | null), new_recording_permissions_obtained_at (Date | null) — the parent-onboarding columns; null clears them (OnboardingService.rollback of a done turn).
+  - new_role (one of USER_ROLES — the only enforcement, users.role has no CHECK), new_password_hash (already bcrypt-hashed by the controller).
+  - new_geo_entity_id (uuid | null), new_role_title (string | null), new_staff_notes (string | null) — staff-account fields; deactivate: true sets deleted_at = now(), reactivate: true clears it (at most one of the two). PATCH /users/:id refuses these five on dev/admin targets (403) and validates new_geo_entity_id against an operational, non-deleted geo entity (422).
   - Only one of new_referrer_user_id/new_referrer_external_id may be provided. Any of the fields can be combined.
 - If the user was found and updated: invalidate the cache. Delete all keys that might reference stale data:
   - CACHE_KEYS.userById(updatedUser.id)
@@ -59,6 +61,20 @@ isOnboarded(user: User): boolean
   - `role` is non-null and not `'student'` (admin/dev accounts never onboard);
   - `new Date(user.created_at) < ONBOARDING_CUTOFF` (required env, ISO timestamp — `onboardingCutoff()` in src/onboarding/onboarding.config.ts throws if unset/unparseable; validated at bootstrap);
   - `birth_year` AND `recording_permissions_obtained_at` are both non-null (written together when the onboarding machine reaches `done`).
+
+createStaff({ name, external_id, geo_entity_id, role_title, staff_notes? }): Promise<User>
+
+- POST /users/staff-create. The controller has already normalised the phone (normaliseStaffPhone in user.dto.ts: strip non-digits, 10 digits → prefix 91, then validateE164PhoneNumber) and checked the geo entity (422 unless operational and not deleted). ConflictException (409) when the phone belongs to ANY user, any role. One INSERT with role 'education_official' and avatar_seed = the new user's own id (generated here so no second write); seeds scores; populates both cache keys.
+
+lookupStaff(q, limit = 20): Promise<StaffLookupRow[]>
+
+- GET /users/lookup. Inline SQL over users LEFT JOIN geo_entity: role IN STAFF_ROLES ('education_official', 'staff') only; name ILIKE %q% OR external_id LIKE %digits-of-q%; soft-deleted rows INCLUDED (deleted_at returned) — deactivated first-off, ordered by deleted_at IS NOT NULL, name, created_at DESC. Blank q → []. The controller attaches `link` (dashboard-url.ts staffDashboardLink).
+
+getStaff(id): Promise<StaffLookupRow | null>
+
+- GET /users/:id. Same row shape for one id; null for a non-uuid, an unknown id, or any non-staff role (dev/admin/student all 404 at the controller — the endpoint exists for the /onboarding page only). Soft-deleted returned with deleted_at set.
+
+Soft delete (users.deleted_at) gates POST /users/login (controller), GET /users/:id semantics and the staff reads — NOT find(): that is the inbound WhatsApp processor's lookup, and a deactivated official who messages the bot must still resolve (otherwise the new-user branch would hit UNIQUE(external_id) on every message).
 
 delete(input: string | string[]): Promise<{ deleted, failed }>
 

@@ -1568,3 +1568,172 @@ describe('UserService.invalidateCache', () => {
     ]);
   });
 });
+
+// ─── Staff accounts (education officials) ────────────────────────────────────
+
+describe('UserService.createStaff', () => {
+  it('409s when the phone exists in any role', async () => {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue({ id: 'x', role: 'student' });
+    const svc = makeService(repo, jest.fn(), makeCache(), makeScore());
+    await expect(
+      svc.createStaff({
+        name: 'Asha',
+        external_id: '919876543210',
+        geo_entity_id: 'g1',
+        role_title: 'Teacher',
+      }),
+    ).rejects.toThrow(/already exists/);
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  it('creates an education_official with avatar_seed = its own id, seeds scores and caches', async () => {
+    const repo = makeRepo();
+    const cache = makeCache();
+    const score = makeScore();
+    repo.findOneBy.mockResolvedValue(null);
+    repo.create.mockImplementation((u: unknown) => u);
+    repo.save.mockImplementation(async (u: unknown) => u);
+    const svc = makeService(repo, jest.fn(), cache, score);
+
+    const out = await svc.createStaff({
+      name: 'Asha',
+      external_id: '919876543210',
+      geo_entity_id: 'g1',
+      role_title: 'Teacher',
+      staff_notes: null,
+    });
+    expect(repo.create).toHaveBeenCalledWith({
+      id: 'gen-uuid',
+      external_id: '919876543210',
+      name: 'Asha',
+      role: 'education_official',
+      geo_entity_id: 'g1',
+      role_title: 'Teacher',
+      staff_notes: null,
+      avatar_seed: 'gen-uuid',
+    });
+    expect(out.avatar_seed).toBe('gen-uuid');
+    expect(score.createSeedScores).toHaveBeenCalledWith('gen-uuid');
+    expect(cache.set).toHaveBeenCalledWith(
+      'user:id:gen-uuid',
+      out,
+      expect.any(Number),
+    );
+  });
+});
+
+describe('UserService.lookupStaff / getStaff', () => {
+  it('lookupStaff searches staff roles only, soft-deleted included, by name or phone digits', async () => {
+    const ds = jest.fn().mockResolvedValue([{ id: 'u1' }]);
+    const svc = makeService(makeRepo(), ds, makeCache(), makeScore());
+    const out = await svc.lookupStaff(' Asha 98765 ');
+    expect(out).toEqual([{ id: 'u1' }]);
+    const [sql, params] = ds.mock.calls[0];
+    expect(sql).toMatch(/u\.role = ANY\(\$1::text\[\]\)/);
+    expect(sql).not.toMatch(/deleted_at IS NULL/);
+    expect(sql).toMatch(/LEFT JOIN geo_entity g/);
+    expect(params).toEqual([
+      ['education_official', 'staff'],
+      'Asha 98765',
+      '98765',
+      20,
+    ]);
+  });
+
+  it('lookupStaff returns [] for a blank query without a query', async () => {
+    const ds = jest.fn();
+    const svc = makeService(makeRepo(), ds, makeCache(), makeScore());
+    expect(await svc.lookupStaff('  ')).toEqual([]);
+    expect(ds).not.toHaveBeenCalled();
+  });
+
+  it('getStaff: null for a non-uuid, else the staff row (any deleted_at)', async () => {
+    const ds = jest
+      .fn()
+      .mockResolvedValue([{ id: 'u1', deleted_at: new Date() }]);
+    const svc = makeService(makeRepo(), ds, makeCache(), makeScore());
+    expect(await svc.getStaff('nope')).toBeNull();
+    expect(ds).not.toHaveBeenCalled();
+    const row = await svc.getStaff('11111111-1111-4111-8111-111111111111');
+    expect(row?.deleted_at).toBeInstanceOf(Date);
+    expect(ds.mock.calls[0][1]).toEqual([
+      '11111111-1111-4111-8111-111111111111',
+      ['education_official', 'staff'],
+    ]);
+  });
+});
+
+describe('UserService.update — staff fields', () => {
+  function setup() {
+    const repo = makeRepo();
+    const existing: Record<string, unknown> = {
+      id: 'u1',
+      external_id: '919999990001',
+      role: 'education_official',
+      deleted_at: null,
+    };
+    repo.findOneBy.mockResolvedValue(existing);
+    repo.save.mockImplementation(async (u: unknown) => u);
+    return {
+      repo,
+      svc: makeService(repo, jest.fn(), makeCache(), makeScore()),
+    };
+  }
+
+  it('deactivate sets deleted_at, reactivate clears it', async () => {
+    const { svc } = setup();
+    const before = Date.now();
+    const off = await svc.update({ id: 'u1', deactivate: true });
+    expect((off!.deleted_at as Date).getTime()).toBeGreaterThanOrEqual(before);
+    const on = await svc.update({ id: 'u1', reactivate: true });
+    expect(on!.deleted_at).toBeNull();
+    await expect(
+      svc.update({ id: 'u1', deactivate: true, reactivate: true }),
+    ).rejects.toThrow(/at most one of deactivate or reactivate/);
+  });
+
+  it('writes geo/title/notes/role/password_hash and validates them', async () => {
+    const { svc } = setup();
+    const out = await svc.update({
+      id: 'u1',
+      new_geo_entity_id: '11111111-1111-4111-8111-111111111111',
+      new_role_title: 'BEO',
+      new_staff_notes: null,
+      new_role: 'staff',
+      new_password_hash: 'h',
+    });
+    expect(out).toEqual(
+      expect.objectContaining({
+        geo_entity_id: '11111111-1111-4111-8111-111111111111',
+        role_title: 'BEO',
+        staff_notes: null,
+        role: 'staff',
+        password_hash: 'h',
+      }),
+    );
+    await expect(
+      svc.update({ id: 'u1', new_role: 'king' as never }),
+    ).rejects.toThrow(/new_role must be one of/);
+    await expect(
+      svc.update({ id: 'u1', new_geo_entity_id: 'x' }),
+    ).rejects.toThrow(/uuid or null/);
+  });
+});
+
+describe('UserService.find — soft delete is NOT applied', () => {
+  it('returns a deactivated account (the inbound processor must still resolve it)', async () => {
+    const repo = makeRepo();
+    const cache = makeCache();
+    cache.get.mockResolvedValue(null);
+    const user = {
+      id: 'u1',
+      external_id: '919999990001',
+      deleted_at: new Date(),
+    };
+    repo.findOneBy.mockResolvedValue(user);
+    const svc = makeService(repo, jest.fn(), cache, makeScore());
+    expect(await svc.find({ id: 'u1' })).toEqual(user);
+    expect(repo.findOneBy).toHaveBeenCalledWith({ id: 'u1' });
+  });
+});

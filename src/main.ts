@@ -51,6 +51,7 @@ import { MediaBucketService } from './interfaces/media-bucket/outbound/outbound.
 import { CacheService } from './interfaces/redis/cache';
 import { OnboardingService } from './onboarding/onboarding.service';
 import { assertOnboardingEnv } from './onboarding/onboarding.config';
+import { assertDashboardEnv } from './interfaces/dashboard/dashboard-url';
 
 const logger = new Logger('Bootstrap');
 
@@ -58,6 +59,8 @@ async function bootstrap() {
   // Parent onboarding needs ONBOARDING_CUTOFF / _LLM_PROVIDER / _LLM_MODEL —
   // fail here rather than on the first parent's reply.
   assertOnboardingEnv();
+  // Every dashboard link (referral, staff) is built from DASHBOARD_PUBLIC_URL.
+  assertDashboardEnv();
 
   const app = await NestFactory.create(AppModule, {
     rawBody: true,

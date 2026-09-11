@@ -11,6 +11,10 @@ import {
   UnauthorizedException,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
+  UnprocessableEntityException,
+  HttpCode,
+  HttpStatus,
   Logger,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
@@ -36,9 +40,19 @@ import {
   ActivityTimeRequestDto,
   ActivityTimeResponse,
   UserMetrics,
+  StaffCreateDto,
+  StaffCreateResponse,
+  StaffUserDetail,
+  StaffUserRow,
+  UpdateUserOptions,
+  PROTECTED_ROLES,
+  normaliseStaffPhone,
 } from './user.dto';
 import { UserActivityService } from './user-activity.service';
-import { UserService } from './user.service';
+import { UserService, StaffLookupRow } from './user.service';
+import { GeoEntityService } from '../geo-entities/geo-entity.service';
+import { DEFAULT_ROLE_TITLE_BY_TYPE } from '../geo-entities/geo-entity.dto';
+import { staffDashboardLink } from '../interfaces/dashboard/dashboard-url';
 import {
   INTERACTIONS_BATCH_SIZE,
   interactionRowToCsvLine,
@@ -50,6 +64,10 @@ import {
   istDateIso,
   istMidnightUtc,
 } from '../notifier/report-card/report-card.utils';
+
+function withLink(row: StaffLookupRow): StaffUserRow {
+  return { ...row, link: staffDashboardLink(row.id) };
+}
 
 @ApiTags('users')
 @Controller('users')
@@ -67,7 +85,55 @@ export class UserController {
     private readonly lessonStateRepo: Repository<LiteracyLessonStateEntity>,
     private readonly userActivityService: UserActivityService,
     private readonly userService: UserService,
+    private readonly geoEntityService: GeoEntityService,
   ) {}
+
+  // ─── Staff accounts (education officials) ─────────────────────────────
+  // Declared before the ':id/…' routes only for readability — Nest matches
+  // by segment count, but 'lookup' and ':id' below MUST come after
+  // 'dashboard', 'dashboard/summary' and 'interactions.csv' (see their
+  // placement) or a literal path is captured as an id.
+
+  @Post('staff-create')
+  @HttpCode(HttpStatus.CREATED)
+  async staffCreate(
+    @Body() body: StaffCreateDto,
+  ): Promise<StaffCreateResponse> {
+    const external_id = normaliseStaffPhone(body.external_id);
+    const geo = await this.geoEntityService.getById(body.geo_entity_id);
+    if (!geo || geo.status !== 'operational' || geo.deleted_at !== null) {
+      throw new UnprocessableEntityException(
+        'geo_entity_id must reference an operational, non-deleted geo entity',
+      );
+    }
+    const role_title =
+      body.role_title?.trim() ||
+      DEFAULT_ROLE_TITLE_BY_TYPE[geo.type] ||
+      'Staff';
+    const user = await this.userService.createStaff({
+      name: body.name.trim(),
+      external_id,
+      geo_entity_id: geo.id,
+      role_title,
+      staff_notes: body.staff_notes?.trim() || null,
+    });
+    const row = withLink({
+      id: user.id,
+      external_id: user.external_id,
+      name: user.name,
+      role: user.role ?? 'education_official',
+      role_title: user.role_title,
+      staff_notes: user.staff_notes,
+      geo_entity_id: geo.id,
+      geo_entity_name: geo.name,
+      geo_entity_type: geo.type,
+      deleted_at: user.deleted_at,
+    });
+    this.logger.log(
+      `staff-create: ${toLogId(external_id)} → ${user.id} (${geo.type} ${geo.code})`,
+    );
+    return { user: row, link: row.link };
+  }
 
   @Post('activity-time')
   async activityTime(
@@ -535,6 +601,30 @@ export class UserController {
     }));
   }
 
+  // After 'dashboard' / 'dashboard/summary' / 'interactions.csv' (literal
+  // single-segment routes) and before ':id' — Nest matches in declaration
+  // order, so the other way round 'lookup' would be captured as an id.
+  @Get('lookup')
+  async lookup(@Query('q') q?: string): Promise<StaffUserRow[]> {
+    const rows = await this.userService.lookupStaff(q ?? '');
+    return rows.map(withLink);
+  }
+
+  @Get(':id')
+  async getStaff(@Param('id') id: string): Promise<StaffUserDetail> {
+    const row = await this.userService.getStaff(id);
+    // Non-staff roles (dev/admin/student) and unknown ids are the same 404:
+    // this endpoint exists for the /onboarding page only.
+    if (!row) throw new NotFoundException('User not found');
+    const geo_entity = row.geo_entity_id
+      ? await this.geoEntityService.getById(row.geo_entity_id)
+      : null;
+    const ancestors = geo_entity
+      ? await this.geoEntityService.ancestors(geo_entity.id)
+      : [];
+    return { ...withLink(row), geo_entity, ancestors };
+  }
+
   @Post('login')
   async login(@Body() body: LoginDto): Promise<LoginResponse> {
     const { phone, password } = body;
@@ -553,6 +643,13 @@ export class UserController {
       );
       throw new UnauthorizedException('Invalid credentials');
     }
+    // Soft-deleted (deactivated) accounts keep their hash but must not log in.
+    if (user.deleted_at) {
+      this.logger.warn(
+        `Login failed: account deactivated phone=${toLogId(phone)}`,
+      );
+      throw new UnauthorizedException('Invalid credentials');
+    }
 
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
@@ -566,14 +663,31 @@ export class UserController {
     return { id: user.id, external_id: user.external_id, role: user.role };
   }
 
+  // Goes through UserService.update so the user cache is evicted (the
+  // previous userRepo.save path left a renamed student stale for
+  // CACHE_TTL.USER). The staff fields are refused on dev/admin targets; name,
+  // phone, password and role still work there — that is how admin accounts
+  // are managed.
   @Patch(':id')
   async patchUser(
     @Param('id') id: string,
     @Body() body: PatchUserDto,
   ): Promise<UserResponse> {
-    if (!body.phone && !body.name && !body.password && !body.role) {
+    const staffFieldsPresent =
+      body.new_geo_entity_id !== undefined ||
+      body.new_role_title !== undefined ||
+      body.new_staff_notes !== undefined ||
+      body.deactivate === true ||
+      body.reactivate === true;
+    if (
+      !body.phone &&
+      !body.name &&
+      !body.password &&
+      !body.role &&
+      !staffFieldsPresent
+    ) {
       throw new BadRequestException(
-        'At least one of phone, name, password, or role required',
+        'At least one of phone, name, password, role, new_geo_entity_id, new_role_title, new_staff_notes, deactivate or reactivate required',
       );
     }
 
@@ -581,19 +695,49 @@ export class UserController {
     if (!user) {
       throw new NotFoundException('User not found');
     }
+    if (
+      staffFieldsPresent &&
+      user.role !== null &&
+      (PROTECTED_ROLES as readonly string[]).includes(user.role)
+    ) {
+      throw new ForbiddenException(
+        'Staff fields cannot be set on dev/admin accounts',
+      );
+    }
+    if (body.new_geo_entity_id !== undefined) {
+      const geo = await this.geoEntityService.getById(body.new_geo_entity_id);
+      if (!geo || geo.status !== 'operational' || geo.deleted_at !== null) {
+        throw new UnprocessableEntityException(
+          'new_geo_entity_id must reference an operational, non-deleted geo entity',
+        );
+      }
+    }
 
-    if (body.phone) user.external_id = body.phone;
-    if (body.name) user.name = body.name;
+    const options: UpdateUserOptions = { id };
+    if (body.phone) options.new_external_id = body.phone;
+    if (body.name) options.new_name = body.name;
     if (body.password)
-      user.password_hash = await bcrypt.hash(body.password, 10);
-    if (body.role) user.role = body.role;
-    await this.userRepo.save(user);
+      options.new_password_hash = await bcrypt.hash(body.password, 10);
+    if (body.role) options.new_role = body.role;
+    if (body.new_geo_entity_id !== undefined)
+      options.new_geo_entity_id = body.new_geo_entity_id;
+    if (body.new_role_title !== undefined)
+      options.new_role_title = body.new_role_title.trim() || null;
+    if (body.new_staff_notes !== undefined)
+      options.new_staff_notes = body.new_staff_notes.trim() || null;
+    if (body.deactivate === true) options.deactivate = true;
+    if (body.reactivate === true) options.reactivate = true;
+
+    const updated = await this.userService.update(options);
+    if (!updated) {
+      throw new NotFoundException('User not found');
+    }
 
     return {
-      id: user.id,
-      external_id: user.external_id,
-      name: user.name,
-      role: user.role,
+      id: updated.id,
+      external_id: updated.external_id,
+      name: updated.name,
+      role: updated.role,
     };
   }
 
