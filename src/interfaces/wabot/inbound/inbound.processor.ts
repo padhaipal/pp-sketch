@@ -23,7 +23,12 @@ import { toLogId } from '../../../otel/pii';
 import { WELCOME_MESSAGE_STATE_TRANSITION_ID } from '../../../literacy/literacy-lesson/literacy-lesson.machine';
 import { rearmHailMary } from '../../../notifier/hail-mary.processor';
 import { OutboundMessageService } from '../../../outbound-messages/outbound-message.service';
-import type { OutboundSentItem } from '../../../outbound-messages/outbound-message.dto';
+import type {
+  OutboundSentItem,
+  OutboundTrigger,
+} from '../../../outbound-messages/outbound-message.dto';
+import { OnboardingService } from '../../../onboarding/onboarding.service';
+import type { FindMediaByStateTransitionIdResult } from '../../../media-meta-data/media-meta-data.dto';
 import {
   appendMediaItems,
   handleSendResult,
@@ -51,6 +56,7 @@ export async function processWabotInboundJob(
   wabotOutbound: WabotOutboundService,
   userActivityService: UserActivityService,
   outboundMessages: OutboundMessageService,
+  onboardingService: OnboardingService,
 ): Promise<void> {
   const payload = job.data;
 
@@ -210,7 +216,7 @@ export async function processWabotInboundJob(
           );
         }
 
-        // Build outbound media: welcome + first lesson
+        // Build outbound media: welcome + the onboarding opener
         const onboardingMedia: OutboundMediaItem[] = [];
         const onboardingStids: string[] = [];
         const onboardingRecords: OutboundSentItem[] = [];
@@ -233,48 +239,39 @@ export async function processWabotInboundJob(
           );
         }
 
-        // Tappable referral link, sent between the welcome bundle and the
-        // first lesson. Same URL the morning-update notifier uses.
-        const referralUrl = `https://dashboard.padhaipal.com/r/${user.external_id}`;
-        onboardingMedia.push({
-          type: 'text',
-          body: `PadhaiPal अपने दोस्तों के साथ शेयर करें बस उन्हें यह लिंक भेजें। ${referralUrl}`,
-        });
-
+        // Parent onboarding starts here (first turn: no classification —
+        // handleTurn inserts the askGuardian row and returns its prompt).
+        // The referral link and lesson one are sent when onboarding
+        // completes (OnboardingService.handleTurn, done state).
         if (userMessageId) {
           try {
-            const lessonResult = await literacyLessonService.processAnswer({
+            const turn = await onboardingService.handleTurn({
               user,
               user_message_id: userMessageId,
             });
-            for (const stid of lessonResult.stateTransitionIds) {
-              const lessonMedia =
+            for (const stid of turn.stateTransitionIds) {
+              const stidMedia =
                 await mediaMetaDataService.findMediaByStateTransitionId(stid);
+              warnIfEmpty(stid, stidMedia);
               appendMediaItems(
                 onboardingMedia,
-                lessonMedia,
+                stidMedia,
                 onboardingRecords,
                 stid,
               );
               onboardingStids.push(stid);
             }
-            // Sentence text is generated at runtime — no media row exists
-            // for it, so it is sent as a plain text message after the
-            // pre-generated prompt media.
-            if (lessonResult.sentenceText) {
-              onboardingMedia.push({
-                type: 'text',
-                body: lessonResult.sentenceText,
-              });
+            for (const text of turn.texts) {
+              onboardingMedia.push({ type: 'text', body: text });
             }
           } catch (err) {
             logger.warn(
-              `Failed to start first lesson for new user ${toLogId(user.external_id)}: ${(err as Error).message}`,
+              `Failed to start onboarding for new user ${toLogId(user.external_id)}: ${(err as Error).message}`,
             );
           }
         } else {
           logger.warn(
-            `New-user first lesson skipped: userMessageId is undefined`,
+            `New-user onboarding start skipped: userMessageId is undefined`,
           );
         }
 
@@ -326,15 +323,50 @@ export async function processWabotInboundJob(
         return;
       }
 
-      // 4b. Comprehension flow submission (interactive → nfm_reply). The
-      // answer id inside response_json is untrusted device input —
-      // processAnswer validates it against the current lesson's passage and
-      // returns {ignored: true} for anything mistimed or forged.
       let userMessageId: string;
       let stateTransitionIds: string[];
       let sentenceText: string | undefined;
+      // Runtime text with no media row (sentence prompt, referral link) —
+      // sent as text items after the stid media in step 9.
+      let texts: string[] = [];
+      let trigger: OutboundTrigger = 'inbound-reply';
 
-      if (payload.message.type === 'interactive') {
+      // 4a. Parent onboarding gate. Un-onboarded users (post-cutoff, no
+      // consent/birth year yet) only ever talk to the onboarding machine:
+      // voice notes are classified per state; anything else gets the
+      // audio-only redirect. Falls through to step 9 like the lesson paths.
+      if (!userService.isOnboarded(user)) {
+        path = 'onboarding';
+        if (payload.message.type !== 'audio') {
+          await sendAudioOnlyRedirect(mediaMetaDataService, wabotOutbound, {
+            user,
+            payload,
+            ctx,
+          });
+          outcome = 'success';
+          return;
+        }
+        const { audioEntity, transcripts } = await persistAndTranscribeAudio(
+          mediaMetaDataService,
+          { payload, user, span },
+        );
+        userMessageId = audioEntity.id;
+        // A prior attempt may have written this message's onboarding row
+        // before failing downstream — drop it so the turn re-runs cleanly.
+        if (job.attemptsMade > 0) {
+          await onboardingService.rollback(userMessageId);
+        }
+        ({ stateTransitionIds, texts } = await onboardingService.handleTurn({
+          user,
+          transcripts,
+          user_message_id: userMessageId,
+        }));
+        trigger = 'onboarding';
+      } else if (payload.message.type === 'interactive') {
+        // 4b. Comprehension flow submission (interactive → nfm_reply). The
+        // answer id inside response_json is untrusted device input —
+        // processAnswer validates it against the current lesson's passage and
+        // returns {ignored: true} for anything mistimed or forged.
         path = 'comprehension-answer';
         const answerId = parseNfmReplyAnswerId(payload.message.interactive);
         if (!answerId) {
@@ -477,6 +509,9 @@ export async function processWabotInboundJob(
       for (const stid of stateTransitionIds) {
         const media =
           await mediaMetaDataService.findMediaByStateTransitionId(stid);
+        // Lesson stids may legitimately be unseeded (reading-speed,
+        // milestones); an onboarding prompt with no media is a config gap.
+        if (trigger === 'onboarding') warnIfEmpty(stid, media);
         appendMediaItems(outboundMedia, media, sentRecords, stid);
       }
 
@@ -485,7 +520,10 @@ export async function processWabotInboundJob(
       // media. At most one of result1/result2 carries it (a snapshot sitting
       // in the sentence state is never complete).
       if (sentenceText) {
-        outboundMedia.push({ type: 'text', body: sentenceText });
+        texts.push(sentenceText);
+      }
+      for (const text of texts) {
+        outboundMedia.push({ type: 'text', body: text });
       }
 
       // 10. Send outbound
@@ -505,7 +543,7 @@ export async function processWabotInboundJob(
         await outboundMessages.recordSent({
           user_id: user.id,
           user_message_id: userMessageId,
-          trigger: 'inbound-reply',
+          trigger,
           items: sentRecords,
         });
       }
@@ -519,6 +557,9 @@ export async function processWabotInboundJob(
             `Inflight expired for ${toLogId(user.external_id)} — rolling back`,
           );
           await mediaMetaDataService.markRolledBack(userMessageId);
+          if (trigger === 'onboarding') {
+            await onboardingService.rollback(userMessageId);
+          }
         }
         outcome = 'success';
       } else if (sendResult.status >= 400 && sendResult.status < 500) {
@@ -558,5 +599,16 @@ export async function processWabotInboundJob(
       performance.now() - startTime,
       buildJobAttributes(outcome),
     );
+  }
+}
+
+// Onboarding prompts are fixed stids that must be seeded; an empty lookup
+// sends nothing for that stid, so make the gap visible.
+function warnIfEmpty(
+  stid: string,
+  media: FindMediaByStateTransitionIdResult,
+): void {
+  if (Object.values(media).every((v) => v == null)) {
+    logger.warn(`No media seeded for ${stid} — sending nothing for it`);
   }
 }

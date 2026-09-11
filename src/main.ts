@@ -49,10 +49,16 @@ import { LiteracyLessonService } from './literacy/literacy-lesson/literacy-lesso
 import { WabotOutboundService } from './interfaces/wabot/outbound/outbound.service';
 import { MediaBucketService } from './interfaces/media-bucket/outbound/outbound.service';
 import { CacheService } from './interfaces/redis/cache';
+import { OnboardingService } from './onboarding/onboarding.service';
+import { assertOnboardingEnv } from './onboarding/onboarding.config';
 
 const logger = new Logger('Bootstrap');
 
 async function bootstrap() {
+  // Parent onboarding needs ONBOARDING_CUTOFF / _LLM_PROVIDER / _LLM_MODEL —
+  // fail here rather than on the first parent's reply.
+  assertOnboardingEnv();
+
   const app = await NestFactory.create(AppModule, {
     rawBody: true,
     bodyParser: false,
@@ -98,6 +104,7 @@ async function bootstrap() {
   const mediaBucket = app.get(MediaBucketService);
   const cacheService = app.get(CacheService);
   const outboundMessageService = app.get(OutboundMessageService);
+  const onboardingService = app.get(OnboardingService);
 
   // BullMQ workers
   const wabotInboundWorker = createWorker<MessageJobDto>(
@@ -111,6 +118,7 @@ async function bootstrap() {
         wabotOutbound,
         userActivityService,
         outboundMessageService,
+        onboardingService,
       );
     },
     // I/O-bound turn (audio download + STT + DB + outbound send); high

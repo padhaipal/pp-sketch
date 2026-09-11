@@ -27,7 +27,7 @@ carry only an `LlmProviderConfig` (`baseUrl`, `envKey`, optional
 
 - API key read from `process.env[envKey]` at call time; missing → immediate
   non-retriable `LlmError`.
-- Per-call timeout `LLM_TIME_CAP` seconds (default 45) via AbortController.
+- Per-call timeout `LLM_TIME_CAP` seconds (default 45) via AbortController; `LlmCallOptions.timeoutMs` overrides it per call (the onboarding classifier passes 5000).
 - 429/5xx/network/timeout → retriable; retried up to `maxAttempts` (default 3)
   with jittered exponential backoff (base 1 s, `Retry-After` honored). Other
   4xx and empty completions → non-retriable, thrown immediately.

@@ -20,6 +20,11 @@ export interface User {
   name: string | null;
   password_hash: string | null;
   role: string | null;
+  // Parent onboarding (src/onboarding): all three written together when the
+  // onboarding machine reaches `done`; null until then.
+  birth_year: number | null;
+  birth_month: number | null;
+  recording_permissions_obtained_at: Date | null;
   created_at: Date;
 }
 
@@ -229,6 +234,10 @@ export interface UpdateUserOptions {
   new_name?: string;
   new_referrer_user_id?: string | null;
   new_referrer_external_id?: string;
+  // null clears the column (OnboardingService.rollback of a done turn).
+  new_birth_year?: number | null;
+  new_birth_month?: number | null;
+  new_recording_permissions_obtained_at?: Date | null;
 }
 
 export interface CreateUserOptions {
@@ -340,6 +349,9 @@ export function validateUpdateUserOptions(options: unknown): UpdateUserOptions {
     new_name,
     new_referrer_user_id,
     new_referrer_external_id,
+    new_birth_year,
+    new_birth_month,
+    new_recording_permissions_obtained_at,
   } = options as Record<string, unknown>;
   if (id !== undefined && typeof id !== 'string') {
     throw new BadRequestException('update() options.id must be a string');
@@ -403,6 +415,38 @@ export function validateUpdateUserOptions(options: unknown): UpdateUserOptions {
     throw new BadRequestException('update() options.new_name must be a string');
   }
   if (
+    new_birth_year !== undefined &&
+    new_birth_year !== null &&
+    !Number.isInteger(new_birth_year)
+  ) {
+    throw new BadRequestException(
+      'update() options.new_birth_year must be an integer or null',
+    );
+  }
+  if (
+    new_birth_month !== undefined &&
+    new_birth_month !== null &&
+    (!Number.isInteger(new_birth_month) ||
+      (new_birth_month as number) < 1 ||
+      (new_birth_month as number) > 12)
+  ) {
+    throw new BadRequestException(
+      'update() options.new_birth_month must be an integer 1–12 or null',
+    );
+  }
+  if (
+    new_recording_permissions_obtained_at !== undefined &&
+    new_recording_permissions_obtained_at !== null &&
+    !(
+      new_recording_permissions_obtained_at instanceof Date &&
+      !Number.isNaN(new_recording_permissions_obtained_at.getTime())
+    )
+  ) {
+    throw new BadRequestException(
+      'update() options.new_recording_permissions_obtained_at must be a Date or null',
+    );
+  }
+  if (
     new_referrer_user_id !== undefined &&
     new_referrer_external_id !== undefined
   ) {
@@ -414,10 +458,13 @@ export function validateUpdateUserOptions(options: unknown): UpdateUserOptions {
     new_external_id === undefined &&
     new_name === undefined &&
     new_referrer_user_id === undefined &&
-    new_referrer_external_id === undefined
+    new_referrer_external_id === undefined &&
+    new_birth_year === undefined &&
+    new_birth_month === undefined &&
+    new_recording_permissions_obtained_at === undefined
   ) {
     throw new BadRequestException(
-      'update() requires at least one field to update (new_external_id, new_name, new_referrer_user_id, new_referrer_external_id)',
+      'update() requires at least one field to update (new_external_id, new_name, new_referrer_user_id, new_referrer_external_id, new_birth_year, new_birth_month, new_recording_permissions_obtained_at)',
     );
   }
   return {
@@ -427,6 +474,9 @@ export function validateUpdateUserOptions(options: unknown): UpdateUserOptions {
     new_name,
     new_referrer_user_id,
     new_referrer_external_id: validatedNewReferrerExternalId,
+    new_birth_year,
+    new_birth_month,
+    new_recording_permissions_obtained_at,
   } as UpdateUserOptions;
 }
 

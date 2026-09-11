@@ -24,7 +24,7 @@ export class OutboundMessageEntity {
   @Column({ type: 'uuid' })
   user_id: string;
 
-  @ManyToOne(() => UserEntity)
+  @ManyToOne(() => UserEntity, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: UserEntity;
 
@@ -33,7 +33,7 @@ export class OutboundMessageEntity {
   @Column({ type: 'uuid', nullable: true })
   user_message_id: string | null;
 
-  @ManyToOne(() => MediaMetaDataEntity, { nullable: true })
+  @ManyToOne(() => MediaMetaDataEntity, { nullable: true, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_message_id' })
   user_message: MediaMetaDataEntity | null;
 

@@ -114,6 +114,11 @@ export interface LlmCallOptions {
   maxAttempts?: number;
   /** Base backoff in ms (exponential, jittered). Default 1000. Tests pass 1. */
   baseBackoffMs?: number;
+  /**
+   * Per-attempt timeout in ms. Default: LLM_TIME_CAP seconds (45). Latency-
+   * bound callers (the onboarding classifier) pass a tight cap.
+   */
+  timeoutMs?: number;
 }
 
 export interface LlmBatchOptions extends LlmCallOptions {

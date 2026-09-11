@@ -73,6 +73,9 @@ function makeMocks(
     find: jest.fn().mockResolvedValue(user),
     create: jest.fn(),
     update: jest.fn(),
+    // Existing users in these specs are onboarded unless a test says
+    // otherwise (see the parent-onboarding describe).
+    isOnboarded: jest.fn().mockReturnValue(true),
   };
   const mediaMetaDataService = {
     createWhatsappAudioMedia: jest.fn().mockResolvedValue(audioEntity),
@@ -103,6 +106,13 @@ function makeMocks(
   const outboundMessages = {
     recordSent: jest.fn().mockResolvedValue(undefined),
   };
+  const onboardingService = {
+    handleTurn: jest.fn().mockResolvedValue({
+      stateTransitionIds: ['onboarding-ask-guardian'],
+      texts: [],
+    }),
+    rollback: jest.fn().mockResolvedValue(undefined),
+  };
 
   return {
     userService,
@@ -111,6 +121,7 @@ function makeMocks(
     wabotOutbound,
     userActivityService,
     outboundMessages,
+    onboardingService,
   };
 }
 
@@ -126,8 +137,13 @@ async function runJob(
     mocks.wabotOutbound as any,
     mocks.userActivityService as any,
     mocks.outboundMessages as any,
+    mocks.onboardingService as any,
   );
 }
+
+// Welcome + ask-guardian prompt media, so new-user sends have something to
+// carry now that the referral link is sent at onboarding completion.
+const PROMPT_TEXT_MEDIA = { text: { id: 'prompt-text', text: 'नमस्ते!' } };
 
 describe('processWabotInboundJob — cleanupPartialState on retry', () => {
   afterEach(() => {
@@ -299,7 +315,7 @@ describe('processWabotInboundJob — new user onboarding', () => {
       id: 'text-1',
     });
     mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
-      {},
+      PROMPT_TEXT_MEDIA,
     );
 
     await runJob(makeTextJob('hello world'), mocks);
@@ -308,21 +324,32 @@ describe('processWabotInboundJob — new user onboarding', () => {
       external_id: '+910000000001',
       referrer_external_id: undefined,
     });
+    // Welcome media + the onboarding opener; NO referral link and NO lesson
+    // (both come at onboarding completion).
+    expect(mocks.onboardingService.handleTurn).toHaveBeenCalledWith({
+      user: { id: 'u-new', external_id: '+910000000001' },
+      user_message_id: 'text-1',
+    });
+    expect(
+      mocks.mediaMetaDataService.findMediaByStateTransitionId,
+    ).toHaveBeenCalledWith('welcome-message');
+    expect(
+      mocks.mediaMetaDataService.findMediaByStateTransitionId,
+    ).toHaveBeenCalledWith('onboarding-ask-guardian');
+    expect(mocks.literacyLessonService.processAnswer).not.toHaveBeenCalled();
     expect(mocks.wabotOutbound.sendMessage).toHaveBeenCalled();
-    // referral link must be present
     const media = (
       mocks.wabotOutbound.sendMessage.mock.calls[0][0] as {
         media: { type: string; body?: string }[];
       }
     ).media;
+    expect(media).toEqual([
+      { type: 'text', body: 'नमस्ते!' },
+      { type: 'text', body: 'नमस्ते!' },
+    ]);
     expect(
-      media.some(
-        (m) =>
-          m.type === 'text' &&
-          typeof m.body === 'string' &&
-          m.body.includes('dashboard.padhaipal.com/r/+910000000001'),
-      ),
-    ).toBe(true);
+      media.some((m) => m.body?.includes('dashboard.padhaipal.com/r/')),
+    ).toBe(false);
   });
 
   it('parses a referrer phone from the text body and uses it when found', async () => {
@@ -402,7 +429,7 @@ describe('processWabotInboundJob — new user onboarding', () => {
     );
   });
 
-  it('tolerates createTextMedia failure but still sends welcome+referral', async () => {
+  it('tolerates createTextMedia failure: sends the welcome only, onboarding starts on the next message', async () => {
     const mocks = makeMocks();
     mocks.userService.find.mockResolvedValueOnce(null);
     mocks.userService.create.mockResolvedValue({
@@ -413,11 +440,12 @@ describe('processWabotInboundJob — new user onboarding', () => {
       new Error('save failed'),
     );
     mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
-      {},
+      PROMPT_TEXT_MEDIA,
     );
 
     await runJob(makeTextJob('hi'), mocks);
 
+    expect(mocks.onboardingService.handleTurn).not.toHaveBeenCalled();
     expect(mocks.wabotOutbound.sendMessage).toHaveBeenCalled();
   });
 
@@ -429,7 +457,7 @@ describe('processWabotInboundJob — new user onboarding', () => {
       external_id: '+910000000001',
     });
     mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
-      {},
+      PROMPT_TEXT_MEDIA,
     );
     // No transcripts → processAnswer not called for first audio (the new-user
     // path uses userMessageId from createWhatsappAudioMedia but does not
@@ -446,7 +474,7 @@ describe('processWabotInboundJob — new user onboarding', () => {
     expect(mocks.wabotOutbound.sendMessage).toHaveBeenCalled();
   });
 
-  it('skips userMessageId-dependent lesson when first message is unsupported type (video)', async () => {
+  it('sends the welcome only (no onboarding start) when the first message is an unsupported type (video)', async () => {
     const mocks = makeMocks();
     mocks.userService.find.mockResolvedValueOnce(null);
     mocks.userService.create.mockResolvedValue({
@@ -454,15 +482,19 @@ describe('processWabotInboundJob — new user onboarding', () => {
       external_id: '+910000000001',
     });
     mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
-      {},
+      PROMPT_TEXT_MEDIA,
     );
 
     await runJob(makeVideoJob(), mocks);
 
-    // processAnswer must NOT run — there's no user_message_id for video.
+    // No user_message_id for video → no onboarding row yet; the gate picks
+    // the user up on their next message.
+    expect(mocks.onboardingService.handleTurn).not.toHaveBeenCalled();
     expect(mocks.literacyLessonService.processAnswer).not.toHaveBeenCalled();
-    // But the welcome+referral bundle still gets sent.
     expect(mocks.wabotOutbound.sendMessage).toHaveBeenCalled();
+    expect(
+      mocks.mediaMetaDataService.findMediaByStateTransitionId,
+    ).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1337,7 +1369,7 @@ describe('processWabotInboundJob — new-user exact downstream args', () => {
       external_id: '+910000000001',
     });
     mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
-      {},
+      PROMPT_TEXT_MEDIA,
     );
     return mocks;
   }
@@ -1385,16 +1417,31 @@ describe('processWabotInboundJob — new-user exact downstream args', () => {
     });
   });
 
-  it("starts the new user's first lesson with their user_message_id", async () => {
+  it("starts the new user's onboarding with their user_message_id (no first lesson)", async () => {
     const mocks = newUserAudio();
     mocks.mediaMetaDataService.createWhatsappAudioMedia.mockResolvedValue({
       id: 'audio-new',
     });
     await runJob(createAudioJob(), mocks);
-    expect(mocks.literacyLessonService.processAnswer).toHaveBeenCalledWith({
+    expect(mocks.onboardingService.handleTurn).toHaveBeenCalledWith({
       user: { id: 'u-new', external_id: '+910000000001' },
       user_message_id: 'audio-new',
     });
+    expect(mocks.literacyLessonService.processAnswer).not.toHaveBeenCalled();
+  });
+
+  it('appends handleTurn texts after the stid media in the welcome bundle', async () => {
+    const mocks = newUserAudio();
+    mocks.mediaMetaDataService.createWhatsappAudioMedia.mockResolvedValue({
+      id: 'audio-new',
+    });
+    mocks.onboardingService.handleTurn.mockResolvedValue({
+      stateTransitionIds: ['onboarding-ask-guardian'],
+      texts: ['extra'],
+    });
+    await runJob(createAudioJob(), mocks);
+    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
+    expect(media[media.length - 1]).toEqual({ type: 'text', body: 'extra' });
   });
 
   it('sends the onboarding bundle with the ctx carrier', async () => {
@@ -1441,7 +1488,7 @@ describe('processWabotInboundJob — failure tolerance (no-coverage catch blocks
       external_id: '+910000000001',
     });
     mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
-      {},
+      PROMPT_TEXT_MEDIA,
     );
     return mocks;
   }
@@ -1466,20 +1513,21 @@ describe('processWabotInboundJob — failure tolerance (no-coverage catch blocks
     // First findMediaByStateTransitionId call (welcome) throws; later calls ok.
     mocks.mediaMetaDataService.findMediaByStateTransitionId
       .mockRejectedValueOnce(new Error('db down'))
-      .mockResolvedValue({});
+      .mockResolvedValue(PROMPT_TEXT_MEDIA);
     await runJob(makeTextJob('hi'), mocks);
     expect(warned()).toMatch(/Failed to fetch welcome media/);
     expect(mocks.wabotOutbound.sendMessage).toHaveBeenCalled();
   });
 
-  it('tolerates the new-user first lesson throwing (logs, still sends what it has)', async () => {
+  it('tolerates the onboarding start throwing (logs, still sends the welcome)', async () => {
     const mocks = newUser();
     mocks.mediaMetaDataService.createTextMedia.mockResolvedValue({ id: 't1' });
-    mocks.literacyLessonService.processAnswer.mockRejectedValue(
-      new Error('lesson boom'),
+    mocks.onboardingService.handleTurn.mockRejectedValue(
+      new Error('onboarding boom'),
     );
     await runJob(makeTextJob('hi'), mocks);
-    expect(warned()).toMatch(/Failed to start first lesson for new user/);
+    expect(warned()).toMatch(/Failed to start onboarding for new user/);
+    expect(mocks.wabotOutbound.sendMessage).toHaveBeenCalled();
   });
 
   it('tolerates the onboarding send throwing (logs, does not fail the job)', async () => {
@@ -1490,11 +1538,11 @@ describe('processWabotInboundJob — failure tolerance (no-coverage catch blocks
     expect(warned()).toMatch(/Failed to send new-user onboarding/);
   });
 
-  it('skips the new-user first lesson when no user_message_id was produced (unsupported type)', async () => {
+  it('skips the onboarding start when no user_message_id was produced (unsupported type)', async () => {
     const mocks = newUser();
     // Video type for a new user → no text/audio entity → userMessageId undefined.
     await runJob(makeVideoJob(), mocks);
-    expect(warned()).toMatch(/New-user first lesson skipped/);
+    expect(warned()).toMatch(/New-user onboarding start skipped/);
     expect(errorSpy.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
       /sent unsupported type/,
     );
@@ -1512,7 +1560,7 @@ describe('processWabotInboundJob — failure tolerance (no-coverage catch blocks
     });
     mocks.mediaMetaDataService.createTextMedia.mockResolvedValue({ id: 't1' });
     mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
-      {},
+      PROMPT_TEXT_MEDIA,
     );
     await runJob(makeTextJob('ref 9876543210'), mocks);
     expect(logSpy.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
@@ -1556,7 +1604,7 @@ describe('processWabotInboundJob — new-user send label', () => {
     });
     mocks.mediaMetaDataService.createTextMedia.mockResolvedValue({ id: 't1' });
     mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
-      {},
+      PROMPT_TEXT_MEDIA,
     );
     mocks.wabotOutbound.sendMessage.mockResolvedValue({
       status: 422,
@@ -1842,5 +1890,213 @@ describe('processWabotInboundJob — reading-speed stids', () => {
     const mocks = readingMocks({ durationMs: 60_000 });
     await runJob(createAudioJob(), mocks);
     expect(calledStids(mocks)).toEqual(['r1-a', 'r1-b', 'r2-a']);
+  });
+});
+
+// ─── parent onboarding gate (2026-09) ────────────────────────────────────────
+
+describe('processWabotInboundJob — parent onboarding gate', () => {
+  let warnSpy: jest.SpyInstance;
+  beforeEach(() => {
+    warnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    jest.clearAllMocks();
+    warnSpy.mockRestore();
+  });
+
+  function unOnboarded(opts: { attemptsMade?: number } = {}) {
+    const mocks = makeMocks();
+    mocks.userService.isOnboarded.mockReturnValue(false);
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({
+      video: {
+        id: 'prompt-video',
+        wa_media_url: 'https://wa/prompt.mp4',
+        media_details: null,
+      },
+    });
+    return { mocks, job: createAudioJob(opts) };
+  }
+
+  it('onboarded users (grandfathered / non-student role / completed — decided by userService.isOnboarded) take the lesson path', async () => {
+    const mocks = makeMocks();
+    mocks.userService.isOnboarded.mockReturnValue(true);
+    await runJob(createAudioJob(), mocks);
+    expect(mocks.userService.isOnboarded).toHaveBeenCalledWith({
+      id: 'user-1',
+      external_id: '+910000000001',
+    });
+    expect(mocks.onboardingService.handleTurn).not.toHaveBeenCalled();
+    expect(mocks.literacyLessonService.processAnswer).toHaveBeenCalled();
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('pp.path', 'audio-reply');
+  });
+
+  it('routes an un-onboarded audio turn to handleTurn and sends its stid media with trigger onboarding', async () => {
+    const { mocks, job } = unOnboarded();
+    mocks.onboardingService.handleTurn.mockResolvedValue({
+      stateTransitionIds: ['onboarding-ask-consent'],
+      texts: [],
+    });
+    await runJob(job, mocks);
+
+    expect(mocks.onboardingService.handleTurn).toHaveBeenCalledWith({
+      user: { id: 'user-1', external_id: '+910000000001' },
+      transcripts: [{ text: 'ओम' }],
+      user_message_id: 'audio-entity-1',
+    });
+    expect(mocks.literacyLessonService.processAnswer).not.toHaveBeenCalled();
+    expect(
+      mocks.literacyLessonService.cleanupPartialState,
+    ).not.toHaveBeenCalled();
+    expect(mocks.userActivityService.getTodayActiveTime).not.toHaveBeenCalled();
+    expect(
+      mocks.mediaMetaDataService.findMediaByStateTransitionId,
+    ).toHaveBeenCalledWith('onboarding-ask-consent');
+    expect(mocks.wabotOutbound.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        media: [
+          { type: 'video', url: 'https://wa/prompt.mp4', mime_type: undefined },
+        ],
+      }),
+    );
+    expect(mocks.outboundMessages.recordSent).toHaveBeenCalledWith({
+      user_id: 'user-1',
+      user_message_id: 'audio-entity-1',
+      trigger: 'onboarding',
+      items: [
+        {
+          media_metadata_id: 'prompt-video',
+          state_transition_id: 'onboarding-ask-consent',
+        },
+      ],
+    });
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('pp.path', 'onboarding');
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('pp.outcome', 'success');
+  });
+
+  it('appends handleTurn texts after the stid media (done turn: referral + lesson passage)', async () => {
+    const { mocks, job } = unOnboarded();
+    mocks.onboardingService.handleTurn.mockResolvedValue({
+      stateTransitionIds: ['onboarding-complete'],
+      texts: ['referral link', 'राम घर जाता है।'],
+    });
+    await runJob(job, mocks);
+    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media;
+    expect(media).toEqual([
+      { type: 'video', url: 'https://wa/prompt.mp4', mime_type: undefined },
+      { type: 'text', body: 'referral link' },
+      { type: 'text', body: 'राम घर जाता है।' },
+    ]);
+  });
+
+  it('warns (and sends nothing for it) when an onboarding stid has no media', async () => {
+    const { mocks, job } = unOnboarded();
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue(
+      {},
+    );
+    await runJob(job, mocks);
+    expect(warnSpy.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
+      /No media seeded for onboarding-ask-guardian/,
+    );
+    expect(mocks.wabotOutbound.sendMessage.mock.calls[0][0].media).toEqual([]);
+  });
+
+  it('redirects a non-audio message from an un-onboarded user to the audio-only prompt', async () => {
+    const { mocks } = unOnboarded();
+    await runJob(makeTextJob('haan'), mocks);
+    expect(mocks.onboardingService.handleTurn).not.toHaveBeenCalled();
+    expect(mocks.mediaMetaDataService.createTextMedia).not.toHaveBeenCalled();
+    expect(
+      mocks.mediaMetaDataService.findMediaByStateTransitionId,
+    ).toHaveBeenCalledWith('audio-only-request');
+    expect(mocks.wabotOutbound.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        media: [{ type: 'video', url: 'https://wa/prompt.mp4' }],
+      }),
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('pp.path', 'onboarding');
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('pp.outcome', 'success');
+  });
+
+  it('also redirects a flow tap (interactive) from an un-onboarded user', async () => {
+    const { mocks } = unOnboarded();
+    await runJob(createInteractiveJob('{"answer_id":"opt-9"}'), mocks);
+    expect(mocks.onboardingService.handleTurn).not.toHaveBeenCalled();
+    expect(mocks.literacyLessonService.processAnswer).not.toHaveBeenCalled();
+    expect(
+      mocks.mediaMetaDataService.findMediaByStateTransitionId,
+    ).toHaveBeenCalledWith('audio-only-request');
+  });
+
+  it("on a BullMQ retry rolls back the previous attempt's row before handleTurn", async () => {
+    const { mocks, job } = unOnboarded({ attemptsMade: 1 });
+    await runJob(job, mocks);
+    expect(mocks.onboardingService.rollback).toHaveBeenCalledTimes(1);
+    expect(mocks.onboardingService.rollback).toHaveBeenCalledWith(
+      'audio-entity-1',
+    );
+    expect(
+      mocks.onboardingService.rollback.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      mocks.onboardingService.handleTurn.mock.invocationCallOrder[0],
+    );
+    expect(
+      mocks.literacyLessonService.cleanupPartialState,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('does not roll back on the first attempt', async () => {
+    const { mocks, job } = unOnboarded({ attemptsMade: 0 });
+    await runJob(job, mocks);
+    expect(mocks.onboardingService.rollback).not.toHaveBeenCalled();
+  });
+
+  it('on delivered:false rolls back the onboarding row beside markRolledBack', async () => {
+    const { mocks, job } = unOnboarded();
+    mocks.wabotOutbound.sendMessage.mockResolvedValue({
+      status: 200,
+      body: { delivered: false, reason: 'inflight-expired' },
+    });
+    await runJob(job, mocks);
+    expect(mocks.mediaMetaDataService.markRolledBack).toHaveBeenCalledWith(
+      'audio-entity-1',
+    );
+    expect(mocks.onboardingService.rollback).toHaveBeenCalledWith(
+      'audio-entity-1',
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('pp.outcome', 'success');
+  });
+
+  it('the lesson path never calls onboardingService.rollback on delivered:false', async () => {
+    const mocks = makeMocks();
+    mocks.wabotOutbound.sendMessage.mockResolvedValue({
+      status: 200,
+      body: { delivered: false, reason: 'inflight-expired' },
+    });
+    await runJob(createAudioJob(), mocks);
+    expect(mocks.mediaMetaDataService.markRolledBack).toHaveBeenCalled();
+    expect(mocks.onboardingService.rollback).not.toHaveBeenCalled();
+  });
+
+  it('a 5XX send fails the job without rolling back (BullMQ retry will)', async () => {
+    const { mocks, job } = unOnboarded();
+    mocks.wabotOutbound.sendMessage.mockResolvedValue({
+      status: 503,
+      body: {},
+    });
+    await expect(runJob(job, mocks)).rejects.toThrow('sendMessage 5XX');
+    expect(mocks.onboardingService.rollback).not.toHaveBeenCalled();
+  });
+
+  it('still enforces the 20 s staleness guard before the gate', async () => {
+    const { mocks } = unOnboarded();
+    const stale = createAudioJob();
+    stale.data.message.timestamp = String(Math.floor(Date.now() / 1000) - 60);
+    await runJob(stale, mocks);
+    expect(mocks.userService.isOnboarded).not.toHaveBeenCalled();
+    expect(mocks.onboardingService.handleTurn).not.toHaveBeenCalled();
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('pp.path', 'stale-skip');
   });
 });

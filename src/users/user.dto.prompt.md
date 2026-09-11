@@ -76,6 +76,10 @@ export interface UpdateUserOptions {
   new_name?: string;
   new_referrer_user_id?: string | null;
   new_referrer_external_id?: string;
+  // null clears the column (OnboardingService.rollback of a done turn).
+  new_birth_year?: number | null;
+  new_birth_month?: number | null;
+  new_recording_permissions_obtained_at?: Date | null;
 }
 
 export interface CreateUserOptions {
@@ -216,7 +220,7 @@ export function validateUpdateUserOptions(options: unknown): UpdateUserOptions {
     new_referrer_external_id === undefined
   ) {
     throw new BadRequestException(
-      'update() requires at least one field to update (new_external_id, new_name, new_referrer_user_id, new_referrer_external_id)',
+      'update() requires at least one field to update (new_external_id, new_name, new_referrer_user_id, new_referrer_external_id, new_birth_year, new_birth_month, new_recording_permissions_obtained_at)',
     );
   }
   return {

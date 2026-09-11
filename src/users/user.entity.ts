@@ -33,6 +33,17 @@ export class UserEntity {
   @Column({ type: 'text', nullable: true })
   role: string | null;
 
+  // Parent onboarding (src/onboarding): written together when the
+  // onboarding machine reaches `done`; null until then.
+  @Column({ type: 'smallint', nullable: true })
+  birth_year: number | null;
+
+  @Column({ type: 'smallint', nullable: true })
+  birth_month: number | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  recording_permissions_obtained_at: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;
 }
