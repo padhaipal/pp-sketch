@@ -321,3 +321,27 @@ describe('runCompletionBatch', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 });
+
+describe('callChatCompletions — per-call timeoutMs', () => {
+  it('aborts the attempt after options.timeoutMs instead of LLM_TIME_CAP', async () => {
+    global.fetch = jest.fn(
+      (_url: unknown, init?: { signal?: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(new Error('aborted')),
+          );
+        }),
+    ) as unknown as typeof fetch;
+
+    const started = Date.now();
+    await expect(
+      callChatCompletions(config, request, { timeoutMs: 20, maxAttempts: 1 }),
+    ).rejects.toMatchObject({
+      name: 'LlmError',
+      retriable: true,
+      message: expect.stringMatching(/openai timed out after 20 ms/),
+    });
+    // Well under the 45 s LLM_TIME_CAP the env sets for this file.
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+});

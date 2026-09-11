@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, EntityManager } from 'typeorm';
 import { validate as isUuid } from 'uuid';
 import { UserEntity } from './user.entity';
 import { InteractionRow } from './interactions-csv';
@@ -13,6 +13,7 @@ import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
 import { ScoreService } from '../literacy/score/score.service';
 import { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound.service';
+import { onboardingCutoff } from '../onboarding/onboarding.config';
 import {
   User,
   FindUserOptions,
@@ -302,8 +303,17 @@ export class UserService {
     return user ?? null;
   }
 
-  async update(options: UpdateUserOptions): Promise<User | null> {
+  // `manager` runs the write inside the caller's transaction. In that mode
+  // the cache is only evicted, never repopulated (a set before commit would
+  // publish uncommitted columns), and the caller must evict again after
+  // commit — invalidateCache() — to close the repopulate race.
+  async update(
+    options: UpdateUserOptions,
+    manager?: EntityManager,
+  ): Promise<User | null> {
     const validated = validateUpdateUserOptions(options);
+    const repo = manager ? manager.getRepository(UserEntity) : this.userRepo;
+    const db = manager ?? this.dataSource;
 
     // Build update payload
     const updateFields: Partial<UserEntity> = {};
@@ -316,11 +326,24 @@ export class UserService {
       updateFields.name = validated.new_name;
     }
 
+    if (validated.new_birth_year !== undefined) {
+      updateFields.birth_year = validated.new_birth_year;
+    }
+
+    if (validated.new_birth_month !== undefined) {
+      updateFields.birth_month = validated.new_birth_month;
+    }
+
+    if (validated.new_recording_permissions_obtained_at !== undefined) {
+      updateFields.recording_permissions_obtained_at =
+        validated.new_recording_permissions_obtained_at;
+    }
+
     if (validated.new_referrer_user_id !== undefined) {
       updateFields.referrer_user_id = validated.new_referrer_user_id;
     } else if (validated.new_referrer_external_id !== undefined) {
       // Resolve referrer by external_id — needs raw SQL subquery
-      const referrerRows = await this.userRepo.findOneBy({
+      const referrerRows = await repo.findOneBy({
         external_id: validated.new_referrer_external_id,
       });
       updateFields.referrer_user_id = referrerRows?.id ?? null;
@@ -331,19 +354,19 @@ export class UserService {
       ? { id: validated.id }
       : { external_id: validated.external_id! };
 
-    const existingUser = await this.userRepo.findOneBy(where);
+    const existingUser = await repo.findOneBy(where);
     if (!existingUser) return null;
 
     // Apply updates and save
     Object.assign(existingUser, updateFields);
-    const updatedUser = await this.userRepo.save(existingUser);
+    const updatedUser = await repo.save(existingUser);
 
     // Cycle check if referrer was set (raw SQL — recursive CTE)
     const referrerWasSet =
       validated.new_referrer_user_id !== undefined ||
       validated.new_referrer_external_id !== undefined;
     if (referrerWasSet && updatedUser.referrer_user_id) {
-      const cycleRows: unknown[] = await this.dataSource.query(
+      const cycleRows: unknown[] = await db.query(
         `WITH RECURSIVE chain AS (
           SELECT id, referrer_user_id FROM users WHERE id = $1
           UNION ALL
@@ -358,12 +381,12 @@ export class UserService {
       if (cycleRows.length > 0) {
         // Roll back by removing the referrer
         updatedUser.referrer_user_id = null;
-        await this.userRepo.save(updatedUser);
+        await repo.save(updatedUser);
         throw new BadRequestException('update() would create a referral cycle');
       }
     }
 
-    // Invalidate and repopulate cache
+    // Invalidate and (outside a transaction) repopulate cache
     const keysToDelete = [
       CACHE_KEYS.userById(updatedUser.id),
       CACHE_KEYS.userByExternalId(updatedUser.external_id),
@@ -376,20 +399,47 @@ export class UserService {
     }
     await this.cacheService.del(keysToDelete);
 
-    await Promise.all([
-      this.cacheService.set(
-        CACHE_KEYS.userById(updatedUser.id),
-        updatedUser,
-        CACHE_TTL.USER,
-      ),
-      this.cacheService.set(
-        CACHE_KEYS.userByExternalId(updatedUser.external_id),
-        updatedUser,
-        CACHE_TTL.USER,
-      ),
-    ]);
+    if (!manager) {
+      await Promise.all([
+        this.cacheService.set(
+          CACHE_KEYS.userById(updatedUser.id),
+          updatedUser,
+          CACHE_TTL.USER,
+        ),
+        this.cacheService.set(
+          CACHE_KEYS.userByExternalId(updatedUser.external_id),
+          updatedUser,
+          CACHE_TTL.USER,
+        ),
+      ]);
+    }
 
     return updatedUser;
+  }
+
+  // Evicts both cache keys for a user. Callers that wrote through
+  // update(…, manager) call this after their transaction commits.
+  async invalidateCache(user: {
+    id: string;
+    external_id: string;
+  }): Promise<void> {
+    await this.cacheService.del([
+      CACHE_KEYS.userById(user.id),
+      CACHE_KEYS.userByExternalId(user.external_id),
+    ]);
+  }
+
+  // Parent-onboarding gate (src/onboarding). True for staff accounts, for
+  // users created before ONBOARDING_CUTOFF (grandfathered), and once the
+  // onboarding machine has written birth_year + recording permission. Pure:
+  // reads the user object the caller holds, which may be a cached copy —
+  // every onboarding write evicts the cache so the next find() is fresh.
+  isOnboarded(user: User): boolean {
+    if (user.role != null && user.role !== 'student') return true;
+    if (new Date(user.created_at) < onboardingCutoff()) return true;
+    return (
+      user.birth_year != null && user.recording_permissions_obtained_at != null
+    );
   }
 
   async create(options: CreateUserOptions): Promise<User> {
@@ -568,27 +618,10 @@ export class UserService {
             [target.id],
           );
 
-          await manager.query(`DELETE FROM scores WHERE user_id = $1`, [
-            target.id,
-          ]);
-          await manager.query(
-            `DELETE FROM literacy_lesson_states WHERE user_id = $1`,
-            [target.id],
-          );
-          // Invariant: any media_metadata row referencing one of this user's
-          // media rows via input_media_id is itself owned by this user. If a
-          // future code path violates that, this DELETE will FK-error and
-          // this list must be extended (e.g. with a recursive pre-delete).
-          await manager.query(`DELETE FROM media_metadata WHERE user_id = $1`, [
-            target.id,
-          ]);
-
-          // Convention deviation: scores / literacy_lesson_states /
-          // media_metadata writes happen here as raw SQL rather than through
-          // their entity services. Done to keep one transaction per user
-          // atomic without opening the UserService <-> MediaMetaDataService
-          // module cycle.
-
+          // Everything else hanging off the user (media, transcripts,
+          // scores, lesson + onboarding states, outbound audit rows) goes
+          // via ON DELETE CASCADE — see CascadeUserDeletes migration and
+          // foreign-keys.spec.ts.
           const userDelete: { id: string }[] = await manager.query(
             `DELETE FROM users WHERE id = $1 RETURNING id`,
             [target.id],
