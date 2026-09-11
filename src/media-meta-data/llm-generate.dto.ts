@@ -196,6 +196,17 @@ export class LlmOutputInvalidError extends Error {
 
 // ─── Request validation ──────────────────────────────────────────────────────
 
+// Providers batch generation may use. Google is reserved for the realtime
+// onboarding classifier (src/onboarding) — the one LLM call a human waits
+// on — so it keeps its own key, quota and failure domain: an OpenAI
+// incident mid-generation-run cannot stall a parent mid-consent, and a
+// generation run cannot exhaust the classifier's quota. VALID_LLM_PROVIDERS
+// is unchanged (onboarding.config.ts validates against the full list) and
+// GoogleLlmService stays registered; only this request validation narrows.
+export const GENERATION_LLM_PROVIDERS = VALID_LLM_PROVIDERS.filter(
+  (p) => p !== 'google',
+);
+
 export function validateLlmGenerateRequest(body: unknown): LlmGenerateRequest {
   if (!body || typeof body !== 'object') {
     throw new BadRequestException('llm-generate body must be an object');
@@ -205,10 +216,10 @@ export function validateLlmGenerateRequest(body: unknown): LlmGenerateRequest {
   const provider = raw.provider;
   if (
     typeof provider !== 'string' ||
-    !(VALID_LLM_PROVIDERS as readonly string[]).includes(provider)
+    !(GENERATION_LLM_PROVIDERS as readonly string[]).includes(provider)
   ) {
     throw new BadRequestException(
-      `provider must be one of: ${VALID_LLM_PROVIDERS.join(', ')}`,
+      `provider must be one of: ${GENERATION_LLM_PROVIDERS.join(', ')} ('google' is reserved for the realtime onboarding classifier)`,
     );
   }
 
