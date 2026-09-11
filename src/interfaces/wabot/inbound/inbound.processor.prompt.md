@@ -35,19 +35,17 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
 4.) Check payload.message.timestamp (Unix epoch — may be seconds or milliseconds. If the value has 10 or fewer digits, treat it as seconds and convert to milliseconds by multiplying by 1000, i.e. assume the event happened at the first millisecond of that second).
 * If it is more than 20 seconds old then log a WARN, end the span, complete the job. Note that wabot will handle sending the "please try again" message to the user.
 
-5.) If payload.message.type is not "audio" then: 
-* Call findMediaByStateTransitionId(AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID) to retrieve the video, then call src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with media: [{ type: 'video', url: videoEntity.wa_media_url }].
-  * See sendMessage() notes below for how to handle the http response.
+5.) If payload.message.type is not "audio" then: `sendAudioOnlyRedirect(mediaMetaDataService, wabotOutbound, { user, payload, ctx })` (src/interfaces/wabot/inbound/inbound.utils.prompt.md) — looks up AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID and sends the video; a missing media row throws (fails the job so it alerts), send failures are logged and swallowed. Then end the span, complete the job.
 
-6.) (Note that now we should have the user entity data from the database and have screened out/handled all first time users and non-audio messages and so only have normal user interaction audio messages left.) Call src/media-meta-data/media-meta-data.service.ts/createWhatsappAudioMedia() with:
-  * wa_media_url: payload.message.audio.mediaUrl
-  * user: the User entity from step 3 (trusted path, no extra DB hit)
-* This will return a mediaMetaData entity for the user's audio message which will contain a link to where that audio is stored in the S3 bucket. There will also be several mediaMetaData text entities associated with that mediaMetaData entity which will contain the transcripts of the audio message.
-* Store the audio mediaMetaData entity's `id` as `userMessageId` — this will be passed to downstream services as the FK linking all writes back to this interaction.
+6.) (Note that now we should have the user entity data from the database and have screened out/handled all first time users and non-audio messages and so only have normal user interaction audio messages left.) Call `persistAndTranscribeAudio(mediaMetaDataService, { payload, user, span })` (inbound.utils.prompt.md). It:
+  * calls src/media-meta-data/media-meta-data.service.ts/createWhatsappAudioMedia() with wa_media_url: payload.message.audio.url and user: the User entity from step 3 (trusted path, no extra DB hit). This returns a mediaMetaData entity for the user's audio message which will contain a link to where that audio is stored in the S3 bucket. There will also be several mediaMetaData text entities associated with that mediaMetaData entity which will contain the transcripts of the audio message.
+  * re-arms the hail-mary timer for the user (best effort — a failure is WARN-logged and ignored).
+  * runs step 7 (below) and returns `{ audioEntity, transcripts }`.
+* Store `audioEntity.id` as `userMessageId` — this will be passed to downstream services as the FK linking all writes back to this interaction.
 
-6.5.) If `job.attemptsMade > 0` then this is a BullMQ retry and a prior attempt may have partially written lesson state and/or score rows for this `userMessageId` before failing downstream (e.g. in sendMessage()). Call `literacyLessonService.cleanupPartialState(userMessageId)` to delete any such rows so the rest of the job runs against a clean slate. Runs exactly once per job, before any `processAnswer` call, so the step-8 `isComplete` double-call is unaffected (the second call wouldn't re-enter the cleanup gate anyway). `createWhatsappAudioMedia()` is already idempotent by `wa_media_url`, so retries reuse the same `userMessageId`.
+6.5.) If `job.attemptsMade > 0` then this is a BullMQ retry and a prior attempt may have partially written lesson state and/or score rows for this `userMessageId` before failing downstream (e.g. in sendMessage()). Call `literacyLessonService.cleanupPartialState(userMessageId)` to delete any such rows so the rest of the job runs against a clean slate. Runs exactly once per job, after `persistAndTranscribeAudio` returns and before any `processAnswer` call, so the step-8 `isComplete` double-call is unaffected (the second call wouldn't re-enter the cleanup gate anyway). `createWhatsappAudioMedia()` is already idempotent by `wa_media_url`, so retries reuse the same `userMessageId`.
 
-7.) Call src/media-meta-data/media-meta-data.service.ts/findTranscripts() with:
+7.) (Inside `persistAndTranscribeAudio`.) Call src/media-meta-data/media-meta-data.service.ts/findTranscripts() with:
   * media_metadata: the audio mediaMetaData entity from step 6 (trusted path — uses .id directly)
 * If no transcripts are returned then log ERROR, end the span, fail the job.
 * Else: continue
@@ -61,11 +59,8 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
 * If processAnswer() returns isComplete === true then call processAnswer() again with just user and user_message_id (omit transcripts — this starts a fresh lesson without sending an ANSWER event). Spread the second result's `stateTransitionIds` into the same local array. 
 
 9.) For each stateTransitionId in the array, call src/media-meta-data/media-meta-data.service.ts/findMediaByStateTransitionId().
-  * Each call returns a `FindMediaByStateTransitionIdResult` with one randomly selected entity per media type (audio, video, text, image), or undefined for types with no matching media.
-  * Build an ordered `OutboundMediaItem[]` array from the results. For each stateTransitionId's result, append items in this order: video, audio, image, sticker, text (skipping any type that is undefined). If there are two stateTransitionIds, the first stateTransitionId's items come before the second's.
-  * For each media entity, construct the OutboundMediaItem:
-    * `type: 'audio' | 'video' | 'image' | 'sticker'` → `{ type, url: entity.wa_media_url }`. Stickers are sent with `type: 'sticker'` explicitly (no mime_type hint needed).
-    * `type: 'text'` → `{ type: 'text', body: entity.text }`
+  * Each call returns a `FindMediaByStateTransitionIdResult` with one randomly selected entity per media type (audio, video, text, image, sticker, flow), or undefined for types with no matching media.
+  * Build an ordered `OutboundMediaItem[]` array from the results with `appendMediaItems(items, media, records, stid)` (inbound.utils.prompt.md): per stateTransitionId, items in the order video, audio, image, sticker, text, then the comprehension flow last (skipping any type that is undefined). If there are two stateTransitionIds, the first stateTransitionId's items come before the second's. `records` collects the entity-backed items for the outbound_messages audit row in step 10.
 
 10.) Send the outbound message(s) to the student via src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with:
   * user_external_id: the User entity's external_id from step 3
