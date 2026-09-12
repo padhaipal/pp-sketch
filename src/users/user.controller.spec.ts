@@ -19,6 +19,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Logger,
   NotFoundException,
   UnauthorizedException,
   UnprocessableEntityException,
@@ -1720,7 +1721,11 @@ describe('UserController public profile + profile PATCH', () => {
     geo_lat: 34.5,
     geo_lng: 74.4,
   };
-  function setup(row: unknown = ROW) {
+  const EXPLAINER_URL = 'https://wa/explainer.mp4';
+  function setup(
+    row: unknown = ROW,
+    explainerRows: unknown[] = [{ wa_media_url: EXPLAINER_URL }],
+  ) {
     const getPublicProfileRow = jest.fn().mockResolvedValue(row);
     const update = jest.fn().mockResolvedValue({});
     const ancestors = jest.fn().mockResolvedValue([
@@ -1733,11 +1738,13 @@ describe('UserController public profile + profile PATCH', () => {
       },
       { id: 'b1', type: 'block', code: '010101', name: 'Kupwara', lat: 1 },
     ]);
+    const explainerQuery = jest.fn().mockResolvedValue(explainerRows);
     const ctrl = makeController({
+      mediaRepo: makeRepo({ manager: { query: explainerQuery } }),
       userSvc: { getPublicProfileRow, update },
       geoSvc: { ancestors },
     });
-    return { ctrl, getPublicProfileRow, update, ancestors };
+    return { ctrl, getPublicProfileRow, update, ancestors, explainerQuery };
   }
 
   it('GET :id/public returns exactly the forwardable allow-list — never external_id, staff_notes or password_hash', async () => {
@@ -1751,6 +1758,7 @@ describe('UserController public profile + profile PATCH', () => {
       [
         'ancestors',
         'avatar_seed',
+        'explainer_url',
         'geo_entity',
         'id',
         'name',
@@ -1765,38 +1773,39 @@ describe('UserController public profile + profile PATCH', () => {
       /external_id|staff_notes|password_hash/,
     );
     expect(out).toMatchInlineSnapshot(`
-{
-  "ancestors": [
-    {
-      "code": "IN",
-      "id": "in",
-      "name": "India",
-      "type": "country",
-    },
-    {
-      "code": "010101",
-      "id": "b1",
-      "name": "Kupwara",
-      "type": "block",
-    },
-  ],
-  "avatar_seed": "u1",
-  "geo_entity": {
-    "code": "01010100101",
-    "has_boundary": false,
-    "id": "g1",
-    "lat": 34.5,
-    "lng": 74.4,
-    "name": "PS Kupwara",
-    "type": "school",
-  },
-  "id": "u1",
-  "name": "Asha Kumari",
-  "role_title": "Teacher",
-  "share_link": "https://dashboard.padhaipal.com/r/919876543210",
-  "spotlight_message": "Read daily!",
-}
-`);
+     {
+       "ancestors": [
+         {
+           "code": "IN",
+           "id": "in",
+           "name": "India",
+           "type": "country",
+         },
+         {
+           "code": "010101",
+           "id": "b1",
+           "name": "Kupwara",
+           "type": "block",
+         },
+       ],
+       "avatar_seed": "u1",
+       "explainer_url": "https://wa/explainer.mp4",
+       "geo_entity": {
+         "code": "01010100101",
+         "has_boundary": false,
+         "id": "g1",
+         "lat": 34.5,
+         "lng": 74.4,
+         "name": "PS Kupwara",
+         "type": "school",
+       },
+       "id": "u1",
+       "name": "Asha Kumari",
+       "role_title": "Teacher",
+       "share_link": "https://dashboard.padhaipal.com/r/919876543210",
+       "spotlight_message": "Read daily!",
+     }
+    `);
   });
 
   it('404s when the account is not an active staff account', async () => {
@@ -1806,6 +1815,52 @@ describe('UserController public profile + profile PATCH', () => {
       NotFoundException,
     );
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it('resolves explainer_url from the lifteracy-explainer stid (ready, not rolled back, video preferred) and memoises the hit', async () => {
+    const { ctrl, explainerQuery } = setup();
+    await expect(ctrl.publicProfile('u1')).resolves.toEqual(
+      expect.objectContaining({ explainer_url: EXPLAINER_URL }),
+    );
+    const [sql, params] = explainerQuery.mock.calls[0];
+    expect(params).toEqual(['lifteracy-explainer']);
+    expect(sql).toMatch(/status = 'ready'/);
+    expect(sql).toMatch(/rolled_back = false/);
+    expect(sql).toMatch(/wa_media_url IS NOT NULL/);
+    expect(sql).toMatch(/ORDER BY \(media_type = 'video'\) DESC/);
+    // Memoised for the process lifetime: one query however many page loads.
+    await ctrl.publicProfile('u1');
+    expect(explainerQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('explainer_url is null (warn, never throws, not memoised) when the clip is unseeded or the lookup fails', async () => {
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    try {
+      const unseeded = setup(ROW, []);
+      await expect(unseeded.ctrl.publicProfile('u1')).resolves.toEqual(
+        expect.objectContaining({ explainer_url: null }),
+      );
+      // A miss must keep re-querying: seeding the clip later must not need a
+      // redeploy to take effect.
+      await unseeded.ctrl.publicProfile('u1');
+      expect(unseeded.explainerQuery).toHaveBeenCalledTimes(2);
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
+        /No ready media for lifteracy-explainer/,
+      );
+
+      const broken = setup();
+      broken.explainerQuery.mockRejectedValue(new Error('db down'));
+      await expect(broken.ctrl.publicProfile('u1')).resolves.toEqual(
+        expect.objectContaining({ explainer_url: null }),
+      );
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
+        /Explainer lookup failed .*db down/,
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('PATCH :id/profile strips HTML, bounds every field, writes through UserService.update (cache eviction) and returns the public shape', async () => {

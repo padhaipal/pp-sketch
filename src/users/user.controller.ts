@@ -59,6 +59,7 @@ import {
   referralUrl,
   staffDashboardLink,
 } from '../interfaces/dashboard/dashboard-url';
+import { EXPLAINER_VIDEO_STATE_TRANSITION_ID } from '../literacy/literacy-lesson/literacy-lesson.machine';
 import {
   INTERACTIONS_BATCH_SIZE,
   interactionRowToCsvLine,
@@ -633,6 +634,49 @@ export class UserController {
     return this.loadPublicProfile(id);
   }
 
+  // One media row that changes almost never, on an unauthenticated endpoint:
+  // memoise it for the process lifetime. Only a HIT is memoised — caching a
+  // miss would mean seeding the clip after boot needed a redeploy to show up.
+  private explainerUrl: string | null = null;
+
+  // Inline read rather than MediaMetaDataService.findMediaByStateTransitionId:
+  // MediaMetaDataModule imports UserModule, so injecting that service here
+  // would open the UserService <-> MediaMetaDataService module cycle the
+  // delete path deliberately avoids. Same visibility filters as that lookup
+  // (ready, not rolled back, actually sendable), video preferred over audio.
+  // Never throws: the explainer is a nice-to-have on this page.
+  private async resolveExplainerUrl(): Promise<string | null> {
+    if (this.explainerUrl) return this.explainerUrl;
+    let rows: { wa_media_url: string }[] = [];
+    try {
+      rows = await this.mediaRepo.manager.query(
+        `SELECT wa_media_url FROM media_metadata
+         WHERE state_transition_id = $1
+           AND status = 'ready'
+           AND rolled_back = false
+           AND wa_media_url IS NOT NULL
+           AND media_type IN ('video', 'audio')
+         ORDER BY (media_type = 'video') DESC
+         LIMIT 1`,
+        [EXPLAINER_VIDEO_STATE_TRANSITION_ID],
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Explainer lookup failed for ${EXPLAINER_VIDEO_STATE_TRANSITION_ID}: ${(err as Error).message}`,
+      );
+      return null;
+    }
+    const url = rows[0]?.wa_media_url ?? null;
+    if (!url) {
+      this.logger.warn(
+        `No ready media for ${EXPLAINER_VIDEO_STATE_TRANSITION_ID} — the dashboard will omit the explainer link`,
+      );
+      return null;
+    }
+    this.explainerUrl = url;
+    return url;
+  }
+
   private async loadPublicProfile(id: string): Promise<PublicProfile> {
     const row = await this.userService.getPublicProfileRow(id);
     if (!row) throw new NotFoundException('This link is not active');
@@ -663,6 +707,7 @@ export class UserController {
         : null,
       ancestors,
       share_link: referralUrl(row.external_id),
+      explainer_url: await this.resolveExplainerUrl(),
     };
   }
 

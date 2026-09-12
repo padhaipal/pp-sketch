@@ -200,6 +200,9 @@ export interface PublicProfile {
   } | null;
   ancestors: { id: string; type: string; code: string; name: string }[];
   share_link: string;
+  // The explainer clip's wa_media_url, or null when it has not been seeded
+  // in this environment (the dashboard then omits the link).
+  explainer_url: string | null;
 }
 
 // Plain text for the spotlight message (it is shown on other people's
