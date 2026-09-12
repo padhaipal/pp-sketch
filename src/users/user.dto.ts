@@ -202,11 +202,24 @@ export interface PublicProfile {
   share_link: string;
 }
 
-// Strips tags and collapses whitespace; the spotlight message is shown as
-// text on other people's pages.
+// Plain text for the spotlight message (it is shown on other people's
+// pages): a single linear pass that drops everything from a '<' to the next
+// '>' and drops every stray '<' / '>' — so no markup can survive, including
+// nested tricks like '<scr<script>ipt>', and there is no regex to backtrack
+// on long runs of '<'. Then &nbsp; → space and whitespace collapsed.
 export function stripHtml(text: string): string {
-  return text
-    .replace(/<[^>]*>/g, '')
+  let out = '';
+  let inTag = false;
+  for (const ch of text) {
+    if (ch === '<') {
+      inTag = true;
+    } else if (ch === '>') {
+      inTag = false;
+    } else if (!inTag) {
+      out += ch;
+    }
+  }
+  return out
     .replace(/&nbsp;/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
