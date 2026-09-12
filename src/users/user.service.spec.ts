@@ -1737,3 +1737,48 @@ describe('UserService.find — soft delete is NOT applied', () => {
     expect(repo.findOneBy).toHaveBeenCalledWith({ id: 'u1' });
   });
 });
+
+describe('UserService.getPublicProfileRow', () => {
+  it('reads active staff-role accounts only, null for a non-uuid', async () => {
+    const ds = jest.fn().mockResolvedValue([{ id: 'u1' }]);
+    const svc = makeService(makeRepo(), ds, makeCache(), makeScore());
+    expect(await svc.getPublicProfileRow('nope')).toBeNull();
+    expect(ds).not.toHaveBeenCalled();
+    expect(
+      await svc.getPublicProfileRow('11111111-1111-4111-8111-111111111111'),
+    ).toEqual({ id: 'u1' });
+    const [sql, params] = ds.mock.calls[0];
+    expect(sql).toMatch(/u\.deleted_at IS NULL/);
+    expect(sql).toMatch(/u\.role = ANY\(\$2::text\[\]\)/);
+    expect(sql).not.toMatch(/staff_notes|password_hash/);
+    expect(params).toEqual([
+      '11111111-1111-4111-8111-111111111111',
+      ['education_official', 'staff'],
+    ]);
+  });
+
+  it('update() writes spotlight_message and avatar_seed and validates the seed', async () => {
+    const repo = makeRepo();
+    const existing: Record<string, unknown> = {
+      id: 'u1',
+      external_id: '919999990001',
+    };
+    repo.findOneBy.mockResolvedValue(existing);
+    repo.save.mockImplementation(async (u: unknown) => u);
+    const svc = makeService(repo, jest.fn(), makeCache(), makeScore());
+    const out = await svc.update({
+      id: 'u1',
+      new_spotlight_message: 'hi',
+      new_avatar_seed: 'abc-1',
+    });
+    expect(out).toEqual(
+      expect.objectContaining({
+        spotlight_message: 'hi',
+        avatar_seed: 'abc-1',
+      }),
+    );
+    await expect(
+      svc.update({ id: 'u1', new_avatar_seed: 'no spaces' }),
+    ).rejects.toThrow(/new_avatar_seed/);
+  });
+});

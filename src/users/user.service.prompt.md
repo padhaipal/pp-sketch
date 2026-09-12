@@ -74,6 +74,11 @@ getStaff(id): Promise<StaffLookupRow | null>
 
 - GET /users/:id. Same row shape for one id; null for a non-uuid, an unknown id, or any non-staff role (dev/admin/student all 404 at the controller — the endpoint exists for the /onboarding page only). Soft-deleted returned with deleted_at set.
 
+getPublicProfileRow(id): Promise<PublicProfileRow | null>
+
+- GET /users/:id/public and PATCH /users/:id/profile (both unauthenticated — the /d link is the credential). One row for an ACTIVE staff-role account with its geo entity's id/type/code/name/has_boundary/lat/lng; `external_id` is read only so the controller can build `share_link` and is never returned. Null for a non-uuid, an unknown id, any other role, or `deleted_at` set (→ 404 "This link is not active"). The row never selects staff_notes or password_hash.
+- update() also accepts `new_spotlight_message` (string | null) and `new_avatar_seed` (`[A-Za-z0-9-]{1,64}`); the controller strips HTML and bounds lengths first (validateProfilePatch in user.dto.ts).
+
 Soft delete (users.deleted_at) gates POST /users/login (controller), GET /users/:id semantics and the staff reads — NOT find(): that is the inbound WhatsApp processor's lookup, and a deactivated official who messages the bot must still resolve (otherwise the new-user branch would hit UNIQUE(external_id) on every message).
 
 delete(input: string | string[]): Promise<{ deleted, failed }>

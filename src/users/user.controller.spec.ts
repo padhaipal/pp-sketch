@@ -19,6 +19,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Logger,
   NotFoundException,
   UnauthorizedException,
   UnprocessableEntityException,
@@ -1699,5 +1700,210 @@ describe('UserController.interactionsCsv', () => {
         '2026-08-01T00:00:00Z',
       ),
     ).rejects.toThrow(BadRequestException);
+  });
+});
+
+// ─── Public teacher dashboard (/d/:id) ───────────────────────────────────────
+
+describe('UserController public profile + profile PATCH', () => {
+  const ROW = {
+    id: 'u1',
+    name: 'Asha Kumari',
+    role_title: 'Teacher',
+    avatar_seed: 'u1',
+    spotlight_message: 'Read daily!',
+    external_id: '919876543210',
+    geo_id: 'g1',
+    geo_type: 'school',
+    geo_code: '01010100101',
+    geo_name: 'PS Kupwara',
+    geo_has_boundary: false,
+    geo_lat: 34.5,
+    geo_lng: 74.4,
+  };
+  const EXPLAINER_URL = 'https://wa/explainer.mp4';
+  function setup(
+    row: unknown = ROW,
+    explainerRows: unknown[] = [{ wa_media_url: EXPLAINER_URL }],
+  ) {
+    const getPublicProfileRow = jest.fn().mockResolvedValue(row);
+    const update = jest.fn().mockResolvedValue({});
+    const ancestors = jest.fn().mockResolvedValue([
+      {
+        id: 'in',
+        type: 'country',
+        code: 'IN',
+        name: 'India',
+        has_boundary: true,
+      },
+      { id: 'b1', type: 'block', code: '010101', name: 'Kupwara', lat: 1 },
+    ]);
+    const explainerQuery = jest.fn().mockResolvedValue(explainerRows);
+    const ctrl = makeController({
+      mediaRepo: makeRepo({ manager: { query: explainerQuery } }),
+      userSvc: { getPublicProfileRow, update },
+      geoSvc: { ancestors },
+    });
+    return { ctrl, getPublicProfileRow, update, ancestors, explainerQuery };
+  }
+
+  it('GET :id/public returns exactly the forwardable allow-list — never external_id, staff_notes or password_hash', async () => {
+    const { ctrl } = setup({
+      ...ROW,
+      staff_notes: 'secret',
+      password_hash: 'hash',
+    });
+    const out = await ctrl.publicProfile('u1');
+    expect(Object.keys(out).sort()).toEqual(
+      [
+        'ancestors',
+        'avatar_seed',
+        'explainer_url',
+        'geo_entity',
+        'id',
+        'name',
+        'role_title',
+        'share_link',
+        'spotlight_message',
+      ].sort(),
+    );
+    // The phone number appears ONLY inside share_link (/r/<external_id>),
+    // by design — never as its own field.
+    expect(JSON.stringify(out)).not.toMatch(
+      /external_id|staff_notes|password_hash/,
+    );
+    expect(out).toMatchInlineSnapshot(`
+     {
+       "ancestors": [
+         {
+           "code": "IN",
+           "id": "in",
+           "name": "India",
+           "type": "country",
+         },
+         {
+           "code": "010101",
+           "id": "b1",
+           "name": "Kupwara",
+           "type": "block",
+         },
+       ],
+       "avatar_seed": "u1",
+       "explainer_url": "https://wa/explainer.mp4",
+       "geo_entity": {
+         "code": "01010100101",
+         "has_boundary": false,
+         "id": "g1",
+         "lat": 34.5,
+         "lng": 74.4,
+         "name": "PS Kupwara",
+         "type": "school",
+       },
+       "id": "u1",
+       "name": "Asha Kumari",
+       "role_title": "Teacher",
+       "share_link": "https://dashboard.padhaipal.com/r/919876543210",
+       "spotlight_message": "Read daily!",
+     }
+    `);
+  });
+
+  it('404s when the account is not an active staff account', async () => {
+    const { ctrl, update } = setup(null);
+    await expect(ctrl.publicProfile('u1')).rejects.toThrow(NotFoundException);
+    await expect(ctrl.patchProfile('u1', { name: 'x' })).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('resolves explainer_url from the lifteracy-explainer stid (ready, not rolled back, video preferred) and memoises the hit', async () => {
+    const { ctrl, explainerQuery } = setup();
+    await expect(ctrl.publicProfile('u1')).resolves.toEqual(
+      expect.objectContaining({ explainer_url: EXPLAINER_URL }),
+    );
+    const [sql, params] = explainerQuery.mock.calls[0];
+    expect(params).toEqual(['lifteracy-explainer']);
+    expect(sql).toMatch(/status = 'ready'/);
+    expect(sql).toMatch(/rolled_back = false/);
+    expect(sql).toMatch(/wa_media_url IS NOT NULL/);
+    expect(sql).toMatch(/ORDER BY \(media_type = 'video'\) DESC/);
+    // Memoised for the process lifetime: one query however many page loads.
+    await ctrl.publicProfile('u1');
+    expect(explainerQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('explainer_url is null (warn, never throws, not memoised) when the clip is unseeded or the lookup fails', async () => {
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    try {
+      const unseeded = setup(ROW, []);
+      await expect(unseeded.ctrl.publicProfile('u1')).resolves.toEqual(
+        expect.objectContaining({ explainer_url: null }),
+      );
+      // A miss must keep re-querying: seeding the clip later must not need a
+      // redeploy to take effect.
+      await unseeded.ctrl.publicProfile('u1');
+      expect(unseeded.explainerQuery).toHaveBeenCalledTimes(2);
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
+        /No ready media for lifteracy-explainer/,
+      );
+
+      const broken = setup();
+      broken.explainerQuery.mockRejectedValue(new Error('db down'));
+      await expect(broken.ctrl.publicProfile('u1')).resolves.toEqual(
+        expect.objectContaining({ explainer_url: null }),
+      );
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
+        /Explainer lookup failed .*db down/,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('PATCH :id/profile strips HTML, bounds every field, writes through UserService.update (cache eviction) and returns the public shape', async () => {
+    const { ctrl, update } = setup();
+    const out = await ctrl.patchProfile('u1', {
+      name: '  <b>Asha</b> Devi ',
+      spotlight_message:
+        '<script>alert(1)</script>Keep <i>reading</i>&nbsp;every day  ',
+      avatar_seed: 'seed-123',
+    });
+    expect(update).toHaveBeenCalledWith({
+      id: 'u1',
+      new_name: 'Asha Devi',
+      new_spotlight_message: 'alert(1)Keep reading every day',
+      new_avatar_seed: 'seed-123',
+    });
+    expect(Object.keys(out)).not.toContain('external_id');
+
+    await ctrl.patchProfile('u1', { spotlight_message: '' });
+    expect(update).toHaveBeenLastCalledWith({
+      id: 'u1',
+      new_spotlight_message: null,
+    });
+
+    // Nested-tag bypass and stray brackets can never leave markup behind.
+    await ctrl.patchProfile('u1', {
+      spotlight_message: '<scr<script>ipt>alert(1)</scr</script>ipt> a < b > c',
+    });
+    const saved = update.mock.calls.at(-1)![0].new_spotlight_message as string;
+    expect(saved).not.toMatch(/[<>]/);
+    expect(saved).not.toMatch(/script/i);
+
+    for (const body of [
+      { name: '' },
+      { name: 'x'.repeat(81) },
+      { spotlight_message: 'x'.repeat(301) },
+      { avatar_seed: 'bad seed!' },
+      { avatar_seed: 'x'.repeat(65) },
+      {},
+    ]) {
+      await expect(ctrl.patchProfile('u1', body as never)).rejects.toThrow(
+        BadRequestException,
+      );
+    }
   });
 });

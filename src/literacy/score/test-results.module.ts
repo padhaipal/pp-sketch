@@ -7,6 +7,8 @@ import {
 } from './test-results.entity';
 import { TestResultsService } from './test-results.service';
 import { TestResultsController } from './test-results.controller';
+import { DashboardScoresService } from './dashboard-scores.service';
+import { DashboardScoresController } from './dashboard-scores.controller';
 import { GeoEntityModule } from '../../geo-entities/geo-entity.module';
 
 @Module({
@@ -18,8 +20,8 @@ import { GeoEntityModule } from '../../geo-entities/geo-entity.module';
     ]),
     GeoEntityModule,
   ],
-  controllers: [TestResultsController],
-  providers: [TestResultsService],
-  exports: [TestResultsService],
+  controllers: [TestResultsController, DashboardScoresController],
+  providers: [TestResultsService, DashboardScoresService],
+  exports: [TestResultsService, DashboardScoresService],
 })
 export class TestResultsModule {}

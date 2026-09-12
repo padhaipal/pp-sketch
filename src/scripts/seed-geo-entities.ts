@@ -15,6 +15,7 @@ import type {
   ManagementGroup,
 } from '../geo-entities/geo-entity.dto';
 import type { MergeEdge } from '../geo-entities/geo-entity.service';
+import { backfillBlockCoords } from './backfill-block-coords';
 
 // ─── Arguments ───────────────────────────────────────────────────────────────
 
@@ -786,6 +787,11 @@ export interface SeedDeps {
   linkMergedSchools: () => Promise<number>;
   mergeEdges: () => Promise<MergeEdge[]>;
   clearMergedInto: (ids: string[]) => Promise<void>;
+  updateBlockCoordinates: (
+    id: string,
+    lat: number,
+    lng: number,
+  ) => Promise<void>;
   query: (sql: string, params?: unknown[]) => Promise<unknown[]>;
 }
 
@@ -950,6 +956,15 @@ export async function runSeed(deps: SeedDeps, args: SeedArgs): Promise<void> {
       `merged_into_id: ${breaks.length} pointers nulled to break cycles`,
     );
   }
+
+  // Block label points: geometric median of each block's located schools
+  // (a register refresh that adds blocks locates them in the same run).
+  await backfillBlockCoords({
+    log: deps.log,
+    query: deps.query,
+    transaction: deps.transaction,
+    updateBlockCoordinates: deps.updateBlockCoordinates,
+  });
 
   // Every school reaches IN within 5 steps.
   const unreachable = (await deps.query(

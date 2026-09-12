@@ -14,6 +14,11 @@ import { identifyCharacterStatus } from './identify-character-status.utils';
 
 export const WELCOME_MESSAGE_STATE_TRANSITION_ID = 'welcome-message';
 export const AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID = 'audio-only-request';
+// Not a lesson transition: the "What is Lifteracy?" explainer clip sent to
+// parents over WhatsApp and linked from the teacher dashboard
+// (GET /users/:id/public → explainer_url). Swapping the clip is an upload
+// under this stid, not a deploy.
+export const EXPLAINER_VIDEO_STATE_TRANSITION_ID = 'lifteracy-explainer';
 export const STALE_LESSON_RESTART_STATE_TRANSITION_ID = 'stale-lesson-restart';
 // Sentence failed but no teachable drill word exists (every badly-read word
 // contains a conjunct/nukta/other grapheme outside TEACHABLE_GRAPHEMES, or

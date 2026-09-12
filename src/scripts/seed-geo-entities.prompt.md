@@ -101,6 +101,10 @@ Then `findMergeCycleBreaks` over the resulting edges nulls the operational
 member of each cycle, or every member when none is operational, and logs.
 Chains are kept, not flattened.
 
+Then block label points: `backfillBlockCoords` (backfill-block-coords.prompt.md)
+writes each block's geometric median of its located schools — a register
+refresh that adds blocks locates them in the same run.
+
 Final check: every school's parent chain reaches `IN` within 5 steps and no
 school lacks a parent (recursive CTE); then counts per type/status.
 
