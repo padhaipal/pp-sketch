@@ -20,7 +20,7 @@ export class ScoreEntity {
   @Column({ type: 'uuid' })
   user_id: string;
 
-  @ManyToOne(() => UserEntity)
+  @ManyToOne(() => UserEntity, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: UserEntity;
 
@@ -36,7 +36,7 @@ export class ScoreEntity {
   @Column({ type: 'uuid', nullable: true })
   user_message_id: string | null;
 
-  @ManyToOne(() => MediaMetaDataEntity)
+  @ManyToOne(() => MediaMetaDataEntity, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_message_id' })
   user_message: MediaMetaDataEntity;
 

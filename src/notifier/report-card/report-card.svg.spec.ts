@@ -1,3 +1,4 @@
+process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.padhaipal.com';
 import {
   buildReportCardSvg,
   buildLandscapeReportCardSvg,

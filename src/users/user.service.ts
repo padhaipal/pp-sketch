@@ -1,164 +1,37 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
-import { validate as isUuid } from 'uuid';
+import { Repository, DataSource, EntityManager } from 'typeorm';
+import { validate as isUuid, v4 as uuidv4 } from 'uuid';
 import { UserEntity } from './user.entity';
 import { InteractionRow } from './interactions-csv';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
 import { ScoreService } from '../literacy/score/score.service';
 import { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound.service';
+import { onboardingCutoff } from '../onboarding/onboarding.config';
 import {
   User,
   FindUserOptions,
   UpdateUserOptions,
   CreateUserOptions,
+  CreateStaffOptions,
+  STAFF_ROLES,
   validateFindUserOptions,
   validateUpdateUserOptions,
   validateCreateUserOptions,
   partitionUserIdentifiers,
   LiteracyTestScores,
-  SnapshotTestScore,
-  TestSnapshotPoint,
 } from './user.dto';
+import { computeLiteracyTestScores } from '../literacy/score/literacy-test-scores';
 
-// ─── Snapshot scoring (NIPUN grades 2/3 + MPL-B) ─────────────────────────────
-
-// A student's FIRST attempt at one question. Only first attempts count toward
-// tests: once the child has seen the explanation for their tap, any repeat of
-// that question is invalidated for testing.
-interface FirstAttempt {
-  at: Date;
-  correct: boolean;
-  question_id: string;
-  // The question's level = its passage's media_details.level (the generation
-  // pipeline's word-count level), NOT literacy_lesson_states.level (the
-  // lesson cap, which can diverge on nearest-level passage fallback).
-  level: number | null;
-  question_type: string | null;
-}
-
-// All tests pass on score STRICTLY greater than 0.5.
-const TEST_PASS_THRESHOLD = 0.5;
-
-const NIPUN_QUESTION_COUNT = 4;
-// NIPUN reading proxies use the retrieve subconstructs only.
-const NIPUN_R1_TYPES = ['R1.1', 'R1.2', 'R1.3'];
-const NIPUN_G2_LEVELS = [10];
-const NIPUN_G3_LEVELS = [11, 12];
-
-// MPL-B selection. Level-13 questions are excluded from every test (and from
-// lessons) by construction — only levels 11/12 qualify here.
-const MPL_B_LEVELS = [11, 12];
-const MPL_B_QUESTION_COUNT = 20;
-const MPL_B_MIN_DISTINCT_TYPES = 4;
-const MPL_B_BATCHES: Array<{ types: string[]; required: number }> = [
-  { types: ['R1.1', 'R1.2', 'R1.3'], required: 5 },
-  { types: ['R2.1', 'R2.2', 'R2.3'], required: 5 },
-  { types: ['R3.1', 'R3.2'], required: 1 },
-];
-
-// NIPUN grade 2/3 snapshot: the most recent `count` first attempts from the
-// (already level/type-filtered) pool. Null = insufficient data.
-function nipunSnapshot(
-  pool: FirstAttempt[],
-  count: number,
-): { score: number; passed: boolean } | null {
-  if (pool.length < count) return null;
-  const selected = pool.slice(-count);
-  const score = selected.filter((a) => a.correct).length / count;
-  return { score, passed: score > TEST_PASS_THRESHOLD };
-}
-
-// MPL-B snapshot over a pool of level-11/12 first attempts (chronological).
-// Four filters, walking most-recent-first; one question may satisfy both
-// filter two and filter three. Null = insufficient data at any filter.
-function mplBSnapshot(
-  pool: FirstAttempt[],
-): { score: number; passed: boolean } | null {
-  // Filter one: fewer than 20 level-11/12 first attempts → no result.
-  if (pool.length < MPL_B_QUESTION_COUNT) return null;
-  const recent = [...pool].reverse();
-  const selected = new Set<FirstAttempt>();
-
-  // Filter two: most recent representative of each question type until four
-  // distinct types are covered; three or fewer distinct types → no result.
-  const seenTypes = new Set<string>();
-  for (const attempt of recent) {
-    if (seenTypes.size >= MPL_B_MIN_DISTINCT_TYPES) break;
-    if (attempt.question_type && !seenTypes.has(attempt.question_type)) {
-      seenTypes.add(attempt.question_type);
-      selected.add(attempt);
-    }
-  }
-  if (seenTypes.size < MPL_B_MIN_DISTINCT_TYPES) return null;
-
-  // Filter three: most recent representatives per batch — R1.x ×5, R2.x ×5,
-  // R3.x ×1 (filter-two picks count toward their batch).
-  for (const batch of MPL_B_BATCHES) {
-    let have = [...selected].filter(
-      (a) => a.question_type && batch.types.includes(a.question_type),
-    ).length;
-    for (const attempt of recent) {
-      if (have >= batch.required) break;
-      if (
-        !selected.has(attempt) &&
-        attempt.question_type &&
-        batch.types.includes(attempt.question_type)
-      ) {
-        selected.add(attempt);
-        have++;
-      }
-    }
-    if (have < batch.required) return null;
-  }
-
-  // Filter four: top up with the most recent remaining attempts to 20
-  // (guaranteed reachable — the pool holds at least 20).
-  for (const attempt of recent) {
-    if (selected.size >= MPL_B_QUESTION_COUNT) break;
-    selected.add(attempt);
-  }
-
-  const score =
-    [...selected].filter((a) => a.correct).length / MPL_B_QUESTION_COUNT;
-  return { score, passed: score > TEST_PASS_THRESHOLD };
-}
-
-// history[] = the snapshot algorithm replayed over every chronological prefix
-// of the pool (insufficient-data prefixes skipped); latest = final entry.
-function snapshotSeries(
-  pool: FirstAttempt[],
-  snapshot: (
-    prefix: FirstAttempt[],
-  ) => { score: number; passed: boolean } | null,
-): SnapshotTestScore {
-  const history: TestSnapshotPoint[] = [];
-  for (let i = 0; i < pool.length; i++) {
-    const result = snapshot(pool.slice(0, i + 1));
-    if (result) {
-      history.push({
-        at: pool[i].at,
-        score: result.score,
-        passed: result.passed,
-      });
-    }
-  }
-  if (history.length === 0) {
-    return { status: 'insufficient_data', attempts_available: pool.length };
-  }
-  return {
-    status: 'ok',
-    attempts_available: pool.length,
-    latest: history[history.length - 1],
-    history,
-  };
-}
+// StaffUserRow before the dashboard link is attached (the controller adds it).
+export type StaffLookupRow = Omit<import('./user.dto').StaffUserRow, 'link'>;
 
 @Injectable()
 export class UserService {
@@ -302,8 +175,17 @@ export class UserService {
     return user ?? null;
   }
 
-  async update(options: UpdateUserOptions): Promise<User | null> {
+  // `manager` runs the write inside the caller's transaction. In that mode
+  // the cache is only evicted, never repopulated (a set before commit would
+  // publish uncommitted columns), and the caller must evict again after
+  // commit — invalidateCache() — to close the repopulate race.
+  async update(
+    options: UpdateUserOptions,
+    manager?: EntityManager,
+  ): Promise<User | null> {
     const validated = validateUpdateUserOptions(options);
+    const repo = manager ? manager.getRepository(UserEntity) : this.userRepo;
+    const db = manager ?? this.dataSource;
 
     // Build update payload
     const updateFields: Partial<UserEntity> = {};
@@ -316,11 +198,45 @@ export class UserService {
       updateFields.name = validated.new_name;
     }
 
+    if (validated.new_birth_year !== undefined) {
+      updateFields.birth_year = validated.new_birth_year;
+    }
+
+    if (validated.new_birth_month !== undefined) {
+      updateFields.birth_month = validated.new_birth_month;
+    }
+
+    if (validated.new_recording_permissions_obtained_at !== undefined) {
+      updateFields.recording_permissions_obtained_at =
+        validated.new_recording_permissions_obtained_at;
+    }
+
+    if (validated.new_role !== undefined) {
+      updateFields.role = validated.new_role;
+    }
+    if (validated.new_password_hash !== undefined) {
+      updateFields.password_hash = validated.new_password_hash;
+    }
+    if (validated.new_geo_entity_id !== undefined) {
+      updateFields.geo_entity_id = validated.new_geo_entity_id;
+    }
+    if (validated.new_role_title !== undefined) {
+      updateFields.role_title = validated.new_role_title;
+    }
+    if (validated.new_staff_notes !== undefined) {
+      updateFields.staff_notes = validated.new_staff_notes;
+    }
+    if (validated.deactivate) {
+      updateFields.deleted_at = new Date();
+    } else if (validated.reactivate) {
+      updateFields.deleted_at = null;
+    }
+
     if (validated.new_referrer_user_id !== undefined) {
       updateFields.referrer_user_id = validated.new_referrer_user_id;
     } else if (validated.new_referrer_external_id !== undefined) {
       // Resolve referrer by external_id — needs raw SQL subquery
-      const referrerRows = await this.userRepo.findOneBy({
+      const referrerRows = await repo.findOneBy({
         external_id: validated.new_referrer_external_id,
       });
       updateFields.referrer_user_id = referrerRows?.id ?? null;
@@ -331,19 +247,19 @@ export class UserService {
       ? { id: validated.id }
       : { external_id: validated.external_id! };
 
-    const existingUser = await this.userRepo.findOneBy(where);
+    const existingUser = await repo.findOneBy(where);
     if (!existingUser) return null;
 
     // Apply updates and save
     Object.assign(existingUser, updateFields);
-    const updatedUser = await this.userRepo.save(existingUser);
+    const updatedUser = await repo.save(existingUser);
 
     // Cycle check if referrer was set (raw SQL — recursive CTE)
     const referrerWasSet =
       validated.new_referrer_user_id !== undefined ||
       validated.new_referrer_external_id !== undefined;
     if (referrerWasSet && updatedUser.referrer_user_id) {
-      const cycleRows: unknown[] = await this.dataSource.query(
+      const cycleRows: unknown[] = await db.query(
         `WITH RECURSIVE chain AS (
           SELECT id, referrer_user_id FROM users WHERE id = $1
           UNION ALL
@@ -358,12 +274,12 @@ export class UserService {
       if (cycleRows.length > 0) {
         // Roll back by removing the referrer
         updatedUser.referrer_user_id = null;
-        await this.userRepo.save(updatedUser);
+        await repo.save(updatedUser);
         throw new BadRequestException('update() would create a referral cycle');
       }
     }
 
-    // Invalidate and repopulate cache
+    // Invalidate and (outside a transaction) repopulate cache
     const keysToDelete = [
       CACHE_KEYS.userById(updatedUser.id),
       CACHE_KEYS.userByExternalId(updatedUser.external_id),
@@ -376,20 +292,47 @@ export class UserService {
     }
     await this.cacheService.del(keysToDelete);
 
-    await Promise.all([
-      this.cacheService.set(
-        CACHE_KEYS.userById(updatedUser.id),
-        updatedUser,
-        CACHE_TTL.USER,
-      ),
-      this.cacheService.set(
-        CACHE_KEYS.userByExternalId(updatedUser.external_id),
-        updatedUser,
-        CACHE_TTL.USER,
-      ),
-    ]);
+    if (!manager) {
+      await Promise.all([
+        this.cacheService.set(
+          CACHE_KEYS.userById(updatedUser.id),
+          updatedUser,
+          CACHE_TTL.USER,
+        ),
+        this.cacheService.set(
+          CACHE_KEYS.userByExternalId(updatedUser.external_id),
+          updatedUser,
+          CACHE_TTL.USER,
+        ),
+      ]);
+    }
 
     return updatedUser;
+  }
+
+  // Evicts both cache keys for a user. Callers that wrote through
+  // update(…, manager) call this after their transaction commits.
+  async invalidateCache(user: {
+    id: string;
+    external_id: string;
+  }): Promise<void> {
+    await this.cacheService.del([
+      CACHE_KEYS.userById(user.id),
+      CACHE_KEYS.userByExternalId(user.external_id),
+    ]);
+  }
+
+  // Parent-onboarding gate (src/onboarding). True for staff accounts, for
+  // users created before ONBOARDING_CUTOFF (grandfathered), and once the
+  // onboarding machine has written birth_year + recording permission. Pure:
+  // reads the user object the caller holds, which may be a cached copy —
+  // every onboarding write evicts the cache so the next find() is fresh.
+  isOnboarded(user: User): boolean {
+    if (user.role != null && user.role !== 'student') return true;
+    if (new Date(user.created_at) < onboardingCutoff()) return true;
+    return (
+      user.birth_year != null && user.recording_permissions_obtained_at != null
+    );
   }
 
   async create(options: CreateUserOptions): Promise<User> {
@@ -494,6 +437,74 @@ export class UserService {
     return user;
   }
 
+  // ─── Staff accounts (education officials) ─────────────────────────────
+
+  // POST /users/staff-create. The caller has already normalised the phone and
+  // checked the geo entity (422). One INSERT: the id is generated here so
+  // avatar_seed can equal it without a second write. Throws
+  // ConflictException when the phone belongs to any user, any role.
+  async createStaff(options: CreateStaffOptions): Promise<User> {
+    const existing = await this.userRepo.findOneBy({
+      external_id: options.external_id,
+    });
+    if (existing) {
+      throw new ConflictException(
+        'A user with this phone number already exists',
+      );
+    }
+    const id = uuidv4();
+    const user = this.userRepo.create({
+      id,
+      external_id: options.external_id,
+      name: options.name,
+      role: 'education_official',
+      geo_entity_id: options.geo_entity_id,
+      role_title: options.role_title,
+      staff_notes: options.staff_notes ?? null,
+      avatar_seed: id,
+    });
+    const saved = await this.userRepo.save(user);
+    await this.scoreService.createSeedScores(saved.id);
+    await this.populateUserCache(saved);
+    return saved;
+  }
+
+  // GET /users/lookup: staff-role accounts only, soft-deleted included.
+  async lookupStaff(q: string, limit = 20): Promise<StaffLookupRow[]> {
+    const trimmed = q.trim();
+    if (trimmed.length === 0) return [];
+    const digits = trimmed.replace(/\D/g, '');
+    return await this.dataSource.query(
+      `SELECT u.id, u.external_id, u.name, u.role, u.role_title, u.staff_notes,
+              u.geo_entity_id, g.name AS geo_entity_name, g.type AS geo_entity_type,
+              u.deleted_at
+       FROM users u
+       LEFT JOIN geo_entity g ON g.id = u.geo_entity_id
+       WHERE u.role = ANY($1::text[])
+         AND (u.name ILIKE '%' || $2 || '%'
+              OR ($3 <> '' AND u.external_id LIKE '%' || $3 || '%'))
+       ORDER BY u.deleted_at IS NOT NULL, u.name NULLS LAST, u.created_at DESC
+       LIMIT $4`,
+      [[...STAFF_ROLES], trimmed, digits, limit],
+    );
+  }
+
+  // GET /users/:id: one staff-role account (soft-deleted included) with its
+  // geo entity's name/type; null for any other role or unknown id.
+  async getStaff(id: string): Promise<StaffLookupRow | null> {
+    if (!isUuid(id)) return null;
+    const rows: StaffLookupRow[] = await this.dataSource.query(
+      `SELECT u.id, u.external_id, u.name, u.role, u.role_title, u.staff_notes,
+              u.geo_entity_id, g.name AS geo_entity_name, g.type AS geo_entity_type,
+              u.deleted_at
+       FROM users u
+       LEFT JOIN geo_entity g ON g.id = u.geo_entity_id
+       WHERE u.id = $1 AND u.role = ANY($2::text[])`,
+      [id, [...STAFF_ROLES]],
+    );
+    return rows[0] ?? null;
+  }
+
   // Per-user atomic delete. Each user runs in its own transaction so one
   // failure does not block the rest of the batch. Errors are surfaced as
   // `failed` entries, never swallowed silently.
@@ -568,27 +579,10 @@ export class UserService {
             [target.id],
           );
 
-          await manager.query(`DELETE FROM scores WHERE user_id = $1`, [
-            target.id,
-          ]);
-          await manager.query(
-            `DELETE FROM literacy_lesson_states WHERE user_id = $1`,
-            [target.id],
-          );
-          // Invariant: any media_metadata row referencing one of this user's
-          // media rows via input_media_id is itself owned by this user. If a
-          // future code path violates that, this DELETE will FK-error and
-          // this list must be extended (e.g. with a recursive pre-delete).
-          await manager.query(`DELETE FROM media_metadata WHERE user_id = $1`, [
-            target.id,
-          ]);
-
-          // Convention deviation: scores / literacy_lesson_states /
-          // media_metadata writes happen here as raw SQL rather than through
-          // their entity services. Done to keep one transaction per user
-          // atomic without opening the UserService <-> MediaMetaDataService
-          // module cycle.
-
+          // Everything else hanging off the user (media, transcripts,
+          // scores, lesson + onboarding states, outbound audit rows) goes
+          // via ON DELETE CASCADE — see CascadeUserDeletes migration and
+          // foreign-keys.spec.ts.
           const userDelete: { id: string }[] = await manager.query(
             `DELETE FROM users WHERE id = $1 RETURNING id`,
             [target.id],
@@ -665,76 +659,11 @@ export class UserService {
   ): Promise<LiteracyTestScores | null> {
     const user = await this.findByIdOrExternalId(input);
     if (!user) return null;
-
-    interface ComprehensionRow {
-      created_at: Date;
-      answer_correct: boolean;
-      question_id: string;
-      question_type: string | null;
-      level: number | null;
-    }
-    const answers: ComprehensionRow[] = await this.dataSource.query(
-      `SELECT s.created_at, s.answer_correct,
-              q.id AS question_id,
-              q.media_details->>'question_type' AS question_type,
-              (p.media_details->>'level')::int AS level
-       FROM literacy_lesson_states s
-       -- Deliberately NO rolled_back filter on these joins (2026-08): a
-       -- retroactively quality-culled passage must not erase the student's
-       -- already-earned comprehension history (NIPUN grades 2/3, MPL-B).
-       JOIN media_metadata o ON o.id::text = s.answer
-       JOIN media_metadata q ON q.id = o.input_media_id
-       JOIN media_metadata p ON p.id = q.input_media_id
-       WHERE s.user_id = $1
-         AND s.answer_correct IS NOT NULL
-         AND (s.snapshot->'context'->>'stateTransitionId')
-           LIKE '%-comprehension-complete'
-       ORDER BY s.created_at ASC`,
+    const scores = await computeLiteracyTestScores(
+      (sql, params) => this.dataSource.query(sql, params),
       [user.id],
     );
-
-    // Dedup to first attempts, in chronological order.
-    const seenQuestions = new Set<string>();
-    const dedupedAttempts: FirstAttempt[] = [];
-    for (const row of answers) {
-      if (seenQuestions.has(row.question_id)) continue;
-      seenQuestions.add(row.question_id);
-      dedupedAttempts.push({
-        at: row.created_at,
-        correct: row.answer_correct === true,
-        question_id: row.question_id,
-        level: row.level,
-        question_type: row.question_type,
-      });
-    }
-
-    const nipunGrade2Pool = dedupedAttempts.filter(
-      (a) =>
-        a.level !== null &&
-        NIPUN_G2_LEVELS.includes(a.level) &&
-        a.question_type !== null &&
-        NIPUN_R1_TYPES.includes(a.question_type),
-    );
-    const nipunGrade3Pool = dedupedAttempts.filter(
-      (a) =>
-        a.level !== null &&
-        NIPUN_G3_LEVELS.includes(a.level) &&
-        a.question_type !== null &&
-        NIPUN_R1_TYPES.includes(a.question_type),
-    );
-    const mplBPool = dedupedAttempts.filter(
-      (a) => a.level !== null && MPL_B_LEVELS.includes(a.level),
-    );
-
-    return {
-      nipun_grade_2: snapshotSeries(nipunGrade2Pool, (prefix) =>
-        nipunSnapshot(prefix, NIPUN_QUESTION_COUNT),
-      ),
-      nipun_grade_3: snapshotSeries(nipunGrade3Pool, (prefix) =>
-        nipunSnapshot(prefix, NIPUN_QUESTION_COUNT),
-      ),
-      mpl_b: snapshotSeries(mplBPool, mplBSnapshot),
-    };
+    return scores.get(user.id) ?? null;
   }
 
   private async populateUserCache(user: User): Promise<void> {

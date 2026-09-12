@@ -62,7 +62,7 @@ export class MediaMetaDataEntity {
   @Column({ type: 'uuid', nullable: true })
   input_media_id: string | null;
 
-  @ManyToOne(() => MediaMetaDataEntity, { nullable: true })
+  @ManyToOne(() => MediaMetaDataEntity, { nullable: true, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'input_media_id' })
   input_media: MediaMetaDataEntity | null;
 
@@ -70,7 +70,7 @@ export class MediaMetaDataEntity {
   @Column({ type: 'uuid', nullable: true })
   user_id: string | null;
 
-  @ManyToOne(() => UserEntity, { nullable: true })
+  @ManyToOne(() => UserEntity, { nullable: true, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: UserEntity | null;
 

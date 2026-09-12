@@ -17,6 +17,9 @@ import { HeygenInboundController } from './interfaces/heygen/inbound/inbound.con
 import { CacheService } from './interfaces/redis/cache';
 import { MirrorModule } from './mirror/mirror.module';
 import { OutboundMessageModule } from './outbound-messages/outbound-message.module';
+import { OnboardingModule } from './onboarding/onboarding.module';
+import { GeoEntityModule } from './geo-entities/geo-entity.module';
+import { TestResultsModule } from './literacy/score/test-results.module';
 
 @Module({
   imports: [
@@ -31,6 +34,9 @@ import { OutboundMessageModule } from './outbound-messages/outbound-message.modu
     MorningUpdateModule,
     MirrorModule.register(),
     OutboundMessageModule,
+    OnboardingModule,
+    GeoEntityModule,
+    TestResultsModule,
   ],
   controllers: [
     AppController,

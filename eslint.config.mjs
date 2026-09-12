@@ -59,4 +59,24 @@ export default tseslint.config(
       '@typescript-eslint/no-require-imports': 'off',
     },
   },
+  // Layering: src/onboarding is a domain module and must not reach into the
+  // wabot transport helpers (see inbound.utils.prompt.md). It returns state
+  // transition ids / text; the processor turns those into WhatsApp media.
+  {
+    files: ['src/onboarding/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/interfaces/wabot/inbound/inbound.utils'],
+              message:
+                'src/onboarding must not import wabot inbound utils (transport layer).',
+            },
+          ],
+        },
+      ],
+    },
+  },
 );

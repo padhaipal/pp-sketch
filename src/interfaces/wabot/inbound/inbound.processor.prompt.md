@@ -25,29 +25,34 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
       * If payload.message.type is "audio": call mediaMetaDataService.createWhatsappAudioMedia({ wa_media_url: payload.message.audio.url, user, otel_carrier }). Store returned entity's id as userMessageId. (STT work runs but transcripts are not used here.)
       * If any other type: log ERROR, skip saving (userMessageId stays undefined).
       * If saving throws: log WARN, continue without userMessageId.
-    * Build an OutboundMediaItem[] array for onboarding:
+    * Build an OutboundMediaItem[] array for the welcome bundle:
       * Fetch welcome media via findMediaByStateTransitionId(WELCOME_MESSAGE_STATE_TRANSITION_ID), append items. If fetch fails, log WARN, continue.
-      * If userMessageId is defined: call literacyLessonService.processAnswer({ user, user_message_id: userMessageId }) (no transcripts — starts a fresh lesson). For each stateTransitionId in `result.stateTransitionIds`, fetch lesson media via findMediaByStateTransitionId() and append items. If processAnswer or media fetch fails, log WARN, continue.
-    * If the outbound array is non-empty: send via sendMessage(). See sendMessage() notes below for how to handle the http response.
+      * If userMessageId is defined: call `onboardingService.handleTurn({ user, user_message_id: userMessageId })` (src/onboarding/onboarding.service.prompt.md — first turn: inserts the askGuardian row, returns `['onboarding-ask-guardian']`, no classification). For each returned stid, fetch media via findMediaByStateTransitionId() (WARN if empty — the prompt must be seeded) and append items; append each returned `texts` entry as a text item. If handleTurn or a media fetch throws, log WARN and continue with the welcome only — the gate in step 4a starts onboarding on the user's next message.
+      * If userMessageId is undefined (unsupported type): log WARN, welcome only.
+      * NO first lesson and NO referral link here any more: both are sent when onboarding completes (handleTurn, done state).
+    * If the outbound array is non-empty: send via sendMessage() (audit trigger `new-user-onboarding`). See sendMessage() notes below for how to handle the http response.
     * End span, return.
 * Else: I now have the existing user's information and continue to the next step. 
 
 4.) Check payload.message.timestamp (Unix epoch — may be seconds or milliseconds. If the value has 10 or fewer digits, treat it as seconds and convert to milliseconds by multiplying by 1000, i.e. assume the event happened at the first millisecond of that second).
-* If it is more than 20 seconds old then log a WARN, end the span, complete the job. Note that wabot will handle sending the "please try again" message to the user.
+* If it is more than 20 seconds old then log a WARN, end the span, complete the job. Note that wabot will handle sending the "please try again" message to the user. Interactive (flow tap) messages are exempt.
 
-5.) If payload.message.type is not "audio" then: 
-* Call findMediaByStateTransitionId(AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID) to retrieve the video, then call src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with media: [{ type: 'video', url: videoEntity.wa_media_url }].
-  * See sendMessage() notes below for how to handle the http response.
+4a.) Parent onboarding gate — `if (!userService.isOnboarded(user))` (user.service.prompt.md: staff role, pre-ONBOARDING_CUTOFF, or birth_year + recording permission recorded ⇒ onboarded). Un-onboarded users only ever talk to the onboarding machine; `path = 'onboarding'`.
+* Not audio (text, interactive, anything): `sendAudioOnlyRedirect(...)` as in step 5, end span, complete the job.
+* Audio: `persistAndTranscribeAudio(...)` as in step 6 → `userMessageId`. If `job.attemptsMade > 0`: `onboardingService.rollback(userMessageId)` first (the previous attempt may have written this message's row). Then `({ stateTransitionIds, texts } = await onboardingService.handleTurn({ user, transcripts, user_message_id: userMessageId }))`; `trigger = 'onboarding'`. No lesson processing, no cleanupPartialState, no active-minute milestones. Fall through to step 9.
+* Runtime text lives in `texts: string[]` (hoisted with userMessageId/stateTransitionIds/sentenceText above the gate); the lesson paths push `sentenceText` into it so step 9 has one path.
 
-6.) (Note that now we should have the user entity data from the database and have screened out/handled all first time users and non-audio messages and so only have normal user interaction audio messages left.) Call src/media-meta-data/media-meta-data.service.ts/createWhatsappAudioMedia() with:
-  * wa_media_url: payload.message.audio.mediaUrl
-  * user: the User entity from step 3 (trusted path, no extra DB hit)
-* This will return a mediaMetaData entity for the user's audio message which will contain a link to where that audio is stored in the S3 bucket. There will also be several mediaMetaData text entities associated with that mediaMetaData entity which will contain the transcripts of the audio message.
-* Store the audio mediaMetaData entity's `id` as `userMessageId` — this will be passed to downstream services as the FK linking all writes back to this interaction.
+5.) If payload.message.type is not "audio" then: `sendAudioOnlyRedirect(mediaMetaDataService, wabotOutbound, { user, payload, ctx })` (src/interfaces/wabot/inbound/inbound.utils.prompt.md) — looks up AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID and sends the video; a missing media row throws (fails the job so it alerts), send failures are logged and swallowed. Then end the span, complete the job.
 
-6.5.) If `job.attemptsMade > 0` then this is a BullMQ retry and a prior attempt may have partially written lesson state and/or score rows for this `userMessageId` before failing downstream (e.g. in sendMessage()). Call `literacyLessonService.cleanupPartialState(userMessageId)` to delete any such rows so the rest of the job runs against a clean slate. Runs exactly once per job, before any `processAnswer` call, so the step-8 `isComplete` double-call is unaffected (the second call wouldn't re-enter the cleanup gate anyway). `createWhatsappAudioMedia()` is already idempotent by `wa_media_url`, so retries reuse the same `userMessageId`.
+6.) (Note that now we should have the user entity data from the database and have screened out/handled all first time users and non-audio messages and so only have normal user interaction audio messages left.) Call `persistAndTranscribeAudio(mediaMetaDataService, { payload, user, span })` (inbound.utils.prompt.md). It:
+  * calls src/media-meta-data/media-meta-data.service.ts/createWhatsappAudioMedia() with wa_media_url: payload.message.audio.url and user: the User entity from step 3 (trusted path, no extra DB hit). This returns a mediaMetaData entity for the user's audio message which will contain a link to where that audio is stored in the S3 bucket. There will also be several mediaMetaData text entities associated with that mediaMetaData entity which will contain the transcripts of the audio message.
+  * re-arms the hail-mary timer for the user (best effort — a failure is WARN-logged and ignored).
+  * runs step 7 (below) and returns `{ audioEntity, transcripts }`.
+* Store `audioEntity.id` as `userMessageId` — this will be passed to downstream services as the FK linking all writes back to this interaction.
 
-7.) Call src/media-meta-data/media-meta-data.service.ts/findTranscripts() with:
+6.5.) If `job.attemptsMade > 0` then this is a BullMQ retry and a prior attempt may have partially written lesson state and/or score rows for this `userMessageId` before failing downstream (e.g. in sendMessage()). Call `literacyLessonService.cleanupPartialState(userMessageId)` to delete any such rows so the rest of the job runs against a clean slate. Runs exactly once per job, after `persistAndTranscribeAudio` returns and before any `processAnswer` call, so the step-8 `isComplete` double-call is unaffected (the second call wouldn't re-enter the cleanup gate anyway). `createWhatsappAudioMedia()` is already idempotent by `wa_media_url`, so retries reuse the same `userMessageId`.
+
+7.) (Inside `persistAndTranscribeAudio`.) Call src/media-meta-data/media-meta-data.service.ts/findTranscripts() with:
   * media_metadata: the audio mediaMetaData entity from step 6 (trusted path — uses .id directly)
 * If no transcripts are returned then log ERROR, end the span, fail the job.
 * Else: continue
@@ -61,11 +66,10 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
 * If processAnswer() returns isComplete === true then call processAnswer() again with just user and user_message_id (omit transcripts — this starts a fresh lesson without sending an ANSWER event). Spread the second result's `stateTransitionIds` into the same local array. 
 
 9.) For each stateTransitionId in the array, call src/media-meta-data/media-meta-data.service.ts/findMediaByStateTransitionId().
-  * Each call returns a `FindMediaByStateTransitionIdResult` with one randomly selected entity per media type (audio, video, text, image), or undefined for types with no matching media.
-  * Build an ordered `OutboundMediaItem[]` array from the results. For each stateTransitionId's result, append items in this order: video, audio, image, sticker, text (skipping any type that is undefined). If there are two stateTransitionIds, the first stateTransitionId's items come before the second's.
-  * For each media entity, construct the OutboundMediaItem:
-    * `type: 'audio' | 'video' | 'image' | 'sticker'` → `{ type, url: entity.wa_media_url }`. Stickers are sent with `type: 'sticker'` explicitly (no mime_type hint needed).
-    * `type: 'text'` → `{ type: 'text', body: entity.text }`
+  * Each call returns a `FindMediaByStateTransitionIdResult` with one randomly selected entity per media type (audio, video, text, image, sticker, flow), or undefined for types with no matching media.
+  * Build an ordered `OutboundMediaItem[]` array from the results with `appendMediaItems(items, media, records, stid)` (inbound.utils.prompt.md): per stateTransitionId, items in the order video, audio, image, sticker, text, then the comprehension flow last (skipping any type that is undefined). If there are two stateTransitionIds, the first stateTransitionId's items come before the second's. `records` collects the entity-backed items for the outbound_messages audit row in step 10.
+  * On the onboarding path an empty lookup logs a WARN (`No media seeded for <stid>`) — onboarding prompts are fixed stids that must be seeded; lesson-path stids (reading-speed, milestones) may legitimately be empty.
+  * Then append each entry of `texts` (sentence prompt, referral link, lesson-one passage) as `{ type: 'text', body }` AFTER all stid media.
 
 10.) Send the outbound message(s) to the student via src/interfaces/wabot/outbound/outbound.service.ts/sendMessage() with:
   * user_external_id: the User entity's external_id from step 3
@@ -75,8 +79,10 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
   * otel_carrier: injectCarrierFromContext(ctx)
 Note that sendMessage() returns { status, body } where body has a `delivered` flag.
   * If 2XX and `delivered: true` then log INFO, end the span and mark the job as successful.
+  * The audit row (`outboundMessages.recordSent`) uses `trigger` — `'inbound-reply'` for the lesson paths, `'onboarding'` for the onboarding path — and is written BEFORE the delivered check so a rolled-back send can still flip it.
   * If 2XX and `delivered: false` then the inflight window expired and wabot already sent the fallback message. Roll back all writes associated with this interaction:
     * Call `mediaMetaDataService.markRolledBack(userMessageId)` — sets `rolled_back = true` on the audio mediaMetaData entity, deleting any fk rows in the database that are associated with that userMessageId and preventing any late/out-of-order writes from referencing it.
+    * On the onboarding path also `onboardingService.rollback(userMessageId)` — deletes this turn's onboarding row (and, for a done turn, resets the user's columns and lesson-one rows).
     * Log INFO, end the span and mark the job as successful.
   * If 4XX then log ERROR, end the span and fail the job.
   * If 5XX then log ERROR, end the span and fail the job.

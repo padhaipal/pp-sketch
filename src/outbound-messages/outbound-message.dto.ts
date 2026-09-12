@@ -4,6 +4,7 @@
 // 'other' (the default) rather than failing or mislabeling.
 export const OUTBOUND_TRIGGERS = [
   'inbound-reply',
+  'onboarding',
   'new-user-onboarding',
   'evening-reminder',
   'hail-mary',

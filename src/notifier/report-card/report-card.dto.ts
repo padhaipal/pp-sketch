@@ -44,7 +44,7 @@ export interface DailyBar {
 export interface ReportCardData {
   user_external_id: string;
   // Public referral URL the QR code on the card encodes —
-  // `https://dashboard.padhaipal.com/r/{user_external_id}`. pp-dashboard
+  // `${DASHBOARD_PUBLIC_URL}/r/{user_external_id}` (dashboard-url.ts). pp-dashboard
   // 302-redirects that path to the wa.me referral link.
   referral_url: string;
   // Bin 3 (mastered) — displayed in the "सीखे हुए अक्षर" subsection.

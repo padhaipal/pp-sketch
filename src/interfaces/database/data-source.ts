@@ -7,6 +7,14 @@ import { LiteracyLessonStateEntity } from '../../literacy/literacy-lesson/litera
 import { QuizResponseEntity } from '../dashboard/quiz-response.entity';
 import { MailingListEntryEntity } from '../dashboard/mailing-list-entry.entity';
 import { QuizShareTokenEntity } from '../dashboard/quiz-share-token.entity';
+import { OnboardingStateEntity } from '../../onboarding/onboarding-state.entity';
+import { OutboundMessageEntity } from '../../outbound-messages/outbound-message.entity';
+import { GeoEntityEntity } from '../../geo-entities/geo-entity.entity';
+import {
+  TestResultStudentEntity,
+  TestResultGeoEntityEntity,
+  TestRunEntity,
+} from '../../literacy/score/test-results.entity';
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
@@ -20,6 +28,12 @@ export const AppDataSource = new DataSource({
     QuizResponseEntity,
     MailingListEntryEntity,
     QuizShareTokenEntity,
+    OnboardingStateEntity,
+    OutboundMessageEntity,
+    GeoEntityEntity,
+    TestResultStudentEntity,
+    TestResultGeoEntityEntity,
+    TestRunEntity,
   ],
   migrations: ['dist/interfaces/database/migrations/*.js'],
   synchronize: false,

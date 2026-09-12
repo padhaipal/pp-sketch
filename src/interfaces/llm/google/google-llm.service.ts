@@ -17,6 +17,12 @@ export class GoogleLlmService {
     envKey: 'GEMINI_API_KEY',
     // Gemini's OpenAI-compatible endpoint accepts 0–2.
     temperatureMax: 2,
+    // Google is reserved for the realtime onboarding classifier (5 s budget,
+    // one attempt), so thinking is disabled at the provider: hidden reasoning
+    // tokens would eat the budget before any output. 'none' is accepted by
+    // 2.5 models only — Gemini 3.x cannot turn thinking off (floor
+    // 'minimal'); see onboarding.config.ts for the migration notes.
+    extraBody: { reasoning_effort: 'none' },
   };
 
   complete(request: LlmRequest, options?: LlmCallOptions): Promise<LlmResult> {

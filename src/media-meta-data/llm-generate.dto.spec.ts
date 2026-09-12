@@ -65,6 +65,23 @@ describe('validateLlmGenerateRequest', () => {
     expect(() => validateLlmGenerateRequest(body)).toThrow(BadRequestException);
   });
 
+  it("rejects provider 'google' — reserved for the realtime onboarding classifier", () => {
+    expect(() =>
+      validateLlmGenerateRequest({ ...validBody(), provider: 'google' }),
+    ).toThrow(
+      "provider must be one of: openai, anthropic, mistral, sarvam ('google' is reserved for the realtime onboarding classifier)",
+    );
+  });
+
+  it.each(['openai', 'anthropic', 'mistral', 'sarvam'])(
+    'still accepts provider %s',
+    (provider) => {
+      expect(
+        validateLlmGenerateRequest({ ...validBody(), provider }).provider,
+      ).toBe(provider);
+    },
+  );
+
   it('drops unknown message fields (no passthrough of untrusted keys)', () => {
     const body = validBody();
     (body.messages as Record<string, unknown>[])[0].__proto__x = 'evil';

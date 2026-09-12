@@ -30,6 +30,20 @@ export const LLM_PROVIDER_TO_MEDIA_SOURCE: Record<LlmProvider, string> = {
   sarvam: 'sarvam-llm',
 };
 
+/**
+ * Env var holding each provider's API key — the same value as that
+ * provider service's `config.envKey` (llm.dto.spec.ts pins the two
+ * together). Lets boot-time checks (onboarding.config.ts) verify a key is
+ * present without instantiating the service.
+ */
+export const PROVIDER_ENV_KEYS: Record<LlmProvider, string> = {
+  openai: 'OPENAI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+  google: 'GEMINI_API_KEY',
+  mistral: 'MISTRAL_API_KEY',
+  sarvam: 'SARVAM_API_KEY',
+};
+
 export interface LlmMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
@@ -114,6 +128,11 @@ export interface LlmCallOptions {
   maxAttempts?: number;
   /** Base backoff in ms (exponential, jittered). Default 1000. Tests pass 1. */
   baseBackoffMs?: number;
+  /**
+   * Per-attempt timeout in ms. Default: LLM_TIME_CAP seconds (45). Latency-
+   * bound callers (the onboarding classifier) pass a tight cap.
+   */
+  timeoutMs?: number;
 }
 
 export interface LlmBatchOptions extends LlmCallOptions {

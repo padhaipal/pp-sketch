@@ -99,6 +99,7 @@ function backoffMs(
 async function singleCall(
   config: LlmProviderConfig,
   request: LlmRequest,
+  timeoutMs?: number,
 ): Promise<LlmResult> {
   const apiKey = process.env[config.envKey];
   if (!apiKey) {
@@ -109,7 +110,8 @@ async function singleCall(
   // must not eat into LLM_TIME_CAP.
   await awaitSendSlot(config.provider);
 
-  const timeCapMs = parseInt(process.env.LLM_TIME_CAP ?? '45', 10) * 1000;
+  const timeCapMs =
+    timeoutMs ?? parseInt(process.env.LLM_TIME_CAP ?? '45', 10) * 1000;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeCapMs);
   const started = Date.now();
@@ -200,7 +202,7 @@ export async function callChatCompletions(
       let lastError: LlmError | undefined;
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
-          const result = await singleCall(config, request);
+          const result = await singleCall(config, request, options?.timeoutMs);
           span.setAttribute('pp.llm.attempts', attempt + 1);
           span.setAttribute(
             'pp.llm.completion_tokens',

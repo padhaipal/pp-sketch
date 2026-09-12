@@ -27,12 +27,12 @@ carry only an `LlmProviderConfig` (`baseUrl`, `envKey`, optional
 
 - API key read from `process.env[envKey]` at call time; missing → immediate
   non-retriable `LlmError`.
-- Per-call timeout `LLM_TIME_CAP` seconds (default 45) via AbortController.
+- Per-call timeout `LLM_TIME_CAP` seconds (default 45) via AbortController; `LlmCallOptions.timeoutMs` overrides it per call (the onboarding classifier passes 5000).
 - 429/5xx/network/timeout → retriable; retried up to `maxAttempts` (default 3)
   with jittered exponential backoff (base 1 s, `Retry-After` honored). Other
   4xx and empty completions → non-retriable, thrown immediately.
 - Every failure is normalized to `LlmError { retriable, status?,
-  retryAfterSeconds? }`. The `retriable` flag is surfaced end-to-end so the
+retryAfterSeconds? }`. The `retriable` flag is surfaced end-to-end so the
   dashboard can offer "try again" only when it can help.
 - No provider async-batch APIs and no BullMQ queues (product decision
   2026-07-27): seeding requests are synchronous per-generation HTTP calls and
@@ -54,10 +54,26 @@ carry only an `LlmProviderConfig` (`baseUrl`, `envKey`, optional
 - Histogram `pp.llm.request_duration_ms` (`provider`, `outcome`), retries
   included; counts/error-rates derive from it.
 
+## Google is reserved for the realtime onboarding classifier (2026-09)
+
+The onboarding classifier (src/onboarding/onboarding.service.ts) is the only
+LLM call a human waits on — 5 s timeout, one attempt, inside the 20 s
+inbound budget. It runs on `ONBOARDING_LLM_PROVIDER=google`,
+`ONBOARDING_LLM_MODEL=gemini-2.5-flash-lite`, with thinking disabled at the
+provider (`GoogleLlmService.config.extraBody = { reasoning_effort: 'none' }`).
+Batch work (passage generation via `POST /media-meta-data/llm-generate`,
+quality gates) must never use Google: `GENERATION_LLM_PROVIDERS` in
+`media-meta-data/llm-generate.dto.ts` excludes it from request validation,
+and pp-dashboard no longer offers Gemini for seeding. Do not re-add it —
+the point is a separate key, quota and failure domain. `VALID_LLM_PROVIDERS`
+still lists all five (the classifier's own validation uses it).
+
 ## Env
 
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`,
 `SARVAM_API_KEY` (shared with STT — same account), `LLM_TIME_CAP`.
+`PROVIDER_ENV_KEYS` in `llm.dto.ts` maps provider → key env var (pinned to
+each service's `config.envKey` by `llm.dto.spec.ts`) for boot-time checks.
 
 ## Registration
 

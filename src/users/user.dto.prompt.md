@@ -76,6 +76,10 @@ export interface UpdateUserOptions {
   new_name?: string;
   new_referrer_user_id?: string | null;
   new_referrer_external_id?: string;
+  // null clears the column (OnboardingService.rollback of a done turn).
+  new_birth_year?: number | null;
+  new_birth_month?: number | null;
+  new_recording_permissions_obtained_at?: Date | null;
 }
 
 export interface CreateUserOptions {
@@ -216,7 +220,7 @@ export function validateUpdateUserOptions(options: unknown): UpdateUserOptions {
     new_referrer_external_id === undefined
   ) {
     throw new BadRequestException(
-      'update() requires at least one field to update (new_external_id, new_name, new_referrer_user_id, new_referrer_external_id)',
+      'update() requires at least one field to update (new_external_id, new_name, new_referrer_user_id, new_referrer_external_id, new_birth_year, new_birth_month, new_recording_permissions_obtained_at)',
     );
   }
   return {
@@ -272,3 +276,11 @@ export function validateCreateUserOptions(options: unknown): CreateUserOptions {
   } as CreateUserOptions;
 }
 ```
+
+## Staff accounts (2026-09)
+
+- `USER_ROLES = ['student','education_official','staff','dev','admin']` — users.role is plain text (the two-value CHECK was dropped in AddStaffFieldsToUsers); this list is the enforcement on every write (`validateUpdateUserOptions.new_role`, `PatchUserDto.role`). `STAFF_ROLES` = education_official, staff; `PROTECTED_ROLES` = dev, admin.
+- `User` gains `geo_entity_id`, `role_title`, `avatar_seed`, `spotlight_message`, `staff_notes`, `deleted_at`.
+- `UpdateUserOptions` gains `new_role`, `new_password_hash`, `new_geo_entity_id`, `new_role_title`, `new_staff_notes` (null clears), `deactivate`, `reactivate`; `PatchUserDto` mirrors the last five plus the widened `role`.
+- `StaffCreateDto` (POST /users/staff-create body), `StaffUserRow` / `StaffUserDetail` / `StaffCreateResponse` (responses; `link` = dashboard-url.ts `staffDashboardLink`).
+- `normaliseStaffPhone(raw)`: strip non-digits; 10 digits → `91` prefix; then the existing `validateE164PhoneNumber` (no second normaliser) — BadRequestException on failure; returns the stored form (no `+`).
