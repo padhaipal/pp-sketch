@@ -1759,8 +1759,10 @@ describe('UserController public profile + profile PATCH', () => {
         'spotlight_message',
       ].sort(),
     );
+    // The phone number appears ONLY inside share_link (/r/<external_id>),
+    // by design — never as its own field.
     expect(JSON.stringify(out)).not.toMatch(
-      /external_id|staff_notes|password_hash|919876543210/,
+      /external_id|staff_notes|password_hash/,
     );
     expect(out).toMatchInlineSnapshot(`
 {
