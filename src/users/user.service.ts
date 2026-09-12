@@ -30,6 +30,22 @@ import {
 } from './user.dto';
 import { computeLiteracyTestScores } from '../literacy/score/literacy-test-scores';
 
+export interface PublicProfileRow {
+  id: string;
+  name: string | null;
+  role_title: string | null;
+  avatar_seed: string | null;
+  spotlight_message: string | null;
+  external_id: string;
+  geo_id: string | null;
+  geo_type: string | null;
+  geo_code: string | null;
+  geo_name: string | null;
+  geo_has_boundary: boolean | null;
+  geo_lat: number | null;
+  geo_lng: number | null;
+}
+
 // StaffUserRow before the dashboard link is attached (the controller adds it).
 export type StaffLookupRow = Omit<import('./user.dto').StaffUserRow, 'link'>;
 
@@ -230,6 +246,12 @@ export class UserService {
       updateFields.deleted_at = new Date();
     } else if (validated.reactivate) {
       updateFields.deleted_at = null;
+    }
+    if (validated.new_spotlight_message !== undefined) {
+      updateFields.spotlight_message = validated.new_spotlight_message;
+    }
+    if (validated.new_avatar_seed !== undefined) {
+      updateFields.avatar_seed = validated.new_avatar_seed;
     }
 
     if (validated.new_referrer_user_id !== undefined) {
@@ -500,6 +522,26 @@ export class UserService {
        FROM users u
        LEFT JOIN geo_entity g ON g.id = u.geo_entity_id
        WHERE u.id = $1 AND u.role = ANY($2::text[])`,
+      [id, [...STAFF_ROLES]],
+    );
+    return rows[0] ?? null;
+  }
+
+  // GET /users/:id/public source row: an ACTIVE staff-role account with its
+  // geo entity. external_id is read only to build share_link; the controller
+  // never returns it. Null for any other role, a deleted account or an
+  // unknown / non-uuid id.
+  async getPublicProfileRow(id: string): Promise<PublicProfileRow | null> {
+    if (!isUuid(id)) return null;
+    const rows: PublicProfileRow[] = await this.dataSource.query(
+      `SELECT u.id, u.name, u.role_title, u.avatar_seed, u.spotlight_message,
+              u.external_id,
+              g.id AS geo_id, g.type AS geo_type, g.code AS geo_code,
+              g.name AS geo_name, g.has_boundary AS geo_has_boundary,
+              g.lat::float8 AS geo_lat, g.lng::float8 AS geo_lng
+       FROM users u
+       LEFT JOIN geo_entity g ON g.id = u.geo_entity_id
+       WHERE u.id = $1 AND u.role = ANY($2::text[]) AND u.deleted_at IS NULL`,
       [id, [...STAFF_ROLES]],
     );
     return rows[0] ?? null;

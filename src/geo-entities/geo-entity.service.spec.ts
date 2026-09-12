@@ -256,6 +256,37 @@ describe('GeoEntityService.upsertBatch', () => {
     ]);
   });
 
+  it('a block re-seeded with null coordinates keeps the ones it has; every other level overwrites', async () => {
+    const query = jest.fn().mockResolvedValue(undefined);
+    const { svc } = makeService(query);
+    await svc.upsertBatch([
+      { ...row, type: 'block', code: '010101', lat: null, lng: null },
+    ]);
+    const sql = String(query.mock.calls[0][0]);
+    expect(sql).toMatch(
+      /"lat" = CASE WHEN EXCLUDED\."type" = 'block' THEN COALESCE\(EXCLUDED\."lat", geo_entity\."lat"\) ELSE EXCLUDED\."lat" END/,
+    );
+    expect(sql).toMatch(
+      /"lng" = CASE WHEN EXCLUDED\."type" = 'block' THEN COALESCE\(EXCLUDED\."lng", geo_entity\."lng"\) ELSE EXCLUDED\."lng" END/,
+    );
+    // Nothing else is COALESCEd — a school losing its coordinate goes null.
+    expect(sql).not.toMatch(/COALESCE\(EXCLUDED\."name"/);
+  });
+
+  it('updateBlockCoordinates writes only blocks, through the manager when given', async () => {
+    const query = jest.fn();
+    const { svc } = makeService(query);
+    const manager = { query: jest.fn().mockResolvedValue(undefined) };
+    await svc.updateBlockCoordinates('b1', 26.8, 80.9, manager as never);
+    expect(manager.query).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /UPDATE geo_entity b SET lat = \$2, lng = \$3, updated_at = now\(\)\s+WHERE b\.id = \$1 AND b\.type = 'block'/,
+      ),
+      ['b1', 26.8, 80.9],
+    );
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('uses the transaction manager when given', async () => {
     const query = jest.fn();
     const { svc } = makeService(query);

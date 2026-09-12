@@ -87,6 +87,8 @@ async function main(): Promise<void> {
         linkMergedSchools: () => geo.linkMergedSchools(),
         mergeEdges: () => geo.mergeEdges(),
         clearMergedInto: (ids) => geo.clearMergedInto(ids),
+        updateBlockCoordinates: (id, lat, lng) =>
+          geo.updateBlockCoordinates(id, lat, lng, manager as never),
         query: (sql, params) => dataSource.query(sql, params),
       },
       args,

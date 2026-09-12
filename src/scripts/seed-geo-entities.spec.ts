@@ -798,9 +798,21 @@ function makeDeps(csv: string, overrides: Partial<SeedDeps> = {}) {
       },
     ]),
     clearMergedInto: jest.fn().mockResolvedValue(undefined),
-    query: jest.fn(async (sql: string) => {
+    updateBlockCoordinates: jest.fn().mockResolvedValue(undefined),
+    query: jest.fn(async (sql: string, params: unknown[] = []) => {
       if (/GROUP BY type, status/.test(sql))
         return [{ type: 'school', status: 'operational', n: 1 }];
+      if (sql.includes('block-coords:districts'))
+        return [{ id: 'district-0101' }];
+      if (sql.includes('block-coords:blocks'))
+        return params[0] === 'district-0101' ? [{ id: 'block-010101' }] : [];
+      if (sql.includes('block-coords:schools'))
+        return params[0] === 'district-0101'
+          ? [
+              { block_id: 'block-010101', lat: 34.1, lng: 74.1 },
+              { block_id: 'block-010101', lat: 34.2, lng: 74.2 },
+            ]
+          : [];
       return [{ n: 0 }];
     }),
     ...overrides,
@@ -887,14 +899,27 @@ describe('runSeed', () => {
     expect(schools.find((r) => r.code === '01010100507')?.status).toBe(
       'closed',
     );
-    // Five level transactions: country, state, district, block, school.
-    expect(txLog.filter((t) => t === 'begin')).toHaveLength(5);
+    // Five level transactions (country, state, district, block, school)
+    // plus one block-coordinates transaction for the fixture's one district.
+    expect(txLog.filter((t) => t === 'begin')).toHaveLength(6);
     expect(deps.linkMergedSchools).toHaveBeenCalledTimes(1);
     expect(deps.clearMergedInto).toHaveBeenCalledWith(
       expect.arrayContaining(['school-01010100502', 'school-01010100503']),
     );
     expect(log.join('\n')).toMatch(/school: 58 rows upserted/);
     expect(log.join('\n')).toMatch(/final counts:/);
+    // Block label points are the seed's final step, after merge pointers:
+    // the median of the two fixture schools.
+    expect(deps.updateBlockCoordinates).toHaveBeenCalledWith(
+      'block-010101',
+      expect.closeTo(34.15, 6),
+      expect.closeTo(74.15, 6),
+    );
+    expect(
+      (deps.updateBlockCoordinates as jest.Mock).mock.invocationCallOrder[0],
+    ).toBeGreaterThan(
+      (deps.linkMergedSchools as jest.Mock).mock.invocationCallOrder[0],
+    );
   });
 
   it('batches school upserts at BATCH_SIZE', async () => {
@@ -924,7 +949,11 @@ describe('runSeed', () => {
   it('fails when the hierarchy check finds an unreachable chain', async () => {
     const { deps } = makeDeps(toCsv(fixture()), {
       query: jest.fn(async (sql: string) =>
-        /WITH RECURSIVE up/.test(sql) ? [{ n: 3 }] : [{ n: 0 }],
+        /WITH RECURSIVE up/.test(sql)
+          ? [{ n: 3 }]
+          : sql.includes('block-coords')
+            ? []
+            : [{ n: 0 }],
       ),
     });
     await expect(
