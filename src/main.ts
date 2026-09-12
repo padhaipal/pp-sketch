@@ -52,6 +52,12 @@ import { CacheService } from './interfaces/redis/cache';
 import { OnboardingService } from './onboarding/onboarding.service';
 import { assertOnboardingEnv } from './onboarding/onboarding.config';
 import { assertDashboardEnv } from './interfaces/dashboard/dashboard-url';
+import { TestResultsService } from './literacy/score/test-results.service';
+import {
+  processTestResultsJob,
+  TEST_RESULTS_CRON,
+} from './literacy/score/test-results.processor';
+import type { TestResultsJobData } from './literacy/score/test-results.processor';
 
 const logger = new Logger('Bootstrap');
 
@@ -341,7 +347,32 @@ async function bootstrap() {
     ),
   );
 
-  logger.log('BullMQ workers started for all 11 queues');
+  // Nightly literacy-test results: 18:45 UTC = 00:15 IST. One job at a time;
+  // the service's overlap guard drops a run that starts while one is live.
+  const testResultsService = app.get(TestResultsService);
+  const testResultsQueue = createQueue(QUEUE_NAMES.TEST_RESULTS);
+  await testResultsQueue.add(
+    'test-results-cron',
+    { full: false },
+    { repeat: { pattern: TEST_RESULTS_CRON } },
+  );
+  const testResultsWorker = createWorker<TestResultsJobData>(
+    QUEUE_NAMES.TEST_RESULTS,
+    async (job) => {
+      await processTestResultsJob(job, testResultsService);
+    },
+    { concurrency: 1 },
+  );
+  testResultsWorker.on('failed', (job, err) =>
+    logger.error(
+      `worker(${QUEUE_NAMES.TEST_RESULTS}) FAILED job id=${job?.id} err=${err.message}`,
+    ),
+  );
+  testResultsWorker.on('error', (err) =>
+    logger.error(`worker(${QUEUE_NAMES.TEST_RESULTS}) ERROR ${err.message}`),
+  );
+
+  logger.log('BullMQ workers started for all 12 queues');
 
   await app.listen(process.env.PORT ?? 3000);
   logger.log(`Application listening on port ${process.env.PORT ?? 3000}`);

@@ -19,6 +19,7 @@ import { MirrorModule } from './mirror/mirror.module';
 import { OutboundMessageModule } from './outbound-messages/outbound-message.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { GeoEntityModule } from './geo-entities/geo-entity.module';
+import { TestResultsModule } from './literacy/score/test-results.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { GeoEntityModule } from './geo-entities/geo-entity.module';
     OutboundMessageModule,
     OnboardingModule,
     GeoEntityModule,
+    TestResultsModule,
   ],
   controllers: [
     AppController,

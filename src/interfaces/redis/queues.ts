@@ -15,6 +15,7 @@ export const QUEUE_NAMES = {
   HAIL_MARY: 'hail-mary',
   MIRROR: 'mirror',
   MEDIA_RELOAD_SWEEP: 'media-reload-sweep',
+  TEST_RESULTS: 'test-results',
 } as const;
 
 const connection = new Redis(process.env.BULLMQ_REDIS_URL!, {
@@ -96,6 +97,14 @@ export const DEFAULT_JOB_OPTIONS: Record<string, JobsOptions> = {
   // Hourly DB scan that re-uploads overdue/stranded media. attempts:1 —
   // the next hourly run is the retry path (same philosophy as mirror).
   [QUEUE_NAMES.MEDIA_RELOAD_SWEEP]: {
+    attempts: 1,
+    removeOnComplete: true,
+    removeOnFail: { count: 500 },
+  },
+  // Nightly scoring: never retried — a failed night is picked up by the
+  // next night's candidate rule (test-results.service.ts), and a retry could
+  // overlap the next run.
+  [QUEUE_NAMES.TEST_RESULTS]: {
     attempts: 1,
     removeOnComplete: true,
     removeOnFail: { count: 500 },

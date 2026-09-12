@@ -87,7 +87,13 @@ create(options: CreateUserOptions): Promise<User>
 - Populate the cache for both userById and userByExternalId keys with CACHE_TTL.USER.
 - Return the newly created user entity.
 
-## getLiteracyTestScores (2026-07, reworked 2026-08)
+## getLiteracyTestScores (2026-07, reworked 2026-08, extracted 2026-09)
+
+The algorithm now lives in src/literacy/score/literacy-test-scores.ts
+(`computeLiteracyTestScores(query, userIds)`, shared with the nightly
+test-results job); this method resolves the user and calls it with one id.
+Output is byte-identical to the pre-extraction implementation
+(literacy-test-scores.spec.ts golden).
 
 NOTE (2026-08): the comprehension first-attempts query's three
 media_metadata joins (option o → question q → passage p) deliberately carry
