@@ -1701,3 +1701,152 @@ describe('UserController.interactionsCsv', () => {
     ).rejects.toThrow(BadRequestException);
   });
 });
+
+// ─── Public teacher dashboard (/d/:id) ───────────────────────────────────────
+
+describe('UserController public profile + profile PATCH', () => {
+  const ROW = {
+    id: 'u1',
+    name: 'Asha Kumari',
+    role_title: 'Teacher',
+    avatar_seed: 'u1',
+    spotlight_message: 'Read daily!',
+    external_id: '919876543210',
+    geo_id: 'g1',
+    geo_type: 'school',
+    geo_code: '01010100101',
+    geo_name: 'PS Kupwara',
+    geo_has_boundary: false,
+    geo_lat: 34.5,
+    geo_lng: 74.4,
+  };
+  function setup(row: unknown = ROW) {
+    const getPublicProfileRow = jest.fn().mockResolvedValue(row);
+    const update = jest.fn().mockResolvedValue({});
+    const ancestors = jest.fn().mockResolvedValue([
+      {
+        id: 'in',
+        type: 'country',
+        code: 'IN',
+        name: 'India',
+        has_boundary: true,
+      },
+      { id: 'b1', type: 'block', code: '010101', name: 'Kupwara', lat: 1 },
+    ]);
+    const ctrl = makeController({
+      userSvc: { getPublicProfileRow, update },
+      geoSvc: { ancestors },
+    });
+    return { ctrl, getPublicProfileRow, update, ancestors };
+  }
+
+  it('GET :id/public returns exactly the forwardable allow-list — never external_id, staff_notes or password_hash', async () => {
+    const { ctrl } = setup({
+      ...ROW,
+      staff_notes: 'secret',
+      password_hash: 'hash',
+    });
+    const out = await ctrl.publicProfile('u1');
+    expect(Object.keys(out).sort()).toEqual(
+      [
+        'ancestors',
+        'avatar_seed',
+        'geo_entity',
+        'id',
+        'name',
+        'role_title',
+        'share_link',
+        'spotlight_message',
+      ].sort(),
+    );
+    expect(JSON.stringify(out)).not.toMatch(
+      /external_id|staff_notes|password_hash|919876543210/,
+    );
+    expect(out).toMatchInlineSnapshot(`
+{
+  "ancestors": [
+    {
+      "code": "IN",
+      "id": "in",
+      "name": "India",
+      "type": "country",
+    },
+    {
+      "code": "010101",
+      "id": "b1",
+      "name": "Kupwara",
+      "type": "block",
+    },
+  ],
+  "avatar_seed": "u1",
+  "geo_entity": {
+    "code": "01010100101",
+    "has_boundary": false,
+    "id": "g1",
+    "lat": 34.5,
+    "lng": 74.4,
+    "name": "PS Kupwara",
+    "type": "school",
+  },
+  "id": "u1",
+  "name": "Asha Kumari",
+  "role_title": "Teacher",
+  "share_link": "https://dashboard.padhaipal.com/r/919876543210",
+  "spotlight_message": "Read daily!",
+}
+`);
+  });
+
+  it('404s when the account is not an active staff account', async () => {
+    const { ctrl, update } = setup(null);
+    await expect(ctrl.publicProfile('u1')).rejects.toThrow(NotFoundException);
+    await expect(ctrl.patchProfile('u1', { name: 'x' })).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('PATCH :id/profile strips HTML, bounds every field, writes through UserService.update (cache eviction) and returns the public shape', async () => {
+    const { ctrl, update } = setup();
+    const out = await ctrl.patchProfile('u1', {
+      name: '  <b>Asha</b> Devi ',
+      spotlight_message:
+        '<script>alert(1)</script>Keep <i>reading</i>&nbsp;every day  ',
+      avatar_seed: 'seed-123',
+    });
+    expect(update).toHaveBeenCalledWith({
+      id: 'u1',
+      new_name: 'Asha Devi',
+      new_spotlight_message: 'alert(1)Keep reading every day',
+      new_avatar_seed: 'seed-123',
+    });
+    expect(Object.keys(out)).not.toContain('external_id');
+
+    await ctrl.patchProfile('u1', { spotlight_message: '' });
+    expect(update).toHaveBeenLastCalledWith({
+      id: 'u1',
+      new_spotlight_message: null,
+    });
+
+    // Nested-tag bypass and stray brackets can never leave markup behind.
+    await ctrl.patchProfile('u1', {
+      spotlight_message: '<scr<script>ipt>alert(1)</scr</script>ipt> a < b > c',
+    });
+    const saved = update.mock.calls.at(-1)![0].new_spotlight_message as string;
+    expect(saved).not.toMatch(/[<>]/);
+    expect(saved).not.toMatch(/script/i);
+
+    for (const body of [
+      { name: '' },
+      { name: 'x'.repeat(81) },
+      { spotlight_message: 'x'.repeat(301) },
+      { avatar_seed: 'bad seed!' },
+      { avatar_seed: 'x'.repeat(65) },
+      {},
+    ]) {
+      await expect(ctrl.patchProfile('u1', body as never)).rejects.toThrow(
+        BadRequestException,
+      );
+    }
+  });
+});
