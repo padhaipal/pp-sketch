@@ -104,6 +104,7 @@ describe('migrations — foreign keys onto users / media_metadata', () => {
         'outbound_messages.user_message_id',
         'scores.user_id',
         'scores.user_message_id',
+        'test_results_student.student_id',
         'users.referrer_user_id',
       ].sort(),
     );
@@ -132,6 +133,18 @@ describe('migrations — foreign keys onto users / media_metadata', () => {
         references: 'geo_entity',
         onDelete: 'SET NULL',
       }),
+    );
+  });
+
+  it.each([
+    ['test_results_student', 'geo_entity_id', 'SET NULL'],
+    ['test_results_geo_entity', 'geo_entity_id', 'CASCADE'],
+  ])('%s.%s → geo_entity is ON DELETE %s', (table, column, onDelete) => {
+    const fk = [...constraints.values()].find(
+      (c) => c.table === table && c.column === column,
+    );
+    expect(fk).toEqual(
+      expect.objectContaining({ references: 'geo_entity', onDelete }),
     );
   });
 

@@ -27,145 +27,11 @@ import {
   validateCreateUserOptions,
   partitionUserIdentifiers,
   LiteracyTestScores,
-  SnapshotTestScore,
-  TestSnapshotPoint,
 } from './user.dto';
+import { computeLiteracyTestScores } from '../literacy/score/literacy-test-scores';
 
 // StaffUserRow before the dashboard link is attached (the controller adds it).
 export type StaffLookupRow = Omit<import('./user.dto').StaffUserRow, 'link'>;
-
-// ─── Snapshot scoring (NIPUN grades 2/3 + MPL-B) ─────────────────────────────
-
-// A student's FIRST attempt at one question. Only first attempts count toward
-// tests: once the child has seen the explanation for their tap, any repeat of
-// that question is invalidated for testing.
-interface FirstAttempt {
-  at: Date;
-  correct: boolean;
-  question_id: string;
-  // The question's level = its passage's media_details.level (the generation
-  // pipeline's word-count level), NOT literacy_lesson_states.level (the
-  // lesson cap, which can diverge on nearest-level passage fallback).
-  level: number | null;
-  question_type: string | null;
-}
-
-// All tests pass on score STRICTLY greater than 0.5.
-const TEST_PASS_THRESHOLD = 0.5;
-
-const NIPUN_QUESTION_COUNT = 4;
-// NIPUN reading proxies use the retrieve subconstructs only.
-const NIPUN_R1_TYPES = ['R1.1', 'R1.2', 'R1.3'];
-const NIPUN_G2_LEVELS = [10];
-const NIPUN_G3_LEVELS = [11, 12];
-
-// MPL-B selection. Level-13 questions are excluded from every test (and from
-// lessons) by construction — only levels 11/12 qualify here.
-const MPL_B_LEVELS = [11, 12];
-const MPL_B_QUESTION_COUNT = 20;
-const MPL_B_MIN_DISTINCT_TYPES = 4;
-const MPL_B_BATCHES: Array<{ types: string[]; required: number }> = [
-  { types: ['R1.1', 'R1.2', 'R1.3'], required: 5 },
-  { types: ['R2.1', 'R2.2', 'R2.3'], required: 5 },
-  { types: ['R3.1', 'R3.2'], required: 1 },
-];
-
-// NIPUN grade 2/3 snapshot: the most recent `count` first attempts from the
-// (already level/type-filtered) pool. Null = insufficient data.
-function nipunSnapshot(
-  pool: FirstAttempt[],
-  count: number,
-): { score: number; passed: boolean } | null {
-  if (pool.length < count) return null;
-  const selected = pool.slice(-count);
-  const score = selected.filter((a) => a.correct).length / count;
-  return { score, passed: score > TEST_PASS_THRESHOLD };
-}
-
-// MPL-B snapshot over a pool of level-11/12 first attempts (chronological).
-// Four filters, walking most-recent-first; one question may satisfy both
-// filter two and filter three. Null = insufficient data at any filter.
-function mplBSnapshot(
-  pool: FirstAttempt[],
-): { score: number; passed: boolean } | null {
-  // Filter one: fewer than 20 level-11/12 first attempts → no result.
-  if (pool.length < MPL_B_QUESTION_COUNT) return null;
-  const recent = [...pool].reverse();
-  const selected = new Set<FirstAttempt>();
-
-  // Filter two: most recent representative of each question type until four
-  // distinct types are covered; three or fewer distinct types → no result.
-  const seenTypes = new Set<string>();
-  for (const attempt of recent) {
-    if (seenTypes.size >= MPL_B_MIN_DISTINCT_TYPES) break;
-    if (attempt.question_type && !seenTypes.has(attempt.question_type)) {
-      seenTypes.add(attempt.question_type);
-      selected.add(attempt);
-    }
-  }
-  if (seenTypes.size < MPL_B_MIN_DISTINCT_TYPES) return null;
-
-  // Filter three: most recent representatives per batch — R1.x ×5, R2.x ×5,
-  // R3.x ×1 (filter-two picks count toward their batch).
-  for (const batch of MPL_B_BATCHES) {
-    let have = [...selected].filter(
-      (a) => a.question_type && batch.types.includes(a.question_type),
-    ).length;
-    for (const attempt of recent) {
-      if (have >= batch.required) break;
-      if (
-        !selected.has(attempt) &&
-        attempt.question_type &&
-        batch.types.includes(attempt.question_type)
-      ) {
-        selected.add(attempt);
-        have++;
-      }
-    }
-    if (have < batch.required) return null;
-  }
-
-  // Filter four: top up with the most recent remaining attempts to 20
-  // (guaranteed reachable — the pool holds at least 20).
-  for (const attempt of recent) {
-    if (selected.size >= MPL_B_QUESTION_COUNT) break;
-    selected.add(attempt);
-  }
-
-  const score =
-    [...selected].filter((a) => a.correct).length / MPL_B_QUESTION_COUNT;
-  return { score, passed: score > TEST_PASS_THRESHOLD };
-}
-
-// history[] = the snapshot algorithm replayed over every chronological prefix
-// of the pool (insufficient-data prefixes skipped); latest = final entry.
-function snapshotSeries(
-  pool: FirstAttempt[],
-  snapshot: (
-    prefix: FirstAttempt[],
-  ) => { score: number; passed: boolean } | null,
-): SnapshotTestScore {
-  const history: TestSnapshotPoint[] = [];
-  for (let i = 0; i < pool.length; i++) {
-    const result = snapshot(pool.slice(0, i + 1));
-    if (result) {
-      history.push({
-        at: pool[i].at,
-        score: result.score,
-        passed: result.passed,
-      });
-    }
-  }
-  if (history.length === 0) {
-    return { status: 'insufficient_data', attempts_available: pool.length };
-  }
-  return {
-    status: 'ok',
-    attempts_available: pool.length,
-    latest: history[history.length - 1],
-    history,
-  };
-}
 
 @Injectable()
 export class UserService {
@@ -793,76 +659,11 @@ export class UserService {
   ): Promise<LiteracyTestScores | null> {
     const user = await this.findByIdOrExternalId(input);
     if (!user) return null;
-
-    interface ComprehensionRow {
-      created_at: Date;
-      answer_correct: boolean;
-      question_id: string;
-      question_type: string | null;
-      level: number | null;
-    }
-    const answers: ComprehensionRow[] = await this.dataSource.query(
-      `SELECT s.created_at, s.answer_correct,
-              q.id AS question_id,
-              q.media_details->>'question_type' AS question_type,
-              (p.media_details->>'level')::int AS level
-       FROM literacy_lesson_states s
-       -- Deliberately NO rolled_back filter on these joins (2026-08): a
-       -- retroactively quality-culled passage must not erase the student's
-       -- already-earned comprehension history (NIPUN grades 2/3, MPL-B).
-       JOIN media_metadata o ON o.id::text = s.answer
-       JOIN media_metadata q ON q.id = o.input_media_id
-       JOIN media_metadata p ON p.id = q.input_media_id
-       WHERE s.user_id = $1
-         AND s.answer_correct IS NOT NULL
-         AND (s.snapshot->'context'->>'stateTransitionId')
-           LIKE '%-comprehension-complete'
-       ORDER BY s.created_at ASC`,
+    const scores = await computeLiteracyTestScores(
+      (sql, params) => this.dataSource.query(sql, params),
       [user.id],
     );
-
-    // Dedup to first attempts, in chronological order.
-    const seenQuestions = new Set<string>();
-    const dedupedAttempts: FirstAttempt[] = [];
-    for (const row of answers) {
-      if (seenQuestions.has(row.question_id)) continue;
-      seenQuestions.add(row.question_id);
-      dedupedAttempts.push({
-        at: row.created_at,
-        correct: row.answer_correct === true,
-        question_id: row.question_id,
-        level: row.level,
-        question_type: row.question_type,
-      });
-    }
-
-    const nipunGrade2Pool = dedupedAttempts.filter(
-      (a) =>
-        a.level !== null &&
-        NIPUN_G2_LEVELS.includes(a.level) &&
-        a.question_type !== null &&
-        NIPUN_R1_TYPES.includes(a.question_type),
-    );
-    const nipunGrade3Pool = dedupedAttempts.filter(
-      (a) =>
-        a.level !== null &&
-        NIPUN_G3_LEVELS.includes(a.level) &&
-        a.question_type !== null &&
-        NIPUN_R1_TYPES.includes(a.question_type),
-    );
-    const mplBPool = dedupedAttempts.filter(
-      (a) => a.level !== null && MPL_B_LEVELS.includes(a.level),
-    );
-
-    return {
-      nipun_grade_2: snapshotSeries(nipunGrade2Pool, (prefix) =>
-        nipunSnapshot(prefix, NIPUN_QUESTION_COUNT),
-      ),
-      nipun_grade_3: snapshotSeries(nipunGrade3Pool, (prefix) =>
-        nipunSnapshot(prefix, NIPUN_QUESTION_COUNT),
-      ),
-      mpl_b: snapshotSeries(mplBPool, mplBSnapshot),
-    };
+    return scores.get(user.id) ?? null;
   }
 
   private async populateUserCache(user: User): Promise<void> {
