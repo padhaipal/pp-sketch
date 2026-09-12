@@ -23,8 +23,13 @@ Seed writes:
   `INSERT … ON CONFLICT (type, code) DO UPDATE` (15 bind parameters however
   many rows, so 5,000-row batches stay under Postgres's 65,535 limit).
   Overwrites every non-key column except `id`, `created_at`, `deleted_at`;
-  sets `updated_at = now()`. `manager` runs it inside the caller's
-  transaction.
+  sets `updated_at = now()`. For `type = 'block'` rows only, `lat`/`lng` are
+  `COALESCE(EXCLUDED.x, geo_entity.x)` — block coordinates are computed
+  afterwards (backfill-block-coords.ts), so a re-seed carrying nulls must
+  not wipe them; schools and every other level overwrite. `manager` runs it
+  inside the caller's transaction.
+- `updateBlockCoordinates(id, lat, lng, manager?)` — the block label point
+  write (blocks only).
 - `linkMergedSchools()` — set-based UPDATE joining `attributes->>'schIdMerged'`
   to another school's `attributes->>'schoolId'` for non-operational schools
   (never self, never `''`/`'0'`); returns the count.

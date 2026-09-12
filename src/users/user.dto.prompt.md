@@ -284,3 +284,9 @@ export function validateCreateUserOptions(options: unknown): CreateUserOptions {
 - `UpdateUserOptions` gains `new_role`, `new_password_hash`, `new_geo_entity_id`, `new_role_title`, `new_staff_notes` (null clears), `deactivate`, `reactivate`; `PatchUserDto` mirrors the last five plus the widened `role`.
 - `StaffCreateDto` (POST /users/staff-create body), `StaffUserRow` / `StaffUserDetail` / `StaffCreateResponse` (responses; `link` = dashboard-url.ts `staffDashboardLink`).
 - `normaliseStaffPhone(raw)`: strip non-digits; 10 digits → `91` prefix; then the existing `validateE164PhoneNumber` (no second normaliser) — BadRequestException on failure; returns the stored form (no `+`).
+
+## Public teacher dashboard (2026-09)
+
+- `ProfilePatchDto` (PATCH /users/:id/profile): `name?`, `spotlight_message?`, `avatar_seed?`. `validateProfilePatch` strips HTML (`stripHtml`: tags removed, `&nbsp;` → space, whitespace collapsed), bounds name to 1–80, spotlight_message to ≤ 300 (empty → null), avatar_seed to `[A-Za-z0-9-]{1,64}`, and requires at least one field.
+- `PublicProfile` — the forwardable GET /users/:id/public shape: `{id, name, role_title, avatar_seed, spotlight_message, geo_entity, ancestors, share_link}`. NEVER external_id, staff_notes or password_hash (user.controller.spec pins the allow-list with an inline snapshot).
+- `UpdateUserOptions` gains `new_spotlight_message` (string | null) and `new_avatar_seed`.

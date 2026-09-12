@@ -40,6 +40,21 @@ schools) from the india-school-coordinates register. Script:
 `source_pulled_at` on every row). `--schools-url` overrides the release
 asset (default: the latest `schools_india_with_coords.csv.gz`).
 
+## Block label points
+
+Blocks have no polygon and no register coordinate; the dashboard renders
+each as a label at `geo_entity.lat/lng` = the geometric median of its
+located schools (src/scripts/backfill-block-coords.prompt.md). The seed does
+this as its final step. For a database seeded BEFORE the seed had that step
+— this one — run once, after the seed:
+
+`node dist/scripts/backfill-block-coords.main.js`
+
+A few minutes (one transaction per district). Verify:
+`SELECT count(*) FILTER (WHERE lat IS NOT NULL) AS located, count(*) AS blocks FROM geo_entity WHERE type='block';`
+Re-seeds never wipe these: the block upsert keeps existing coordinates when
+the incoming row has none.
+
 ## Notes
 
 The container has curl and outbound network and sits on Railway's private

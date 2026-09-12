@@ -180,8 +180,16 @@ export class GeoEntityService {
     const db = manager ?? this.dataSource;
     const column = <K extends keyof GeoEntityUpsertRow>(key: K) =>
       rows.map((r) => r[key]);
+    // Block coordinates are not in the register — they are computed from
+    // the block's schools afterwards (backfill-block-coords.ts) — so a
+    // re-seed that carries null lat/lng for a block must not wipe them.
+    // Schools and every other level overwrite as usual.
     const setClause = UPSERT_COLUMNS.filter((c) => c !== 'type' && c !== 'code')
-      .map((c) => `"${c}" = EXCLUDED."${c}"`)
+      .map((c) =>
+        c === 'lat' || c === 'lng'
+          ? `"${c}" = CASE WHEN EXCLUDED."type" = 'block' THEN COALESCE(EXCLUDED."${c}", geo_entity."${c}") ELSE EXCLUDED."${c}" END`
+          : `"${c}" = EXCLUDED."${c}"`,
+      )
       .join(', ');
     await db.query(
       `INSERT INTO geo_entity (${UPSERT_COLUMNS.map((c) => `"${c}"`).join(', ')})
@@ -209,6 +217,23 @@ export class GeoEntityService {
         column('source'),
         column('source_pulled_at'),
       ],
+    );
+  }
+
+  // Block label point (geometric median of the block's located schools —
+  // backfill-block-coords.ts). Only blocks: every other level either has a
+  // polygon or carries its own register coordinate.
+  async updateBlockCoordinates(
+    id: string,
+    lat: number,
+    lng: number,
+    manager?: EntityManager,
+  ): Promise<void> {
+    const db = manager ?? this.dataSource;
+    await db.query(
+      `UPDATE geo_entity b SET lat = $2, lng = $3, updated_at = now()
+       WHERE b.id = $1 AND b.type = 'block'`,
+      [id, lat, lng],
     );
   }
 

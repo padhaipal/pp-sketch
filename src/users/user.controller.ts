@@ -47,12 +47,18 @@ import {
   UpdateUserOptions,
   PROTECTED_ROLES,
   normaliseStaffPhone,
+  ProfilePatchDto,
+  PublicProfile,
+  validateProfilePatch,
 } from './user.dto';
 import { UserActivityService } from './user-activity.service';
 import { UserService, StaffLookupRow } from './user.service';
 import { GeoEntityService } from '../geo-entities/geo-entity.service';
 import { DEFAULT_ROLE_TITLE_BY_TYPE } from '../geo-entities/geo-entity.dto';
-import { staffDashboardLink } from '../interfaces/dashboard/dashboard-url';
+import {
+  referralUrl,
+  staffDashboardLink,
+} from '../interfaces/dashboard/dashboard-url';
 import {
   INTERACTIONS_BATCH_SIZE,
   interactionRowToCsvLine,
@@ -604,6 +610,62 @@ export class UserController {
   // After 'dashboard' / 'dashboard/summary' / 'interactions.csv' (literal
   // single-segment routes) and before ':id' — Nest matches in declaration
   // order, so the other way round 'lookup' would be captured as an id.
+  // ─── Public teacher dashboard (/d/:id) — no auth, forwardable ─────────
+  // Only these two are on the dashboard proxy's PUBLIC_ALLOWED list. The
+  // response is the allow-list in PublicProfile: never external_id,
+  // staff_notes or password_hash.
+
+  @Get(':id/public')
+  async publicProfile(@Param('id') id: string): Promise<PublicProfile> {
+    return this.loadPublicProfile(id);
+  }
+
+  @Patch(':id/profile')
+  async patchProfile(
+    @Param('id') id: string,
+    @Body() body: ProfilePatchDto,
+  ): Promise<PublicProfile> {
+    // 404 first: the write must never touch a non-staff or deleted account.
+    await this.loadPublicProfile(id);
+    const fields = validateProfilePatch(body);
+    // UserService.update evicts the user cache.
+    await this.userService.update({ id, ...fields });
+    return this.loadPublicProfile(id);
+  }
+
+  private async loadPublicProfile(id: string): Promise<PublicProfile> {
+    const row = await this.userService.getPublicProfileRow(id);
+    if (!row) throw new NotFoundException('This link is not active');
+    const ancestors = row.geo_id
+      ? (await this.geoEntityService.ancestors(row.geo_id)).map((a) => ({
+          id: a.id,
+          type: a.type,
+          code: a.code,
+          name: a.name,
+        }))
+      : [];
+    return {
+      id: row.id,
+      name: row.name,
+      role_title: row.role_title,
+      avatar_seed: row.avatar_seed,
+      spotlight_message: row.spotlight_message,
+      geo_entity: row.geo_id
+        ? {
+            id: row.geo_id,
+            type: row.geo_type!,
+            code: row.geo_code!,
+            name: row.geo_name!,
+            has_boundary: row.geo_has_boundary === true,
+            lat: row.geo_lat,
+            lng: row.geo_lng,
+          }
+        : null,
+      ancestors,
+      share_link: referralUrl(row.external_id),
+    };
+  }
+
   @Get('lookup')
   async lookup(@Query('q') q?: string): Promise<StaffUserRow[]> {
     const rows = await this.userService.lookupStaff(q ?? '');

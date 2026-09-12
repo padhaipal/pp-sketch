@@ -158,6 +158,104 @@ export interface StaffCreateResponse {
   link: string;
 }
 
+// ─── Public teacher dashboard (/d/:id) ──────────────────────────────────────
+
+export const PROFILE_NAME_MAX = 80;
+export const SPOTLIGHT_MESSAGE_MAX = 300;
+export const AVATAR_SEED_RE = /^[A-Za-z0-9-]{1,64}$/;
+
+// PATCH /users/:id/profile body — self-service, unauthenticated (the /d link
+// is the credential), so every field is bounded and the message is plain
+// text: it renders on OTHER people's dashboards.
+export class ProfilePatchDto {
+  @IsString()
+  @IsOptional()
+  name?: string;
+
+  @IsString()
+  @IsOptional()
+  spotlight_message?: string;
+
+  @IsString()
+  @IsOptional()
+  avatar_seed?: string;
+}
+
+// GET /users/:id/public — the forwardable shape. NEVER carries external_id,
+// staff_notes or password_hash (public-profile.spec pins the allow-list).
+export interface PublicProfile {
+  id: string;
+  name: string | null;
+  role_title: string | null;
+  avatar_seed: string | null;
+  spotlight_message: string | null;
+  geo_entity: {
+    id: string;
+    type: string;
+    code: string;
+    name: string;
+    has_boundary: boolean;
+    lat: number | null;
+    lng: number | null;
+  } | null;
+  ancestors: { id: string; type: string; code: string; name: string }[];
+  share_link: string;
+}
+
+// Strips tags and collapses whitespace; the spotlight message is shown as
+// text on other people's pages.
+export function stripHtml(text: string): string {
+  return text
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function validateProfilePatch(body: ProfilePatchDto): {
+  new_name?: string;
+  new_spotlight_message?: string | null;
+  new_avatar_seed?: string;
+} {
+  const out: {
+    new_name?: string;
+    new_spotlight_message?: string | null;
+    new_avatar_seed?: string;
+  } = {};
+  if (body.name !== undefined) {
+    const name = stripHtml(body.name);
+    if (name.length === 0 || name.length > PROFILE_NAME_MAX) {
+      throw new BadRequestException(
+        `name must be 1–${PROFILE_NAME_MAX} characters`,
+      );
+    }
+    out.new_name = name;
+  }
+  if (body.spotlight_message !== undefined) {
+    const message = stripHtml(body.spotlight_message);
+    if (message.length > SPOTLIGHT_MESSAGE_MAX) {
+      throw new BadRequestException(
+        `spotlight_message must be at most ${SPOTLIGHT_MESSAGE_MAX} characters`,
+      );
+    }
+    out.new_spotlight_message = message.length === 0 ? null : message;
+  }
+  if (body.avatar_seed !== undefined) {
+    if (!AVATAR_SEED_RE.test(body.avatar_seed)) {
+      throw new BadRequestException(
+        'avatar_seed must be 1–64 characters of [A-Za-z0-9-]',
+      );
+    }
+    out.new_avatar_seed = body.avatar_seed;
+  }
+  if (Object.keys(out).length === 0) {
+    throw new BadRequestException(
+      'At least one of name, spotlight_message or avatar_seed required',
+    );
+  }
+  return out;
+}
+
 // Staff phone numbers arrive as whatever the operator typed: strip
 // non-digits, treat a bare 10-digit Indian mobile as +91, then run the same
 // E.164 validation every other external_id goes through. Returns the stored
@@ -352,6 +450,9 @@ export interface UpdateUserOptions {
   new_staff_notes?: string | null;
   deactivate?: boolean;
   reactivate?: boolean;
+  // Self-service profile (PATCH /users/:id/profile).
+  new_spotlight_message?: string | null;
+  new_avatar_seed?: string;
   // null clears the column (OnboardingService.rollback of a done turn).
   new_birth_year?: number | null;
   new_birth_month?: number | null;
@@ -486,7 +587,27 @@ export function validateUpdateUserOptions(options: unknown): UpdateUserOptions {
     new_staff_notes,
     deactivate,
     reactivate,
+    new_spotlight_message,
+    new_avatar_seed,
   } = options as Record<string, unknown>;
+  if (
+    new_spotlight_message !== undefined &&
+    new_spotlight_message !== null &&
+    typeof new_spotlight_message !== 'string'
+  ) {
+    throw new BadRequestException(
+      'update() options.new_spotlight_message must be a string or null',
+    );
+  }
+  if (
+    new_avatar_seed !== undefined &&
+    (typeof new_avatar_seed !== 'string' ||
+      !AVATAR_SEED_RE.test(new_avatar_seed))
+  ) {
+    throw new BadRequestException(
+      'update() options.new_avatar_seed must match [A-Za-z0-9-]{1,64}',
+    );
+  }
   if (id !== undefined && typeof id !== 'string') {
     throw new BadRequestException('update() options.id must be a string');
   }
@@ -651,6 +772,8 @@ export function validateUpdateUserOptions(options: unknown): UpdateUserOptions {
     new_geo_entity_id === undefined &&
     new_role_title === undefined &&
     new_staff_notes === undefined &&
+    new_spotlight_message === undefined &&
+    new_avatar_seed === undefined &&
     deactivate !== true &&
     reactivate !== true
   ) {
@@ -675,6 +798,8 @@ export function validateUpdateUserOptions(options: unknown): UpdateUserOptions {
     new_staff_notes,
     deactivate: deactivate === true ? true : undefined,
     reactivate: reactivate === true ? true : undefined,
+    new_spotlight_message,
+    new_avatar_seed,
   } as UpdateUserOptions;
 }
 
