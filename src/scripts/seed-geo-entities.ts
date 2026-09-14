@@ -28,7 +28,22 @@ export interface SeedArgs {
   statusMap: Record<string, GeoEntityStatus>;
   pulledAt: Date;
   dryRun: boolean;
+  // Real state codes; defaults to UDISE_STATE_CODES.
+  stateCodes?: ReadonlySet<string>;
 }
+
+// The state/UT codes the UDISE register uses — the seed's definition of a
+// real state. Deliberately NOT the boundary manifest's state rows: those say
+// which state polygons exist, a different set (no polygon was built for
+// Andhra Pradesh, 28, and the manifest carries a stray 39). Using them
+// silently dropped all of AP. A row outside this set belongs to a central
+// body's pseudo-state (KVS/NVS/Navy/IAF) and is skipped. 25 and 26 are unused
+// since Daman & Diu and Dadra & Nagar Haveli merged into 38 in 2020.
+export const UDISE_STATE_CODES: ReadonlySet<string> = new Set(
+  Array.from({ length: 38 }, (_, i) => String(i + 1).padStart(2, '0')).filter(
+    (code) => code !== '25' && code !== '26',
+  ),
+);
 
 export function parseArgs(
   argv: string[],
@@ -392,6 +407,9 @@ export interface Pass1Report {
   clustersSpanningBlocks: number;
   meanAttributesBytes: number;
   unmappedStatuses: Map<string, number>;
+  // state_code → rows skipped as pseudo-state, so a real state wrongly
+  // excluded shows up by code instead of hiding inside one total.
+  pseudoStateCodes: Map<string, number>;
   errors: string[];
 }
 
@@ -406,6 +424,7 @@ export class Pass1Accumulator {
   private readonly clusterCdLengths = new Counter<number>();
   private readonly clusterBlocks = new Map<string, Set<string>>();
   private readonly unmappedStatuses = new Counter<string>();
+  private readonly pseudoStateCodes = new Counter<string>();
   private readonly formatFailures: string[] = [];
   private rows = 0;
   private skippedParse = 0;
@@ -419,6 +438,7 @@ export class Pass1Accumulator {
     private readonly manifest: Manifest,
     private readonly statusMap: Record<string, GeoEntityStatus>,
     private readonly log: (message: string) => void = () => undefined,
+    private readonly stateCodes: ReadonlySet<string> = UDISE_STATE_CODES,
   ) {}
 
   recordParseSkip(): void {
@@ -440,10 +460,12 @@ export class Pass1Accumulator {
       }
       return;
     }
-    // Central bodies (KVS/NVS/Navy/IAF) are pseudo-states with no boundary:
-    // the manifest's 36 state files define the real set.
-    if (!this.manifest.states.has(row.state_code)) {
+    // A state_code outside the UDISE state set is a central body's
+    // pseudo-state (see UDISE_STATE_CODES). Whether the state has a boundary
+    // polygon is irrelevant here — that only decides has_boundary.
+    if (!this.stateCodes.has(row.state_code)) {
       this.skippedPseudoState += 1;
+      this.pseudoStateCodes.bump(row.state_code);
       return;
     }
     this.statusPairs.bump(
@@ -581,9 +603,12 @@ export class Pass1Accumulator {
           .join(', ')} — fill SCHOOL_STATUS_MAP or pass --status-map`,
       );
     }
-    if (this.states.size !== this.manifest.states.size) {
+    const missingStates = [...this.stateCodes].filter(
+      (code) => !this.states.has(code),
+    );
+    if (missingStates.length > 0) {
       errors.push(
-        `expected ${this.manifest.states.size} states from the manifest, saw ${this.states.size}`,
+        `register is missing state codes: ${missingStates.join(', ')}`,
       );
     }
     if (this.schools === 0) errors.push('no valid school rows');
@@ -611,6 +636,7 @@ export class Pass1Accumulator {
       meanAttributesBytes:
         this.schools > 0 ? Math.round(this.attributesBytes / this.schools) : 0,
       unmappedStatuses: this.unmappedStatuses,
+      pseudoStateCodes: this.pseudoStateCodes,
       errors: errors.filter((e) => !e.startsWith('format: ')),
     };
   }
@@ -622,6 +648,13 @@ export function formatReport(report: Pass1Report): string {
   lines.push(
     `skipped — parse errors: ${report.skippedParse.toLocaleString()}, format checks: ${report.skippedFormat.toLocaleString()}, pseudo-states: ${report.skippedPseudoState.toLocaleString()}, duplicate udise codes: ${report.duplicateSchoolCodes.toLocaleString()}`,
   );
+  if (report.pseudoStateCodes.size > 0) {
+    lines.push(
+      `pseudo-state codes skipped: ${[...report.pseudoStateCodes]
+        .map(([code, count]) => `${code} ×${count.toLocaleString()}`)
+        .join(', ')}`,
+    );
+  }
   lines.push(
     `levels — states: ${report.states}, districts: ${report.districts}, blocks: ${report.blocks.toLocaleString()}, schools: ${report.schools.toLocaleString()}`,
   );
@@ -799,8 +832,14 @@ export async function runPass1(
   deps: Pick<SeedDeps, 'log' | 'openRows'>,
   manifest: Manifest,
   statusMap: Record<string, GeoEntityStatus>,
+  stateCodes: ReadonlySet<string> = UDISE_STATE_CODES,
 ): Promise<{ accumulator: Pass1Accumulator; report: Pass1Report }> {
-  const accumulator = new Pass1Accumulator(manifest, statusMap, deps.log);
+  const accumulator = new Pass1Accumulator(
+    manifest,
+    statusMap,
+    deps.log,
+    stateCodes,
+  );
   for await (const row of streamCsvRows(deps.openRows(), () =>
     accumulator.recordParseSkip(),
   )) {
@@ -816,10 +855,12 @@ export async function runSeed(deps: SeedDeps, args: SeedArgs): Promise<void> {
     `manifest: ${manifest.states.size} states, ${manifest.districts.size} districts`,
   );
 
+  const stateCodes = args.stateCodes ?? UDISE_STATE_CODES;
   const { accumulator, report } = await runPass1(
     deps,
     manifest,
     args.statusMap,
+    stateCodes,
   );
   deps.log(formatReport(report));
   if (report.errors.length > 0) {
@@ -907,7 +948,7 @@ export async function runSeed(deps: SeedDeps, args: SeedArgs): Promise<void> {
       seen += 1;
       if (seen % 100_000 === 0)
         deps.log(`pass 2: ${seen.toLocaleString()} rows`);
-      if (checkRowFormat(row) || !manifest.states.has(row.state_code)) {
+      if (checkRowFormat(row) || !stateCodes.has(row.state_code)) {
         counts.skipped += 1;
         continue;
       }

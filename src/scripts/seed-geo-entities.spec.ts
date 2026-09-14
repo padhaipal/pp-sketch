@@ -4,6 +4,7 @@ import {
   DEFAULT_SCHOOLS_URL,
   Pass1Accumulator,
   SCHOOL_ATTRIBUTE_KEYS,
+  UDISE_STATE_CODES,
   SCHOOL_STATUS_MAP,
   SUSPECT_GROUP_SIZE,
   UnmappedStatusError,
@@ -253,6 +254,10 @@ const MANIFEST_CSV = [
   'district,0102,Baramulla,boundaries/district/0102.geojson,1,1',
   // 0201 deliberately absent → has_boundary false.
 ].join('\n');
+
+// The fixture register's real states. Tests that validate a clean run pass
+// this; the production default (UDISE_STATE_CODES) expects all 36.
+const FIXTURE_STATES: ReadonlySet<string> = new Set(['01', '02']);
 
 function toCsv(rows: SourceRow[]): string {
   const esc = (v: string) =>
@@ -591,10 +596,15 @@ describe('Pass1Accumulator over the 60-row fixture', () => {
   });
 
   it('passes once the status map covers every label, and resolves names by majority', () => {
-    const acc = new Pass1Accumulator(parseManifest(MANIFEST_CSV), {
-      ...STATUS_MAP,
-      'Sanctioned But Not Operational': 'sanctioned_not_operational',
-    });
+    const acc = new Pass1Accumulator(
+      parseManifest(MANIFEST_CSV),
+      {
+        ...STATUS_MAP,
+        'Sanctioned But Not Operational': 'sanctioned_not_operational',
+      },
+      undefined,
+      FIXTURE_STATES,
+    );
     for (const r of fixture()) acc.add(r);
     const report = acc.finish();
     expect(report.errors).toEqual([]);
@@ -834,6 +844,7 @@ describe('runSeed', () => {
       statusMap: FULL_STATUS_MAP,
       pulledAt: PULLED_AT,
       dryRun: true,
+      stateCodes: FIXTURE_STATES,
     });
     expect(upserts).toEqual([]);
     expect(log.join('\n')).toMatch(/validation passed/);
@@ -862,6 +873,7 @@ describe('runSeed', () => {
       statusMap: FULL_STATUS_MAP,
       pulledAt: PULLED_AT,
       dryRun: false,
+      stateCodes: FIXTURE_STATES,
     });
 
     expect(upserts.map((b) => b[0].type)).toEqual([
@@ -941,6 +953,7 @@ describe('runSeed', () => {
       statusMap: STATUS_MAP,
       pulledAt: PULLED_AT,
       dryRun: false,
+      stateCodes: FIXTURE_STATES,
     });
     const schoolBatches = upserts.filter((b) => b[0].type === 'school');
     expect(schoolBatches.map((b) => b.length)).toEqual([BATCH_SIZE, 1]);
@@ -963,7 +976,109 @@ describe('runSeed', () => {
         statusMap: FULL_STATUS_MAP,
         pulledAt: PULLED_AT,
         dryRun: false,
+        stateCodes: FIXTURE_STATES,
       }),
     ).rejects.toThrow(/3 chains do not reach IN/);
+  });
+});
+
+// ─── Real states vs boundary polygons (Andhra Pradesh regression) ────────────
+
+describe('real states are the UDISE state codes, not the boundary manifest', () => {
+  // Mirrors production: a real state (28, AP) with NO state polygon, and a
+  // stray manifest state (39) that is not in the register.
+  const AP_MANIFEST_CSV = [
+    'type,code,name,file,bytes,vertices',
+    'country,IN,India,boundaries/country/IN.geojson,1,1',
+    'state,01,Jammu & Kashmir,boundaries/state/01.geojson,1,1',
+    'state,39,"Dadra,Nagar Haveli,Daman & Diu",boundaries/state/39.geojson,1,1',
+    'district,0101,Kupwara,boundaries/district/0101.geojson,1,1',
+  ].join('\n');
+  const STATES: ReadonlySet<string> = new Set(['01', '28']);
+  const rows = [
+    row({ udise: '01010100101' }),
+    row({ udise: '28010100101' }),
+    row({ udise: '28010100102' }),
+    row({ udise: '90010100001' }), // central-body pseudo-state
+  ];
+
+  it('the production state set is the 36 UDISE codes: 28 in, retired 25/26 and the stray manifest 39 out', () => {
+    expect(UDISE_STATE_CODES.size).toBe(36);
+    expect(UDISE_STATE_CODES.has('28')).toBe(true);
+    for (const code of ['25', '26', '39', '90']) {
+      expect(UDISE_STATE_CODES.has(code)).toBe(false);
+    }
+  });
+
+  it('pass 1 keeps a real state that has no state polygon and still skips the pseudo-state', () => {
+    const acc = new Pass1Accumulator(
+      parseManifest(AP_MANIFEST_CSV),
+      STATUS_MAP,
+      undefined,
+      STATES,
+    );
+    for (const r of rows) acc.add(r);
+    const report = acc.finish();
+
+    expect(report.errors).toEqual([]);
+    expect(report.skippedPseudoState).toBe(1);
+    expect([...report.pseudoStateCodes]).toEqual([['90', 1]]);
+    expect(formatReport(report)).toMatch(/pseudo-state codes skipped: 90 ×1/);
+    expect(report.states).toBe(2);
+    expect(report.schools).toBe(3);
+
+    // Present, but without a boundary: has_boundary still comes from the
+    // manifest.
+    const { rows: stateRows } = buildLevelRows(
+      'state',
+      acc.resolved(acc.states),
+      null,
+      parseManifest(AP_MANIFEST_CSV),
+      PULLED_AT,
+    );
+    const byCode = new Map(stateRows.map((r) => [r.code, r]));
+    expect(byCode.get('28')?.has_boundary).toBe(false);
+    expect(byCode.get('01')?.has_boundary).toBe(true);
+    expect(byCode.has('39')).toBe(false);
+  });
+
+  it('validation names a real state missing from the register', () => {
+    const acc = new Pass1Accumulator(
+      parseManifest(AP_MANIFEST_CSV),
+      STATUS_MAP,
+      undefined,
+      new Set(['01', '28', '29']),
+    );
+    for (const r of rows) acc.add(r);
+    expect(acc.finish().errors).toEqual([
+      'register is missing state codes: 29',
+    ]);
+  });
+
+  it('pass 2 inserts the state and the schools of a real state with no polygon', async () => {
+    const { deps, upserts } = makeDeps(toCsv(rows), {
+      readManifest: async () => AP_MANIFEST_CSV,
+    });
+    await runSeed(deps, {
+      schoolsUrl: 'x',
+      manifest: 'm',
+      statusMap: STATUS_MAP,
+      pulledAt: PULLED_AT,
+      dryRun: false,
+      stateCodes: STATES,
+    });
+    const ofType = (type: string) =>
+      upserts.flat().filter((r) => r.type === type);
+    expect(ofType('state').map((r) => [r.code, r.has_boundary])).toEqual(
+      expect.arrayContaining([
+        ['01', true],
+        ['28', false],
+      ]),
+    );
+    expect(
+      ofType('school')
+        .map((r) => r.code)
+        .sort(),
+    ).toEqual(['01010100101', '28010100101', '28010100102']);
   });
 });
