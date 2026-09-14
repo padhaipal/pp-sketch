@@ -54,8 +54,8 @@ block, the mean serialised `attributes` size.
 Validation errors (exit 1): a district/block under two parents, a parent
 code missing one level up, an unmapped status, a `UDISE_STATE_CODES` state
 absent from the register, no valid schools. The real-state set is not the
-manifest's state list: the manifest has no polygon for Andhra Pradesh (28)
-and a stray `39`; AP seeds with `has_boundary = false`. `--dry-run` stops after the report.
+manifest's state list: a polygon missing or mislabelled in the manifest only
+sets that state's `has_boundary = false`, never drops its schools. `--dry-run` stops after the report.
 
 ## Pass 2 — insert
 

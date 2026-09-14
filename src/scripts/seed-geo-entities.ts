@@ -34,9 +34,9 @@ export interface SeedArgs {
 
 // The state/UT codes the UDISE register uses — the seed's definition of a
 // real state. Deliberately NOT the boundary manifest's state rows: those say
-// which state polygons exist, a different set (no polygon was built for
-// Andhra Pradesh, 28, and the manifest carries a stray 39). Using them
-// silently dropped all of AP. A row outside this set belongs to a central
+// which state polygons exist. A build that mislabelled AP's polygon (shipped
+// as 37, no 28, a stray 39) silently dropped all of AP's schools while the
+// state count still read 36. A row outside this set belongs to a central
 // body's pseudo-state (KVS/NVS/Navy/IAF) and is skipped. 25 and 26 are unused
 // since Daman & Diu and Dadra & Nagar Haveli merged into 38 in 2020.
 export const UDISE_STATE_CODES: ReadonlySet<string> = new Set(
