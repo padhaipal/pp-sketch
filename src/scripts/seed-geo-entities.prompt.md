@@ -40,8 +40,9 @@ name) — failures are skipped and counted separately.
 
 ## Pass 1 — validate and report (`Pass1Accumulator`)
 
-Per row: format check → pseudo-state check (`state_code` not in the
-manifest's 36 states — KVS/NVS/Navy/IAF central bodies — skipped) → status
+Per row: format check → pseudo-state check (`state_code` not in
+`UDISE_STATE_CODES` — 01–38 minus retired 25/26 — skipped and counted per
+code; KVS/NVS/Navy/IAF central bodies) → status
 mapping (`schoolStatusName` through `SCHOOL_STATUS_MAP`; unmapped values are
 collected and fail validation) → accumulate: hierarchy nodes with majority
 names / parents / lgd ids, the school-code set (duplicates skipped),
@@ -51,8 +52,10 @@ pairs, the `clusterCd` length distribution, clusters spanning more than one
 block, the mean serialised `attributes` size.
 
 Validation errors (exit 1): a district/block under two parents, a parent
-code missing one level up, an unmapped status, a state count that differs
-from the manifest, no valid schools. `--dry-run` stops after the report.
+code missing one level up, an unmapped status, a `UDISE_STATE_CODES` state
+absent from the register, no valid schools. The real-state set is not the
+manifest's state list: a polygon missing or mislabelled in the manifest only
+sets that state's `has_boundary = false`, never drops its schools. `--dry-run` stops after the report.
 
 ## Pass 2 — insert
 
