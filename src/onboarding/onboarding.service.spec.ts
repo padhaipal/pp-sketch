@@ -17,11 +17,14 @@ import {
   OnboardingService,
   istYear,
   normalizeClassification,
+  matchTranscripts,
   referralText,
-  systemPrompt,
+  transcriptsMessage,
 } from './onboarding.service';
 import {
   machine,
+  MAX_AGE,
+  MIN_AGE,
   ONBOARDING_STIDS,
   UNINTELLIGIBLE,
   NONE,
@@ -208,10 +211,10 @@ describe('OnboardingService.handleTurn — classifying turns', () => {
     });
     const request = m.complete.mock.calls[0][0];
     expect(request.messages[0].content).toMatch(
-      /^Reply with exactly one of: yes, no\./,
+      /^A parent on WhatsApp was asked whether they are this child's parent or guardian\./,
     );
     expect(request.messages[1].content).toBe(
-      'Transcript 1: हाँ जी\nTranscript 2: haan ji',
+      transcriptsMessage(['हाँ जी', 'haan ji']),
     );
     expect(insertedSnapshot(m.managerQuery).value).toBe('askConsent');
     expect(m.userService.update).not.toHaveBeenCalled();
@@ -229,6 +232,23 @@ describe('OnboardingService.handleTurn — classifying turns', () => {
     expect(m.complete).not.toHaveBeenCalled();
     expect(out.stateTransitionIds).toEqual([ONBOARDING_STIDS.askConsent]);
     expect(insertedSnapshot(m.managerQuery).value).toBe('askConsent');
+  });
+
+  it('a clear spoken age skips the LLM and advances', async () => {
+    const m = makeMocks({ row: snapshotAt('askAge') });
+    const out = await m.svc.handleTurn({
+      user,
+      transcripts: [
+        { id: 't1', text: 'आठ साल' },
+        { id: 't2', text: '8 साल' },
+      ] as any[],
+      user_message_id: 'msg-5a',
+    });
+    expect(m.complete).not.toHaveBeenCalled();
+    expect(out.stateTransitionIds).toEqual([ONBOARDING_STIDS.askMonth]);
+    expect(insertedSnapshot(m.managerQuery).context.birthYear).toBe(
+      istYear() - 8,
+    );
   });
 
   it('an unintelligible reply re-asks without advancing', async () => {
@@ -396,44 +416,73 @@ describe('OnboardingService.rollback', () => {
 });
 
 describe('OnboardingService.classify', () => {
-  it('makes one bounded, temperature-0 call with every transcript', async () => {
+  const age = { kind: 'integer', min: MIN_AGE, max: MAX_AGE } as const;
+
+  it('makes one bounded, temperature-0 call with the state prompt and every transcript', async () => {
     const m = makeMocks();
     m.complete.mockResolvedValue({ text: ' 7 ', duration_ms: 5 });
-    const value = await m.svc.classify(
-      transcripts,
-      { kind: 'integer', min: 3, max: 18 },
-      'askAge',
-    );
+    const value = await m.svc.classify(transcripts, age, 'askAge', 'PROMPT');
     expect(value).toBe('7');
     expect(m.complete).toHaveBeenCalledTimes(1);
     const [request, options] = m.complete.mock.calls[0];
     expect(request).toEqual({
       model: 'test-classifier',
       messages: [
-        {
-          role: 'system',
-          content: 'Reply with the integer only, or UNINTELLIGIBLE.',
-        },
-        {
-          role: 'user',
-          content: 'Transcript 1: हाँ जी\nTranscript 2: haan ji',
-        },
+        { role: 'system', content: 'PROMPT' },
+        { role: 'user', content: transcriptsMessage(['हाँ जी', 'haan ji']) },
       ],
       temperatureRatio: 0,
       max_tokens: 200,
     });
     expect(options).toEqual({ timeoutMs: 5000, maxAttempts: 1 });
     expect(logSpy.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
-      /onboarding\.classify\.result state=askAge kind=integer outcome=7 provider=openai/,
+      /onboarding\.classify\.result state=askAge kind=integer method=llm outcome=7 provider=openai/,
     );
+  });
+
+  it.each([
+    [age, ['आठ', 'aath'], '8'],
+    [{ kind: 'month' } as const, ['मार्च में', 'March'], '3'],
+  ])(
+    '%j: a clear match in %j returns %s without calling the LLM',
+    async (interpret, texts, expected) => {
+      const m = makeMocks();
+      const value = await m.svc.classify(
+        texts.map((text, i) => ({ id: `t${i}`, text })) as any[],
+        interpret,
+        'state',
+        'PROMPT',
+      );
+      expect(value).toBe(expected);
+      expect(m.complete).not.toHaveBeenCalled();
+      expect(logSpy.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
+        new RegExp(`method=match outcome=${expected}`),
+      );
+    },
+  );
+
+  it('falls back to the LLM when the transcripts disagree', async () => {
+    const m = makeMocks();
+    m.complete.mockResolvedValue({ text: 'eight', duration_ms: 5 });
+    const value = await m.svc.classify(
+      [
+        { id: 't1', text: 'आठ' },
+        { id: 't2', text: 'नौ' },
+      ] as any[],
+      age,
+      'askAge',
+      'PROMPT',
+    );
+    expect(m.complete).toHaveBeenCalledTimes(1);
+    expect(value).toBe('8');
   });
 
   it('logs only whether a name was found, never the name', async () => {
     const m = makeMocks();
     m.complete.mockResolvedValue({ text: 'सीता', duration_ms: 5 });
-    await m.svc.classify(transcripts, { kind: 'name' }, 'askName');
+    await m.svc.classify(transcripts, { kind: 'name' }, 'askName', 'PROMPT');
     const logged = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
-    expect(logged).toMatch(/kind=name outcome=name/);
+    expect(logged).toMatch(/kind=name method=llm outcome=name/);
     expect(logged).not.toMatch(/सीता/);
   });
 
@@ -443,7 +492,7 @@ describe('OnboardingService.classify', () => {
     try {
       const m = makeMocks();
       await expect(
-        m.svc.classify(transcripts, { kind: 'month' }),
+        m.svc.classify(transcripts, { kind: 'month' }, 'askMonth', 'PROMPT'),
       ).rejects.toThrow(/sarvam is not supported/);
       expect(m.complete).not.toHaveBeenCalled();
     } finally {
@@ -457,7 +506,7 @@ describe('OnboardingService.classify', () => {
     try {
       const m = makeMocks();
       await expect(
-        m.svc.classify(transcripts, { kind: 'month' }),
+        m.svc.classify(transcripts, { kind: 'month' }, 'askMonth', 'PROMPT'),
       ).rejects.toThrow(/ONBOARDING_LLM_MODEL must be set/);
     } finally {
       process.env.ONBOARDING_LLM_MODEL = prev;
@@ -465,21 +514,25 @@ describe('OnboardingService.classify', () => {
   });
 });
 
-describe('systemPrompt', () => {
-  it('renders the four prompts verbatim', () => {
-    expect(systemPrompt({ kind: 'enum', options: ['yes', 'no'] })).toBe(
-      'Reply with exactly one of: yes, no. Transcripts of one reply from several speech engines follow. If none clearly matches, reply UNINTELLIGIBLE.',
-    );
-    expect(systemPrompt({ kind: 'integer', min: 3, max: 18 })).toBe(
-      'Reply with the integer only, or UNINTELLIGIBLE.',
-    );
-    expect(systemPrompt({ kind: 'month' })).toBe(
-      'Reply with the month number 1–12, or NONE.',
-    );
-    expect(systemPrompt({ kind: 'name' })).toBe(
-      "Extract the person's name from these transcripts, in the script it appears in. Reply with the name only, or NONE.",
-    );
-    expect(() => systemPrompt({ kind: 'none' })).toThrow();
+describe('transcriptsMessage / matchTranscripts', () => {
+  it('lists transcripts without numbered labels', () => {
+    const message = transcriptsMessage(['आठ', 'eight']);
+    expect(message.split('\n').slice(1)).toEqual(['- आठ', '- eight']);
+    expect(message).not.toMatch(/\d/);
+  });
+
+  it('matches only age and month questions', () => {
+    expect(
+      matchTranscripts(['8'], { kind: 'integer', min: 0, max: 1000 }),
+    ).toBe('8');
+    expect(matchTranscripts(['मई'], { kind: 'month' })).toBe('5');
+    expect(
+      matchTranscripts(['yes'], { kind: 'enum', options: ['yes', 'no'] }),
+    ).toBeNull();
+    expect(matchTranscripts(['राम'], { kind: 'name' })).toBeNull();
+    expect(
+      matchTranscripts(['कुछ नहीं'], { kind: 'integer', min: 0, max: 1000 }),
+    ).toBeNull();
   });
 });
 
@@ -517,23 +570,29 @@ describe('normalizeClassification', () => {
     ['08.', '8'],
     [' 12 ', '12'],
     ['150', '150'],
-    // Exactly one number token, wherever it sits; range is the machine's job.
+    ['0', '0'],
+    ['1000', '1000'],
+    // A prefix, suffix or number word is read, never trusted to be digits.
     ['I think 8', '8'],
     ['8 years', '8'],
-    ['1234', '1234'],
-    // Devanagari digits normalized.
+    ['Age: eight', '8'],
+    ['आठ', '8'],
+    ['वह सात साल की है', '7'],
+    ['एक सौ पाँच', '105'],
     ['८', '8'],
-    ['वह ८ साल की है', '8'],
-    // Word numerals are not parsed — the model should emit digits.
-    ['वह सात साल की है', UNINTELLIGIBLE],
-    ['eight', UNINTELLIGIBLE],
-    // Two candidates is a guess.
+    // Out of range or two candidates.
+    ['1001', UNINTELLIGIBLE],
     ['7 or 8', UNINTELLIGIBLE],
+    ['7.5', UNINTELLIGIBLE],
     ['UNINTELLIGIBLE', UNINTELLIGIBLE],
     ['', UNINTELLIGIBLE],
   ])('integer: %j → %s', (text, expected) => {
     expect(
-      normalizeClassification(text, { kind: 'integer', min: 3, max: 18 }),
+      normalizeClassification(text, {
+        kind: 'integer',
+        min: MIN_AGE,
+        max: MAX_AGE,
+      }),
     ).toBe(expected);
   });
 
@@ -542,10 +601,14 @@ describe('normalizeClassification', () => {
     ['12.', '12'],
     ['Month 7', '7'],
     ['८', '8'],
+    ['March', '3'],
+    ['March (3)', '3'],
+    ['मार्च', '3'],
+    ['twelve', '12'],
     ['0', NONE],
     ['13', NONE],
     ['3 or 4', NONE],
-    ['March', NONE],
+    ['April or May', NONE],
     ['NONE', NONE],
   ])('month: %j → %s', (text, expected) => {
     expect(normalizeClassification(text, { kind: 'month' })).toBe(expected);
@@ -554,6 +617,7 @@ describe('normalizeClassification', () => {
   it.each([
     ['सीता', 'सीता'],
     ['"Ram Kumar".', 'Ram Kumar'],
+    ['Name: सीता', 'सीता'],
     ['NONE', NONE],
     ['none', NONE],
     ['UNINTELLIGIBLE', NONE],

@@ -2,6 +2,7 @@ import { createActor, type ActorRefFrom } from 'xstate';
 import {
   machine,
   interpretFor,
+  classifierPromptFor,
   ONBOARDING_STIDS,
   UNINTELLIGIBLE,
   NONE,
@@ -67,6 +68,44 @@ describe('onboarding machine — meta.interpret per state', () => {
     ['done', { kind: 'none' }],
   ])('%s declares %j', (state, interpret) => {
     expect(interpretFor(at(state).getSnapshot())).toEqual(interpret);
+  });
+
+  it.each<OnboardingStateName>([
+    'askGuardian',
+    'askConsent',
+    'consentRefused',
+    'askName',
+    'askAge',
+    'askMonth',
+  ])('%s has its own classifier prompt', (state) => {
+    expect(classifierPromptFor(at(state).getSnapshot())).toMatch(
+      /^A parent on WhatsApp /,
+    );
+  });
+
+  it('prompts differ per question, and the guardian prompt gives no Hindi examples', () => {
+    const states: OnboardingStateName[] = [
+      'askGuardian',
+      'askConsent',
+      'consentRefused',
+      'askName',
+      'askAge',
+      'askMonth',
+    ];
+    const prompts = states.map((state) =>
+      classifierPromptFor(at(state).getSnapshot()),
+    );
+    expect(new Set(prompts).size).toBe(states.length);
+    expect(prompts[0]).not.toMatch(/[\u0900-\u097F]/);
+    expect(classifierPromptFor(at('askMonth').getSnapshot())).toMatch(
+      /Chaitra 4/,
+    );
+  });
+
+  it('non-classifying states have no prompt', () => {
+    expect(() => classifierPromptFor(at('declined').getSnapshot())).toThrow(
+      /declares no meta.prompt/,
+    );
   });
 
   it('throws for a state without meta', () => {
@@ -193,7 +232,7 @@ describe('onboarding machine — askName', () => {
 });
 
 describe('onboarding machine — askAge', () => {
-  it.each([String(MIN_AGE), '8', String(MAX_AGE)])(
+  it.each([String(MIN_AGE), '8', '120', String(MAX_AGE)])(
     'valid age %s → askMonth with birthYear = IST year − age',
     (age) => {
       const snap = reply(at('askAge'), age);
@@ -205,17 +244,25 @@ describe('onboarding machine — askAge', () => {
     },
   );
 
-  it.each([String(MIN_AGE - 1), String(MAX_AGE + 1), '0', '120'])(
-    'out-of-range age %s → stays, emitting the age retry prompt',
+  it.each([String(MAX_AGE + 1), '-1', '12345'])(
+    'an age outside %s is treated as unintelligible (no retry prompt exists)',
     (age) => {
       const snap = reply(at('askAge'), age);
       expect(snap.value).toBe('askAge');
       expect(snap.context.birthYear).toBeNull();
       expect(snap.context.stateTransitionIds).toEqual([
-        ONBOARDING_STIDS.askAgeRetry,
+        ONBOARDING_STIDS.unintelligible,
+        ONBOARDING_STIDS.askAge,
       ]);
     },
   );
+
+  it('ONBOARDING_STIDS no longer carries an age retry prompt', () => {
+    expect(Object.values(ONBOARDING_STIDS)).not.toContain(
+      'onboarding-ask-age-retry',
+    );
+    expect(Object.values(ONBOARDING_STIDS)).toHaveLength(11);
+  });
 
   it('UNINTELLIGIBLE → stays, emitting unintelligible + its own prompt', () => {
     const snap = reply(at('askAge'), UNINTELLIGIBLE);
