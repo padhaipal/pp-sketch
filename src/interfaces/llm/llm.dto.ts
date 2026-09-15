@@ -113,8 +113,13 @@ export interface LlmProviderConfig {
    * is multiplied by this before it goes on the wire.
    */
   temperatureMax: number;
-  /** Extra body fields merged into every request (provider quirks). */
-  extraBody?: Record<string, unknown>;
+  /**
+   * Extra body fields merged into every request (provider quirks). A function
+   * receives the request's model, for quirks that differ by model family.
+   */
+  extraBody?:
+    | Record<string, unknown>
+    | ((model: string) => Record<string, unknown>);
 }
 
 /** One slot of a completeBatch() result, index-aligned with the input. */

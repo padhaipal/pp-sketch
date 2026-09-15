@@ -59,8 +59,9 @@ retryAfterSeconds? }`. The `retriable` flag is surfaced end-to-end so the
 The onboarding classifier (src/onboarding/onboarding.service.ts) is the only
 LLM call a human waits on — 5 s timeout, one attempt, inside the 20 s
 inbound budget. It runs on `ONBOARDING_LLM_PROVIDER=google`,
-`ONBOARDING_LLM_MODEL=gemini-2.5-flash-lite`, with thinking disabled at the
-provider (`GoogleLlmService.config.extraBody = { reasoning_effort: 'none' }`).
+`ONBOARDING_LLM_MODEL=gemini-3.5-flash-lite`, with thinking held at the
+model's floor by the provider (`GoogleLlmService.config.extraBody` →
+`reasoning_effort: 'minimal'` on 3.x, `'none'` on 2.5).
 Batch work (passage generation via `POST /media-meta-data/llm-generate`,
 quality gates) must never use Google: `GENERATION_LLM_PROVIDERS` in
 `media-meta-data/llm-generate.dto.ts` excludes it from request validation,

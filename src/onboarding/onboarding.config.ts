@@ -22,30 +22,24 @@ export function onboardingCutoff(): Date {
 }
 
 // Tripwire for obvious mistakes only — the real guarantee is the provider-level
-// reasoning_effort: 'none' (GoogleLlmService.config.extraBody) plus the staging
-// p95 check. Reasoning models emit hidden tokens before any output; with a 5 s
+// reasoning floor (googleReasoningEffort: 'none' on 2.5, 'minimal' on 3.x)
+// plus the staging p95 check. Reasoning models emit hidden tokens before any output; with a 5 s
 // cap and maxAttempts: 1 that is a guaranteed UNINTELLIGIBLE.
 export const DISALLOWED_MODEL_PATTERNS: readonly RegExp[] = [
   /^o\d/,
   /^gpt-5/,
   /^gemini-.*-pro/,
-  /^gemini-3/,
   /-thinking\b/,
   /-reasoning\b/,
   /-reasoner\b/,
   /^grok-4/,
 ];
 
-// REVIEW: the pinned classifier model is ONBOARDING_LLM_MODEL=gemini-2.5-flash-lite
-// (see .env.example) — 2.5 is three generations behind and will deprecate
-// (no shutdown date announced as of 2026-09). Migrating to gemini-3.5-flash-lite
-// is three coupled edits: the model id, removing /^gemini-3/ from the denylist
-// above, and GoogleLlmService.config.extraBody → reasoning_effort: 'minimal'
-// (3.5 Flash-Lite's floor is minimal, not low, and 'none' is 2.5-only).
-// Without all three the app fails at boot — correct behaviour, but this is
-// the pointer. Choose the successor on measured staging p95
-// (pp.llm.request_duration_ms, provider=google), not on paper. Check
-// https://ai.google.dev/gemini-api/docs/deprecations before merging that.
+// Model: ONBOARDING_LLM_MODEL=gemini-3.5-flash-lite. gemini-2.5-flash-lite
+// returns 404 "no longer available to new users" for Google projects that
+// had not used it (seen on staging 2026-09-15). 3.x cannot turn thinking off;
+// GoogleLlmService sends reasoning_effort 'minimal', so watch
+// onboarding.classify.result duration_ms against the 5 s budget.
 
 // Sarvam is excluded: its 2 s process-wide send pacing (llm-client.ts) is
 // incompatible with a 5 s per-turn classifier budget.

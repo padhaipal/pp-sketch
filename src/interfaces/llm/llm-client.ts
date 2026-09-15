@@ -136,7 +136,9 @@ async function singleCall(
         temperature:
           (request.temperatureRatio ?? DEFAULT_TEMPERATURE_RATIO) *
           config.temperatureMax,
-        ...config.extraBody,
+        ...(typeof config.extraBody === 'function'
+          ? config.extraBody(request.model)
+          : config.extraBody),
       }),
       signal: controller.signal,
     });

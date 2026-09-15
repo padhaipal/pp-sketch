@@ -22,7 +22,7 @@ beforeEach(() => {
   for (const k of ENV) delete process.env[k];
   process.env.ONBOARDING_CUTOFF = '2026-09-15T00:00:00Z';
   process.env.ONBOARDING_LLM_PROVIDER = 'google';
-  process.env.ONBOARDING_LLM_MODEL = 'gemini-2.5-flash-lite';
+  process.env.ONBOARDING_LLM_MODEL = 'gemini-3.5-flash-lite';
   process.env.GEMINI_API_KEY = 'test-key';
 });
 afterEach(() => {
@@ -33,10 +33,10 @@ afterEach(() => {
 });
 
 describe('onboardingLlm — production configuration', () => {
-  it('accepts google + gemini-2.5-flash-lite with GEMINI_API_KEY set', () => {
+  it('accepts google + gemini-3.5-flash-lite with GEMINI_API_KEY set', () => {
     expect(onboardingLlm()).toEqual({
       provider: 'google',
-      model: 'gemini-2.5-flash-lite',
+      model: 'gemini-3.5-flash-lite',
     });
     expect(() => assertOnboardingEnv()).not.toThrow();
   });
@@ -57,8 +57,6 @@ describe('onboardingLlm — reasoning-model tripwire', () => {
     ['gpt-5-mini', /^gpt-5/],
     ['gemini-2.5-pro', /^gemini-.*-pro/],
     ['gemini-3.1-pro-preview', /^gemini-.*-pro/],
-    ['gemini-3-flash-preview', /^gemini-3/],
-    ['gemini-3.5-flash-lite', /^gemini-3/],
     ['claude-x-thinking', /-thinking\b/],
     ['some-reasoning-model', /-reasoning\b/],
     ['deepseek-reasoner', /-reasoner\b/],
@@ -74,6 +72,7 @@ describe('onboardingLlm — reasoning-model tripwire', () => {
   });
 
   it.each([
+    'gemini-3.5-flash-lite',
     'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
     'gpt-4.1-nano',
