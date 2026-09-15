@@ -29,10 +29,15 @@ parent's reply while in that state. Options live ONLY here, never in DB
 rows. `interpretFor(snapshot)` reads it off `snapshot.getMeta()`
 (`${machine.id}.${state}`) and throws for a state without meta.
 
+Every classifying state also declares `meta.prompt` — the LLM system prompt
+for that question (the guardian and hear-more questions are both yes/no but
+are worded differently). `classifierPromptFor(snapshot)` returns it and
+throws for a state without one (declined, done).
+
 | kind      | shape                       | classifier output set          |
 | --------- | --------------------------- | ------------------------------ |
 | `enum`    | `{ options: string[] }`     | one option (upper) or UNINTELLIGIBLE |
-| `integer` | `{ min: 3, max: 18 }`       | digits or UNINTELLIGIBLE       |
+| `integer` | `{ min: 0, max: 1000 }`     | digits or UNINTELLIGIBLE       |
 | `month`   | —                           | `1`–`12` or NONE               |
 | `name`    | —                           | the name or NONE               |
 | `none`    | —                           | not classified (`ANY`)         |
@@ -60,20 +65,21 @@ question is repeated.
 - **askName** (name) — prompt `onboarding-ask-name`. Any reply → askAge,
   `onboarding-ask-age`; studentName = value, or null on NONE. Never
   UNINTELLIGIBLE.
-- **askAge** (integer 3–18) — prompt `onboarding-ask-age`
+- **askAge** (integer 0–1000, `MIN_AGE`/`MAX_AGE`; no plausibility range) —
+  prompt `onboarding-ask-age`
   - valid → askMonth, `onboarding-ask-month`; birthYear = istYear − age
-  - UNINTELLIGIBLE → self, `['onboarding-unintelligible', 'onboarding-ask-age']`
-  - any other integer → self, `onboarding-ask-age-retry`
+  - anything else (UNINTELLIGIBLE) → self,
+    `['onboarding-unintelligible', 'onboarding-ask-age']`
 - **askMonth** (month) — prompt `onboarding-ask-month`. Any reply → done,
   `onboarding-complete`; birthMonth = 1–12, else null.
 - **done** — final (`snapshot.status === 'done'`). The service writes the
   user's columns in the same transaction as this row.
 
-## Full stid list (12)
+## Full stid list (11)
 
 onboarding-ask-guardian, -ask-guardian-retry, -ask-consent, -consent-info,
--consent-refused, -declined, -ask-name, -ask-age, -ask-age-retry,
--ask-month, -complete, -unintelligible — exported as `ONBOARDING_STIDS`.
+-consent-refused, -declined, -ask-name, -ask-age, -ask-month, -complete,
+-unintelligible — exported as `ONBOARDING_STIDS`.
 pp-dashboard hardcodes the same list (src/app/media-metadata/types.ts,
 NON_LESSON_STIDS); keep in sync by hand. Prompt media for each must be
 seeded — an unseeded stid sends nothing (the processor WARNs).

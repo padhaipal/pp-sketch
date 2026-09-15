@@ -16,11 +16,18 @@ import { referralUrl } from '../interfaces/dashboard/dashboard-url';
 import {
   machine,
   interpretFor,
+  classifierPromptFor,
   Interpret,
   ONBOARDING_STIDS,
   NONE,
   UNINTELLIGIBLE,
 } from './onboarding.machine';
+import {
+  matchAge,
+  matchMonth,
+  readAge,
+  readMonth,
+} from './onboarding-answer-match';
 
 export interface HandleTurnOptions {
   user: User;
@@ -42,26 +49,12 @@ export interface HandleTurnResult {
 // re-runs the whole turn (rollback + handleTurn).
 const CLASSIFY_TIMEOUT_MS = 5000;
 // Headroom for a chatty prefix ("The answer is: yes") — normalization below
-// finds the answer inside it; at temperature 0 with a one-token target the
-// extra budget is never spent.
+// finds the answer inside it.
 const CLASSIFY_MAX_TOKENS = 200;
 const NAME_MAX_LENGTH = 60;
 
-const DEVANAGARI_DIGITS = '०१२३४५६७८९';
-
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-// The one number in the text (Devanagari digits normalized — a Hindi
-// transcript makes "८" a plausible reply); null when there are zero or
-// several number tokens.
-function singleNumberToken(text: string): number | null {
-  const ascii = text.replace(/[०-९]/g, (d) =>
-    String(DEVANAGARI_DIGITS.indexOf(d)),
-  );
-  const tokens = ascii.match(/\d+/g) ?? [];
-  return tokens.length === 1 ? parseInt(tokens[0], 10) : null;
 }
 
 // Same URL the morning-update notifier uses (dashboard-url.ts).
@@ -80,26 +73,36 @@ export function istYear(now: Date = new Date()): number {
   );
 }
 
-export function systemPrompt(interpret: Interpret): string {
-  switch (interpret.kind) {
-    case 'enum':
-      return `Reply with exactly one of: ${interpret.options.join(', ')}. Transcripts of one reply from several speech engines follow. If none clearly matches, reply UNINTELLIGIBLE.`;
-    case 'integer':
-      return 'Reply with the integer only, or UNINTELLIGIBLE.';
-    case 'month':
-      return 'Reply with the month number 1–12, or NONE.';
-    case 'name':
-      return "Extract the person's name from these transcripts, in the script it appears in. Reply with the name only, or NONE.";
-    case 'none':
-      throw new Error('no classification for interpret kind none');
-  }
+// The parent's transcripts as the LLM's user message: an unnumbered list, so
+// no label digit ("Transcript 1") can be read as an age or month.
+export function transcriptsMessage(texts: string[]): string {
+  return [
+    'Speech-to-text readings of one voice reply. Several engines transcribed the same audio, so the readings may differ. The reply may be in Hindi, English or a mix, and English words are often written in Devanagari.',
+    ...texts.map((text) => `- ${text}`),
+  ].join('\n');
+}
+
+// The deterministic pass before the LLM: an age or birth month every
+// transcript agrees on (onboarding-answer-match.ts). null → ask the LLM.
+export function matchTranscripts(
+  texts: string[],
+  interpret: Interpret,
+): string | null {
+  const value =
+    interpret.kind === 'integer'
+      ? matchAge(texts)
+      : interpret.kind === 'month'
+        ? matchMonth(texts)
+        : null;
+  return value === null ? null : String(value);
 }
 
 // Collapses the model's free text onto the allowed set for the Interpret.
 // Anything outside it is UNINTELLIGIBLE (month / name: NONE) — the machine
-// never sees raw model output. Tolerant of a prefix or suffix ("The answer
-// is yes", "I think 8") — an unnecessary UNINTELLIGIBLE costs a parent a
-// whole retry turn — but never guesses between two candidates.
+// never sees raw model output. Tolerant of a prefix, suffix or number word
+// ("The answer is yes", "eight years", "March") — an unnecessary
+// UNINTELLIGIBLE costs a parent a whole retry turn — but never guesses
+// between two candidates.
 export function normalizeClassification(
   text: string,
   interpret: Interpret,
@@ -118,16 +121,18 @@ export function normalizeClassification(
       return matched.size === 1 ? [...matched][0] : UNINTELLIGIBLE;
     }
     case 'integer': {
-      const n = singleNumberToken(trimmed);
-      // Range is the machine's job (askAge retry), not the parser's.
-      return n === null ? UNINTELLIGIBLE : String(n);
+      const n = readAge(trimmed);
+      return n !== null && n >= interpret.min && n <= interpret.max
+        ? String(n)
+        : UNINTELLIGIBLE;
     }
     case 'month': {
-      const month = singleNumberToken(trimmed);
-      return month !== null && month >= 1 && month <= 12 ? String(month) : NONE;
+      const month = readMonth(trimmed);
+      return month === null ? NONE : String(month);
     }
     case 'name': {
       const name = trimmed
+        .replace(/^(child'?s\s+)?name\s*(is|:|-)\s*/i, '')
         .replace(/^["'“”‘’]+/, '')
         .replace(/["'“”‘’.]+$/, '')
         .trim();
@@ -213,7 +218,12 @@ export class OnboardingService {
     const value =
       interpret.kind === 'none'
         ? 'ANY'
-        : await this.classify(transcripts ?? [], interpret, state);
+        : await this.classify(
+            transcripts ?? [],
+            interpret,
+            state,
+            classifierPromptFor(current),
+          );
 
     actor.send({ type: 'REPLY', value, istYear: istYear() });
     const next = actor.getSnapshot();
@@ -290,24 +300,33 @@ export class OnboardingService {
     );
   }
 
-  // Single completion, provider/model from env, temperature 0, all
-  // transcripts in one message. Output is normalized onto the Interpret's
+  // A clear age or birth month in the transcripts is used as-is (no LLM
+  // call). Otherwise a single completion, provider/model from env,
+  // temperature 0, the state's prompt as system message and every transcript
+  // in one user message; the output is normalized onto the Interpret's
   // allowed set before it reaches the machine.
   async classify(
     transcripts: MediaMetaData[],
     interpret: Interpret,
-    state = 'unknown',
+    state: string,
+    prompt: string,
   ): Promise<string> {
+    const texts = transcripts.map((t) => (t.text ?? '').trim());
+    const matched = matchTranscripts(texts, interpret);
+    if (matched !== null) {
+      this.logger.log(
+        `onboarding.classify.result state=${state} kind=${interpret.kind} method=match outcome=${matched}`,
+      );
+      return matched;
+    }
+
     const { provider, model } = onboardingLlm();
-    const body = transcripts
-      .map((t, i) => `Transcript ${i + 1}: ${(t.text ?? '').trim()}`)
-      .join('\n');
     const result = await this.llmServiceFor(provider).complete(
       {
         model,
         messages: [
-          { role: 'system', content: systemPrompt(interpret) },
-          { role: 'user', content: body },
+          { role: 'system', content: prompt },
+          { role: 'user', content: transcriptsMessage(texts) },
         ],
         temperatureRatio: 0,
         max_tokens: CLASSIFY_MAX_TOKENS,
@@ -319,7 +338,7 @@ export class OnboardingService {
     const outcome =
       interpret.kind === 'name' ? (value === NONE ? NONE : 'name') : value;
     this.logger.log(
-      `onboarding.classify.result state=${state} kind=${interpret.kind} outcome=${outcome} provider=${provider} duration_ms=${result.duration_ms}`,
+      `onboarding.classify.result state=${state} kind=${interpret.kind} method=llm outcome=${outcome} provider=${provider} duration_ms=${result.duration_ms}`,
     );
     return value;
   }
