@@ -102,6 +102,19 @@ describe('callChatCompletions', () => {
     expect(body.reasoning_effort).toBeNull();
   });
 
+  it('resolves a function extraBody against the request model', async () => {
+    const fetchMock = jest.fn().mockResolvedValue(okResponse());
+    global.fetch = fetchMock;
+    await callChatCompletions(
+      { ...config, extraBody: (model) => ({ seen_model: model }) },
+      request,
+      fast,
+    );
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.seen_model).toBe(request.model);
+  });
+
   it('paces consecutive sarvam sends by SARVAM_LLM_MIN_SEND_INTERVAL_MS', async () => {
     process.env.SARVAM_LLM_MIN_SEND_INTERVAL_MS = '60';
     try {

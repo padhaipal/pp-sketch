@@ -1,7 +1,10 @@
 import { PROVIDER_ENV_KEYS, VALID_LLM_PROVIDERS } from './llm.dto';
 import { OpenaiLlmService } from './openai/openai-llm.service';
 import { AnthropicLlmService } from './anthropic/anthropic-llm.service';
-import { GoogleLlmService } from './google/google-llm.service';
+import {
+  GoogleLlmService,
+  googleReasoningEffort,
+} from './google/google-llm.service';
 import { MistralLlmService } from './mistral/mistral-llm.service';
 import { SarvamLlmService } from './sarvam/sarvam-llm.service';
 
@@ -33,9 +36,19 @@ describe('PROVIDER_ENV_KEYS', () => {
 });
 
 describe('GoogleLlmService — reserved for the onboarding classifier', () => {
-  it('disables thinking at the provider (2.5-only reasoning_effort: none)', () => {
-    expect(new GoogleLlmService().config.extraBody).toEqual({
-      reasoning_effort: 'none',
-    });
-  });
+  it.each([
+    ['gemini-3.5-flash-lite', 'minimal'],
+    ['gemini-3-flash-preview', 'minimal'],
+    ['gemini-2.5-flash-lite', 'none'],
+    ['gemini-2.5-flash', 'none'],
+  ])(
+    'holds thinking at the floor for %s (reasoning_effort: %s)',
+    (model, effort) => {
+      expect(googleReasoningEffort(model)).toBe(effort);
+      const { extraBody } = new GoogleLlmService().config;
+      expect(typeof extraBody === 'function' && extraBody(model)).toEqual({
+        reasoning_effort: effort,
+      });
+    },
+  );
 });

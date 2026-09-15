@@ -21,9 +21,9 @@ step 4a).
   this classifier (llm-generate rejects it, see
   src/interfaces/llm/llm.prompt.md). Sarvam is refused (its 2 s process-wide
   send pacing breaks the 5 s budget).
-- `ONBOARDING_LLM_MODEL` — production `gemini-2.5-flash-lite`, pinned;
-  reasoning models are refused at boot. Details, the API-key boot check and
-  the migration notes: onboarding.config.prompt.md.
+- `ONBOARDING_LLM_MODEL` — production `gemini-3.5-flash-lite`, pinned;
+  reasoning models are refused at boot. Details and the API-key boot check:
+  onboarding.config.prompt.md.
 
 ## handleTurn({ user, transcripts?, user_message_id }) → { stateTransitionIds, texts }
 
