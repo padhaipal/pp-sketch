@@ -3,10 +3,16 @@ import { UserEntity } from './users/user.entity';
 import { validateCreateUserOptions } from './users/user.dto';
 import * as bcrypt from 'bcrypt';
 
-const SEED_PHONE = '919000000000';
-const SEED_PASSWORD = 'admin123';
+// Bootstrap dev login, from env only — never a default in the repo.
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} must be set`);
+  return value;
+}
 
 async function seed() {
+  const SEED_PHONE = required('SEED_PHONE');
+  const SEED_PASSWORD = required('SEED_PASSWORD');
   const validated = validateCreateUserOptions({ external_id: SEED_PHONE });
 
   await AppDataSource.initialize();
