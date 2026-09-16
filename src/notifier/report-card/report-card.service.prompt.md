@@ -42,7 +42,7 @@ The 7 IST days are oldest-first (so the rightmost bar is yesterday).
   weekday labels under each bar (`HINDI_WEEKDAY_SHORT`). Zero-activity bars
   render a thin grey baseline tick so the day still reads as "present".
 * QR + CTA: brand-blue Hindi text `पढ़ाईपाल अभी आज़माएं!` next to a QR code
-  encoding `https://wa.me/918528097842?text=…<phonenumber>…` per the spec.
+  encoding the referral URL (pp-dashboard `/r/<phone>`) per the spec.
   Generated each call (not cached) via the `qrcode` lib.
 
 `generatePng()` runs `sharp(Buffer.from(svg)).png().toBuffer()`. Hindi
