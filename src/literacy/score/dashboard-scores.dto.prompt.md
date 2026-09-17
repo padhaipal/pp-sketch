@@ -29,6 +29,8 @@ RootStats, series: SeriesPoint[], child_type, children: ChildRow[] |
 StudentRow[], most_improved: ChildRow[] }`; `ChildRow = GeoRef +
 {pass_rate, n, students_active, using_lifteracy, delta, bin, official,
 students? (teacher rows: referred count)}`;
-`StudentRow {student_id, label, score, passed, attempts, in_band, active,
-last_active_at, delta (points vs the row ≤ as_of − range, else null)}`; `SpotlightResponse {top, most_improved}` of `{child,
+`StudentRow {student_id, label, name (full name as stored, null until set;
+the class view edits it via PATCH /users/:id/profile), score, passed,
+attempts, in_band, active, last_active_at, delta (points vs the row ≤ as_of −
+range, else null)}`; `SpotlightResponse {top, most_improved}` of `{child,
 official}`; `Official {name, role_title, avatar_seed, spotlight_message}`.

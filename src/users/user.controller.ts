@@ -28,6 +28,9 @@ import { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
 import { ScoreEntity } from '../literacy/score/score.entity';
 import { LiteracyLessonStateEntity } from '../literacy/literacy-lesson/literacy-lesson-state.entity';
 import { toLogId } from '../otel/pii';
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import {
   LoginDto,
   PatchUserDto,
@@ -625,9 +628,31 @@ export class UserController {
   async patchProfile(
     @Param('id') id: string,
     @Body() body: ProfilePatchDto,
-  ): Promise<PublicProfile> {
-    // 404 first: the write must never touch a non-staff or deleted account.
-    await this.loadPublicProfile(id);
+  ): Promise<PublicProfile | { id: string; name: string }> {
+    const staff = await this.userService.getPublicProfileRow(id);
+    if (!staff) {
+      // Not staff → a STUDENT renamed from the class view (/d, the teacher's
+      // link is the credential): `name` only, never spotlight/avatar. 404
+      // for anything else, so the write never touches a deleted or unknown
+      // account; the id must be a uuid (no phone-number lookups here).
+      const student = UUID_RE.test(id)
+        ? await this.userService.findByIdOrExternalId(id)
+        : null;
+      if (!student || student.role !== 'student' || student.deleted_at) {
+        throw new NotFoundException('This link is not active');
+      }
+      const fields = validateProfilePatch(body);
+      if (
+        fields.new_name === undefined ||
+        fields.new_spotlight_message !== undefined ||
+        fields.new_avatar_seed !== undefined
+      ) {
+        throw new BadRequestException('Only name can be set for a student');
+      }
+      // UserService.update evicts the user cache.
+      await this.userService.update({ id, new_name: fields.new_name });
+      return { id, name: fields.new_name };
+    }
     const fields = validateProfilePatch(body);
     // UserService.update evicts the user cache.
     await this.userService.update({ id, ...fields });
