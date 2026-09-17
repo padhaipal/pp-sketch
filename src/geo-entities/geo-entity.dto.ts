@@ -92,6 +92,9 @@ export interface GeoEntityDescendantRow {
   lat: number | null;
   lng: number | null;
   status: GeoEntityStatus;
+  // Schools: government / government_aided / private / other (UDISE
+  // management); null for the other levels. The dashboard's map uses it.
+  management_group: ManagementGroup | null;
 }
 
 export interface DescendantsPage {

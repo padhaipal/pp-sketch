@@ -47,6 +47,15 @@ export interface GeoRef {
   has_boundary: boolean;
   lat: number | null;
   lng: number | null;
+  // Schools only (UDISE management): government | government_aided |
+  // private | other; absent/null elsewhere. The map draws private schools
+  // with a different marker.
+  management_group?:
+    | 'government'
+    | 'government_aided'
+    | 'private'
+    | 'other'
+    | null;
 }
 
 export interface RootStats {

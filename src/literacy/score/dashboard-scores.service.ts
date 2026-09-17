@@ -411,6 +411,7 @@ export class DashboardScoresService {
           has_boundary: item.has_boundary,
           lat: item.lat === null ? null : Number(item.lat),
           lng: item.lng === null ? null : Number(item.lng),
+          management_group: item.management_group ?? null,
         });
       }
       cursor = page.next_cursor;
