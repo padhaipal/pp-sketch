@@ -560,12 +560,31 @@ interface Span {
   end: number; // exclusive
 }
 
+// A number read out digit by digit, as speech engines often write one:
+// "पाँच शून्य" → 50, "नौ शून्य शून्य" → 900, "one zero" → 10. Two or more
+// consecutive single-digit words (0–9), taken as one number.
+function digitRun(toks: string[], i: number): Span | null {
+  let pos = i;
+  let digits = '';
+  while (pos < toks.length) {
+    const word = NUMBER_WORDS.get(toks[pos]);
+    if (!word || word.tens || word.value > 9) break;
+    digits += String(word.value);
+    pos += 1;
+  }
+  return digits.length >= 2
+    ? { value: parseInt(digits, 10), start: i, end: pos }
+    : null;
+}
+
 function belowHundred(toks: string[], i: number): Span | null {
   const tok = toks[i];
   if (tok === undefined) return null;
   if (/^\d+$/.test(tok)) {
     return { value: parseInt(tok, 10), start: i, end: i + 1 };
   }
+  const run = digitRun(toks, i);
+  if (run) return run;
   const word = NUMBER_WORDS.get(tok);
   if (!word) return null;
   const next = NUMBER_WORDS.get(toks[i + 1] ?? '');

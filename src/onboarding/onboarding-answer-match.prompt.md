@@ -15,6 +15,9 @@ lexicon entry goes through the same function, so variants (फ़रवरी/�
 ## Numbers 0–1000
 - Digit runs (any size; out-of-range values still count, so "2019" blocks
   a match).
+- A run of two or more single-digit words is one number read out digit by
+  digit, as speech engines often write it: "पाँच शून्य" → 50, "नौ शून्य
+  शून्य" → 900, "one zero" → 10 (checked before the tables below).
 - Hindi 0–99 as an explicit table (Devanagari and romanized spellings) —
   irregular, so never composed.
 - English 0–19 + tens (Latin and as hi-IN engines write it: एट, ट्वेंटी);

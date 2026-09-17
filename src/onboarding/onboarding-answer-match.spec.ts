@@ -134,6 +134,12 @@ describe('matchAge — variants and wrappers', () => {
     [['साढ़े सात साल'], 7],
     // Several engines agreeing, in different forms, with an empty reading.
     [['आठ', '8', 'eight', ''], 8],
+    // Read out digit by digit (Azure), beside the number word (Sarvam).
+    [['पचास', 'पाँच शून्य।'], 50],
+    [['नो सो', 'नौ शून्य शून्य।'], 900],
+    [['एक शून्य'], 10],
+    [['one zero'], 10],
+    [['वन जीरो'], 10],
   ])('%j → %i', (texts, expected) => {
     expect(matchAge(texts)).toBe(expected);
   });
@@ -154,6 +160,8 @@ describe('matchAge — variants and wrappers', () => {
     [['1001']],
     [['two thousand']],
     [['2019']],
+    // Digit by digit but over MAX_AGE.
+    [['एक दो शून्य शून्य']],
   ])('%j → null (ask the LLM)', (texts) => {
     expect(matchAge(texts)).toBeNull();
   });
