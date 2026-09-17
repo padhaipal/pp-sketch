@@ -77,9 +77,9 @@ const PROMPTS = {
   askName:
     "A parent on WhatsApp was asked their child's name. Reply with only the child's name, written in the script it appears in. If the reply gives no name, reply NONE.",
   askAge:
-    "A parent on WhatsApp was asked how old their child is. Reply with the child's age in whole years as digits only, for example 8. The age may be spoken as a word in Hindi or English. Round a half year down (साढ़े सात is 7). Convert an age given in months to whole years (18 महीने is 1). If the reply does not state exactly one age, reply UNINTELLIGIBLE.",
+    "A parent on WhatsApp was asked how old their child is. Reply with the child's age in whole years as digits only, for example 8. The age may be spoken as a word in Hindi or English. Round a half year down (साढ़े सात is 7). Convert an age given in months to whole years (18 महीने is 1). The readings are of the same reply, so reconcile them: prefer the age most readings support, and treat digits read out one by one (पाँच शून्य) as one number (50). Reply UNINTELLIGIBLE only if no single age can be inferred.",
   askMonth:
-    'A parent on WhatsApp was asked which month their child was born in. Reply with the month as a number from 1 to 12, where January is 1 and December is 12. The month may be an English or Hindi month name, or a number. A Hindu calendar month becomes the closest month: Chaitra 4, Vaishakh 5, Jyeshtha 6, Ashadh 7, Shravan 8, Bhadrapad 9, Ashwin 10, Kartik 11, Margashirsha 12, Paush 1, Magh 2, Phalgun 3. If the reply gives no month or the parent does not know, reply NONE.',
+    'A parent on WhatsApp was asked which month their child was born in. Reply with the month as a number from 1 to 12, where January is 1 and December is 12. The month may be an English or Hindi month name, or a number. A Hindu calendar month becomes the closest month: Chaitra 4, Vaishakh 5, Jyeshtha 6, Ashadh 7, Shravan 8, Bhadrapad 9, Ashwin 10, Kartik 11, Margashirsha 12, Paush 1, Magh 2, Phalgun 3. The readings are of the same reply, so reconcile them and prefer the month most readings support. If the reply gives no month or the parent does not know, reply NONE.',
 } as const;
 
 const YES_NO: Interpret = { kind: 'enum', options: ['yes', 'no'] };
