@@ -85,6 +85,7 @@ function toStudentRow(m: MemberRow): StudentRow {
   return {
     student_id: m.student_id,
     label: m.label,
+    name: m.name,
     score: m.score,
     passed: m.passed,
     attempts: m.attempts,
@@ -583,6 +584,7 @@ export class DashboardScoresService {
       return {
         student_id: r.student_id,
         label: studentLabel(r.name, ordinal.get(r.student_id) ?? 0),
+        name: r.name,
         score: r.score,
         passed: r.passed,
         attempts: r.attempts,

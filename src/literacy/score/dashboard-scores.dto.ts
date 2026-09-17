@@ -88,7 +88,11 @@ export interface ChildRow extends GeoRef {
 
 export interface StudentRow {
   student_id: string;
+  // Display label: first name, else "Student N" (never phone digits).
   label: string;
+  // The full name as stored (null until a parent/teacher sets one) — the
+  // class view shows and edits this via PATCH /users/:id/profile.
+  name: string | null;
   score: number | null;
   passed: boolean | null;
   attempts: number;
