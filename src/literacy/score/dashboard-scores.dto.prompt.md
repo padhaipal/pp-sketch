@@ -26,7 +26,7 @@ students_unbanded > 0` — NOT students_active: a school whose students went
 
 Shapes: `ScoresResponse { as_of, metric, range, entity: GeoRef, root:
 RootStats, series: SeriesPoint[], child_type, children: ChildRow[] |
-StudentRow[], most_improved: ChildRow[] }`; `ChildRow = GeoRef +
+StudentRow[], most_improved: ChildRow[] }`; `GeoRef` also carries `management_group?` (schools: government | government_aided | private | other) from the descendants row — the map marks private schools. `ChildRow = GeoRef +
 {pass_rate, n, students_active, using_lifteracy, delta, bin, official,
 students? (teacher rows: referred count)}`;
 `StudentRow {student_id, label, name (full name as stored, null until set;

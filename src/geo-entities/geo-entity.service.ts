@@ -111,7 +111,8 @@ export class GeoEntityService {
          JOIN tree t ON g.parent_id = t.id
          WHERE t.type <> $2
        )
-       SELECT g.id, g.code, g.name, g.has_boundary, g.lat, g.lng, g.status
+       SELECT g.id, g.code, g.name, g.has_boundary, g.lat, g.lng, g.status,
+              g.management_group
        FROM tree t
        JOIN geo_entity g ON g.id = t.id
        WHERE g.type = $2

@@ -27,7 +27,7 @@ state → DGSE, country → Minister); the dashboard's /onboarding form prefills
 from the same map.
 
 Response shapes: `GeoEntitySearchRow` (search), `DescendantsPage` /
-`GeoEntityDescendantRow` (descendants, keyset cursor = last id, limit ≤
+`GeoEntityDescendantRow` (descendants — also carries `management_group` for schools, null elsewhere; keyset cursor = last id, limit ≤
 `DESCENDANTS_MAX_LIMIT` = 500, default 100), `GeoEntityUpsertRow` (what the
 seed writes). Validators throw BadRequestException: `validateGeoEntityType`,
 `validateGeoEntityId(value, field)`, `validateDescendantsLimit`.
