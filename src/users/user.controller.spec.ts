@@ -1906,4 +1906,57 @@ describe('UserController public profile + profile PATCH', () => {
       );
     }
   });
+
+  it('PATCH :id/profile on a STUDENT (class-view rename): name only, uuid only, writes new_name, returns {id, name}', async () => {
+    const studentId = '5c2a6f0e-1a2b-4c3d-9e8f-0a1b2c3d4e5f';
+    const student = {
+      id: studentId,
+      role: 'student',
+      deleted_at: null,
+      name: null,
+    };
+    const findByIdOrExternalId = jest.fn().mockResolvedValue(student);
+    const update = jest.fn().mockResolvedValue(student);
+    const ctrl = makeController({
+      userSvc: {
+        getPublicProfileRow: jest.fn().mockResolvedValue(null),
+        findByIdOrExternalId,
+        update,
+      },
+    });
+    await expect(
+      ctrl.patchProfile(studentId, { name: ' <b>Rani</b> Devi ' }),
+    ).resolves.toEqual({ id: studentId, name: 'Rani Devi' });
+    expect(update).toHaveBeenCalledWith({
+      id: studentId,
+      new_name: 'Rani Devi',
+    });
+    // never spotlight / avatar for a student
+    for (const body of [
+      { spotlight_message: 'hi' },
+      { avatar_seed: 'seed-1' },
+      { name: 'Rani', avatar_seed: 'seed-1' },
+    ]) {
+      await expect(ctrl.patchProfile(studentId, body as never)).rejects.toThrow(
+        BadRequestException,
+      );
+    }
+    expect(update).toHaveBeenCalledTimes(1);
+    // a phone-shaped id is never looked up; a non-student / deleted / unknown user is 404
+    await expect(
+      ctrl.patchProfile('919876543210', { name: 'Rani' }),
+    ).rejects.toThrow(NotFoundException);
+    expect(findByIdOrExternalId).not.toHaveBeenCalledWith('919876543210');
+    findByIdOrExternalId.mockResolvedValueOnce({
+      ...student,
+      deleted_at: new Date(),
+    });
+    await expect(
+      ctrl.patchProfile(studentId, { name: 'Rani' }),
+    ).rejects.toThrow(NotFoundException);
+    findByIdOrExternalId.mockResolvedValueOnce(null);
+    await expect(
+      ctrl.patchProfile(studentId, { name: 'Rani' }),
+    ).rejects.toThrow(NotFoundException);
+  });
 });
