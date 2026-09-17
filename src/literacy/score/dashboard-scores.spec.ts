@@ -92,6 +92,7 @@ describe('dashboard-scores arithmetic', () => {
       in_band: true,
       active: false,
       last_active_at: last,
+      delta: null,
     });
     const rows = [
       s('neither', null, null),
@@ -240,7 +241,16 @@ interface StudentFixture {
     attempts: number;
   }>;
   last_active_at: string | null;
-  referrer_geo?: string; // deliberately NOT used by the membership rule
+  referrer_geo?: string; // deliberately NOT used by the school membership rule
+  referrer_user_id?: string; // the student's teacher (class membership)
+}
+
+interface TeacherFixture {
+  id: string;
+  name: string | null;
+  role_title: string | null;
+  avatar_seed: string | null;
+  spotlight_message: string | null;
 }
 
 function makeService(fixture: {
@@ -255,10 +265,44 @@ function makeService(fixture: {
     created_at: string;
   }>;
   students?: StudentFixture[];
+  teachers?: TeacherFixture[];
 }) {
   const byId = new Map(
     fixture.entities.map((e) => [(e as { id: string }).id, e]),
   );
+  const dateMs = (d: string) => new Date(`${d}T00:00:00Z`).getTime();
+  // The students/class SELECT: latest row + the newest row ≤ as_of − range.
+  const memberRows = (
+    list: StudentFixture[],
+    asOf: string,
+    range: string,
+    keep: (latest: StudentFixture['rows'][number]) => boolean,
+  ) => {
+    const cutoff = dateMs(asOf) - Number(range) * 86_400_000;
+    return list
+      .map((s) => {
+        const sorted = [...s.rows].sort((a, b) =>
+          a.created_at < b.created_at ? 1 : -1,
+        );
+        const prior = sorted.find((r) => dateMs(r.created_at) <= cutoff);
+        return { s, latest: sorted[0], prior };
+      })
+      .filter(({ latest }) => latest && keep(latest))
+      .map(({ s, latest, prior }) => ({
+        student_id: s.student_id,
+        name: s.name,
+        created_at: new Date(s.created_at),
+        birth_year: s.birth_year,
+        birth_month: s.birth_month,
+        referrer_user_id: s.referrer_user_id ?? null,
+        score: latest.score,
+        passed: latest.passed,
+        attempts: latest.attempts,
+        last_active_at: s.last_active_at ? new Date(s.last_active_at) : null,
+        prior_score: prior ? prior.score : null,
+        prior_passed: prior ? prior.passed : null,
+      }));
+  };
   const children = (id: string, type: string) =>
     fixture.entities.filter(
       (e) =>
@@ -331,28 +375,63 @@ function makeService(fixture: {
         const school = params[0] as string;
         const metric = /l\.(\w+)_score::float8/.exec(sql)![1];
         expect(metric).toBe('nipun_g2');
-        return (fixture.students ?? [])
-          .filter((s) => s.rows.some((r) => r.geo === school))
-          .map((s) => ({
-            s,
-            latest: [...s.rows].sort((a, b) =>
-              a.created_at < b.created_at ? 1 : -1,
-            )[0],
-          }))
-          .filter(({ latest }) => latest.geo === school)
-          .map(({ s, latest }) => ({
-            student_id: s.student_id,
-            name: s.name,
-            created_at: new Date(s.created_at),
-            birth_year: s.birth_year,
-            birth_month: s.birth_month,
-            score: latest.score,
-            passed: latest.passed,
-            attempts: latest.attempts,
-            last_active_at: s.last_active_at
-              ? new Date(s.last_active_at)
-              : null,
-          }));
+        return memberRows(
+          (fixture.students ?? []).filter((s) =>
+            s.rows.some((r) => r.geo === school),
+          ),
+          params[1] as string,
+          params[2] as string,
+          (latest) => latest.geo === school,
+        );
+      }
+      case 'dashboard-scores:class': {
+        const teacher = params[0] as string;
+        return memberRows(
+          (fixture.students ?? []).filter(
+            (s) => s.referrer_user_id === teacher,
+          ),
+          params[1] as string,
+          params[2] as string,
+          () => true,
+        );
+      }
+      case 'dashboard-scores:teachers': {
+        const ids = params[0] as string[];
+        return (fixture.teachers ?? []).filter((t) => ids.includes(t.id));
+      }
+      case 'dashboard-scores:teacher': {
+        return (fixture.teachers ?? [])
+          .filter((t) => t.id === params[0])
+          .map((t) => ({ id: t.id, name: t.name }));
+      }
+      case 'dashboard-scores:class-as-of': {
+        const dates = (fixture.students ?? [])
+          .filter((s) => s.referrer_user_id === params[0])
+          .flatMap((s) => s.rows.map((r) => r.created_at))
+          .sort();
+        return [
+          { computed_for: dates.length ? dates[dates.length - 1] : null },
+        ];
+      }
+      case 'dashboard-scores:class-series': {
+        const cutoff =
+          dateMs(params[1] as string) - Number(params[2]) * 86_400_000;
+        const byDate = new Map<string, { n: number; pass: number }>();
+        for (const s of (fixture.students ?? []).filter(
+          (x) => x.referrer_user_id === params[0],
+        )) {
+          for (const r of s.rows) {
+            const t = dateMs(r.created_at);
+            if (t <= cutoff || t > dateMs(params[1] as string)) continue;
+            const b = byDate.get(r.created_at) ?? { n: 0, pass: 0 };
+            if (r.score !== null) b.n++;
+            if (r.passed) b.pass++;
+            byDate.set(r.created_at, b);
+          }
+        }
+        return [...byDate]
+          .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+          .map(([computed_for, b]) => ({ computed_for, ...b }));
       }
       default:
         throw new Error(`unexpected SQL ${tag ?? sql.slice(0, 40)}`);
@@ -557,7 +636,7 @@ describe('DashboardScoresService.scores — geo levels', () => {
         delta: null,
       },
       series: [],
-      child_type: 'student',
+      child_type: 'teacher',
       children: [],
       most_improved: [],
     });
@@ -716,28 +795,77 @@ describe('DashboardScoresService.scores — school level (students)', () => {
       referrer_geo: 'S1',
     },
   ];
+  const T1: TeacherFixture = {
+    id: 'T1',
+    name: 'Asha',
+    role_title: 'Teacher',
+    avatar_seed: 'asha',
+    spotlight_message: 'Read daily!',
+  };
   const fixture = () => ({
     entities: ENTITIES,
     geoRows: [geoRow('S1', AS_OF, 2, 1, [1, 0.5])],
-    students,
+    students: students.map((s) => ({ ...s, referrer_user_id: 'T1' })),
+    teachers: [T1],
   });
 
-  it('lists members by compute-time school, ordered scored desc → unscored by last_active_at → neither; labels never contain phone digits', async () => {
+  it('school level: one teacher row per referrer of the compute-time members, aggregated from their students', async () => {
     const { svc } = makeService(fixture());
     const out = await svc.scores('S1', 'nipun_g2', 30);
+    expect(out.child_type).toBe('teacher');
+    const rows = out.children as ChildRow[];
+    expect(rows).toHaveLength(1);
+    // st-moved's latest row is at S2 → not a member here, so 4 students.
+    expect(rows[0]).toEqual(
+      expect.objectContaining({
+        id: 'T1',
+        type: 'teacher',
+        name: 'Asha',
+        pass_rate: 50,
+        n: 2,
+        students: 4,
+        students_active: 2,
+        using_lifteracy: true,
+        delta: null,
+        bin: 'mid',
+        official: expect.objectContaining({
+          name: 'Asha',
+          avatar_seed: 'asha',
+          spotlight_message: 'Read daily!',
+        }),
+      }),
+    );
+    // n < 5 → nobody qualifies for the spotlight yet
+    await expect(svc.spotlight('S1', 'nipun_g2', 30)).resolves.toEqual({
+      top: null,
+      most_improved: null,
+    });
+  });
+
+  it('class level (teacher id): members by referrer wherever their latest row sits, ordered scored desc → unscored by last_active_at → neither; labels never contain phone digits', async () => {
+    const { svc, geo } = makeService(fixture());
+    const out = await svc.scores('T1', 'nipun_g2', 30);
+    expect(geo.getById).toHaveBeenCalledWith('T1');
+    expect(out.entity).toEqual(
+      expect.objectContaining({ id: 'T1', type: 'teacher', name: 'Asha' }),
+    );
     expect(out.child_type).toBe('student');
+    expect(out.as_of).toBe(AS_OF);
     const rows = out.children as StudentRow[];
+    // st-a and st-moved tie on score → input order (st-a first)
     expect(rows.map((r) => r.student_id)).toEqual([
       'st-a',
+      'st-moved',
       'st-b',
       'st-c',
       'st-d',
     ]);
     expect(rows.map((r) => r.label)).toEqual([
       'Student 1',
+      'Gone',
       'Bittu',
-      'Student 3',
       'Student 4',
+      'Student 5',
     ]);
     for (const r of rows) expect(r.label).not.toMatch(/\d{5,}/);
     expect(rows[0]).toEqual(
@@ -747,25 +875,54 @@ describe('DashboardScoresService.scores — school level (students)', () => {
         attempts: 4,
         in_band: true,
         active: false,
+        delta: null,
       }),
     );
-    expect(rows[1].active).toBe(true);
+    // st-moved has a prior row (2026-08-01, score 1) ≤ as_of − 30 → delta 0
+    expect(rows[1].delta).toBe(0);
+    expect(rows[2].active).toBe(true);
     // st-c is 10 on 2026-09-13 → outside nipun_g2 [7, 9).
-    expect(rows[2].in_band).toBe(false);
-    expect(rows[3]).toEqual(
+    expect(rows[3].in_band).toBe(false);
+    expect(rows[4]).toEqual(
       expect.objectContaining({
         in_band: false,
         active: false,
         last_active_at: null,
       }),
     );
-    expect(rows.find((r) => r.student_id === 'st-moved')).toBeUndefined();
+    // root aggregated from the class: 3 scored, 2 passed; prior pass rate 100 (st-moved)
+    expect(out.root).toEqual(
+      expect.objectContaining({
+        pass_rate: 66.7,
+        n: 3,
+        students_active: 3,
+        students_unbanded: 1,
+        delta: -33.3,
+      }),
+    );
+    expect(out.root.mean).toBeCloseTo(2.5 / 3, 6);
+    expect(out.series).toEqual([{ date: AS_OF, pass_rate: 66.7, n: 3 }]);
+    expect(out.most_improved).toEqual([]);
+  });
+
+  it('class level: a teacher with no scored students yet → 200 with nulls', async () => {
+    const { svc } = makeService({
+      entities: ENTITIES,
+      geoRows: [],
+      students: [],
+      teachers: [T1],
+    });
+    const out = await svc.scores('T1', 'nipun_g2', 30);
+    expect(out.as_of).toBeNull();
+    expect(out.root.n).toBeNull();
+    expect(out.child_type).toBe('student');
+    expect(out.children).toEqual([]);
   });
 
   it('labels are stable across two calls', async () => {
     const { svc } = makeService(fixture());
-    const a = (await svc.scores('S1', 'nipun_g2', 30)).children as StudentRow[];
-    const b = (await svc.scores('S1', 'nipun_g2', 30)).children as StudentRow[];
+    const a = (await svc.scores('T1', 'nipun_g2', 30)).children as StudentRow[];
+    const b = (await svc.scores('T1', 'nipun_g2', 30)).children as StudentRow[];
     expect(a.map((r) => [r.student_id, r.label])).toEqual(
       b.map((r) => [r.student_id, r.label]),
     );

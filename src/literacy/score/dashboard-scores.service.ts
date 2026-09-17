@@ -72,6 +72,72 @@ function metricColumns(metric: LiteracyMetric): string {
   return `${metric}_n::int AS n, ${metric}_pass::int AS pass, ${metric}_sum::float8 AS sum, ${metric}_sumsq::float8 AS sumsq, students_active, students_scored, students_unbanded`;
 }
 
+// A student row plus the internals the school/class levels aggregate over
+// (never sent to the client — see toStudentRow).
+interface MemberRow extends StudentRow {
+  referrer_user_id: string | null;
+  prior_score: number | null;
+  prior_passed: boolean | null;
+  unbanded: boolean;
+}
+
+function toStudentRow(m: MemberRow): StudentRow {
+  return {
+    student_id: m.student_id,
+    label: m.label,
+    score: m.score,
+    passed: m.passed,
+    attempts: m.attempts,
+    in_band: m.in_band,
+    active: m.active,
+    last_active_at: m.last_active_at,
+    delta: m.delta,
+  };
+}
+
+// Pass rate of the group's prior rows (≤ as_of − range), for a delta.
+function priorPassRate(members: MemberRow[]): number | null {
+  const prior = members.filter((m) => m.prior_score !== null);
+  return passRate(
+    prior.filter((m) => m.prior_passed === true).length,
+    prior.length,
+  );
+}
+
+function rankImproved(children: ChildRow[]): ChildRow[] {
+  return children
+    .filter((c) => c.n >= MOST_IMPROVED_MIN_N && c.delta !== null)
+    .sort((a, b) => (b.delta ?? 0) - (a.delta ?? 0))
+    .slice(0, MOST_IMPROVED_LIMIT);
+}
+
+function emptyResponse(
+  entity: GeoRef,
+  childType: ScoresResponse['child_type'],
+  metric: LiteracyMetric,
+  range: DashboardRange,
+): ScoresResponse {
+  return {
+    as_of: null,
+    metric,
+    range,
+    entity,
+    root: {
+      pass_rate: null,
+      mean: null,
+      sd: null,
+      n: null,
+      students_active: null,
+      students_unbanded: null,
+      delta: null,
+    },
+    series: [],
+    child_type: childType,
+    children: [],
+    most_improved: [],
+  };
+}
+
 @Injectable()
 export class DashboardScoresService {
   constructor(
@@ -85,7 +151,8 @@ export class DashboardScoresService {
     range: DashboardRange,
   ): Promise<ScoresResponse> {
     const entity = await this.geoEntityService.getById(id);
-    if (!entity) throw new NotFoundException('Geo entity not found');
+    // Not a geo entity → a teacher's user id (the class level under a school).
+    if (!entity) return this.classScores(id, metric, range);
     const childType = CHILD_TYPE_OF[entity.type];
 
     const latest = await this.latestRow(id, metric);
@@ -93,25 +160,7 @@ export class DashboardScoresService {
       // A new school, or any entity before its first nightly run: 200 with
       // nulls — a brand-new teacher's first visit is when the share link
       // matters most.
-      return {
-        as_of: null,
-        metric,
-        range,
-        entity: toRef(entity),
-        root: {
-          pass_rate: null,
-          mean: null,
-          sd: null,
-          n: null,
-          students_active: null,
-          students_unbanded: null,
-          delta: null,
-        },
-        series: [],
-        child_type: childType,
-        children: [],
-        most_improved: [],
-      };
+      return emptyResponse(toRef(entity), childType, metric, range);
     }
     const asOf = isoDate(latest.computed_for);
     const prior = await this.priorRows([id], metric, asOf, range);
@@ -129,14 +178,13 @@ export class DashboardScoresService {
 
     let children: ChildRow[] | StudentRow[];
     let mostImproved: ChildRow[] = [];
-    if (childType === 'student') {
-      children = await this.students(id, metric, asOf);
-    } else if (childType) {
+    if (childType === 'teacher') {
+      const members = await this.students({ school: id }, metric, asOf, range);
+      children = await this.teachers(members);
+      mostImproved = rankImproved(children);
+    } else if (childType && childType !== 'student') {
       children = await this.geoChildren(entity, childType, metric, asOf, range);
-      mostImproved = children
-        .filter((c) => c.n >= MOST_IMPROVED_MIN_N && c.delta !== null)
-        .sort((a, b) => (b.delta ?? 0) - (a.delta ?? 0))
-        .slice(0, MOST_IMPROVED_LIMIT);
+      mostImproved = rankImproved(children);
     } else {
       children = [];
     }
@@ -151,6 +199,107 @@ export class DashboardScoresService {
       child_type: childType,
       children,
       most_improved: mostImproved,
+    };
+  }
+
+  // ─── Class level (`:id` = a teacher's user id) ────────────────────────
+
+  // The teacher's class = the students they referred. Everything is derived
+  // from those students' test_results_student rows: no geo vector exists
+  // for a teacher, so root/series are aggregated here (one small GROUP BY
+  // for the series). 404 when the id is neither a geo entity nor a user.
+  private async classScores(
+    teacherId: string,
+    metric: LiteracyMetric,
+    range: DashboardRange,
+  ): Promise<ScoresResponse> {
+    const teacher: Array<{ id: string; name: string | null }> =
+      await this.dataSource.query(
+        `/* dashboard-scores:teacher */
+         SELECT id, name FROM users WHERE id = $1 AND deleted_at IS NULL`,
+        [teacherId],
+      );
+    if (!teacher[0]) throw new NotFoundException('Geo entity not found');
+    const entity: GeoRef = {
+      id: teacherId,
+      type: 'teacher',
+      code: '',
+      name: teacher[0].name ?? 'Teacher',
+      has_boundary: false,
+      lat: null,
+      lng: null,
+    };
+    const asOfRows: Array<{ computed_for: string | Date | null }> =
+      await this.dataSource.query(
+        `/* dashboard-scores:class-as-of */
+         SELECT MAX(t.computed_for) AS computed_for
+         FROM test_results_student t
+         JOIN users u ON u.id = t.student_id
+         WHERE u.referrer_user_id = $1 AND u.role = 'student' AND u.deleted_at IS NULL`,
+        [teacherId],
+      );
+    const computedFor = asOfRows[0]?.computed_for ?? null;
+    if (!computedFor) return emptyResponse(entity, 'student', metric, range);
+    const asOf = isoDate(computedFor);
+
+    const members = await this.students(
+      { teacher: teacherId },
+      metric,
+      asOf,
+      range,
+    );
+    const scored = members.filter((m) => m.score !== null);
+    const n = scored.length;
+    const sum = scored.reduce((a, m) => a + (m.score ?? 0), 0);
+    const sumsq = scored.reduce((a, m) => a + (m.score ?? 0) ** 2, 0);
+    const rootPass = passRate(
+      scored.filter((m) => m.passed === true).length,
+      n,
+    );
+    const root: RootStats = {
+      pass_rate: rootPass,
+      mean: meanOf(sum, n),
+      sd: populationSd(sum, sumsq, n),
+      n,
+      students_active: members.filter((m) => m.active).length,
+      students_unbanded: members.filter((m) => m.unbanded).length,
+      delta: delta(rootPass, priorPassRate(members)),
+    };
+
+    interface SeriesRow {
+      computed_for: string | Date;
+      n: number;
+      pass: number;
+    }
+    const seriesRows: SeriesRow[] = await this.dataSource.query(
+      `/* dashboard-scores:class-series */
+       SELECT t.computed_for,
+              COUNT(*) FILTER (WHERE t.${metric}_score IS NOT NULL)::int AS n,
+              COUNT(*) FILTER (WHERE t.${metric}_passed)::int AS pass
+       FROM test_results_student t
+       JOIN users u ON u.id = t.student_id
+       WHERE u.referrer_user_id = $1 AND u.role = 'student' AND u.deleted_at IS NULL
+         AND t.computed_for > ($2::date - ($3 || ' days')::interval)
+         AND t.computed_for <= $2::date
+       GROUP BY t.computed_for
+       ORDER BY t.computed_for`,
+      [teacherId, asOf, String(range)],
+    );
+
+    return {
+      as_of: asOf,
+      metric,
+      range,
+      entity,
+      root,
+      series: seriesRows.map((r) => ({
+        date: isoDate(r.computed_for),
+        pass_rate: passRate(r.pass, r.n),
+        n: r.n,
+      })),
+      child_type: 'student',
+      children: members.map(toStudentRow),
+      most_improved: [],
     };
   }
 
@@ -335,40 +484,62 @@ export class DashboardScoresService {
     );
   }
 
-  // ─── Students (school level) ──────────────────────────────────────────
+  // ─── Students (school level → grouped into teachers; class level) ─────
 
-  // Membership is the student's LATEST test_results_student row's
-  // geo_entity_id — the compute-time school the geo vectors were built
-  // from — not referrer.geo_entity_id, which may have moved since the
-  // nightly run; a student must never be inside one school's n while
+  // School scope: membership is the student's LATEST test_results_student
+  // row's geo_entity_id — the compute-time school the geo vectors were
+  // built from — not referrer.geo_entity_id, which may have moved since
+  // the nightly run; a student must never be inside one school's n while
   // listed under another. A student with any row for this school is a
   // candidate; only those whose latest row is still here are members.
+  // Class scope: membership is `users.referrer_user_id = teacher` —
+  // wherever the student's latest row sits.
+  // Each row also carries the student's newest row dated ≤ as_of − range
+  // (prior_score / prior_passed) for deltas.
   private async students(
-    schoolId: string,
+    scope: { school: string } | { teacher: string },
     metric: LiteracyMetric,
     asOf: string,
-  ): Promise<StudentRow[]> {
+    range: DashboardRange,
+  ): Promise<MemberRow[]> {
     interface Row {
       student_id: string;
       name: string | null;
       created_at: Date;
       birth_year: number | null;
       birth_month: number | null;
+      referrer_user_id: string | null;
       score: number | null;
       passed: boolean | null;
       attempts: number;
       last_active_at: Date | null;
+      prior_score: number | null;
+      prior_passed: boolean | null;
     }
+    const bySchool = 'school' in scope;
     const rows: Row[] = await this.dataSource.query(
-      `/* dashboard-scores:students */
+      `/* dashboard-scores:${bySchool ? 'students' : 'class'} */
        WITH members AS (
-         SELECT DISTINCT student_id FROM test_results_student WHERE geo_entity_id = $1
+         ${
+           bySchool
+             ? `SELECT DISTINCT student_id FROM test_results_student WHERE geo_entity_id = $1`
+             : `SELECT u.id AS student_id FROM users u
+                WHERE u.referrer_user_id = $1 AND u.role = 'student' AND u.deleted_at IS NULL`
+         }
        ),
        latest AS (
          SELECT DISTINCT ON (t.student_id) t.*
          FROM test_results_student t
          JOIN members m ON m.student_id = t.student_id
          ORDER BY t.student_id, t.created_at DESC
+       ),
+       prior AS (
+         SELECT DISTINCT ON (t.student_id) t.student_id,
+                t.${metric}_score::float8 AS prior_score, t.${metric}_passed AS prior_passed
+         FROM test_results_student t
+         JOIN members m ON m.student_id = t.student_id
+         WHERE t.computed_for <= ($2::date - ($3 || ' days')::interval)
+         ORDER BY t.student_id, t.computed_for DESC
        ),
        -- Deliberate read outside the results tables: active/last_active_at
        -- are not stored per student. One grouped MAX, not an EXISTS + MAX.
@@ -379,17 +550,20 @@ export class DashboardScoresService {
          GROUP BY l.user_id
        )
        SELECT l.student_id, u.name, u.created_at, u.birth_year, u.birth_month,
+              u.referrer_user_id,
               l.${metric}_score::float8 AS score, l.${metric}_passed AS passed,
-              l.${metric}_attempts::int AS attempts, a.last_active_at
+              l.${metric}_attempts::int AS attempts, a.last_active_at,
+              p.prior_score, p.prior_passed
        FROM latest l
        JOIN users u ON u.id = l.student_id
        LEFT JOIN activity a ON a.user_id = l.student_id
-       WHERE l.geo_entity_id = $1 AND u.role = 'student' AND u.deleted_at IS NULL`,
-      [schoolId],
+       LEFT JOIN prior p ON p.student_id = l.student_id
+       WHERE ${bySchool ? 'l.geo_entity_id = $1 AND ' : ''}u.role = 'student' AND u.deleted_at IS NULL`,
+      [bySchool ? scope.school : scope.teacher, asOf, String(range)],
     );
     const asOfDate = new Date(`${asOf}T00:00:00Z`);
     const activeSince = asOfDate.getTime() - ACTIVE_WINDOW_DAYS * 86_400_000;
-    // Stable ordinal: by created_at among the school's current members.
+    // Stable ordinal: by created_at among the current members.
     const ordinal = new Map(
       [...rows]
         .sort(
@@ -400,11 +574,12 @@ export class DashboardScoresService {
         )
         .map((r, i) => [r.student_id, i + 1]),
     );
-    const out: StudentRow[] = rows.map((r) => {
+    const out: MemberRow[] = rows.map((r) => {
       // Deliberate read of users.birth_year/birth_month: in_band is not
       // stored per student either.
       const age = ageOn(asOfDate, r.birth_year, r.birth_month);
       const lastActive = r.last_active_at ? new Date(r.last_active_at) : null;
+      const priorScore = r.prior_score ?? null;
       return {
         student_id: r.student_id,
         label: studentLabel(r.name, ordinal.get(r.student_id) ?? 0),
@@ -414,8 +589,76 @@ export class DashboardScoresService {
         in_band: inBand(metric, age),
         active: lastActive !== null && lastActive.getTime() >= activeSince,
         last_active_at: lastActive ? lastActive.toISOString() : null,
+        delta: delta(
+          r.score === null ? null : r.score * 100,
+          priorScore === null ? null : priorScore * 100,
+        ),
+        referrer_user_id: r.referrer_user_id ?? null,
+        prior_score: priorScore,
+        prior_passed: r.prior_passed ?? null,
+        unbanded: age === null,
       };
     });
     return out.sort(compareStudents);
+  }
+
+  // School level: one ChildRow per referrer (teacher) of the school's
+  // members, aggregated from their students' rows — pass rate over scored
+  // students, delta against the students' prior rows, the teacher's own
+  // profile as `official`. Ordered pass_rate desc, then name.
+  private async teachers(members: MemberRow[]): Promise<ChildRow[]> {
+    const groups = new Map<string, MemberRow[]>();
+    for (const m of members) {
+      if (!m.referrer_user_id) continue;
+      const g = groups.get(m.referrer_user_id);
+      if (g) g.push(m);
+      else groups.set(m.referrer_user_id, [m]);
+    }
+    if (groups.size === 0) return [];
+    const users: Array<Official & { id: string }> = await this.dataSource.query(
+      `/* dashboard-scores:teachers */
+       SELECT id, name, role_title, avatar_seed, spotlight_message
+       FROM users
+       WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
+      [[...groups.keys()]],
+    );
+    const byId = new Map(users.map((u) => [u.id, u]));
+    const rows: ChildRow[] = [...groups].map(([id, studs]) => {
+      const scored = studs.filter((s) => s.score !== null);
+      const pr = passRate(
+        scored.filter((s) => s.passed === true).length,
+        scored.length,
+      );
+      const u = byId.get(id);
+      return {
+        id,
+        type: 'teacher',
+        code: '',
+        name: u?.name ?? 'Teacher',
+        has_boundary: false,
+        lat: null,
+        lng: null,
+        pass_rate: pr,
+        n: scored.length,
+        students: studs.length,
+        students_active: studs.filter((s) => s.active).length,
+        using_lifteracy: true,
+        delta: delta(pr, priorPassRate(studs)),
+        bin: binOf(pr, true),
+        official: u
+          ? {
+              name: u.name,
+              role_title: u.role_title ?? 'Teacher',
+              avatar_seed: u.avatar_seed,
+              spotlight_message: u.spotlight_message,
+            }
+          : null,
+      };
+    });
+    return rows.sort(
+      (a, b) =>
+        (b.pass_rate ?? -1) - (a.pass_rate ?? -1) ||
+        a.name.localeCompare(b.name),
+    );
   }
 }

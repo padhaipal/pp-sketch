@@ -14,7 +14,10 @@ Types for GET /geo-entities/:id/scores, /scores.csv and /spotlight
 - `usingLifteracy(row)`: a row at as_of with `students_scored +
 students_unbanded > 0` — NOT students_active: a school whose students went
   quiet keeps its last colour; activity is a separate number.
-- `CHILD_TYPE_OF`: country → state → district → block → school → student.
+- `CHILD_TYPE_OF`: country → state → district → block → school → teacher;
+  a teacher's children are students (`scores(<teacher user id>)`).
+  `ChildType` includes `'teacher'`; `GeoRef.type` is `GeoEntityType |
+  'teacher'` (teacher refs: id = users.id, code '', no coordinates).
 - `studentLabel(name, ordinal)`: first name if set, else "Student N" —
   never anything derived from the phone number. `compareStudents`: scored
   desc, unscored by last_active_at desc, neither last (ties by label).
@@ -24,7 +27,8 @@ students_unbanded > 0` — NOT students_active: a school whose students went
 Shapes: `ScoresResponse { as_of, metric, range, entity: GeoRef, root:
 RootStats, series: SeriesPoint[], child_type, children: ChildRow[] |
 StudentRow[], most_improved: ChildRow[] }`; `ChildRow = GeoRef +
-{pass_rate, n, students_active, using_lifteracy, delta, bin, official}`;
+{pass_rate, n, students_active, using_lifteracy, delta, bin, official,
+students? (teacher rows: referred count)}`;
 `StudentRow {student_id, label, score, passed, attempts, in_band, active,
-last_active_at}`; `SpotlightResponse {top, most_improved}` of `{child,
+last_active_at, delta (points vs the row ≤ as_of − range, else null)}`; `SpotlightResponse {top, most_improved}` of `{child,
 official}`; `Official {name, role_title, avatar_seed, spotlight_message}`.
