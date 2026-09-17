@@ -17,21 +17,31 @@ export const ACTIVE_WINDOW_DAYS = 14;
 // the heaviest unauthenticated queries in the app.
 export const PUBLIC_CACHE_CONTROL = 'public, max-age=300';
 
-export type ChildType = 'state' | 'district' | 'block' | 'school' | 'student';
+export type ChildType =
+  | 'state'
+  | 'district'
+  | 'block'
+  | 'school'
+  | 'teacher'
+  | 'student';
 
-// The child level below each root type; a school's children are students.
+// The child level below each root type. A school's children are its
+// TEACHERS (the referrers of its students); a teacher's children — reached
+// by passing the teacher's user id as `:id` — are their students.
 export const CHILD_TYPE_OF: Record<GeoEntityType, ChildType | null> = {
   country: 'state',
   state: 'district',
   district: 'block',
   block: 'school',
-  school: 'student',
+  school: 'teacher',
   cluster: null,
 };
 
 export interface GeoRef {
   id: string;
-  type: GeoEntityType;
+  // 'teacher' = a referrer user standing in as the school's child level
+  // (id = users.id, code '', no coordinates).
+  type: GeoEntityType | 'teacher';
   code: string;
   name: string;
   has_boundary: boolean;
@@ -72,6 +82,8 @@ export interface ChildRow extends GeoRef {
   delta: number | null;
   bin: Bin;
   official: Official | null;
+  // Teacher rows only: how many students the teacher referred.
+  students?: number;
 }
 
 export interface StudentRow {
@@ -83,6 +95,9 @@ export interface StudentRow {
   in_band: boolean;
   active: boolean;
   last_active_at: string | null;
+  // Score change in points (0–100) against the student's newest row dated
+  // ≤ as_of − range days; null without a prior row or a score.
+  delta: number | null;
 }
 
 export interface ScoresResponse {

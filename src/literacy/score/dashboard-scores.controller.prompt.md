@@ -2,7 +2,8 @@
 
 Unauthenticated, forwardable reads for /d/:id (the pp-dashboard proxy's
 PUBLIC_ALLOWED list carries exactly these). `metric` required (nipun_g2 |
-nipun_g3 | mpl_b), `range` 30 | 90 (default 30), `:id` a uuid; 400 otherwise.
+nipun_g3 | mpl_b), `range` 30 | 90 (default 30), `:id` a uuid — a geo entity
+OR a teacher's user id (the class level; see the service) — 400 otherwise.
 All three set `Cache-Control: public, max-age=300` — the data changes once a
 night and these are the heaviest queries in the app. `scores.csv` returns
 the children rows as `text/csv` with a `Content-Disposition` filename of
