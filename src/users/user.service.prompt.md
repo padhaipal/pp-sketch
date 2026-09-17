@@ -89,6 +89,7 @@ create(options: CreateUserOptions): Promise<User>
 
 - Validate options at runtime with validateCreateUserOptions(). If it fails, log WARN and let the BadRequestException propagate.
 - One atomic query to create the user and resolve the referrer (if provided). After write, if a referrer was set: run the same recursive CTE cycle check as in update() — if it returns any rows, roll back and throw BadRequestException.
+- `role`: `'student'` when the referrer is a teacher — a non-deleted account whose role is in STAFF_ROLES and whose geo entity is a school (`roleForReferrer` / `TEACHER_STUDENT_ROLE_SQL`); otherwise NULL (no referrer, student or block/district-official referrer). Decided once at creation, never relabelled. The nightly test results and the teacher dashboard count only `role = 'student'`.
 - Populate the cache for both userById and userByExternalId keys with CACHE_TTL.USER.
 - Return the newly created user entity.
 
