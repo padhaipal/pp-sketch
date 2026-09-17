@@ -49,6 +49,10 @@ export interface PublicProfileRow {
 // StaffUserRow before the dashboard link is attached (the controller adds it).
 export type StaffLookupRow = Omit<import('./user.dto').StaffUserRow, 'link'>;
 
+// SQL form of roleForReferrer for the INSERT…SELECT create path: `r` is the
+// referrer, `g` its geo entity, $4 the staff roles.
+const TEACHER_STUDENT_ROLE_SQL = `CASE WHEN r.role = ANY($4) AND g.type = 'school' AND r.deleted_at IS NULL THEN 'student' END`;
+
 @Injectable()
 export class UserService {
   private readonly logger = new Logger(UserService.name);
@@ -357,6 +361,21 @@ export class UserService {
     );
   }
 
+  // A user referred by a teacher is that teacher's student — the nightly
+  // test results and the teacher dashboard count only role = 'student'. A
+  // teacher is a staff account placed at a school (a block or district
+  // official's referral makes no student). Everyone else keeps role NULL.
+  // Decided once, at creation; existing rows are never relabelled.
+  private async roleForReferrer(referrerId: string): Promise<'student' | null> {
+    const rows: unknown[] = await this.dataSource.query(
+      `SELECT 1 FROM users r JOIN geo_entity g ON g.id = r.geo_entity_id
+       WHERE r.id = $1 AND r.role = ANY($2) AND g.type = 'school'
+         AND r.deleted_at IS NULL`,
+      [referrerId, [...STAFF_ROLES]],
+    );
+    return rows.length > 0 ? 'student' : null;
+  }
+
   async create(options: CreateUserOptions): Promise<User> {
     const validated = validateCreateUserOptions(options);
 
@@ -367,6 +386,7 @@ export class UserService {
         external_id: validated.external_id,
         name: validated.name ?? null,
         referrer_user_id: validated.referrer_user_id,
+        role: await this.roleForReferrer(validated.referrer_user_id),
       });
       user = await this.userRepo.save(user);
 
@@ -397,13 +417,16 @@ export class UserService {
     } else if (validated.referrer_external_id) {
       // INSERT...SELECT with referrer lookup — raw SQL (complex query #5)
       const rows: UserEntity[] = await this.dataSource.query(
-        `INSERT INTO users (external_id, name, referrer_user_id)
-               SELECT $1, $2, id FROM users WHERE external_id = $3
+        `INSERT INTO users (external_id, name, referrer_user_id, role)
+               SELECT $1, $2, r.id, ${TEACHER_STUDENT_ROLE_SQL}
+               FROM users r LEFT JOIN geo_entity g ON g.id = r.geo_entity_id
+               WHERE r.external_id = $3
                RETURNING *`,
         [
           validated.external_id,
           validated.name ?? null,
           validated.referrer_external_id,
+          [...STAFF_ROLES],
         ],
       );
 

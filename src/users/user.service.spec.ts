@@ -307,6 +307,46 @@ describe('UserService.create', () => {
     expect(score.createSeedScores).toHaveBeenCalledWith('u2');
   });
 
+  it('with referrer_user_id: a teacher referrer makes the new user a student', async () => {
+    const repo = makeRepo();
+    repo.save.mockResolvedValue({ id: 'u2', external_id: '918888880002' });
+    const ds = jest
+      .fn()
+      .mockResolvedValueOnce([{ ['1']: 1 }]) // referrer is staff at a school
+      .mockResolvedValueOnce([]); // no cycle
+
+    const svc = makeService(repo, ds, makeCache(), makeScore());
+    await svc.create({
+      external_id: '918888880002',
+      referrer_user_id: 'ref-1',
+    });
+
+    expect(ds.mock.calls[0][0]).toMatch(/g\.type = 'school'/);
+    expect(ds.mock.calls[0][1]).toEqual([
+      'ref-1',
+      ['education_official', 'staff'],
+    ]);
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ referrer_user_id: 'ref-1', role: 'student' }),
+    );
+  });
+
+  it('with referrer_user_id: a non-teacher referrer leaves role null', async () => {
+    const repo = makeRepo();
+    repo.save.mockResolvedValue({ id: 'u2', external_id: '918888880002' });
+    const ds = jest.fn().mockResolvedValue([]); // not a teacher; no cycle
+
+    const svc = makeService(repo, ds, makeCache(), makeScore());
+    await svc.create({
+      external_id: '918888880002',
+      referrer_user_id: 'ref-1',
+    });
+
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ referrer_user_id: 'ref-1', role: null }),
+    );
+  });
+
   it('with referrer_external_id: referrer found → uses INSERT…SELECT row', async () => {
     const repo = makeRepo();
     const score = makeScore();
@@ -328,6 +368,21 @@ describe('UserService.create', () => {
 
     expect(out).toBe(inserted);
     expect(score.createSeedScores).toHaveBeenCalledWith('u3');
+    // The role is decided in the same statement: student only when the
+    // referrer is staff placed at a school.
+    const [sql, params] = ds.mock.calls[0];
+    expect(sql).toMatch(
+      /INSERT INTO users \(external_id, name, referrer_user_id, role\)/,
+    );
+    expect(sql).toMatch(
+      /CASE WHEN r\.role = ANY\(\$4\) AND g\.type = 'school'/,
+    );
+    expect(params).toEqual([
+      '917777770003',
+      null,
+      '919999990001',
+      ['education_official', 'staff'],
+    ]);
   });
 
   it('with referrer_external_id: referrer not found → falls back to no-referrer insert', async () => {
@@ -485,9 +540,10 @@ describe('UserService — exact SQL + where-clause shapes', () => {
       external_id: '919999990001',
       referrer_user_id: 'ref-1',
     });
-    expect(ds).toHaveBeenCalledTimes(1);
-    expect(ds.mock.calls[0][0]).toContain('WITH RECURSIVE chain');
-    expect(ds.mock.calls[0][1]).toEqual(['ref-1', 'u-new']);
+    // referrer-role lookup, then the cycle check
+    expect(ds).toHaveBeenCalledTimes(2);
+    expect(ds.mock.calls[1][0]).toContain('WITH RECURSIVE chain');
+    expect(ds.mock.calls[1][1]).toEqual(['ref-1', 'u-new']);
   });
 
   it('create with referrer_external_id: INSERT...SELECT params + null-default for missing name', async () => {
@@ -511,13 +567,16 @@ describe('UserService — exact SQL + where-clause shapes', () => {
     });
     // INSERT call
     expect(ds.mock.calls[0][0]).toContain(
-      'INSERT INTO users (external_id, name, referrer_user_id)',
+      'INSERT INTO users (external_id, name, referrer_user_id, role)',
     );
-    expect(ds.mock.calls[0][0]).toContain(
-      'SELECT $1, $2, id FROM users WHERE external_id = $3',
-    );
+    expect(ds.mock.calls[0][0]).toContain('WHERE r.external_id = $3');
     expect(ds.mock.calls[0][0]).toContain('RETURNING *');
-    expect(ds.mock.calls[0][1]).toEqual(['919999990001', null, '918888880002']);
+    expect(ds.mock.calls[0][1]).toEqual([
+      '919999990001',
+      null,
+      '918888880002',
+      ['education_official', 'staff'],
+    ]);
     // Cycle-check call
     expect(ds.mock.calls[1][0]).toContain('WITH RECURSIVE chain');
     expect(ds.mock.calls[1][1]).toEqual(['ref-1', 'u-new']);
