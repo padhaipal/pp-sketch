@@ -173,8 +173,18 @@ TOGGLE: set/unset the Railway variable. No code change in either direction.
 
 - MAX_LESSON_LEVEL restored to 12. Level ≥ 8 selects a random ready reading
   passage (media_details.role='passage', media_details.level = level) instead
-  of random word-list sentences; recently-lessoned passages (last 10) are
-  excluded; falls back to nearest level, then to a level-7 word lesson.
+  of random word-list sentences. **A student never sees a passage twice while
+  any unseen one exists** (2026-09; was "last 10 excluded"): the selection
+  SQL ships every passage id in the student's history
+  (`RECENT_PASSAGES_TO_EXCLUDE = 10_000_000`, newest first) and
+  `selectPassage` walks: (1) exact level, unseen → (2) nearest level 8–12,
+  unseen → bank exhausted: (3) exact level, least-recently-seen first
+  (`ORDER BY array_position($2, id) DESC`) → (4) nearest level, LRU. Steps 3–4
+  return `reused: true` → span `pp.lesson.passage.reused` + a warn
+  ("passage bank exhausted … reusing") — the signal to seed more. An empty
+  bank with no history still falls back to a level-7 word lesson. "Seen" =
+  any literacy_lesson_states row with that passage_id (assigned, not
+  necessarily completed).
 - Sentence-band progression (base ≥ 8, 2026-08): the single round-trip SQL
   ships only the raw inputs — `recent_turns` (json_agg of {rn, is_done,
   stid} over the 18-row window, newest first) and `lifetime_done_count`

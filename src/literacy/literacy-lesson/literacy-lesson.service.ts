@@ -67,9 +67,14 @@ function effectiveMaxLessonLevel(): number {
 // (sentence-band-signal.utils.ts), which also owns
 // SENTENCE_RECENT_ROWS_WINDOW (the row-scan window doubles as its
 // entire-history-visible threshold).
-// Recently-lessoned passages excluded from re-selection (mirrors
-// RECENT_WORDS_TO_EXCLUDE for words).
-const RECENT_PASSAGES_TO_EXCLUDE = 10;
+// Passages excluded from re-selection: effectively EVERY passage the student
+// has ever been assigned (was 10 — a student saw the same passage again after
+// ten others). A student never sees a passage twice while any unseen passage
+// exists at any lesson level; only when the whole bank is exhausted does
+// selectPassage fall back to least-recently-seen reuse (see its ladder).
+// The list is per student (hundreds to low thousands of ids), so shipping it
+// as one array is cheap.
+const RECENT_PASSAGES_TO_EXCLUDE = 10_000_000;
 // The three machine transitions that land in the `sentence` state — the
 // student is holding the reading passage and expected to record a full read
 // (see literacy-lesson.machine.ts). Extends the stale-restart window only.
@@ -523,51 +528,69 @@ export class LiteracyLessonService {
     };
   }
 
-  // Random ready reading passage for the level, excluding recently-lessoned
-  // passages; widens to the nearest level (8-12) before giving up. The
-  // explicit <= MAX_LESSON_LEVEL bound keeps level-13 (250+ word) passages
-  // out of lessons even if a future caller skips the maxLength clamp.
+  // Random ready reading passage for the level that the student has NEVER
+  // been assigned (`seenPassageIds` = every passage in their history, newest
+  // first); widens to the nearest level (8-12) before ever repeating. Only
+  // when the whole bank is exhausted — no unseen passage at any lesson level
+  // — does it reuse, least-recently-seen first (`reused: true`, so the
+  // caller can log/alert: time to seed more). The explicit
+  // <= MAX_LESSON_LEVEL bound keeps level-13 (250+ word) passages out of
+  // lessons even if a future caller skips the maxLength clamp.
   private async selectPassage(
     level: number,
-    excludePassageIds: string[],
-  ): Promise<{ id: string; text: string; level: number } | null> {
+    seenPassageIds: string[],
+  ): Promise<{
+    id: string;
+    text: string;
+    level: number;
+    reused: boolean;
+  } | null> {
     interface PassageRow {
       id: string;
       text: string;
       level: number;
     }
-    const exclude = excludePassageIds.length > 0 ? excludePassageIds : [];
-    const base = `FROM media_metadata
+    const seen = seenPassageIds.length > 0 ? seenPassageIds : [];
+    const select = `SELECT id, text, (media_details->>'level')::int AS level
+       FROM media_metadata
        WHERE media_type = 'text' AND status = 'ready' AND rolled_back = false
          AND media_details->>'role' = 'passage'
-         AND (media_details->>'level')::int <= ${MAX_LESSON_LEVEL}
-         AND NOT (id = ANY($2::uuid[]))`;
-    // 1. Exact level, non-recent.
+         AND (media_details->>'level')::int <= ${MAX_LESSON_LEVEL}`;
+    const exactLevel = `AND (media_details->>'level')::int = $1`;
+    const bandLevels = `AND (media_details->>'level')::int BETWEEN ${SENTENCE_LEVEL_THRESHOLD + 1} AND ${MAX_LESSON_LEVEL}`;
+    const nearestFirst = `ABS((media_details->>'level')::int - $1),`;
+    // 1. Exact level, unseen.
     let rows: PassageRow[] = await this.dataSource.query(
-      `SELECT id, text, (media_details->>'level')::int AS level ${base}
-         AND (media_details->>'level')::int = $1
+      `${select} AND NOT (id = ANY($2::uuid[])) ${exactLevel}
        ORDER BY random() LIMIT 1`,
-      [level, exclude],
+      [level, seen],
     );
-    // 2. Exact level, recency ignored (small pools).
-    if (rows.length === 0 && exclude.length > 0) {
-      rows = await this.dataSource.query(
-        `SELECT id, text, (media_details->>'level')::int AS level ${base}
-           AND (media_details->>'level')::int = $1
-         ORDER BY random() LIMIT 1`,
-        [level, []],
-      );
-    }
-    // 3. Nearest level in the sentence band, non-recent.
+    // 2. Nearest level in the sentence band, unseen.
     if (rows.length === 0) {
       rows = await this.dataSource.query(
-        `SELECT id, text, (media_details->>'level')::int AS level ${base}
-           AND (media_details->>'level')::int BETWEEN ${SENTENCE_LEVEL_THRESHOLD + 1} AND ${MAX_LESSON_LEVEL}
-         ORDER BY ABS((media_details->>'level')::int - $1), random() LIMIT 1`,
-        [level, exclude],
+        `${select} AND NOT (id = ANY($2::uuid[])) ${bandLevels}
+         ORDER BY ${nearestFirst} random() LIMIT 1`,
+        [level, seen],
       );
     }
-    return rows[0] ?? null;
+    if (rows.length > 0) return { ...rows[0], reused: false };
+    if (seen.length === 0) return null; // empty bank, nothing to reuse
+    // 3. Bank exhausted → exact level, least-recently-seen first ($2 is
+    //    newest-first, so the highest array position is the oldest).
+    rows = await this.dataSource.query(
+      `${select} AND id = ANY($2::uuid[]) ${exactLevel}
+       ORDER BY array_position($2::uuid[], id) DESC, random() LIMIT 1`,
+      [level, seen],
+    );
+    // 4. Nearest level, least-recently-seen first.
+    if (rows.length === 0) {
+      rows = await this.dataSource.query(
+        `${select} AND id = ANY($2::uuid[]) ${bandLevels}
+         ORDER BY ${nearestFirst} array_position($2::uuid[], id) DESC, random() LIMIT 1`,
+        [level, seen],
+      );
+    }
+    return rows[0] ? { ...rows[0], reused: true } : null;
   }
 
   async findCurrentState(userId: string): Promise<LiteracyLessonState | null> {
@@ -852,6 +875,14 @@ export class LiteracyLessonService {
             span.setAttribute('pp.lesson.word.selection', 'passage');
             span.setAttribute('pp.lesson.passage_id', passage.id);
             span.setAttribute('pp.lesson.word.count', sentence.length);
+            span.setAttribute('pp.lesson.passage.reused', passage.reused);
+            if (passage.reused) {
+              // Every passage at every lesson level has been assigned to this
+              // student already — seed more; least-recently-seen is served.
+              this.logger.warn(
+                `selectNextString: passage bank exhausted at level ${String(maxLength)} — reusing ${passage.id} (user on the span)`,
+              );
+            }
             this.logger.log(
               `selectNextString: passage=${passage.id} level=${String(maxLength)} words=${String(sentence.length)}`,
             );
