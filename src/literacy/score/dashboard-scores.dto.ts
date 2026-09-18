@@ -3,6 +3,7 @@ import type { LiteracyMetric } from './age-bands';
 import type { GeoEntityType } from '../../geo-entities/geo-entity.dto';
 
 export const DASHBOARD_METRICS: readonly LiteracyMetric[] = [
+  'usage',
   'nipun_g2',
   'nipun_g3',
   'mpl_b',

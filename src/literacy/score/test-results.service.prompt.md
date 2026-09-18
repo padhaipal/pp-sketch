@@ -10,7 +10,22 @@ write to those tables is here). Run by the `test-results` BullMQ queue
 
 `test_results_geo_entity` stores, per metric, `n`, `sum`, `sumsq`, `pass`
 and an exact histogram (`nipun_*_hist` 5 bins, `mpl_b_hist` 21 — the score
-space is discrete, see literacy-test-scores.prompt.md). These roll up
+space is discrete, see literacy-test-scores.prompt.md; `usage_hist` 31 —
+whole minutes 0…29 and 30+).
+
+## Usage — the leading indicator (migration 1790000000000-AddUsageMetric)
+
+`METRICS = [...TEST_METRICS, 'usage']`. A student's `usage_score` on the row
+dated D is their active minutes on the IST day **before** D (the last
+complete day at the 00:15 IST run): the voice-note gap rule in
+users/active-time.ts (`activeMs`, gaps < 120 s) over `media_metadata`
+whatsapp audio, 1 dp; `usage_attempts` = notes that day; `usage_passed` =
+minutes **strictly** > `USAGE_PASS_MINUTES` (5). A student with no note
+that day gets NULL/NULL/0 — zero is never stored; every reader treats
+absence as zero. Per area: `usage_n` counts EVERY student in the geo step
+(no age band, unbanded included), absent students add 0 minutes to sum and
+`hist[0]`; only a row dated D carries minutes (`latest-students` selects
+`CASE WHEN t.computed_for = D THEN usage_score END`). These roll up
 additively: a block's vector is the element-wise sum of its schools'. An
 average cannot be summed; the histogram yields exact mean, sd, median, any
 percentile and any pass threshold without reading student rows.
@@ -26,8 +41,8 @@ percentile and any pass threshold without reading student rows.
    crashed runs and are ignored.
 3. Insert the `test_runs` row (`running`).
 4. Candidates: `role = 'student' AND deleted_at IS NULL` with a
-   `literacy_lesson_states` row newer than the student's latest
-   `test_results_student.created_at` (or no row yet). NOT "activity since
+   `literacy_lesson_states` row or a whatsapp voice note newer than the
+   student's latest `test_results_student.created_at` (or no row yet). NOT "activity since
    midnight" — a student missed by a failed night is picked up the next
    night. `full: true` takes everyone (after a retroactive passage edit).
 5. Batches of `STUDENT_BATCH_SIZE` (200) → `computeLatestLiteracyTestScores`
@@ -43,7 +58,8 @@ percentile and any pass threshold without reading student rows.
    the last `ACTIVE_WINDOW_DAYS` (14); `students_scored` = any non-null
    score; unbanded (null birth_year) → `students_unbanded`, no metric
    contribution; per metric, a scored student inside that metric's age band
-   (age-bands.ts) contributes n=1, sum, sumsq, pass, hist[score × denominator].
+   (age-bands.ts) contributes n=1, sum, sumsq, pass, hist[`histIndex`];
+   usage contributes for every student (see above).
 7. Roll-up: for each school with ≥1 student, `GeoEntityService.ancestors`
    once (cached per school), and the student's vector is added to the school
    and every ancestor — so an ancestor's vector is exactly the sum of its

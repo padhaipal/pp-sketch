@@ -70,6 +70,7 @@ const ANCESTORS: Record<string, string[]> = {
 class FakeDb {
   students: Student[] = [];
   lessons = new Map<string, Date[]>();
+  voiceNotes = new Map<string, Date[]>();
   answers = new Map<string, ComprehensionRow[]>();
   results: ResultRow[] = [];
   geo: GeoRow[] = [];
@@ -121,9 +122,10 @@ class FakeDb {
                   .filter((r) => r.student_id === s.id)
                   .map((r) => r.created_at.getTime()),
               );
-              return (this.lessons.get(s.id) ?? []).some(
-                (l) => l.getTime() > latest,
-              );
+              return [
+                ...(this.lessons.get(s.id) ?? []),
+                ...(this.voiceNotes.get(s.id) ?? []),
+              ].some((l) => l.getTime() > latest);
             })
             .sort((a, b) => (a.id < b.id ? -1 : 1))
             .map((s) => ({
@@ -137,11 +139,22 @@ class FakeDb {
           const ids = params[0] as string[];
           return ids.flatMap((id) => this.answers.get(id) ?? []);
         }
+        case 'test-results:voice-notes': {
+          const ids = params[0] as string[];
+          const start = (params[1] as Date).getTime();
+          const end = (params[2] as Date).getTime();
+          return ids.flatMap((id) =>
+            (this.voiceNotes.get(id) ?? [])
+              .filter((t) => t.getTime() >= start && t.getTime() < end)
+              .sort((a, b) => a.getTime() - b.getTime())
+              .map((t) => ({ user_id: id, created_at: t })),
+          );
+        }
         case 'test-results:upsert-students': {
           const created = this.tick();
-          for (let i = 0; i < params.length; i += 12) {
+          for (let i = 0; i < params.length; i += 15) {
             const [student_id, geo_entity_id, computed_for, ...scores] =
-              params.slice(i, i + 12) as [
+              params.slice(i, i + 15) as [
                 string,
                 string | null,
                 string,
@@ -165,6 +178,7 @@ class FakeDb {
         }
         case 'test-results:latest-students': {
           const since = (params[0] as Date).getTime();
+          const computedFor = params[1] as string;
           const latest = new Map<string, ResultRow>();
           for (const r of [...this.results].sort(
             (a, b) => b.created_at.getTime() - a.created_at.getTime(),
@@ -197,6 +211,10 @@ class FakeDb {
                 nipun_g3_passed: g3p,
                 mpl_b_score: mbs,
                 mpl_b_passed: mbp,
+                usage_score:
+                  r.computed_for === computedFor
+                    ? (r.scores[9] as number | null)
+                    : null,
                 active: (this.lessons.get(s.id) ?? []).some(
                   (l) => l.getTime() >= since,
                 ),
@@ -384,7 +402,20 @@ describe('TestResultsService.run — candidates and skip criterion', () => {
     const a = db.results.find((r) => r.student_id === 'A')!;
     expect(a.geo_entity_id).toBe('S1');
     expect(a.computed_for).toBe(COMPUTED_FOR);
-    expect(a.scores).toEqual([0.75, true, 4, null, null, 0, null, null, 0]);
+    expect(a.scores).toEqual([
+      0.75,
+      true,
+      4,
+      null,
+      null,
+      0,
+      null,
+      null,
+      0,
+      null,
+      null,
+      0,
+    ]);
   });
 
   it("a student with no new activity is not re-scored; geo rows are still rebuilt from everyone's latest row", async () => {
@@ -466,7 +497,7 @@ describe('TestResultsService.run — candidates and skip criterion', () => {
       String(sql).includes('test-results:upsert-students'),
     );
     expect(
-      upserts.map(([, params]) => (params as unknown[]).length / 12),
+      upserts.map(([, params]) => (params as unknown[]).length / 15),
     ).toEqual([STUDENT_BATCH_SIZE, 1]);
   });
 });
@@ -503,6 +534,10 @@ describe('TestResultsService.run — geo aggregation and roll-up', () => {
         nipun_g3_passed: g3p,
         mpl_b_score: mbs,
         mpl_b_passed: mbp,
+        usage_score:
+          r.computed_for === COMPUTED_FOR
+            ? (r.scores[9] as number | null)
+            : null,
       };
       addVector(v, studentVector(row, COMPUTED_FOR_DATE));
     }
@@ -610,6 +645,80 @@ describe('TestResultsService.run — geo aggregation and roll-up', () => {
     // H has a score but no staff referrer → in no geo row.
     const d = stored(db, 'D');
     expect(d.students_scored).toBe(5);
+  });
+});
+
+describe('TestResultsService.run — usage (active minutes, day before computed_for)', () => {
+  // computed_for 2026-09-13 → usage day is 2026-09-12 IST =
+  // 2026-09-11T18:30Z … 2026-09-12T18:30Z.
+  const at = (iso: string) => new Date(iso);
+  const minutesApart = (startIso: string, count: number, gapMin = 1) =>
+    Array.from(
+      { length: count },
+      (_, i) => new Date(at(startIso).getTime() + i * gapMin * 60_000),
+    );
+  const usageOf = (db: FakeDb, id: string) => {
+    const r = db.results.find((x) => x.student_id === id)!;
+    return { minutes: r.scores[9], passed: r.scores[10], notes: r.scores[11] };
+  };
+
+  it('stores minutes and a strict > 5 pass for students with voice notes that day; nothing for the rest', async () => {
+    const db = new FakeDb();
+    seed(db);
+    db.voiceNotes = new Map([
+      // A: 4 notes a minute apart → 3.0 min, fail
+      ['A', minutesApart('2026-09-12T04:00:00Z', 4)],
+      // B: exactly 5.0 min → still a fail (strictly greater)
+      ['B', minutesApart('2026-09-12T04:00:00Z', 6)],
+      // G: 7 notes → 6.0 min → pass; a 2-minute silence is not counted
+      [
+        'G',
+        [
+          ...minutesApart('2026-09-12T04:00:00Z', 7),
+          at('2026-09-12T04:30:00Z'),
+        ],
+      ],
+      // F: only notes on the computed_for day itself (after IST midnight)
+      ['F', minutesApart('2026-09-12T18:30:00Z', 3)],
+    ]);
+    const { svc } = makeService(db);
+    await svc.run({ full: false, now: NOW });
+
+    expect(usageOf(db, 'A')).toEqual({ minutes: 3, passed: false, notes: 4 });
+    expect(usageOf(db, 'B')).toEqual({ minutes: 5, passed: false, notes: 6 });
+    expect(usageOf(db, 'G')).toEqual({ minutes: 6, passed: true, notes: 8 });
+    // absence, never a zero
+    expect(usageOf(db, 'F')).toEqual({ minutes: null, passed: null, notes: 0 });
+    expect(usageOf(db, 'C')).toEqual({ minutes: null, passed: null, notes: 0 });
+
+    // Area: every student counts (unbanded F included), absent = 0 minutes.
+    const s1 = db.geo.find(
+      (g) => g.geo_entity_id === 'S1' && g.computed_for === COMPUTED_FOR,
+    )!.metrics.usage;
+    expect(s1).toEqual({
+      n: 2,
+      sum: '8.000',
+      sumsq: '34.0000',
+      pass: 0,
+      hist: [0, 0, 0, 1, 0, 1, ...Array<number>(25).fill(0)],
+    });
+    const s3 = db.geo.find(
+      (g) => g.geo_entity_id === 'S3' && g.computed_for === COMPUTED_FOR,
+    )!.metrics.usage;
+    expect(s3.n).toBe(2);
+    expect(s3.pass).toBe(1);
+    expect(s3.hist[0]).toBe(1); // F: absent → 0
+    expect(s3.hist[6]).toBe(1); // G
+  });
+
+  it('a voice note alone (no lesson row) makes a student a candidate', async () => {
+    const db = new FakeDb();
+    seed(db);
+    db.lessons.delete('A');
+    db.voiceNotes = new Map([['A', minutesApart('2026-09-12T04:00:00Z', 2)]]);
+    const { svc } = makeService(db);
+    await svc.run({ full: false, now: NOW });
+    expect(usageOf(db, 'A')).toEqual({ minutes: 1, passed: false, notes: 2 });
   });
 });
 

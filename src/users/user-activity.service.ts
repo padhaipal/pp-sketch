@@ -21,7 +21,7 @@ import {
   istMidnightUtc,
 } from '../notifier/report-card/report-card.utils';
 
-const ACTIVE_GAP_THRESHOLD_MS = 120_000;
+import { ACTIVE_GAP_THRESHOLD_MS, activeMs } from './active-time';
 const FIVE_MIN_MS = 5 * 60 * 1000;
 // SQL fragment: IST calendar date of a timestamptz. IST is a fixed +5:30 (no
 // DST) so a plain interval add matches the JS helpers in report-card.utils.
@@ -320,27 +320,15 @@ export class UserActivityService {
   }
 
   private computeActiveMs(sortedMsgs: Date[], window: ParsedWindow): number {
-    if (sortedMsgs.length < 2) return 0;
     const startMs = window.start.getTime();
     const endMs = window.end.getTime();
-
-    let active = 0;
-    let prev: number | null = null;
-    for (const msg of sortedMsgs) {
-      const t = msg.getTime();
-      if (t < startMs || t > endMs) {
-        prev = null;
-        continue;
-      }
-      if (prev !== null) {
-        const gap = t - prev;
-        if (gap > 0 && gap < ACTIVE_GAP_THRESHOLD_MS) {
-          active += gap;
-        }
-      }
-      prev = t;
-    }
-    return active;
+    // The window is one contiguous interval, so dropping out-of-window
+    // messages is the same as resetting across them.
+    return activeMs(
+      sortedMsgs
+        .map((m) => m.getTime())
+        .filter((t) => t >= startMs && t <= endMs),
+    );
   }
 
   private parseWindows(windows: TimeWindowDto[]): ParsedWindow[] {

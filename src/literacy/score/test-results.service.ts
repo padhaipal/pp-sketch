@@ -10,26 +10,44 @@ import {
   MPL_B_QUESTION_COUNT,
   NIPUN_QUESTION_COUNT,
 } from './literacy-test-scores';
-import { ageOn, inBand, LiteracyMetric } from './age-bands';
+import { ageOn, inBand, LiteracyMetric, TestMetric } from './age-bands';
+import { activeMs } from '../../users/active-time';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-export const METRICS: readonly LiteracyMetric[] = [
+export const TEST_METRICS: readonly TestMetric[] = [
   'nipun_g2',
   'nipun_g3',
   'mpl_b',
 ];
-// Score space is discrete: score × denominator is the histogram index.
+export const METRICS: readonly LiteracyMetric[] = [...TEST_METRICS, 'usage'];
+// Usage — the leading indicator: active minutes (voice-note gap rule,
+// users/active-time.ts) on the IST day BEFORE computed_for, i.e. the last
+// complete day when the 00:15 IST run starts. Pass is strictly more than
+// USAGE_PASS_MINUTES. A day with no voice note is never stored: absence is
+// zero, both per student (no usage_score) and per area (counted as 0).
+export const USAGE_PASS_MINUTES = 5;
+export const USAGE_HIST_MAX_MINUTES = 30; // last bucket: 30+
+const IST_OFFSET_MS = 5.5 * 3_600_000;
+// Score space is discrete: score × denominator is the histogram index (usage:
+// whole minutes, capped at the last bucket).
 export const HIST_DENOMINATOR: Record<LiteracyMetric, number> = {
   nipun_g2: NIPUN_QUESTION_COUNT,
   nipun_g3: NIPUN_QUESTION_COUNT,
   mpl_b: MPL_B_QUESTION_COUNT,
+  usage: 1,
 };
 export const HIST_LENGTH: Record<LiteracyMetric, number> = {
   nipun_g2: NIPUN_QUESTION_COUNT + 1,
   nipun_g3: NIPUN_QUESTION_COUNT + 1,
   mpl_b: MPL_B_QUESTION_COUNT + 1,
+  usage: USAGE_HIST_MAX_MINUTES + 1,
 };
+export function histIndex(metric: LiteracyMetric, score: number): number {
+  return metric === 'usage'
+    ? Math.min(Math.floor(score), USAGE_HIST_MAX_MINUTES)
+    : Math.round(score * HIST_DENOMINATOR[metric]);
+}
 export const STUDENT_BATCH_SIZE = 200;
 export const GEO_BATCH_SIZE = 500;
 export const ACTIVE_WINDOW_DAYS = 14;
@@ -55,6 +73,7 @@ export interface GeoVector {
   nipun_g2: MetricVector;
   nipun_g3: MetricVector;
   mpl_b: MetricVector;
+  usage: MetricVector;
 }
 
 export function emptyVector(): GeoVector {
@@ -72,6 +91,7 @@ export function emptyVector(): GeoVector {
     nipun_g2: metric('nipun_g2'),
     nipun_g3: metric('nipun_g3'),
     mpl_b: metric('mpl_b'),
+    usage: metric('usage'),
   };
 }
 
@@ -104,6 +124,9 @@ export interface LatestStudentRow {
   nipun_g3_passed: boolean | null;
   mpl_b_score: number | null;
   mpl_b_passed: boolean | null;
+  // Minutes from the row dated computed_for only (an older row's minutes
+  // belong to another day); null → 0.
+  usage_score: number | null;
 }
 
 // A student's contribution to their school's vector on `computedFor`:
@@ -116,25 +139,32 @@ export function studentVector(
 ): GeoVector {
   const v = emptyVector();
   v.students_active = row.active ? 1 : 0;
-  const scores: Record<LiteracyMetric, [number | null, boolean | null]> = {
+  const scores: Record<TestMetric, [number | null, boolean | null]> = {
     nipun_g2: [row.nipun_g2_score, row.nipun_g2_passed],
     nipun_g3: [row.nipun_g3_score, row.nipun_g3_passed],
     mpl_b: [row.mpl_b_score, row.mpl_b_passed],
   };
-  v.students_scored = METRICS.some((m) => scores[m][0] !== null) ? 1 : 0;
+  v.students_scored = TEST_METRICS.some((m) => scores[m][0] !== null) ? 1 : 0;
+  // Usage counts every student, banded or not: absent minutes are zero.
+  const minutes = row.usage_score ?? 0;
+  v.usage.n = 1;
+  v.usage.sum = minutes;
+  v.usage.sumsq = minutes * minutes;
+  v.usage.pass = minutes > USAGE_PASS_MINUTES ? 1 : 0;
+  v.usage.hist[histIndex('usage', minutes)] = 1;
   const age = ageOn(computedFor, row.birth_year, row.birth_month);
   if (age === null) {
     v.students_unbanded = 1;
     return v;
   }
-  for (const m of METRICS) {
+  for (const m of TEST_METRICS) {
     const [score, passed] = scores[m];
     if (score === null || !inBand(m, age)) continue;
     v[m].n = 1;
     v[m].sum = score;
     v[m].sumsq = score * score;
     v[m].pass = passed ? 1 : 0;
-    v[m].hist[Math.round(score * HIST_DENOMINATOR[m])] = 1;
+    v[m].hist[histIndex(m, score)] = 1;
   }
   return v;
 }
@@ -305,6 +335,13 @@ export class TestResultsService {
            WHERE l.user_id = u.id
              AND l.created_at > COALESCE(
                (SELECT max(t.created_at) FROM test_results_student t WHERE t.student_id = u.id),
+               '-infinity'::timestamptz))
+           OR EXISTS (
+           SELECT 1 FROM media_metadata m
+           WHERE m.user_id = u.id AND m.source = 'whatsapp' AND m.media_type = 'audio'
+             AND m.rolled_back = false
+             AND m.created_at > COALESCE(
+               (SELECT max(t.created_at) FROM test_results_student t WHERE t.student_id = u.id),
                '-infinity'::timestamptz)))
        ORDER BY u.id`,
       [full],
@@ -319,6 +356,10 @@ export class TestResultsService {
       (sql, params) => this.dataSource.query(sql, params),
       batch.map((c) => c.id),
     );
+    const usage = await this.usageForBatch(
+      batch.map((c) => c.id),
+      computedFor,
+    );
     const values: string[] = [];
     const params: unknown[] = [];
     let p = 0;
@@ -332,11 +373,13 @@ export class TestResultsService {
         nipun_g3: { score: null, passed: null, attempts: 0 },
         mpl_b: { score: null, passed: null, attempts: 0 },
       };
+      const u = usage.get(c.id) ?? { minutes: null, notes: 0 };
       values.push(
         `(${push(c.id)}, ${push(c.geo_entity_id)}, ${push(computedFor)}::date, ` +
           `${push(s.nipun_g2.score)}, ${push(s.nipun_g2.passed)}, ${push(s.nipun_g2.attempts)}, ` +
           `${push(s.nipun_g3.score)}, ${push(s.nipun_g3.passed)}, ${push(s.nipun_g3.attempts)}, ` +
-          `${push(s.mpl_b.score)}, ${push(s.mpl_b.passed)}, ${push(s.mpl_b.attempts)})`,
+          `${push(s.mpl_b.score)}, ${push(s.mpl_b.passed)}, ${push(s.mpl_b.attempts)}, ` +
+          `${push(u.minutes)}, ${push(u.minutes === null ? null : u.minutes > USAGE_PASS_MINUTES)}, ${push(u.notes)})`,
       );
     }
     if (values.length === 0) return 0;
@@ -346,17 +389,54 @@ export class TestResultsService {
          (student_id, geo_entity_id, computed_for,
           nipun_g2_score, nipun_g2_passed, nipun_g2_attempts,
           nipun_g3_score, nipun_g3_passed, nipun_g3_attempts,
-          mpl_b_score, mpl_b_passed, mpl_b_attempts)
+          mpl_b_score, mpl_b_passed, mpl_b_attempts,
+          usage_score, usage_passed, usage_attempts)
        VALUES ${values.join(',\n')}
        ON CONFLICT (student_id, computed_for) DO UPDATE SET
          geo_entity_id = EXCLUDED.geo_entity_id,
          nipun_g2_score = EXCLUDED.nipun_g2_score, nipun_g2_passed = EXCLUDED.nipun_g2_passed, nipun_g2_attempts = EXCLUDED.nipun_g2_attempts,
          nipun_g3_score = EXCLUDED.nipun_g3_score, nipun_g3_passed = EXCLUDED.nipun_g3_passed, nipun_g3_attempts = EXCLUDED.nipun_g3_attempts,
          mpl_b_score = EXCLUDED.mpl_b_score, mpl_b_passed = EXCLUDED.mpl_b_passed, mpl_b_attempts = EXCLUDED.mpl_b_attempts,
+         usage_score = EXCLUDED.usage_score, usage_passed = EXCLUDED.usage_passed, usage_attempts = EXCLUDED.usage_attempts,
          created_at = now()`,
       params,
     );
     return batch.length;
+  }
+
+  // Active minutes per student on the IST day before `computedFor`, from
+  // their WhatsApp voice notes. Students with no note that day are absent
+  // from the map (never a zero row).
+  private async usageForBatch(
+    ids: string[],
+    computedFor: string,
+  ): Promise<Map<string, { minutes: number; notes: number }>> {
+    const dayEnd = new Date(
+      new Date(`${computedFor}T00:00:00Z`).getTime() - IST_OFFSET_MS,
+    );
+    const dayStart = new Date(dayEnd.getTime() - 86_400_000);
+    const rows: Array<{ user_id: string; created_at: Date | string }> =
+      await this.dataSource.query(
+        `/* test-results:voice-notes */
+         SELECT user_id, created_at FROM media_metadata
+         WHERE user_id = ANY($1::uuid[])
+           AND source = 'whatsapp' AND media_type = 'audio' AND rolled_back = false
+           AND created_at >= $2 AND created_at < $3
+         ORDER BY user_id, created_at`,
+        [ids, dayStart, dayEnd],
+      );
+    const times = new Map<string, number[]>();
+    for (const r of rows) {
+      const list = times.get(r.user_id) ?? [];
+      list.push(new Date(r.created_at).getTime());
+      times.set(r.user_id, list);
+    }
+    return new Map(
+      [...times].map(([id, t]) => [
+        id,
+        { minutes: Math.round(activeMs(t) / 6_000) / 10, notes: t.length },
+      ]),
+    );
   }
 
   // Every student's LATEST row (most were skipped tonight, so tonight's rows
@@ -377,6 +457,7 @@ export class TestResultsService {
               t.nipun_g2_score::float8 AS nipun_g2_score, t.nipun_g2_passed,
               t.nipun_g3_score::float8 AS nipun_g3_score, t.nipun_g3_passed,
               t.mpl_b_score::float8 AS mpl_b_score, t.mpl_b_passed,
+              CASE WHEN t.computed_for = $2::date THEN t.usage_score::float8 END AS usage_score,
               EXISTS (SELECT 1 FROM literacy_lesson_states l
                       WHERE l.user_id = t.student_id AND l.created_at >= $1) AS active
        FROM test_results_student t
@@ -384,7 +465,7 @@ export class TestResultsService {
        LEFT JOIN users r ON r.id = u.referrer_user_id
        WHERE u.role = 'student' AND u.deleted_at IS NULL
        ORDER BY t.student_id, t.created_at DESC`,
-      [activeSince],
+      [activeSince, computedFor],
     );
 
     const vectors = new Map<string, GeoVector>();

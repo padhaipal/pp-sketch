@@ -4,13 +4,16 @@
 // student with no birth_year at all is "unbanded": excluded from every
 // metric's n and counted in students_unbanded.
 
-export type LiteracyMetric = 'nipun_g2' | 'nipun_g3' | 'mpl_b';
+// The three literacy-test proxies plus `usage` — the leading indicator:
+// active minutes per day (test-results.service.ts), no age band.
+export type LiteracyMetric = 'nipun_g2' | 'nipun_g3' | 'mpl_b' | 'usage';
+export type TestMetric = Exclude<LiteracyMetric, 'usage'>;
 
 // [min, max) in whole years on the computed_for date.
 //
 // PLACEHOLDER VALUES — confirm with Tom before merging anything that reads
 // these for a real decision. The shape is final; the numbers are not.
-export const METRIC_AGE_BANDS: Record<LiteracyMetric, [number, number]> = {
+export const METRIC_AGE_BANDS: Record<TestMetric, [number, number]> = {
   nipun_g2: [7, 9],
   nipun_g3: [8, 10],
   mpl_b: [8, 10],
@@ -41,6 +44,7 @@ export function ageOn(
 }
 
 export function inBand(metric: LiteracyMetric, age: number | null): boolean {
+  if (metric === 'usage') return true;
   if (age === null) return false;
   const [min, max] = METRIC_AGE_BANDS[metric];
   return age >= min && age < max;

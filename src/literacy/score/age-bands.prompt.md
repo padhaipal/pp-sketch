@@ -8,7 +8,8 @@ the birth month; null `birth_month` assumes July; null `birth_year` → null.
 [8, 10), mpl_b [8, 10). **PLACEHOLDER VALUES — confirm with Tom before any
 real decision reads them**; the source comment says the same.
 
-`inBand(metric, age)`. Used by `studentVector` in test-results.service.ts: a
+`inBand(metric, age)` — always true for `usage` (no band; `LiteracyMetric`
+= the three `TestMetric`s + `usage`). Used by `studentVector` in test-results.service.ts: a
 student outside a metric's band is excluded from that metric's `n` only; a
 null-`birth_year` student is unbanded — excluded from every `n`, counted in
 `students_unbanded`.
