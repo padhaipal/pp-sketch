@@ -1149,23 +1149,37 @@ describe('LiteracyLessonService.selectNextWord — scoring + exclusion + tie-bre
 // controlled snapshot. Returns the service + the INSERT param capture.
 const DEFAULT_TEST_PASSAGES = [{ id: 'passage-1', text: 'अब कमल' }];
 
+// The mocked passage bank: a plain list (first row answers every passage
+// query) or a resolver that sees the SQL + params — for the selectPassage
+// ladder tests, which must tell the unseen / reuse queries apart.
+type PassagePool =
+  | { id: string; text: string; level?: number }[]
+  | ((
+      sql: string,
+      params: unknown[],
+    ) => { id: string; text: string; level?: number }[]);
+
 // SQL-routed dsQuery: the selection query, the passage lookup(s) and the
 // INSERT are matched by shape, so word-path call indexes stay stable and the
 // passage path (level ≥ 8, 2026-07) just works.
 function routedDsQuery(
   row: Record<string, unknown>,
-  passages: { id: string; text: string }[] = DEFAULT_TEST_PASSAGES,
+  passages: PassagePool = DEFAULT_TEST_PASSAGES,
 ): jest.Mock {
-  return jest.fn().mockImplementation(async (sql: string) => {
-    if (sql.includes('recent_distinct_words')) return [row];
-    if (sql.includes("media_details->>'role' = 'passage'")) {
-      return passages.slice(0, 1);
-    }
-    if (sql.includes('INSERT INTO literacy_lesson_states')) {
-      return [{ id: 'lls-1' }];
-    }
-    return [];
-  });
+  return jest
+    .fn()
+    .mockImplementation(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('recent_distinct_words')) return [row];
+      if (sql.includes("media_details->>'role' = 'passage'")) {
+        return typeof passages === 'function'
+          ? passages(sql, params)
+          : passages.slice(0, 1);
+      }
+      if (sql.includes('INSERT INTO literacy_lesson_states')) {
+        return [{ id: 'lls-1' }];
+      }
+      return [];
+    });
 }
 
 // Params of the literacy_lesson_states INSERT, wherever it landed in the
@@ -1181,7 +1195,7 @@ function insertParamsOf(dsQuery: jest.Mock): unknown[] {
 function freshStart(
   row: Record<string, unknown>,
   snapshot = happySnapshot(),
-  passages: { id: string; text: string }[] = DEFAULT_TEST_PASSAGES,
+  passages: PassagePool = DEFAULT_TEST_PASSAGES,
 ) {
   const repo = makeRepo();
   repo.findOne.mockResolvedValue(null);
@@ -1756,7 +1770,7 @@ describe('LiteracyLessonService — word-length decisions on timeout-shaped hist
 async function freshSentenceStart(
   row: Record<string, unknown>,
   snapshot: unknown = happySnapshot(),
-  passages: { id: string; text: string }[] = DEFAULT_TEST_PASSAGES,
+  passages: PassagePool = DEFAULT_TEST_PASSAGES,
 ): Promise<{
   out: {
     stateTransitionIds: string[];
@@ -1869,6 +1883,119 @@ describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 
       (c[0] as string).includes("media_details->>'role' = 'passage'"),
     )!;
     expect(passageCall[1]).toEqual([8, ['old-p1', 'old-p2']]);
+  });
+
+  // ── selectPassage ladder (2026-09: never twice while anything is unseen) ──
+  // Query shapes: unseen = `NOT (id = ANY($2` ; reuse = `array_position` ;
+  // exact level = `= $1` ; nearest level = `BETWEEN`.
+  const isUnseen = (sql: string) => sql.includes('NOT (id = ANY($2');
+  const isReuse = (sql: string) => sql.includes('array_position');
+  const isExact = (sql: string) =>
+    sql.includes("(media_details->>'level')::int = $1");
+  const passageSql = (dsQuery: jest.Mock) =>
+    dsQuery.mock.calls
+      .map((c) => c[0] as string)
+      .filter((s) => s.includes("media_details->>'role' = 'passage'"));
+  const heldAt8 = () =>
+    progressed({
+      prev_level: 8,
+      recent_words: ['अब कमल'],
+      recent_passage_ids: ['newest-p', 'older-p', 'oldest-p'],
+    });
+
+  it('never repeats while an unseen passage exists at ANOTHER level: exact level exhausted → nearest unseen, no reuse query', async () => {
+    const { input, dsQuery } = await freshSentenceStart(
+      heldAt8(),
+      happySnapshot(),
+      (sql) => {
+        if (isUnseen(sql) && isExact(sql)) return []; // level 8 fully seen
+        if (isUnseen(sql))
+          return [{ id: 'fresh-l9', text: 'नया वाक्य यहाँ', level: 9 }];
+        throw new Error(`reuse query must not run: ${sql.slice(0, 60)}`);
+      },
+    );
+    expect(input.passageId).toBe('fresh-l9');
+    expect(passageSql(dsQuery).some(isReuse)).toBe(false);
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.passage.reused',
+      false,
+    ]);
+  });
+
+  it('bank exhausted (nothing unseen at any level) → reuses the LEAST-recently-seen passage at the exact level and flags it', async () => {
+    const { input, dsQuery } = await freshSentenceStart(
+      heldAt8(),
+      happySnapshot(),
+      (sql, params) => {
+        if (isUnseen(sql)) return [];
+        // the reuse query asks Postgres for the oldest by array position; the
+        // fake honours that by answering with the last id of the seen list
+        if (isReuse(sql) && isExact(sql)) {
+          const seen = params[1] as string[];
+          return [
+            { id: seen[seen.length - 1], text: 'पुराना वाक्य', level: 8 },
+          ];
+        }
+        return [];
+      },
+    );
+    expect(input.passageId).toBe('oldest-p');
+    const sqls = passageSql(dsQuery);
+    // ladder order: unseen exact → unseen nearest → reuse exact
+    expect(sqls.map((s) => [isUnseen(s), isReuse(s), isExact(s)])).toEqual([
+      [true, false, true],
+      [true, false, false],
+      [false, true, true],
+    ]);
+    expect(sqls[2]).toContain('ORDER BY array_position($2::uuid[], id) DESC');
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.passage.reused',
+      true,
+    ]);
+  });
+
+  it('bank exhausted and nothing at the exact level → reuses the nearest level, least-recently-seen first', async () => {
+    const { input, dsQuery } = await freshSentenceStart(
+      heldAt8(),
+      happySnapshot(),
+      (sql) => {
+        if (isUnseen(sql)) return [];
+        if (isReuse(sql) && isExact(sql)) return [];
+        if (isReuse(sql))
+          return [{ id: 'older-p', text: 'पास का वाक्य', level: 9 }];
+        return [];
+      },
+    );
+    expect(input.passageId).toBe('older-p');
+    const last = passageSql(dsQuery).at(-1)!;
+    expect(last).toContain('BETWEEN');
+    expect(last).toContain('array_position($2::uuid[], id) DESC');
+  });
+
+  it('a student with no passage history and an empty bank gets the word fallback, never a reuse query', async () => {
+    const { input, dsQuery } = await freshSentenceStart(
+      progressed({
+        prev_level: 8,
+        recent_words: ['अब कमल'],
+        recent_passage_ids: [],
+      }),
+      happySnapshot(),
+      () => [],
+    );
+    expect(input.passageId).toBeUndefined();
+    expect(passageSql(dsQuery).some(isReuse)).toBe(false);
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.word.selection',
+      'passage-missing-word-fallback',
+    ]);
+  });
+
+  it('ships the whole passage history as the exclusion list (limit is effectively unbounded)', async () => {
+    const { dsQuery } = await freshSentenceStart(heldAt8());
+    const selection = dsQuery.mock.calls.find((c) =>
+      (c[0] as string).includes('recent_distinct_words'),
+    )!;
+    expect(selection[1]).toContain(10_000_000);
   });
 
   it('recency exclusion still sees each word inside a stored sentence (word path)', async () => {
