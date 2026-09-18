@@ -35,5 +35,8 @@ describe('inBand', () => {
     expect(inBand('mpl_b', 9)).toBe(true);
     expect(inBand('mpl_b', 10)).toBe(false);
     expect(inBand('mpl_b', null)).toBe(false);
+    // Usage has no band: every student counts, even without a birth year.
+    expect(inBand('usage', 3)).toBe(true);
+    expect(inBand('usage', null)).toBe(true);
   });
 });

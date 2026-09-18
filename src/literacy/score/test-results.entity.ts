@@ -60,6 +60,15 @@ export class TestResultStudentEntity {
   @Column({ type: 'integer', default: 0 })
   mpl_b_attempts: number;
 
+  // Usage: active minutes on the IST day before computed_for; NULL when the
+  // student sent no voice note that day (zero is never stored).
+  @Column({ type: 'numeric', precision: 6, scale: 1, nullable: true })
+  usage_score: string | null;
+  @Column({ type: 'boolean', nullable: true })
+  usage_passed: boolean | null;
+  @Column({ type: 'integer', default: 0 })
+  usage_attempts: number;
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;
 }
@@ -131,6 +140,23 @@ export class TestResultGeoEntityEntity {
     default: () => `'{${Array(21).fill(0).join(',')}}'`,
   })
   mpl_b_hist: number[];
+
+  // Usage (active minutes on the day before computed_for): n counts every
+  // student, minutes sum, whole-minute histogram 0…30+.
+  @Column({ type: 'integer', default: 0 })
+  usage_n: number;
+  @Column({ type: 'numeric', precision: 12, scale: 1, default: 0 })
+  usage_sum: string;
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0 })
+  usage_sumsq: string;
+  @Column({ type: 'integer', default: 0 })
+  usage_pass: number;
+  @Column({
+    type: 'integer',
+    array: true,
+    default: () => `'{${Array(31).fill(0).join(',')}}'`,
+  })
+  usage_hist: number[];
 
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;

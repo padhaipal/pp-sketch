@@ -7,6 +7,7 @@ import type {
 } from '../../geo-entities/geo-entity.dto';
 import { DESCENDANTS_MAX_LIMIT } from '../../geo-entities/geo-entity.dto';
 import { ageOn, inBand, LiteracyMetric } from './age-bands';
+import { USAGE_PASS_MINUTES } from './test-results.service';
 import {
   ACTIVE_WINDOW_DAYS,
   binOf,
@@ -275,7 +276,11 @@ export class DashboardScoresService {
     const seriesRows: SeriesRow[] = await this.dataSource.query(
       `/* dashboard-scores:class-series */
        SELECT t.computed_for,
-              COUNT(*) FILTER (WHERE t.${metric}_score IS NOT NULL)::int AS n,
+              ${
+                metric === 'usage'
+                  ? `(SELECT COUNT(*) FROM users c WHERE c.referrer_user_id = $1 AND c.role = 'student' AND c.deleted_at IS NULL)::int AS n`
+                  : `COUNT(*) FILTER (WHERE t.${metric}_score IS NOT NULL)::int AS n`
+              },
               COUNT(*) FILTER (WHERE t.${metric}_passed)::int AS pass
        FROM test_results_student t
        JOIN users u ON u.id = t.student_id
@@ -519,6 +524,12 @@ export class DashboardScoresService {
       prior_passed: boolean | null;
     }
     const bySchool = 'school' in scope;
+    // Usage is a per-day number: only a row dated as_of (or exactly the prior
+    // date) carries minutes for that day; anything else is zero.
+    const usage = metric === 'usage';
+    const scoreSql = usage
+      ? `CASE WHEN l.computed_for = $2::date THEN l.usage_score::float8 END`
+      : `l.${metric}_score::float8`;
     const rows: Row[] = await this.dataSource.query(
       `/* dashboard-scores:${bySchool ? 'students' : 'class'} */
        WITH members AS (
@@ -540,7 +551,7 @@ export class DashboardScoresService {
                 t.${metric}_score::float8 AS prior_score, t.${metric}_passed AS prior_passed
          FROM test_results_student t
          JOIN members m ON m.student_id = t.student_id
-         WHERE t.computed_for <= ($2::date - ($3 || ' days')::interval)
+         WHERE t.computed_for ${usage ? '=' : '<='} ($2::date - ($3 || ' days')::interval)
          ORDER BY t.student_id, t.computed_for DESC
        ),
        -- Deliberate read outside the results tables: active/last_active_at
@@ -553,7 +564,7 @@ export class DashboardScoresService {
        )
        SELECT l.student_id, u.name, u.created_at, u.birth_year, u.birth_month,
               u.referrer_user_id,
-              l.${metric}_score::float8 AS score, l.${metric}_passed AS passed,
+              ${scoreSql} AS score, l.${metric}_passed AS passed,
               l.${metric}_attempts::int AS attempts, a.last_active_at,
               p.prior_score, p.prior_passed
        FROM latest l
@@ -581,24 +592,29 @@ export class DashboardScoresService {
       // stored per student either.
       const age = ageOn(asOfDate, r.birth_year, r.birth_month);
       const lastActive = r.last_active_at ? new Date(r.last_active_at) : null;
-      const priorScore = r.prior_score ?? null;
+      // Usage: absence is zero minutes; deltas are in minutes, not points.
+      const score = usage ? (r.score ?? 0) : r.score;
+      const priorScore = usage ? (r.prior_score ?? 0) : (r.prior_score ?? null);
+      const scale = usage ? 1 : 100;
       return {
         student_id: r.student_id,
         label: studentLabel(r.name, ordinal.get(r.student_id) ?? 0),
         name: r.name,
-        score: r.score,
-        passed: r.passed,
+        score,
+        passed: usage ? score! > USAGE_PASS_MINUTES : r.passed,
         attempts: r.attempts,
         in_band: inBand(metric, age),
         active: lastActive !== null && lastActive.getTime() >= activeSince,
         last_active_at: lastActive ? lastActive.toISOString() : null,
         delta: delta(
-          r.score === null ? null : r.score * 100,
-          priorScore === null ? null : priorScore * 100,
+          score === null ? null : score * scale,
+          priorScore === null ? null : priorScore * scale,
         ),
         referrer_user_id: r.referrer_user_id ?? null,
         prior_score: priorScore,
-        prior_passed: r.prior_passed ?? null,
+        prior_passed: usage
+          ? priorScore! > USAGE_PASS_MINUTES
+          : (r.prior_passed ?? null),
         unbanded: age === null,
       };
     });
