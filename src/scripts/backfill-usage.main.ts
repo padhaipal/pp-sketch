@@ -52,6 +52,10 @@ async function main(): Promise<void> {
   } finally {
     await app.close();
   }
+  // queues.ts opens a module-level ioredis client on import that nothing
+  // closes, so the event loop never drains on its own. Every write above is
+  // awaited before the summary prints; exiting here loses nothing.
+  process.exit(0);
 }
 
 if (require.main === module) {
