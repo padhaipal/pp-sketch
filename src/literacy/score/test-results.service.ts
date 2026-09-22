@@ -28,7 +28,7 @@ export const METRICS: readonly LiteracyMetric[] = [...TEST_METRICS, 'usage'];
 // zero, both per student (no usage_score) and per area (counted as 0).
 export const USAGE_PASS_MINUTES = 5;
 export const USAGE_HIST_MAX_MINUTES = 30; // last bucket: 30+
-const IST_OFFSET_MS = 5.5 * 3_600_000;
+export const IST_OFFSET_MS = 5.5 * 3_600_000;
 // Score space is discrete: score × denominator is the histogram index (usage:
 // whole minutes, capped at the last bucket).
 export const HIST_DENOMINATOR: Record<LiteracyMetric, number> = {
@@ -176,6 +176,14 @@ export class TestRunInProgressError extends Error {
     super(`a test-results run is already in progress (${runId})`);
     this.name = 'TestRunInProgressError';
   }
+}
+
+// One backfilled student-day (upsertStudentUsage).
+export interface StudentUsageRow {
+  student_id: string;
+  geo_entity_id: string | null;
+  minutes: number;
+  notes: number;
 }
 
 export interface RunOptions {
@@ -497,10 +505,69 @@ export class TestResultsService {
     return entries.length;
   }
 
+  // ─── Usage backfill (src/scripts/backfill-usage.ts) ───────────────────
+  // Historical rows for days the nightly never saw. Both writers touch ONLY
+  // the usage columns on conflict (NIPUN/MPL-B stay whatever the nightly
+  // wrote, NULL on rows created here) and bind created_at to the historical
+  // instant rather than now(): aggregateGeo picks each student's latest row
+  // by created_at and candidates() compares activity against it, so a
+  // backfilled row stamped now() would shadow tonight's real scores.
+
+  async upsertStudentUsage(
+    rows: StudentUsageRow[],
+    computedFor: string,
+    createdAt: Date,
+  ): Promise<number> {
+    if (rows.length === 0) return 0;
+    const values: string[] = [];
+    const params: unknown[] = [];
+    let p = 0;
+    const push = (v: unknown) => {
+      params.push(v);
+      return `$${++p}`;
+    };
+    for (const r of rows) {
+      values.push(
+        `(${push(r.student_id)}, ${push(r.geo_entity_id)}, ${push(computedFor)}::date, ` +
+          `${push(r.minutes)}, ${push(r.minutes > USAGE_PASS_MINUTES)}, ${push(r.notes)}, ${push(createdAt)})`,
+      );
+    }
+    await this.dataSource.query(
+      `/* test-results:backfill-students */
+       INSERT INTO test_results_student
+         (student_id, geo_entity_id, computed_for, usage_score, usage_passed, usage_attempts, created_at)
+       VALUES ${values.join(',\n')}
+       ON CONFLICT (student_id, computed_for) DO UPDATE SET
+         usage_score = EXCLUDED.usage_score, usage_passed = EXCLUDED.usage_passed, usage_attempts = EXCLUDED.usage_attempts`,
+      params,
+    );
+    return rows.length;
+  }
+
+  async upsertGeoUsage(
+    entries: Array<[string, GeoVector]>,
+    computedFor: string,
+    createdAt: Date,
+  ): Promise<number> {
+    for (let i = 0; i < entries.length; i += GEO_BATCH_SIZE) {
+      await this.upsertGeoRows(
+        entries.slice(i, i + GEO_BATCH_SIZE),
+        computedFor,
+        {
+          usageOnly: true,
+          createdAt,
+        },
+      );
+    }
+    return entries.length;
+  }
+
   private async upsertGeoRows(
     entries: Array<[string, GeoVector]>,
     computedFor: string,
+    backfill?: { usageOnly: true; createdAt: Date },
   ): Promise<void> {
+    if (entries.length === 0) return;
     const values: string[] = [];
     const params: unknown[] = [];
     let p = 0;
@@ -531,20 +598,29 @@ export class TestResultsService {
       `${m}_pass`,
       `${m}_hist`,
     ]);
-    const setClause = [
-      'students_active',
-      'students_scored',
-      'students_unbanded',
-      ...metricColumnNames,
-    ]
-      .map((c) => `${c} = EXCLUDED.${c}`)
-      .join(', ');
+    const updatable = backfill
+      ? metricColumnNames.filter((c) => c.startsWith('usage_'))
+      : [
+          'students_active',
+          'students_scored',
+          'students_unbanded',
+          ...metricColumnNames,
+        ];
+    const setClause = updatable.map((c) => `${c} = EXCLUDED.${c}`).join(', ');
+    const createdAtCol = backfill ? ', created_at' : '';
+    const createdAtVal = backfill ? `, ${push(backfill.createdAt)}` : '';
+    const createdAtSet = backfill ? '' : ', created_at = now()';
+    // values were built before createdAtVal bound its parameter, so append it
+    // to every row here rather than inside the loop above.
+    const rowsSql = backfill
+      ? values.map((v) => `${v.slice(0, -1)}${createdAtVal})`).join(',\n')
+      : values.join(',\n');
     await this.dataSource.query(
-      `/* test-results:upsert-geo */
+      `/* test-results:${backfill ? 'backfill-geo' : 'upsert-geo'} */
        INSERT INTO test_results_geo_entity
-         (geo_entity_id, computed_for, students_active, students_scored, students_unbanded, ${metricColumnNames.join(', ')})
-       VALUES ${values.join(',\n')}
-       ON CONFLICT (geo_entity_id, computed_for) DO UPDATE SET ${setClause}, created_at = now()`,
+         (geo_entity_id, computed_for, students_active, students_scored, students_unbanded, ${metricColumnNames.join(', ')}${createdAtCol})
+       VALUES ${rowsSql}
+       ON CONFLICT (geo_entity_id, computed_for) DO UPDATE SET ${setClause}${createdAtSet}`,
       params,
     );
   }

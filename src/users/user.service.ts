@@ -358,6 +358,9 @@ export class UserService {
     );
   }
 
+  // Every branch writes role 'student': the inbound processor is the only
+  // caller and a first message is always a learner. Staff come in through
+  // createStaff(); dev/admin through the seed or PATCH.
   async create(options: CreateUserOptions): Promise<User> {
     const validated = validateCreateUserOptions(options);
 
@@ -368,6 +371,7 @@ export class UserService {
         external_id: validated.external_id,
         name: validated.name ?? null,
         referrer_user_id: validated.referrer_user_id,
+        role: 'student',
       });
       user = await this.userRepo.save(user);
 
@@ -398,8 +402,8 @@ export class UserService {
     } else if (validated.referrer_external_id) {
       // INSERT...SELECT with referrer lookup — raw SQL (complex query #5)
       const rows: UserEntity[] = await this.dataSource.query(
-        `INSERT INTO users (external_id, name, referrer_user_id)
-               SELECT $1, $2, id FROM users WHERE external_id = $3
+        `INSERT INTO users (external_id, name, referrer_user_id, role)
+               SELECT $1, $2, id, 'student' FROM users WHERE external_id = $3
                RETURNING *`,
         [
           validated.external_id,
@@ -413,6 +417,7 @@ export class UserService {
         user = this.userRepo.create({
           external_id: validated.external_id,
           name: validated.name ?? null,
+          role: 'student',
         });
         user = await this.userRepo.save(user);
         await this.scoreService.createSeedScores(user.id);
@@ -451,6 +456,7 @@ export class UserService {
       user = this.userRepo.create({
         external_id: validated.external_id,
         name: validated.name ?? null,
+        role: 'student',
       });
     }
 
@@ -499,23 +505,29 @@ export class UserService {
   async lookupStaff(
     q: string,
     limit = 20,
-    roles: readonly UserRole[] = STAFF_ROLES,
+    roles?: readonly UserRole[],
   ): Promise<StaffLookupRow[]> {
     const trimmed = q.trim();
     if (trimmed.length === 0) return [];
     const digits = trimmed.replace(/\D/g, '');
+    // An explicit roles list is the "every account" search: rows created
+    // before role defaulted to 'student' may still be NULL and must show.
+    const roleClause =
+      roles === undefined
+        ? `u.role = ANY($1::text[])`
+        : `(u.role = ANY($1::text[]) OR u.role IS NULL)`;
     return await this.dataSource.query(
       `SELECT u.id, u.external_id, u.name, u.role, u.role_title, u.staff_notes,
               u.geo_entity_id, g.name AS geo_entity_name, g.type AS geo_entity_type,
               u.deleted_at
        FROM users u
        LEFT JOIN geo_entity g ON g.id = u.geo_entity_id
-       WHERE u.role = ANY($1::text[])
+       WHERE ${roleClause}
          AND (u.name ILIKE '%' || $2 || '%'
               OR ($3 <> '' AND u.external_id LIKE '%' || $3 || '%'))
        ORDER BY u.deleted_at IS NOT NULL, u.name NULLS LAST, u.created_at DESC
        LIMIT $4`,
-      [[...roles], trimmed, digits, limit],
+      [[...(roles ?? STAFF_ROLES)], trimmed, digits, limit],
     );
   }
 

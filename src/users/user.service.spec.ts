@@ -257,6 +257,11 @@ describe('UserService.create', () => {
     const out = await svc.create({ external_id: '919999990001' });
 
     expect(out).toBe(saved);
+    expect(repo.create).toHaveBeenCalledWith({
+      external_id: '919999990001',
+      name: null,
+      role: 'student',
+    });
     expect(score.createSeedScores).toHaveBeenCalledWith('u1');
     expect(cache.set).toHaveBeenCalledWith('user:id:u1', saved, 3600);
     expect(cache.set).toHaveBeenCalledWith(
@@ -511,10 +516,10 @@ describe('UserService — exact SQL + where-clause shapes', () => {
     });
     // INSERT call
     expect(ds.mock.calls[0][0]).toContain(
-      'INSERT INTO users (external_id, name, referrer_user_id)',
+      'INSERT INTO users (external_id, name, referrer_user_id, role)',
     );
     expect(ds.mock.calls[0][0]).toContain(
-      'SELECT $1, $2, id FROM users WHERE external_id = $3',
+      "SELECT $1, $2, id, 'student' FROM users WHERE external_id = $3",
     );
     expect(ds.mock.calls[0][0]).toContain('RETURNING *');
     expect(ds.mock.calls[0][1]).toEqual(['919999990001', null, '918888880002']);
@@ -1641,11 +1646,15 @@ describe('UserService.lookupStaff / getStaff', () => {
     ]);
   });
 
-  it('lookupStaff searches the given roles when `roles` is passed', async () => {
+  it('lookupStaff searches the given roles, NULL role included, when `roles` is passed', async () => {
     const ds = jest.fn().mockResolvedValue([]);
     const svc = makeService(makeRepo(), ds, makeCache(), makeScore());
     await svc.lookupStaff('98765', 20, ['student', 'dev']);
-    expect(ds.mock.calls[0][1][0]).toEqual(['student', 'dev']);
+    const [sql, params] = ds.mock.calls[0];
+    expect(sql).toMatch(
+      /\(u\.role = ANY\(\$1::text\[\]\) OR u\.role IS NULL\)/,
+    );
+    expect(params[0]).toEqual(['student', 'dev']);
   });
 
   it('lookupStaff returns [] for a blank query without a query', async () => {

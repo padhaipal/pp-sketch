@@ -777,3 +777,97 @@ describe('TestResultsService — overlap guard', () => {
     );
   });
 });
+
+describe('TestResultsService — usage backfill writers', () => {
+  function plainService() {
+    const query = jest.fn().mockResolvedValue([]);
+    const svc = new TestResultsService(
+      { query } as unknown as DataSource,
+      { ancestors: jest.fn() } as unknown as GeoEntityService,
+    );
+    return { svc, query };
+  }
+  const at = new Date('2026-06-01T18:45:00Z');
+
+  it('upsertStudentUsage binds created_at and updates only the usage columns on conflict', async () => {
+    const { svc, query } = plainService();
+    const n = await svc.upsertStudentUsage(
+      [
+        { student_id: 'A', geo_entity_id: 'S1', minutes: 5.5, notes: 4 },
+        { student_id: 'B', geo_entity_id: null, minutes: 5, notes: 1 },
+      ],
+      '2026-06-02',
+      at,
+    );
+    expect(n).toBe(2);
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('test-results:backfill-students');
+    expect(sql).toContain(
+      '(student_id, geo_entity_id, computed_for, usage_score, usage_passed, usage_attempts, created_at)',
+    );
+    expect(sql).toMatch(
+      /DO UPDATE SET\s+usage_score = EXCLUDED\.usage_score, usage_passed = EXCLUDED\.usage_passed, usage_attempts = EXCLUDED\.usage_attempts$/,
+    );
+    expect(sql).not.toMatch(/nipun|mpl_b|created_at = /);
+    // pass is strictly > 5 minutes.
+    expect(params).toEqual([
+      'A',
+      'S1',
+      '2026-06-02',
+      5.5,
+      true,
+      4,
+      at,
+      'B',
+      null,
+      '2026-06-02',
+      5,
+      false,
+      1,
+      at,
+    ]);
+  });
+
+  it('upsertStudentUsage with no rows issues no query', async () => {
+    const { svc, query } = plainService();
+    expect(await svc.upsertStudentUsage([], '2026-06-02', at)).toBe(0);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('upsertGeoUsage writes created_at and updates only usage_* on conflict', async () => {
+    const { svc, query } = plainService();
+    const v = emptyVector();
+    v.usage = { n: 2, sum: 7, sumsq: 49, pass: 1, hist: v.usage.hist };
+    v.students_active = 1;
+    const n = await svc.upsertGeoUsage(
+      [
+        ['S1', v],
+        ['B1', v],
+      ],
+      '2026-06-02',
+      at,
+    );
+    expect(n).toBe(2);
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('test-results:backfill-geo');
+    expect(sql).toMatch(/usage_hist, created_at\)\s+VALUES/);
+    expect(sql).toMatch(
+      /DO UPDATE SET usage_n = EXCLUDED\.usage_n, usage_sum = EXCLUDED\.usage_sum, usage_sumsq = EXCLUDED\.usage_sumsq, usage_pass = EXCLUDED\.usage_pass, usage_hist = EXCLUDED\.usage_hist$/,
+    );
+    expect(sql).not.toMatch(
+      /students_active = EXCLUDED|nipun_g2_n = EXCLUDED|created_at = now\(\)/,
+    );
+    // created_at is bound once and its placeholder closes every row's tuple.
+    expect(params.filter((p) => p === at)).toHaveLength(1);
+    const slot = `$${params.indexOf(at) + 1}`;
+    expect(sql.match(new RegExp(`, \\${slot}\\)`, 'g'))).toHaveLength(2);
+    expect(sql.match(/\(\$1, \$2::date/)).not.toBeNull();
+    expect(params[0]).toBe('S1');
+  });
+
+  it('upsertGeoUsage with no entries issues no query', async () => {
+    const { svc, query } = plainService();
+    expect(await svc.upsertGeoUsage([], '2026-06-02', at)).toBe(0);
+    expect(query).not.toHaveBeenCalled();
+  });
+});

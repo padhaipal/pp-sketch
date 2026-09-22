@@ -66,9 +66,9 @@ createStaff({ name, external_id, geo_entity_id, role_title, staff_notes? }): Pro
 
 - POST /users/staff-create. The controller has already normalised the phone (normaliseStaffPhone in user.dto.ts: strip non-digits, 10 digits → prefix 91, then validateE164PhoneNumber) and checked the geo entity (422 unless operational and not deleted). ConflictException (409) when the phone belongs to ANY user, any role. One INSERT with role 'education_official' and avatar_seed = the new user's own id (generated here so no second write); seeds scores; populates both cache keys.
 
-lookupStaff(q, limit = 20, roles = STAFF_ROLES): Promise<StaffLookupRow[]>
+lookupStaff(q, limit = 20, roles?: UserRole[]): Promise<StaffLookupRow[]>
 
-- GET /users/lookup. Inline SQL over users LEFT JOIN geo_entity: role IN `roles` — STAFF_ROLES ('education_official', 'staff') by default; the controller passes USER_ROLES (every role) when the request has `any_role=1`, so the onboarding console can distinguish an existing student (promotable) or dev/admin (hands off) from a new number; name ILIKE %q% OR external_id LIKE %digits-of-q%; soft-deleted rows INCLUDED (deleted_at returned) — deactivated first-off, ordered by deleted_at IS NOT NULL, name, created_at DESC. Blank q → []. The controller attaches `link` (dashboard-url.ts staffDashboardLink).
+- GET /users/lookup. Inline SQL over users LEFT JOIN geo_entity: role IN `roles` — STAFF_ROLES ('education_official', 'staff') when `roles` is omitted; the controller passes USER_ROLES (every role) when the request has `any_role=1`, and an explicit list also matches `role IS NULL` (accounts from before role defaulted to 'student'), so the onboarding console can distinguish an existing student (promotable) or dev/admin (hands off) from a new number; name ILIKE %q% OR external_id LIKE %digits-of-q%; soft-deleted rows INCLUDED (deleted_at returned) — deactivated first-off, ordered by deleted_at IS NOT NULL, name, created_at DESC. Blank q → []. The controller attaches `link` (dashboard-url.ts staffDashboardLink).
 
 getStaff(id): Promise<StaffLookupRow | null>
 
@@ -89,6 +89,7 @@ create(options: CreateUserOptions): Promise<User>
 
 - Validate options at runtime with validateCreateUserOptions(). If it fails, log WARN and let the BadRequestException propagate.
 - One atomic query to create the user and resolve the referrer (if provided). After write, if a referrer was set: run the same recursive CTE cycle check as in update() — if it returns any rows, roll back and throw BadRequestException.
+- Every branch writes `role = 'student'` (the referral branch's raw INSERT includes the literal). The inbound processor is the only caller and a first message is always a learner; staff come in through createStaff(), dev/admin through the seed or PATCH. Migration SetUsersRoleDefaultStudent (1791000000000) adds a column default and re-runs the NULL → 'student' backfill for accounts created between AddStaffFieldsToUsers and this change.
 - Populate the cache for both userById and userByExternalId keys with CACHE_TTL.USER.
 - Return the newly created user entity.
 
