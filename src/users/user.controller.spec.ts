@@ -960,6 +960,17 @@ describe('UserController.lookup + getStaff', () => {
     expect(out[1].deleted_at).toEqual(new Date('2026-09-01'));
     await ctrl.lookup(undefined);
     expect(lookupStaff).toHaveBeenLastCalledWith('');
+    // any_role=1 → every role; anything else → default (staff only).
+    await ctrl.lookup('9', '1');
+    expect(lookupStaff).toHaveBeenLastCalledWith('9', 20, [
+      'student',
+      'education_official',
+      'staff',
+      'dev',
+      'admin',
+    ]);
+    await ctrl.lookup('9', '0');
+    expect(lookupStaff).toHaveBeenLastCalledWith('9');
   });
 
   it('getStaff returns the record with geo_entity + ancestors; 404 for non-staff / unknown', async () => {
