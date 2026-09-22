@@ -1641,6 +1641,13 @@ describe('UserService.lookupStaff / getStaff', () => {
     ]);
   });
 
+  it('lookupStaff searches the given roles when `roles` is passed', async () => {
+    const ds = jest.fn().mockResolvedValue([]);
+    const svc = makeService(makeRepo(), ds, makeCache(), makeScore());
+    await svc.lookupStaff('98765', 20, ['student', 'dev']);
+    expect(ds.mock.calls[0][1][0]).toEqual(['student', 'dev']);
+  });
+
   it('lookupStaff returns [] for a blank query without a query', async () => {
     const ds = jest.fn();
     const svc = makeService(makeRepo(), ds, makeCache(), makeScore());

@@ -49,6 +49,7 @@ import {
   StaffUserRow,
   UpdateUserOptions,
   PROTECTED_ROLES,
+  USER_ROLES,
   normaliseStaffPhone,
   ProfilePatchDto,
   PublicProfile,
@@ -736,9 +737,18 @@ export class UserController {
     };
   }
 
+  // any_role=1 widens the search to every role so the onboarding console
+  // can tell "existing student → promote" and "dev/admin → hands off" apart
+  // from "new". Callers are admin/dev-gated by the dashboard proxy.
   @Get('lookup')
-  async lookup(@Query('q') q?: string): Promise<StaffUserRow[]> {
-    const rows = await this.userService.lookupStaff(q ?? '');
+  async lookup(
+    @Query('q') q?: string,
+    @Query('any_role') anyRole?: string,
+  ): Promise<StaffUserRow[]> {
+    const rows =
+      anyRole === '1'
+        ? await this.userService.lookupStaff(q ?? '', 20, USER_ROLES)
+        : await this.userService.lookupStaff(q ?? '');
     return rows.map(withLink);
   }
 

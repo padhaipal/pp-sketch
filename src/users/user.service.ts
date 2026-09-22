@@ -22,6 +22,7 @@ import {
   CreateUserOptions,
   CreateStaffOptions,
   STAFF_ROLES,
+  UserRole,
   validateFindUserOptions,
   validateUpdateUserOptions,
   validateCreateUserOptions,
@@ -491,8 +492,15 @@ export class UserService {
     return saved;
   }
 
-  // GET /users/lookup: staff-role accounts only, soft-deleted included.
-  async lookupStaff(q: string, limit = 20): Promise<StaffLookupRow[]> {
+  // GET /users/lookup: staff-role accounts only (default), soft-deleted
+  // included. `roles` widens the search — the onboarding console passes
+  // every role so an existing student/dev/admin row is found before a
+  // staff-create would 409 on it.
+  async lookupStaff(
+    q: string,
+    limit = 20,
+    roles: readonly UserRole[] = STAFF_ROLES,
+  ): Promise<StaffLookupRow[]> {
     const trimmed = q.trim();
     if (trimmed.length === 0) return [];
     const digits = trimmed.replace(/\D/g, '');
@@ -507,7 +515,7 @@ export class UserService {
               OR ($3 <> '' AND u.external_id LIKE '%' || $3 || '%'))
        ORDER BY u.deleted_at IS NOT NULL, u.name NULLS LAST, u.created_at DESC
        LIMIT $4`,
-      [[...STAFF_ROLES], trimmed, digits, limit],
+      [[...roles], trimmed, digits, limit],
     );
   }
 
