@@ -1,10 +1,10 @@
 /**
  * One-off usage backfill: test_results_student.usage_* and the usage columns
  * of test_results_geo_entity for every day before the nightly test-results
- * run existed (and idempotently over days it did). Only referred students
- * (users.referrer_user_id set) are in scope: the teacher dashboard is the
- * consumer and a teacher's class is the students they referred. Never
- * writes NIPUN/MPL-B. Pure over injected I/O; CLI in backfill-usage.main.ts.
+ * run existed (and idempotently over days it did). Every student gets
+ * student rows (so a learner attached to a teacher later brings their
+ * history along); school rows come only through a referrer with a school,
+ * as in the nightly. Never writes NIPUN/MPL-B. Pure over injected I/O; CLI in backfill-usage.main.ts.
  */
 import { activeMs } from '../users/active-time';
 import { istDateIso } from '../notifier/report-card/report-card.utils';
@@ -93,7 +93,7 @@ export async function backfillUsage(
     `/* backfill-usage:students */
      SELECT u.id, u.birth_year, u.birth_month, u.created_at, r.geo_entity_id
      FROM users u
-     JOIN users r ON r.id = u.referrer_user_id
+     LEFT JOIN users r ON r.id = u.referrer_user_id
      WHERE u.role = 'student' AND u.deleted_at IS NULL
      ORDER BY u.id`,
   )) as StudentRow[];
@@ -105,7 +105,7 @@ export async function backfillUsage(
     geoRows: 0,
   };
   if (students.length === 0) {
-    deps.log('no referred students — nothing to do');
+    deps.log('no students — nothing to do');
     return summary;
   }
 
