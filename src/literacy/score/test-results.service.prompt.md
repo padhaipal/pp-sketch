@@ -70,6 +70,16 @@ percentile and any pass threshold without reading student rows.
 8. Finish the `test_runs` row (`ok` + counts). Any exception → `failed`,
    `error` set, rethrown.
 
+## upsertStudentUsage / upsertGeoUsage — backfill writers
+
+Used only by src/scripts/backfill-usage.ts (its prompt.md has the rules).
+Both bind `created_at` to the historical nightly instant instead of now()
+and, on conflict, update the usage columns only: student rows keep whatever
+NIPUN/MPL-B the nightly wrote (NULL on rows created here); geo rows keep
+students_active/scored/unbanded and the three test vectors. `upsertGeoRows`
+takes an optional `{ usageOnly, createdAt }` for this; the nightly path is
+unchanged.
+
 ## enqueue(full)
 
 Mirrors MirrorService.enqueue: `already-running` while `isRunning()` or a

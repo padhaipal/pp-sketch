@@ -31,7 +31,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "seed": "ts-node -r tsconfig-paths/register src/seed.ts",
     "passage-quality-sweep": "ts-node -r tsconfig-paths/register src/scripts/passage-quality-sweep.main.ts",
-    "purge-digit-passages": "ts-node -r tsconfig-paths/register src/scripts/purge-digit-passages.main.ts"
+    "purge-digit-passages": "ts-node -r tsconfig-paths/register src/scripts/purge-digit-passages.main.ts",
+    "backfill-usage": "ts-node -r tsconfig-paths/register src/scripts/backfill-usage.main.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1020.0",
