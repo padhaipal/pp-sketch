@@ -7,14 +7,16 @@ one-off fills `test_results_student.usage_*` and the `usage_*` columns of
 (default 2026-04-14 … today IST) so a teacher's class series shows minutes
 from the start. NIPUN / MPL-B are never computed or touched.
 
-Scope: `users.role = 'student'`, not deleted, **with a referrer** (the
-teacher dashboard's class is the referrer's students). Unreferred students
-and synthetic accounts are ignored.
+Scope: every `users.role = 'student'`, not deleted. Student rows are written
+for all of them, so a learner attached to a teacher later (PATCH
+`new_referrer_user_id`) brings their history along; school rows only come
+through a referrer with a school, as in the nightly.
 
 `backfillUsage(deps, { from, to, dryRun })` (pure over injected I/O):
 1. `backfill-usage:students` — id, birth_year/month, created_at, and the
-   referrer's CURRENT `geo_entity_id` (run this after teachers have been
-   promoted and given a school, or the geo phase writes nothing).
+   referrer's CURRENT `geo_entity_id` (LEFT JOIN; null without a referrer).
+   Run after teachers have been promoted and given a school, or the geo
+   phase writes nothing.
 2. `backfill-usage:voice-notes` — one read for the whole range, from the
    nightly instant of `from − 1` to that of `to`, bucketed by (student, IST
    day). `backfill-usage:lessons` — one read for `students_active`.

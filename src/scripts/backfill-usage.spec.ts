@@ -80,6 +80,7 @@ function makeDeps(f: Fixture) {
 // which must land in different days.
 // C: referred, same school, joined 3 June → in no geo row before that.
 // N: referred but the referrer has no school → student row only.
+// U: no referrer at all → student row only, like N.
 const FIXTURE: Fixture = {
   students: [
     {
@@ -103,6 +104,13 @@ const FIXTURE: Fixture = {
       created_at: ist('2026-05-01T09:00:00'),
       geo_entity_id: null,
     },
+    {
+      id: 'U',
+      birth_year: 2018,
+      birth_month: 7,
+      created_at: ist('2026-05-01T09:00:00'),
+      geo_entity_id: null,
+    },
   ],
   notes: [
     { user_id: 'A', created_at: ist('2026-06-01T10:00:00') },
@@ -111,6 +119,7 @@ const FIXTURE: Fixture = {
     { user_id: 'A', created_at: ist('2026-06-01T23:59:00') },
     { user_id: 'A', created_at: ist('2026-06-02T00:01:00') },
     { user_id: 'N', created_at: ist('2026-06-01T12:00:00') },
+    { user_id: 'U', created_at: ist('2026-06-01T12:30:00') },
     { user_id: 'C', created_at: ist('2026-06-03T12:00:00') },
   ],
   lessons: [
@@ -140,9 +149,9 @@ describe('backfillUsage', () => {
     });
 
     expect(summary).toEqual({
-      students: 3,
+      students: 4,
       days: 3,
-      studentRows: 4, // A×2 (1 & 2 June), N (1 June), C (3 June)
+      studentRows: 5, // A×2 (1 & 2 June), N + U (1 June), C (3 June)
       geoRows: 9, // S1 + B1 + D1, every day
     });
     // Notes read once for the whole range: from the day before `from` to the
@@ -151,7 +160,7 @@ describe('backfillUsage', () => {
       sql.includes('voice-notes'),
     )!;
     expect(notesCall[1]).toEqual([
-      ['A', 'C', 'N'],
+      ['A', 'C', 'N', 'U'],
       nightlyInstant('2026-06-01'),
       nightlyInstant('2026-06-04'),
     ]);
@@ -163,6 +172,7 @@ describe('backfillUsage', () => {
     expect(rows2).toEqual([
       { student_id: 'A', geo_entity_id: 'S1', minutes: 1, notes: 4 },
       { student_id: 'N', geo_entity_id: null, minutes: 0, notes: 1 },
+      { student_id: 'U', geo_entity_id: null, minutes: 0, notes: 1 },
     ]);
     // Row dated 3 June = IST day 2 June: A's 00:01 note alone.
     const [rows3] = studentWrites[1];
@@ -211,13 +221,13 @@ describe('backfillUsage', () => {
       to: '2026-06-02',
       dryRun: true,
     });
-    expect(summary.studentRows).toBe(2);
+    expect(summary.studentRows).toBe(3);
     expect(summary.geoRows).toBe(3);
     expect(studentWrites).toHaveLength(0);
     expect(geoWrites).toHaveLength(0);
   });
 
-  it('no referred students → nothing read beyond the population', async () => {
+  it('no students → nothing read beyond the population', async () => {
     const { deps, query } = makeDeps({ ...FIXTURE, students: [] });
     const summary = await backfillUsage(deps, {
       from: '2026-06-02',
