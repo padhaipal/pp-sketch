@@ -12,6 +12,7 @@ import * as crypto from 'crypto';
 import { trace } from '@opentelemetry/api';
 import { drillWordMediaCreateFailure } from '../otel/metrics';
 import { MediaMetaDataEntity } from './media-meta-data.entity';
+import type { PassageQuestionExportRow } from './passages-csv';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
 import { UserService } from '../users/user.service';
@@ -1777,6 +1778,40 @@ export class MediaMetaDataService {
    * row's created_at. Newest first. Same visibility rules as
    * getPassageStats; same pagination contract as listComprehensionStids.
    */
+  // GET /media-meta-data/passages.csv: EVERY passage family (rolled-back and
+  // gate-failed included — `status` says which), one row per question with
+  // its options and their explanation text aggregated in creation order.
+  async listPassageQuestionsForExport(): Promise<PassageQuestionExportRow[]> {
+    return await this.dataSource.query(
+      `/* media-meta-data:passages-csv */
+       SELECT p.id AS passage_id, (p.media_details->>'level')::int AS level,
+              p.media_details->>'passage_type' AS passage_type,
+              CASE WHEN q.media_details ? 'gate_failure' THEN 'gate_failed'
+                   WHEN p.rolled_back OR q.rolled_back THEN 'rolled_back'
+                   WHEN p.status <> 'ready' THEN p.status
+                   ELSE 'active' END AS status,
+              CASE WHEN q.media_details ? 'gate_failure'
+                   THEN concat_ws(': ', q.media_details->'gate_failure'->>'gate', q.media_details->'gate_failure'->>'reason')
+              END AS gate_failure,
+              p.media_details->'quality'->>'verdict' AS quality_verdict,
+              p.media_details->>'model' AS model,
+              p.created_at AS passage_created_at, p.text AS passage_text,
+              q.id AS question_id, q.media_details->>'question_type' AS question_type,
+              q.text AS question_text,
+              COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                          'text', o.text, 'correct', (o.media_details->>'correct')::boolean, 'explanation', e.text)
+                          ORDER BY o.created_at, o.id)
+                        FROM media_metadata o
+                        LEFT JOIN media_metadata e ON e.input_media_id = o.id
+                          AND e.media_type = 'text' AND e.media_details->>'role' = 'explanation'
+                        WHERE o.input_media_id = q.id AND o.media_details->>'role' = 'option'), '[]'::jsonb) AS options
+       FROM media_metadata p
+       JOIN media_metadata q ON q.input_media_id = p.id AND q.media_details->>'role' = 'question'
+       WHERE p.media_type = 'text' AND p.media_details->>'role' = 'passage'
+       ORDER BY level NULLS LAST, p.created_at, p.id, q.created_at, q.id`,
+    );
+  }
+
   async searchPassages(options: {
     q?: string;
     passage_type?: string;

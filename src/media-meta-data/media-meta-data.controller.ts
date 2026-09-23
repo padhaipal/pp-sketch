@@ -22,6 +22,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { MediaMetaDataEntity } from './media-meta-data.entity';
 import { MediaMetaDataService } from './media-meta-data.service';
+import { passagesCsv } from './passages-csv';
 import { MediaMetadataCoverageService } from './media-metadata-coverage.service';
 import { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound.service';
 import {
@@ -154,6 +155,20 @@ export class MediaMetaDataController {
       limit: limit !== undefined ? parseInt(limit, 10) : undefined,
       offset: offset !== undefined ? parseInt(offset, 10) : undefined,
     });
+  }
+
+  // Every passage family as CSV, one line per question (dashboard "Download
+  // CSV"). Small enough to build in memory. Declared before @Get(':id').
+  @Get('passages.csv')
+  async passagesCsv(@Res() res: Response): Promise<void> {
+    const rows =
+      await this.mediaMetaDataService.listPassageQuestionsForExport();
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set(
+      'Content-Disposition',
+      'attachment; filename="reading-passages.csv"',
+    );
+    res.send(passagesCsv(rows));
   }
 
   // Recent gate-failed generations (soft-deleted question rows carrying

@@ -216,6 +216,27 @@ describe('MediaMetaDataController.getPassageStats', () => {
   });
 });
 
+describe('MediaMetaDataController.passagesCsv', () => {
+  it('sends the CSV with download headers', async () => {
+    const listPassageQuestionsForExport = jest.fn().mockResolvedValue([]);
+    const { ctrl } = makeController({
+      mediaSvc: { listPassageQuestionsForExport },
+    });
+    const res = makeRes();
+    await ctrl.passagesCsv(res);
+    expect(res.set).toHaveBeenCalledWith(
+      'Content-Type',
+      'text/csv; charset=utf-8',
+    );
+    expect(res.set).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'attachment; filename="reading-passages.csv"',
+    );
+    const body = res.send.mock.calls[0][0] as string;
+    expect(body.startsWith('\uFEFFpassage_id,level,')).toBe(true);
+  });
+});
+
 describe('MediaMetaDataController.searchPassages', () => {
   it('parses pagination and forwards filters', async () => {
     const searchPassages = jest
