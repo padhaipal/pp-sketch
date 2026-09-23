@@ -73,6 +73,21 @@ export interface SeriesPoint {
   date: string;
   pass_rate: number | null;
   n: number;
+  // usage: mean minutes per student that day (absent students = 0);
+  // tests: mean score × 100 over the scored students; null at n = 0.
+  mean: number | null;
+}
+
+// Class level only: one line per student for the trend chart. `value` is
+// minutes for usage (no row that day → 0) and score × 100 for the tests
+// (no row → null, a gap in the line).
+export interface StudentSeriesPoint {
+  date: string;
+  value: number | null;
+}
+export interface StudentSeries {
+  student_id: string;
+  points: StudentSeriesPoint[];
 }
 
 export type Bin = 'high' | 'mid' | 'low' | 'none';
@@ -124,6 +139,7 @@ export interface ScoresResponse {
   child_type: ChildType | null;
   children: ChildRow[] | StudentRow[];
   most_improved: ChildRow[];
+  students_series?: StudentSeries[];
 }
 
 export interface SpotlightEntry {

@@ -68,7 +68,10 @@ entity `{ id, type: 'teacher', code: '', name }`; `as_of` =
 (pass_rate / mean / sd over scored students, students_active,
 students_unbanded = members without a birth year, delta against their prior
 rows); `series` = one `GROUP BY computed_for` over the referred students'
-rows in (as_of − range, as_of] (`dashboard-scores:class-series`);
+rows in (as_of − range, as_of] (`dashboard-scores:class-series`, also
+`SUM(score)` → `mean`); `students_series` = the same rows per student
+(`dashboard-scores:class-student-series`, minutes or score × 100) grouped
+in member order;
 `children` = StudentRow[] (with `delta`); `most_improved` is empty (the
 client ranks students by delta itself).
 

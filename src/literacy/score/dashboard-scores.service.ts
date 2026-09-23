@@ -26,6 +26,7 @@ import {
   RootStats,
   ScoresResponse,
   SeriesPoint,
+  StudentSeries,
   SpotlightResponse,
   StudentRow,
   studentLabel,
@@ -67,6 +68,18 @@ function isoDate(value: string | Date): string {
   return value instanceof Date
     ? value.toISOString().slice(0, 10)
     : String(value).slice(0, 10);
+}
+
+// SeriesPoint.mean: usage = minutes per student (sum of minutes over every
+// student, absent = 0); tests = mean score × 100 over the scored students.
+function seriesMean(
+  metric: LiteracyMetric,
+  sum: number | null | undefined,
+  n: number,
+): number | null {
+  if (!n || typeof sum !== 'number') return null;
+  const mean = sum / n;
+  return Math.round((metric === 'usage' ? mean : mean * 100) * 10) / 10;
 }
 
 function metricColumns(metric: LiteracyMetric): string {
@@ -272,6 +285,7 @@ export class DashboardScoresService {
       computed_for: string | Date;
       n: number;
       pass: number;
+      sum: number;
     }
     const seriesRows: SeriesRow[] = await this.dataSource.query(
       `/* dashboard-scores:class-series */
@@ -281,7 +295,8 @@ export class DashboardScoresService {
                   ? `(SELECT COUNT(*) FROM users c WHERE c.referrer_user_id = $1 AND c.role = 'student' AND c.deleted_at IS NULL)::int AS n`
                   : `COUNT(*) FILTER (WHERE t.${metric}_score IS NOT NULL)::int AS n`
               },
-              COUNT(*) FILTER (WHERE t.${metric}_passed)::int AS pass
+              COUNT(*) FILTER (WHERE t.${metric}_passed)::int AS pass,
+              COALESCE(SUM(t.${metric}_score), 0)::float8 AS sum
        FROM test_results_student t
        JOIN users u ON u.id = t.student_id
        WHERE u.referrer_user_id = $1 AND u.role = 'student' AND u.deleted_at IS NULL
@@ -291,6 +306,35 @@ export class DashboardScoresService {
        ORDER BY t.computed_for`,
       [teacherId, asOf, String(range)],
     );
+
+    // One line per student for the trend chart: minutes for usage (a day
+    // without a row is 0 minutes), score × 100 for the tests (no row → gap).
+    interface StudentPointRow {
+      student_id: string;
+      computed_for: string | Date;
+      value: number | null;
+    }
+    const pointRows: StudentPointRow[] = await this.dataSource.query(
+      `/* dashboard-scores:class-student-series */
+       SELECT t.student_id, t.computed_for,
+              ${metric === 'usage' ? `COALESCE(t.usage_score, 0)::float8` : `(t.${metric}_score * 100)::float8`} AS value
+       FROM test_results_student t
+       JOIN users u ON u.id = t.student_id
+       WHERE u.referrer_user_id = $1 AND u.role = 'student' AND u.deleted_at IS NULL
+         AND t.computed_for > ($2::date - ($3 || ' days')::interval)
+         AND t.computed_for <= $2::date
+       ORDER BY t.student_id, t.computed_for`,
+      [teacherId, asOf, String(range)],
+    );
+    const byStudent = new Map<string, StudentSeries>();
+    for (const r of pointRows) {
+      const s = byStudent.get(r.student_id) ?? {
+        student_id: r.student_id,
+        points: [],
+      };
+      s.points.push({ date: isoDate(r.computed_for), value: r.value });
+      byStudent.set(r.student_id, s);
+    }
 
     return {
       as_of: asOf,
@@ -302,10 +346,14 @@ export class DashboardScoresService {
         date: isoDate(r.computed_for),
         pass_rate: passRate(r.pass, r.n),
         n: r.n,
+        mean: seriesMean(metric, r.sum, r.n),
       })),
       child_type: 'student',
       children: members.map(toStudentRow),
       most_improved: [],
+      students_series: members
+        .map((m) => byStudent.get(m.student_id))
+        .filter((s): s is StudentSeries => s !== undefined),
     };
   }
 
@@ -391,6 +439,7 @@ export class DashboardScoresService {
       date: isoDate(r.computed_for),
       pass_rate: passRate(r.pass, r.n),
       n: r.n,
+      mean: seriesMean(metric, r.sum, r.n),
     }));
   }
 

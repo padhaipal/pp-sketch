@@ -26,7 +26,13 @@ students_unbanded > 0` — NOT students_active: a school whose students went
 
 Shapes: `ScoresResponse { as_of, metric, range, entity: GeoRef, root:
 RootStats, series: SeriesPoint[], child_type, children: ChildRow[] |
-StudentRow[], most_improved: ChildRow[] }`; `GeoRef` also carries `management_group?` (schools: government | government_aided | private | other) from the descendants row — the map marks private schools. `ChildRow = GeoRef +
+StudentRow[], most_improved: ChildRow[], students_series? }`; `SeriesPoint =
+{date, pass_rate, n, mean}` where `mean` is minutes per student for usage
+(absent students = 0) and mean score × 100 over scored students for the
+tests (null at n = 0); `students_series` (class level only) =
+`StudentSeries[] = {student_id, points: {date, value}[]}` — minutes for
+usage (no row → 0) or score × 100 (no row → null, a gap) — one per member
+with a row in the window, in member order; `GeoRef` also carries `management_group?` (schools: government | government_aided | private | other) from the descendants row — the map marks private schools. `ChildRow = GeoRef +
 {pass_rate, n, students_active, using_lifteracy, delta, bin, official,
 students? (teacher rows: referred count)}`;
 `StudentRow {student_id, label, name (full name as stored, null until set;
