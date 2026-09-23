@@ -416,15 +416,21 @@ function makeService(fixture: {
       case 'dashboard-scores:class-series': {
         const cutoff =
           dateMs(params[1] as string) - Number(params[2]) * 86_400_000;
-        const byDate = new Map<string, { n: number; pass: number }>();
+        const byDate = new Map<
+          string,
+          { n: number; pass: number; sum: number }
+        >();
         for (const s of (fixture.students ?? []).filter(
           (x) => x.referrer_user_id === params[0],
         )) {
           for (const r of s.rows) {
             const t = dateMs(r.created_at);
             if (t <= cutoff || t > dateMs(params[1] as string)) continue;
-            const b = byDate.get(r.created_at) ?? { n: 0, pass: 0 };
-            if (r.score !== null) b.n++;
+            const b = byDate.get(r.created_at) ?? { n: 0, pass: 0, sum: 0 };
+            if (r.score !== null) {
+              b.n++;
+              b.sum += r.score;
+            }
             if (r.passed) b.pass++;
             byDate.set(r.created_at, b);
           }
@@ -432,6 +438,37 @@ function makeService(fixture: {
         return [...byDate]
           .sort((a, b) => (a[0] < b[0] ? -1 : 1))
           .map(([computed_for, b]) => ({ computed_for, ...b }));
+      }
+      case 'dashboard-scores:class-student-series': {
+        const cutoff =
+          dateMs(params[1] as string) - Number(params[2]) * 86_400_000;
+        const out: Array<{
+          student_id: string;
+          computed_for: string;
+          value: number | null;
+        }> = [];
+        for (const s of (fixture.students ?? []).filter(
+          (x) => x.referrer_user_id === params[0],
+        )) {
+          for (const r of s.rows) {
+            const t = dateMs(r.created_at);
+            if (t <= cutoff || t > dateMs(params[1] as string)) continue;
+            out.push({
+              student_id: s.student_id,
+              computed_for: r.created_at,
+              value: r.score === null ? null : r.score * 100,
+            });
+          }
+        }
+        return out.sort((a, b) =>
+          a.student_id < b.student_id
+            ? -1
+            : a.student_id > b.student_id
+              ? 1
+              : a.computed_for < b.computed_for
+                ? -1
+                : 1,
+        );
       }
       default:
         throw new Error(`unexpected SQL ${tag ?? sql.slice(0, 40)}`);
@@ -901,8 +938,16 @@ describe('DashboardScoresService.scores — school level (students)', () => {
       }),
     );
     expect(out.root.mean).toBeCloseTo(2.5 / 3, 6);
-    expect(out.series).toEqual([{ date: AS_OF, pass_rate: 66.7, n: 3 }]);
+    expect(out.series).toEqual([
+      { date: AS_OF, pass_rate: 66.7, n: 3, mean: 83.3 },
+    ]);
     expect(out.most_improved).toEqual([]);
+    // one line per member with a row in the window (unscored rows are null
+    // points = gaps), in member order
+    expect(out.students_series?.map((s) => s.student_id)).toEqual(
+      out.children.map((c) => (c as StudentRow).student_id),
+    );
+    expect(out.students_series?.[0].points[0]).toMatchObject({ date: AS_OF });
   });
 
   it('class level: a teacher with no scored students yet → 200 with nulls', async () => {
