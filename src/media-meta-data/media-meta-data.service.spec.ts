@@ -4236,3 +4236,20 @@ describe('findMediaByStateTransitionId — comprehension flow mapping', () => {
     expect(seen.size).toBeGreaterThan(1);
   });
 });
+
+describe('MediaMetaDataService.listPassageQuestionsForExport', () => {
+  it('reads every passage family (no rolled_back filter) with options and explanations aggregated', async () => {
+    const dsQuery = jest.fn().mockResolvedValue([{ passage_id: 'p1' }]);
+    const { service } = makeService({ dsQuery });
+    const out = await service.listPassageQuestionsForExport();
+    expect(out).toEqual([{ passage_id: 'p1' }]);
+    const sql = dsQuery.mock.calls[0][0] as string;
+    expect(sql).toContain('media-meta-data:passages-csv');
+    expect(sql).toMatch(/p\.media_details->>'role' = 'passage'/);
+    expect(sql).toMatch(/q\.media_details->>'role' = 'question'/);
+    expect(sql).toMatch(/o\.media_details->>'role' = 'option'/);
+    expect(sql).toMatch(/e\.media_details->>'role' = 'explanation'/);
+    expect(sql).toMatch(/'gate_failed'[\s\S]*'rolled_back'[\s\S]*'active'/);
+    expect(sql).not.toMatch(/WHERE[^;]*rolled_back = false/);
+  });
+});

@@ -373,6 +373,12 @@ After all items processed:
   with role 'option', jsonb_agg in created_at order, no rolled_back filter —
   the options of a gate-failed question are rolled back too); dashboard
   "Filter failures" list.
+- `listPassageQuestionsForExport()` — GET /media-meta-data/passages.csv
+  source: passage ⟶ question rows (role links via input_media_id) with the
+  question's options and each option's explanation TEXT row aggregated
+  (`options: [{text, correct, explanation}]`, creation order); NO
+  rolled_back/status filter — `status` column derives gate_failed /
+  rolled_back / active / p.status. Ordered by level, passage, question.
 - `recordPassageQuality(passageId, quality)` — jsonb-merges a quality record
   onto a passage row (used by src/scripts/passage-quality-sweep).
 - `deleteByStateTransitionId(stid)` — rolls back every row carrying the stid;

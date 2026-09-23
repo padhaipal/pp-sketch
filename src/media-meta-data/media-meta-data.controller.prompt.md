@@ -71,6 +71,15 @@ uploadStaticMedia()
   wildcard). Declared before `@Get(':id')`.
 - `GET /media-meta-data/passage-stats` — live passage counts per (level,
   passage_type, question_type) for the dashboard's seeding counters.
+- `GET /media-meta-data/passages.csv` — every passage family as a CSV
+  download (`passages-csv.ts`: UTF-8 BOM, CRLF, one line per question with
+  the passage repeated: passage_id, level, passage_type, status
+  (active | rolled_back | gate_failed | other p.status), gate_failure
+  ("gate: reason"), quality_verdict, model, passage_created_at,
+  passage_text, question_id, question_type, question_text, option_a…d,
+  correct_option (letters, `;`-joined), explanation_a…d). Rolled-back and
+  gate-failed families INCLUDED by design. Built in memory; declared before
+  `@Get(':id')`.
 - `GET /media-meta-data/passages?q&passage_type&question_type&media_type&created_after&created_before&quality&judge&solvability&limit&offset`
   — paginated passage search (ILIKE substring on text, wildcards escaped;
   type filters validated against VALID_PASSAGE_TYPES/VALID_QUESTION_TYPES/
