@@ -70,7 +70,13 @@ uploadStaticMedia()
   query per family via right()/length(), never LIKE ('_' would be a
   wildcard). Declared before `@Get(':id')`.
 - `GET /media-meta-data/passage-stats` — live passage counts per (level,
-  passage_type, question_type) for the dashboard's seeding counters.
+  passage_type, question_type) for the dashboard's seeding counters, plus
+  `levels[]` = per passage level `{passages, max_seen}`: total live passages
+  and the most distinct live passages any one live student (role student,
+  not deleted) has been assigned at that level — the "about to run out"
+  signal. Derived by scanning literacy_lesson_states on every call
+  (deliberate: internal page, small user base; swap for a counter table when
+  slow).
 - `GET /media-meta-data/passages.csv` — every passage family as a CSV
   download (`passages-csv.ts`: UTF-8 BOM, CRLF, one line per question with
   the passage repeated: passage_id, level, passage_type, status
