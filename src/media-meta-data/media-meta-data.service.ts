@@ -1672,6 +1672,15 @@ export class MediaMetaDataService {
    * non-rolled-back passages counted per (level, passage_type,
    * question_type). question_type lives on the linked question row
    * (q.input_media_id = passage id; 1:1 for live content).
+   *
+   * `levels` adds per-level runway: total live passages at that level and
+   * the most distinct live passages any one live student has been assigned
+   * at that level ("seen" = any literacy_lesson_states row with that
+   * passage_id, same as selectPassage's exclusion set). Level is the
+   * PASSAGE's level, not the student's level at assignment (nearest-level
+   * fallback makes them differ). Deliberately derived by scanning
+   * literacy_lesson_states — internal page, tiny user base; replace with a
+   * maintained counter table when it gets slow.
    */
   async getPassageStats(): Promise<{
     rows: Array<{
@@ -1680,6 +1689,7 @@ export class MediaMetaDataService {
       question_type: string | null;
       passages: number;
     }>;
+    levels: Array<{ level: number | null; passages: number; max_seen: number }>;
   }> {
     const rows: Array<{
       level: number | null;
@@ -1703,12 +1713,47 @@ export class MediaMetaDataService {
        GROUP BY 1, 2, 3
        ORDER BY 1, 2, 3`,
     );
+    const levels: Array<{
+      level: number | null;
+      passages: string;
+      max_seen: string;
+    }> = await this.dataSource.query(
+      `WITH live AS (
+         SELECT id, (media_details->>'level')::int AS level
+         FROM media_metadata
+         WHERE media_type = 'text'
+           AND status = 'ready'
+           AND rolled_back = false
+           AND media_details->>'role' = 'passage'
+       ),
+       seen AS (
+         SELECT l.level, s.user_id, COUNT(DISTINCT s.passage_id) AS n
+         FROM literacy_lesson_states s
+         JOIN live l ON l.id = s.passage_id
+         JOIN users u ON u.id = s.user_id
+          AND u.role = 'student'
+          AND u.deleted_at IS NULL
+         GROUP BY 1, 2
+       )
+       SELECT l.level,
+              COUNT(DISTINCT l.id) AS passages,
+              COALESCE(MAX(x.n), 0) AS max_seen
+       FROM live l
+       LEFT JOIN seen x ON x.level = l.level
+       GROUP BY 1
+       ORDER BY 1`,
+    );
     return {
       rows: rows.map((r) => ({
         level: r.level,
         passage_type: r.passage_type,
         question_type: r.question_type,
         passages: parseInt(r.passages, 10),
+      })),
+      levels: levels.map((r) => ({
+        level: r.level,
+        passages: parseInt(r.passages, 10),
+        max_seen: parseInt(r.max_seen, 10),
       })),
     };
   }

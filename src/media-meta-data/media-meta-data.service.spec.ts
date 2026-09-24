@@ -3745,6 +3745,10 @@ describe('getPassageStats', () => {
         passages: '1',
       },
     ]);
+    dsQuery.mockResolvedValueOnce([
+      { level: 9, passages: '4', max_seen: '3' },
+      { level: 12, passages: '1', max_seen: '0' },
+    ]);
     const { service } = makeService({ dsQuery });
     const result = await service.getPassageStats();
     expect(result.rows).toEqual([
@@ -3761,12 +3765,25 @@ describe('getPassageStats', () => {
         passages: 1,
       },
     ]);
+    expect(result.levels).toEqual([
+      { level: 9, passages: 4, max_seen: 3 },
+      { level: 12, passages: 1, max_seen: 0 },
+    ]);
     const sql = dsQuery.mock.calls[0][0] as string;
     // Visibility re-derived: live, ready passages; live question join.
     expect(sql).toContain("p.status = 'ready'");
     expect(sql).toContain('p.rolled_back = false');
     expect(sql).toContain("p.media_details->>'role' = 'passage'");
     expect(sql).toContain('q.rolled_back = false');
+    // Runway query: live passages only, live students only, distinct
+    // passages per (level, user), max per level.
+    const runwaySql = dsQuery.mock.calls[1][0] as string;
+    expect(runwaySql).toContain("status = 'ready'");
+    expect(runwaySql).toContain('rolled_back = false');
+    expect(runwaySql).toContain("u.role = 'student'");
+    expect(runwaySql).toContain('u.deleted_at IS NULL');
+    expect(runwaySql).toContain('COUNT(DISTINCT s.passage_id)');
+    expect(runwaySql).toContain('COALESCE(MAX(x.n), 0)');
   });
 });
 
