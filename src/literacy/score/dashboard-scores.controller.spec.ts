@@ -9,7 +9,7 @@ const ID = '11111111-1111-4111-8111-111111111111';
 function make() {
   const scores = jest.fn().mockResolvedValue({
     metric: 'mpl_b',
-    range: 90,
+    range: 'all',
     entity: { type: 'block', code: '010101' },
     children: [{ id: 'a', name: 'X, Y', n: 1 }],
   });
@@ -37,14 +37,17 @@ function headers(
 describe('DashboardScoresController', () => {
   it('validates metric and range (range defaults to 30) and forwards to the service', async () => {
     const { ctrl, scores, spotlight } = make();
-    await ctrl.getScores(ID, 'mpl_b', '90');
-    expect(scores).toHaveBeenCalledWith(ID, 'mpl_b', 90);
+    await ctrl.getScores(ID, 'mpl_b', 'all');
+    expect(scores).toHaveBeenCalledWith(ID, 'mpl_b', 'all');
     await ctrl.getSpotlight(ID, 'nipun_g2', undefined);
     expect(spotlight).toHaveBeenCalledWith(ID, 'nipun_g2', 30);
     await expect(ctrl.getScores(ID, 'x', '30')).rejects.toThrow(
       BadRequestException,
     );
     await expect(ctrl.getScores(ID, 'mpl_b', '7')).rejects.toThrow(
+      BadRequestException,
+    );
+    await expect(ctrl.getScores(ID, 'mpl_b', '90')).rejects.toThrow(
       BadRequestException,
     );
     await expect(ctrl.getScores('nope', 'mpl_b', '30')).rejects.toThrow(
@@ -55,11 +58,11 @@ describe('DashboardScoresController', () => {
   it('CSV: text/csv of the children with a filename from entity/metric/range', async () => {
     const { ctrl } = make();
     const res = { setHeader: jest.fn() };
-    const csv = await ctrl.getScoresCsv(ID, res as never, 'mpl_b', '90');
+    const csv = await ctrl.getScoresCsv(ID, res as never, 'mpl_b', 'all');
     expect(csv).toBe('id,name,n\na,"X, Y",1');
     expect(res.setHeader).toHaveBeenCalledWith(
       'Content-Disposition',
-      'attachment; filename="lifteracy-block-010101-mpl_b-90d.csv"',
+      'attachment; filename="lifteracy-block-010101-mpl_b-all-time.csv"',
     );
   });
 

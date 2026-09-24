@@ -68,7 +68,8 @@ describe('dashboard-scores arithmetic', () => {
     expect(validateMetric('mpl_b')).toBe('mpl_b');
     expect(() => validateMetric('nipun')).toThrow(/metric must be one of/);
     expect(validateRange(undefined)).toBe(30);
-    expect(validateRange('90')).toBe(90);
+    expect(validateRange('all')).toBe('all');
+    expect(() => validateRange('90')).toThrow(/range must be one of/);
     expect(() => validateRange('60')).toThrow(/range must be one of/);
   });
 
@@ -271,20 +272,32 @@ function makeService(fixture: {
     fixture.entities.map((e) => [(e as { id: string }).id, e]),
   );
   const dateMs = (d: string) => new Date(`${d}T00:00:00Z`).getTime();
-  // The students/class SELECT: latest row + the newest row ≤ as_of − range.
+  // All time binds no day count ($3): the series has no lower bound and the
+  // prior row is the OLDEST row strictly before as_of.
+  const allTime = (params: unknown[]) => params[2] === undefined;
+  const cutoffOf = (params: unknown[]) =>
+    allTime(params)
+      ? -Infinity
+      : dateMs(params[1] as string) - Number(params[2]) * 86_400_000;
+  // The students/class SELECT: latest row + the newest row ≤ as_of − range
+  // (all time: the oldest row < as_of).
   const memberRows = (
     list: StudentFixture[],
-    asOf: string,
-    range: string,
+    params: unknown[],
     keep: (latest: StudentFixture['rows'][number]) => boolean,
   ) => {
-    const cutoff = dateMs(asOf) - Number(range) * 86_400_000;
+    const asOf = params[1] as string;
+    const cutoff = cutoffOf(params);
     return list
       .map((s) => {
         const sorted = [...s.rows].sort((a, b) =>
           a.created_at < b.created_at ? 1 : -1,
         );
-        const prior = sorted.find((r) => dateMs(r.created_at) <= cutoff);
+        const prior = allTime(params)
+          ? [...sorted]
+              .reverse()
+              .find((r) => dateMs(r.created_at) < dateMs(asOf))
+          : sorted.find((r) => dateMs(r.created_at) <= cutoff);
         return { s, latest: sorted[0], prior };
       })
       .filter(({ latest }) => latest && keep(latest))
@@ -320,26 +333,29 @@ function makeService(fixture: {
       }
       case 'dashboard-scores:prior': {
         const ids = params[0] as string[];
-        const cutoff =
-          new Date(`${params[1] as string}T00:00:00Z`).getTime() -
-          Number(params[2]) * 86_400_000;
+        const cutoff = cutoffOf(params);
         const out: GeoRow[] = [];
         for (const id of ids) {
-          const row = fixture.geoRows
-            .filter(
-              (r) =>
-                r.geo_entity_id === id &&
-                new Date(`${r.computed_for}T00:00:00Z`).getTime() <= cutoff,
-            )
-            .sort((a, b) => (a.computed_for < b.computed_for ? 1 : -1))[0];
+          const row = allTime(params)
+            ? fixture.geoRows
+                .filter(
+                  (r) =>
+                    r.geo_entity_id === id &&
+                    dateMs(r.computed_for) < dateMs(params[1] as string),
+                )
+                .sort((a, b) => (a.computed_for < b.computed_for ? -1 : 1))[0]
+            : fixture.geoRows
+                .filter(
+                  (r) =>
+                    r.geo_entity_id === id && dateMs(r.computed_for) <= cutoff,
+                )
+                .sort((a, b) => (a.computed_for < b.computed_for ? 1 : -1))[0];
           if (row) out.push(row);
         }
         return out;
       }
       case 'dashboard-scores:series': {
-        const cutoff =
-          new Date(`${params[1] as string}T00:00:00Z`).getTime() -
-          Number(params[2]) * 86_400_000;
+        const cutoff = cutoffOf(params);
         return fixture.geoRows
           .filter((r) => r.geo_entity_id === params[0])
           .filter((r) => {
@@ -379,8 +395,7 @@ function makeService(fixture: {
           (fixture.students ?? []).filter((s) =>
             s.rows.some((r) => r.geo === school),
           ),
-          params[1] as string,
-          params[2] as string,
+          params,
           (latest) => latest.geo === school,
         );
       }
@@ -390,8 +405,7 @@ function makeService(fixture: {
           (fixture.students ?? []).filter(
             (s) => s.referrer_user_id === teacher,
           ),
-          params[1] as string,
-          params[2] as string,
+          params,
           () => true,
         );
       }
@@ -414,8 +428,7 @@ function makeService(fixture: {
         ];
       }
       case 'dashboard-scores:class-series': {
-        const cutoff =
-          dateMs(params[1] as string) - Number(params[2]) * 86_400_000;
+        const cutoff = cutoffOf(params);
         const byDate = new Map<
           string,
           { n: number; pass: number; sum: number }
@@ -440,8 +453,7 @@ function makeService(fixture: {
           .map(([computed_for, b]) => ({ computed_for, ...b }));
       }
       case 'dashboard-scores:class-student-series': {
-        const cutoff =
-          dateMs(params[1] as string) - Number(params[2]) * 86_400_000;
+        const cutoff = cutoffOf(params);
         const out: Array<{
           student_id: string;
           computed_for: string;
@@ -630,7 +642,7 @@ describe('DashboardScoresService.scores — geo levels', () => {
     expect(out.most_improved).toEqual([]);
   });
 
-  it('90-day range picks an older prior row, and most_improved orders by delta with n ≥ 5', async () => {
+  it("all time: series has no lower bound, the prior is each entity's OLDEST row, most_improved orders by delta with n ≥ 5", async () => {
     const f = fixture();
     f.geoRows.push(geoRow('S1', '2026-06-01', 3, 0, [0, 0.25, 0]));
     f.geoRows.push(geoRow('S9', AS_OF, 6, 3, [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]));
@@ -642,17 +654,36 @@ describe('DashboardScoresService.scores — geo levels', () => {
       ),
       1,
     );
-    const { svc } = makeService(f);
-    const out = await svc.scores('B1', 'nipun_g2', 90);
-    // B1 prior for 90 days: newest ≤ 2026-06-15 → none → null.
-    expect(out.root.delta).toBeNull();
+    const { svc, query } = makeService(f);
+    const out = await svc.scores('B1', 'nipun_g2', 'all');
+    expect(out.range).toBe('all');
+    // No day count is bound for all time — $2 (as_of) is the only date.
+    for (const [sql, params] of query.mock.calls as [string, unknown[]][]) {
+      if (/dashboard-scores:(prior|series|students|class)/.test(sql)) {
+        expect(sql).not.toContain("' days'");
+        expect(params).toHaveLength(2);
+      }
+    }
+    // Every B1 row, oldest first.
+    expect(out.series.map((p) => p.date)).toEqual([
+      '2026-08-10',
+      '2026-09-01',
+      AS_OF,
+    ]);
+    // B1 prior = its oldest row (2026-08-10, 50%) → 75 − 50.
+    expect(out.root.delta).toBe(25);
+    const children = out.children as ChildRow[];
+    const byId = new Map(children.map((c) => [c.id, c]));
+    // S1: oldest row 2026-06-01 (0%) → +100; S2: 2026-07-01 (100%) → −20;
+    // S9: 2026-06-01 (100%) → −50.
+    expect(byId.get('S1')!.delta).toBe(100);
+    expect(byId.get('S2')!.delta).toBe(-20);
+    expect(byId.get('S9')!.delta).toBe(-50);
+    // n ≥ 5 only (S1 has 3), best delta first.
     expect(out.most_improved.map((c) => [c.id, c.delta])).toEqual([
+      ['S2', -20],
       ['S9', -50],
     ]);
-    const s2 = (out.children as ChildRow[]).find((c) => c.id === 'S2')!;
-    expect(s2.n).toBe(5);
-    // S2's only older row is 2026-07-01, AFTER as_of − 90 days → no prior.
-    expect(s2.delta).toBeNull();
   });
 
   it('empty root: 200 with nulls, no children, no series', async () => {

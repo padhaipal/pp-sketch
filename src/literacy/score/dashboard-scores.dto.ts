@@ -8,7 +8,9 @@ export const DASHBOARD_METRICS: readonly LiteracyMetric[] = [
   'nipun_g3',
   'mpl_b',
 ];
-export const DASHBOARD_RANGES = [30, 90] as const;
+// 30 = the last 30 days; 'all' = all time (no lower bound on the series;
+// deltas compare against the OLDEST row instead of a row ≤ as_of − range).
+export const DASHBOARD_RANGES = [30, 'all'] as const;
 export type DashboardRange = (typeof DASHBOARD_RANGES)[number];
 export const DEFAULT_RANGE: DashboardRange = 30;
 export const MOST_IMPROVED_MIN_N = 5;
@@ -125,7 +127,8 @@ export interface StudentRow {
   active: boolean;
   last_active_at: string | null;
   // Score change in points (0–100) against the student's newest row dated
-  // ≤ as_of − range days; null without a prior row or a score.
+  // ≤ as_of − range days (all time: the oldest row before as_of); null
+  // without a prior row or a score.
   delta: number | null;
 }
 
@@ -166,8 +169,9 @@ export function validateMetric(raw: unknown): LiteracyMetric {
 
 export function validateRange(raw: unknown): DashboardRange {
   if (raw === undefined || raw === null || raw === '') return DEFAULT_RANGE;
+  if (raw === 'all') return 'all';
   const n = typeof raw === 'number' ? raw : Number(raw);
-  if (!(DASHBOARD_RANGES as readonly number[]).includes(n)) {
+  if (!(DASHBOARD_RANGES as readonly unknown[]).includes(n)) {
     throw new BadRequestException(
       `range must be one of: ${DASHBOARD_RANGES.join(', ')}`,
     );

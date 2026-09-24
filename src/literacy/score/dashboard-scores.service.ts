@@ -153,6 +153,32 @@ function emptyResponse(
   };
 }
 
+// Window SQL. $2 is always as_of and $3 the day count, which is bound only
+// for a numeric range. All time ('all'): the series has no lower bound and
+// the delta's comparison row is the OLDEST row before as_of (change since
+// the first record) instead of the newest row ≤ as_of − range days. A lone
+// row is never its own prior (strict <), so a single-day entity keeps a null
+// delta as it did before.
+function sinceSql(range: DashboardRange, col: string): string {
+  return range === 'all'
+    ? ''
+    : `AND ${col} > ($2::date - ($3 || ' days')::interval)`;
+}
+function priorSql(
+  range: DashboardRange,
+  col: string,
+  exactDay = false,
+): string {
+  if (range === 'all') return `${col} < $2::date`;
+  return `${col} ${exactDay ? '=' : '<='} ($2::date - ($3 || ' days')::interval)`;
+}
+function priorOrder(range: DashboardRange): 'ASC' | 'DESC' {
+  return range === 'all' ? 'ASC' : 'DESC';
+}
+function rangeParams(range: DashboardRange): string[] {
+  return range === 'all' ? [] : [String(range)];
+}
+
 @Injectable()
 export class DashboardScoresService {
   constructor(
@@ -300,11 +326,11 @@ export class DashboardScoresService {
        FROM test_results_student t
        JOIN users u ON u.id = t.student_id
        WHERE u.referrer_user_id = $1 AND u.role = 'student' AND u.deleted_at IS NULL
-         AND t.computed_for > ($2::date - ($3 || ' days')::interval)
+         ${sinceSql(range, 't.computed_for')}
          AND t.computed_for <= $2::date
        GROUP BY t.computed_for
        ORDER BY t.computed_for`,
-      [teacherId, asOf, String(range)],
+      [teacherId, asOf, ...rangeParams(range)],
     );
 
     // One line per student for the trend chart: minutes for usage (a day
@@ -321,10 +347,10 @@ export class DashboardScoresService {
        FROM test_results_student t
        JOIN users u ON u.id = t.student_id
        WHERE u.referrer_user_id = $1 AND u.role = 'student' AND u.deleted_at IS NULL
-         AND t.computed_for > ($2::date - ($3 || ' days')::interval)
+         ${sinceSql(range, 't.computed_for')}
          AND t.computed_for <= $2::date
        ORDER BY t.student_id, t.computed_for`,
-      [teacherId, asOf, String(range)],
+      [teacherId, asOf, ...rangeParams(range)],
     );
     const byStudent = new Map<string, StudentSeries>();
     for (const r of pointRows) {
@@ -399,7 +425,8 @@ export class DashboardScoresService {
     return rows[0] ?? null;
   }
 
-  // Newest row dated ≤ as_of − range days, per entity → its pass rate.
+  // Newest row dated ≤ as_of − range days (all time: the oldest row before
+  // as_of), per entity → its pass rate.
   private async priorRows(
     ids: string[],
     metric: LiteracyMetric,
@@ -412,9 +439,9 @@ export class DashboardScoresService {
        SELECT DISTINCT ON (geo_entity_id) geo_entity_id, computed_for, ${metricColumns(metric)}
        FROM test_results_geo_entity
        WHERE geo_entity_id = ANY($1::uuid[])
-         AND computed_for <= ($2::date - ($3 || ' days')::interval)
-       ORDER BY geo_entity_id, computed_for DESC`,
-      [ids, asOf, String(range)],
+         AND ${priorSql(range, 'computed_for')}
+       ORDER BY geo_entity_id, computed_for ${priorOrder(range)}`,
+      [ids, asOf, ...rangeParams(range)],
     );
     return new Map(rows.map((r) => [r.geo_entity_id, passRate(r.pass, r.n)]));
   }
@@ -430,10 +457,10 @@ export class DashboardScoresService {
        SELECT geo_entity_id, computed_for, ${metricColumns(metric)}
        FROM test_results_geo_entity
        WHERE geo_entity_id = $1
-         AND computed_for > ($2::date - ($3 || ' days')::interval)
+         ${sinceSql(range, 'computed_for')}
          AND computed_for <= $2::date
        ORDER BY computed_for`,
-      [id, asOf, String(range)],
+      [id, asOf, ...rangeParams(range)],
     );
     return rows.map((r) => ({
       date: isoDate(r.computed_for),
@@ -551,7 +578,8 @@ export class DashboardScoresService {
   // Class scope: membership is `users.referrer_user_id = teacher` —
   // wherever the student's latest row sits.
   // Each row also carries the student's newest row dated ≤ as_of − range
-  // (prior_score / prior_passed) for deltas.
+  // (all time: the oldest row before as_of) as prior_score / prior_passed
+  // for deltas.
   private async students(
     scope: { school: string } | { teacher: string },
     metric: LiteracyMetric,
@@ -600,8 +628,8 @@ export class DashboardScoresService {
                 t.${metric}_score::float8 AS prior_score, t.${metric}_passed AS prior_passed
          FROM test_results_student t
          JOIN members m ON m.student_id = t.student_id
-         WHERE t.computed_for ${usage ? '=' : '<='} ($2::date - ($3 || ' days')::interval)
-         ORDER BY t.student_id, t.computed_for DESC
+         WHERE ${priorSql(range, 't.computed_for', usage)}
+         ORDER BY t.student_id, t.computed_for ${priorOrder(range)}
        ),
        -- Deliberate read outside the results tables: active/last_active_at
        -- are not stored per student. One grouped MAX, not an EXISTS + MAX.
@@ -621,7 +649,7 @@ export class DashboardScoresService {
        LEFT JOIN activity a ON a.user_id = l.student_id
        LEFT JOIN prior p ON p.student_id = l.student_id
        WHERE ${bySchool ? 'l.geo_entity_id = $1 AND ' : ''}u.role = 'student' AND u.deleted_at IS NULL`,
-      [bySchool ? scope.school : scope.teacher, asOf, String(range)],
+      [bySchool ? scope.school : scope.teacher, asOf, ...rangeParams(range)],
     );
     const asOfDate = new Date(`${asOf}T00:00:00Z`);
     const activeSince = asOfDate.getTime() - ACTIVE_WINDOW_DAYS * 86_400_000;

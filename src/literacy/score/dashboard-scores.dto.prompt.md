@@ -4,7 +4,7 @@ Types for GET /geo-entities/:id/scores, /scores.csv and /spotlight
 (dashboard-scores.controller.ts) and the pure arithmetic behind them
 (dashboard-scores.spec.ts).
 
-- `metric ∈ usage | nipun_g2 | nipun_g3 | mpl_b` (usage: `score` = minutes, absent = 0, `delta` in minutes); `range ∈ 30 | 90` days, default 30
+- `metric ∈ usage | nipun_g2 | nipun_g3 | mpl_b` (usage: `score` = minutes, absent = 0, `delta` in minutes); `range ∈ 30 | 'all'` (30 days, or all time — 2026-09, replaced 90), default 30
   (`DEFAULT_RANGE`, so spotlight tracks the page's toggle).
 - `passRate(pass, n)` = pass/n × 100 to 1 dp, null at n = 0. `meanOf` =
   sum/n. `populationSd` = sqrt(sumsq/n − mean²) (clamped ≥ 0), 0 at n ≤ 1,
