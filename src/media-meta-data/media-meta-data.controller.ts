@@ -80,7 +80,10 @@ export class MediaMetaDataController {
     const gen = row.generation_request_json as {
       script_text?: string;
     } | null;
-    const details = row.media_details as { mime_type?: string } | null;
+    const details = row.media_details as {
+      mime_type?: string;
+      sendable?: unknown;
+    } | null;
     return {
       id: row.id,
       media_type: row.media_type,
@@ -93,6 +96,7 @@ export class MediaMetaDataController {
       content_mime: details?.mime_type ?? null,
       generation_script: gen?.script_text ?? null,
       wa_media_url: row.wa_media_url,
+      sendable: details?.sendable !== false,
     };
   }
 
@@ -232,6 +236,28 @@ export class MediaMetaDataController {
   async deleteMedia(@Param('id') id: string): Promise<DeleteResponse> {
     await this.mediaMetaDataService.markRolledBack(id);
     return { deleted: true };
+  }
+
+  // Reversible per-row opt-out from random selection (media_details.sendable).
+  // Unlike DELETE this keeps S3 + children intact. uuid guard so a literal
+  // path can never reach it.
+  @Patch(':id')
+  async setSendable(
+    @Param('id') id: string,
+    @Body() body: { sendable?: unknown },
+  ): Promise<{ id: string; sendable: boolean }> {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        id,
+      )
+    ) {
+      throw new BadRequestException('id must be a uuid');
+    }
+    if (typeof body?.sendable !== 'boolean') {
+      throw new BadRequestException('sendable (boolean) required');
+    }
+    await this.mediaMetaDataService.setSendable(id, body.sendable);
+    return { id, sendable: body.sendable };
   }
 
   @Get(':id/audio')

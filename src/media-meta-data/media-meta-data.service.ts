@@ -106,6 +106,7 @@ import {
   assertValidMediaSource,
   assertValidMediaStatus,
   type MediaStatus,
+  SENDABLE_SQL,
 } from './media-meta-data.dto';
 
 // Feature flag check (OpenFeature)
@@ -499,7 +500,8 @@ export class MediaMetaDataService {
        WHERE state_transition_id = ANY($1::text[])
          AND status = 'ready'
          AND rolled_back = false
-         AND (wa_media_url IS NOT NULL OR media_type IN ('text', 'flow'))`,
+         AND (wa_media_url IS NOT NULL OR media_type IN ('text', 'flow'))
+         AND ${SENDABLE_SQL}`,
       [keys],
     );
     const specificByType = new Map<string, MediaMetaData[]>();
@@ -539,10 +541,11 @@ export class MediaMetaDataService {
     if (!result.text) {
       const drillMatch = DRILL_WORD_STID_RE.exec(stateTransitionId);
       if (drillMatch && !DRILL_WORD_EXCLUDED_PREFIXES.has(drillMatch[1])) {
-        result.text = await this.ensureDrillWordTextMedia(
+        const autoRow = await this.ensureDrillWordTextMedia(
           stateTransitionId,
           drillMatch[1],
         );
+        if (autoRow) result.text = autoRow;
       }
     }
 
@@ -573,13 +576,15 @@ export class MediaMetaDataService {
   // Race-safe across instances: the partial unique index on
   // (state_transition_id) WHERE source='drill-word-auto' makes the INSERT's
   // ON CONFLICT DO NOTHING lose quietly, and the follow-up SELECT returns the
-  // winner's row. Retries transient DB failures with jittered exponential
-  // backoff inside a 20s budget, then throws (the turn fails; wabot's timeout
-  // fallback reaches the user).
+  // winner's row. Returns null when the existing auto row has been switched
+  // off (media_details.sendable=false) or rolled back — the unique index
+  // still blocks the INSERT, but the row must not be sent. Retries transient
+  // DB failures with jittered exponential backoff inside a 20s budget, then
+  // throws (the turn fails; wabot's timeout fallback reaches the user).
   private async ensureDrillWordTextMedia(
     stateTransitionId: string,
     word: string,
-  ): Promise<MediaMetaData> {
+  ): Promise<MediaMetaData | null> {
     const startedAt = Date.now();
     let attempt = 0;
     for (;;) {
@@ -594,19 +599,29 @@ export class MediaMetaDataService {
         );
         let row = inserted[0];
         if (!row) {
-          // Lost the race — another instance created it; read the winner.
+          // Lost the race — another instance created it (or it pre-exists);
+          // read the winner. Rolled-back / switched-off rows still own the
+          // unique index slot but must not be sent → null.
           const existing: MediaMetaData[] = await this.dataSource.query(
-            `SELECT * FROM media_metadata
+            `SELECT *, (rolled_back = false AND ${SENDABLE_SQL}) AS deliverable
+             FROM media_metadata
              WHERE state_transition_id = $1 AND source = 'drill-word-auto'
              LIMIT 1`,
             [stateTransitionId],
           );
           row = existing[0];
-        }
-        if (!row) {
-          throw new Error(
-            'drill-word auto-create: conflict but no existing row found',
-          );
+          if (!row) {
+            throw new Error(
+              'drill-word auto-create: conflict but no existing row found',
+            );
+          }
+          if (!(row as { deliverable?: boolean }).deliverable) {
+            this.logger.log(
+              `drill-word auto-create: existing row for stid="${stateTransitionId}" is rolled back or not sendable — sending no text`,
+            );
+            return null;
+          }
+          delete (row as { deliverable?: boolean }).deliverable;
         }
         if (attempt > 1) {
           this.logger.warn(
@@ -1343,6 +1358,9 @@ export class MediaMetaDataService {
         }),
       );
       const explanationId = uuid();
+      // Explanation reaches the student as TTS audio only: the text row is
+      // the TTS source + dashboard display, never sent (sendable=false). If
+      // TTS fails, ops flips it on from the dashboard.
       entities.push(
         this.mediaRepo.create({
           id: explanationId,
@@ -1356,6 +1374,7 @@ export class MediaMetaDataService {
           media_details: {
             role: 'explanation',
             model: request.model,
+            sendable: false,
           },
         }),
       );
@@ -1756,6 +1775,41 @@ export class MediaMetaDataService {
         max_seen: parseInt(r.max_seen, 10),
       })),
     };
+  }
+
+  /**
+   * Flips a row's media_details.sendable (see SENDABLE_SQL) and drops the
+   * stid's selection cache so the change is live on the next turn. Merge is
+   * shallow (top-level key) — sibling keys like quality.* are untouched.
+   * NotFound when the id matches no row (rolled-back rows can still be
+   * flagged; harmless).
+   */
+  async setSendable(mediaId: string, sendable: boolean): Promise<void> {
+    if (typeof mediaId !== 'string' || mediaId.length === 0) {
+      throw new BadRequestException('mediaId must be a non-empty string');
+    }
+    if (typeof sendable !== 'boolean') {
+      throw new BadRequestException('sendable must be a boolean');
+    }
+    const rows: Array<{ state_transition_id: string | null }> =
+      await this.dataSource.query(
+        `UPDATE media_metadata
+         SET media_details = COALESCE(media_details, '{}'::jsonb)
+           || jsonb_build_object('sendable', $2::boolean)
+         WHERE id = $1
+         RETURNING state_transition_id`,
+        [mediaId, sendable],
+      );
+    if (rows.length === 0) {
+      throw new NotFoundException(`Media ${mediaId} not found`);
+    }
+    const stid = rows[0].state_transition_id;
+    if (stid) {
+      await this.cacheService.del(CACHE_KEYS.mediaByStateTransitionId(stid));
+    }
+    this.logger.log(
+      `setSendable: media=${mediaId} stid=${stid ?? 'null'} sendable=${sendable}`,
+    );
   }
 
   /**

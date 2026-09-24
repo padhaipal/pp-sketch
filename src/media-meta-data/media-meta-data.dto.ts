@@ -72,6 +72,13 @@ export interface MediaMetaData {
   created_at: Date;
 }
 
+// Per-row opt-out from random selection: media_details.sendable === false
+// hides a row from findMediaByStateTransitionId (and coverage counts) without
+// rolling it back (rollback deletes S3 + cascades; this is a reversible
+// flag). Absent key or anything but the literal `false` = sendable. String
+// compare, no cast, so a garbage value can never throw in the hot path.
+export const SENDABLE_SQL = `COALESCE(media_details->>'sendable', 'true') <> 'false'`;
+
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
 export interface DashboardTranscriptResponse {
@@ -114,6 +121,8 @@ export interface MediaItemResponse {
   content_mime: string | null;
   generation_script: string | null;
   wa_media_url: string | null;
+  // media_details.sendable !== false — eligible for random selection.
+  sendable: boolean;
 }
 
 // ─── Internal DTOs ────────────────────────────────────────────────────────────
