@@ -163,7 +163,7 @@ sentence machine states, selectPassage, computeSentenceBandSignal,
 comprehension handling, and passage generation/gates are all live and simply
 unreachable from selection. Mid-lesson students continue at their stored
 level (continue path skips selection), so completedReading at 8+ still
-fires. While capped, new lesson rows are written at the capped level, so
+fires (see "completedReading" below). While capped, new lesson rows are written at the capped level, so
 prev_level ratchets down; on lifting the cap students re-climb (the +3
 accelerator can jump 7→10 in one selection).
 
@@ -209,3 +209,18 @@ TOGGLE: set/unset the Railway variable. No code change in either direction.
   persists answer/answer_correct/level/passage_id, returns the
   `${answerId}-comprehension-complete` stid. Invalid/mistimed answers return
   `{ignored: true}` and persist nothing.
+
+## completedReading — reading-speed hook gate (2026-09)
+
+`ProcessAnswerResult.completedReading` fires when THIS voice turn was a
+CORRECT passage read at level > SENTENCE_LEVEL_THRESHOLD, independent of
+lesson completion: stid matches `CORRECT_PASSAGE_READ_STID_RE`
+(`…-sentence-{complete|comprehension}-correct-{first|retry}`) AND
+`answerCorrect === true` AND a sentence is in context. Before 2026-09 it was
+gated on `snapshot.status === 'done'`, which only level 8 reaches on the read
+turn (9+ go to `comprehension` and complete on the flow tap, where no audio
+duration exists) — so wpm stids only ever fired for level 8, and also
+misfired on `sentence-sentence-complete-maxErrors` (failed second read).
+The answerCorrect check exists because the comprehension state's voice-note
+nudge re-emits `…-sentence-comprehension-correct-retry` with answerCorrect
+null.

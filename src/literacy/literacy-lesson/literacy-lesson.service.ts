@@ -83,6 +83,13 @@ const PASSAGE_READ_STIDS = new Set([
   'sentence-sentence-wrong-retry',
   'sentence-word-sentence-correct-retrySentence',
 ]);
+// The four machine transitions that record a CORRECT full passage read
+// (level 8 → complete, level 9+ → comprehension; first try or retry). The
+// stid alone is not enough: the comprehension state's voice-note nudge
+// re-emits `…-sentence-comprehension-correct-retry` with answerCorrect null,
+// so callers must also check answerCorrect === true.
+const CORRECT_PASSAGE_READ_STID_RE =
+  /-sentence-(?:complete|comprehension)-correct-(?:first|retry)$/;
 // Joins the per-engine STT transcripts for the word-lesson evaluators. The
 // tilde is stripped by their clean() step so it can never match anything,
 // but it stops the tail of one engine's transcript and the head of the
@@ -398,13 +405,17 @@ export class LiteracyLessonService {
           span.setAttribute('pp.lesson.sentence', sentenceText);
         }
 
-        // This turn finished a sentence-band reading: hand the caller the
-        // token count so it can derive a reading-speed stid. Token array,
+        // This turn was a CORRECT passage read (level 8 → done, 9+ → awaiting
+        // comprehension — lesson completion is irrelevant): hand the caller
+        // the token count so it can derive a reading-speed stid. Token array,
         // never the raw passage text — the count must match what alignment
         // scored, and punctuation is not a word.
         const sentenceTokens = snapshot.context.sentence;
         const completedReading =
-          isComplete &&
+          snapshot.context.answerCorrect === true &&
+          CORRECT_PASSAGE_READ_STID_RE.test(
+            snapshotContext.stateTransitionId,
+          ) &&
           sentenceTokens != null &&
           sentenceTokens.length > 0 &&
           selectedLevel != null &&

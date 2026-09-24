@@ -43,10 +43,13 @@ export interface ProcessAnswerResult {
   // one (already answered, or no sentence lesson in flight). Nothing was
   // persisted; the caller should send nothing.
   ignored?: boolean;
-  // Set when THIS turn completed a sentence-band reading (machine reached
-  // 'done', a sentence was in context, selected level > threshold): the
+  // Set when THIS turn was a correct sentence-band passage read (stid is one
+  // of the four `…-sentence-{complete|comprehension}-correct-{first|retry}`,
+  // answerCorrect true, selected level > threshold) — regardless of whether
+  // the lesson is complete (level 8) or now awaits comprehension (9+): the
   // token count of what was read, for the caller's reading-speed stid.
-  // Never set on the comprehension-answer path.
+  // Never set on a failed read, the comprehension nudge, or the
+  // comprehension-answer path.
   completedReading?: { wordCount: number; level: number };
 }
 

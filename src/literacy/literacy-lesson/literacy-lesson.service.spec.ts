@@ -2117,8 +2117,9 @@ describe('LiteracyLessonService.processAnswer — sentence persistence + result'
   });
 
   describe('completedReading', () => {
-    // Done sentence snapshot: what a finished level-9 reading looks like.
-    const doneSentenceContext = {
+    // Correct level-9+ read: machine is still active (awaiting the
+    // comprehension tap) — the hook must fire regardless of completion.
+    const correctReadContext = {
       word: '',
       sentence: ['अब', 'कमल'],
       pendingCorrect: [],
@@ -2130,38 +2131,88 @@ describe('LiteracyLessonService.processAnswer — sentence persistence + result'
     const sentenceRow = () =>
       progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 });
 
-    it('is set with the TOKEN count and level when done + sentence + level > 7', async () => {
-      const { out } = await freshSentenceStart(
-        sentenceRow(),
-        happySnapshot({ status: 'done', context: doneSentenceContext }),
-      );
-      // Level 8: this harness's progression rows land the sentence band at
-      // its entry level — the value itself is pinned by the threshold specs.
-      expect(out.completedReading).toEqual({ wordCount: 2, level: 8 });
-    });
+    it.each([
+      ['p1-sentence-comprehension-correct-first', 'active'],
+      ['p1-sentence-comprehension-correct-retry', 'active'],
+      ['p1-sentence-complete-correct-first', 'done'],
+      ['p1-sentence-complete-correct-retry', 'done'],
+    ] as const)(
+      'is set with the TOKEN count and level for correct read %s (status %s)',
+      async (stateTransitionId, status) => {
+        const { out } = await freshSentenceStart(
+          sentenceRow(),
+          happySnapshot({
+            status,
+            context: { ...correctReadContext, stateTransitionId },
+          }),
+        );
+        // Level 8: this harness's progression rows land the sentence band at
+        // its entry level — the value itself is pinned by the threshold specs.
+        expect(out.completedReading).toEqual({ wordCount: 2, level: 8 });
+      },
+    );
 
-    it('is undefined while the lesson is still active (status gate)', async () => {
+    it('is undefined for a failed second read even though the lesson is done (correct gate)', async () => {
       const { out } = await freshSentenceStart(
         sentenceRow(),
-        happySnapshot({ status: 'active', context: doneSentenceContext }),
+        happySnapshot({
+          status: 'done',
+          context: {
+            ...correctReadContext,
+            answerCorrect: false,
+            stateTransitionId: 'sentence-sentence-complete-maxErrors',
+          },
+        }),
       );
       expect(out.completedReading).toBeUndefined();
     });
 
-    it('is undefined when done without a sentence in context (sentence gate)', async () => {
+    it('is undefined for the comprehension voice-note nudge (same stid, answerCorrect null)', async () => {
       const { out } = await freshSentenceStart(
         sentenceRow(),
-        happySnapshot({ status: 'done' }),
+        happySnapshot({
+          status: 'active',
+          context: {
+            ...correctReadContext,
+            answerCorrect: null,
+            stateTransitionId: 'p1-sentence-comprehension-correct-retry',
+          },
+        }),
       );
       expect(out.completedReading).toBeUndefined();
     });
 
-    it('is undefined for a completed word-band lesson (level gate)', async () => {
-      // Word-path selection (level 2) with a done sentence-shaped snapshot:
-      // only the level gate fails, isolating it from the other two.
+    it('is undefined for a correct word answer mid sentence drill (stid gate)', async () => {
+      const { out } = await freshSentenceStart(
+        sentenceRow(),
+        happySnapshot({
+          status: 'active',
+          context: {
+            ...correctReadContext,
+            stateTransitionId: 'कमल-word-sentence-correct-retrySentence',
+          },
+        }),
+      );
+      expect(out.completedReading).toBeUndefined();
+    });
+
+    it('is undefined when correct without a sentence in context (sentence gate)', async () => {
+      const { out } = await freshSentenceStart(
+        sentenceRow(),
+        happySnapshot({
+          status: 'done',
+          context: { ...correctReadContext, sentence: null },
+        }),
+      );
+      expect(out.completedReading).toBeUndefined();
+    });
+
+    it('is undefined for a word-band lesson (level gate)', async () => {
+      // Word-path selection (level 2) with a correct sentence-read snapshot:
+      // only the level gate fails, isolating it from the others.
       const { out } = await freshSentenceStart(
         freshRow(),
-        happySnapshot({ status: 'done', context: doneSentenceContext }),
+        happySnapshot({ status: 'done', context: correctReadContext }),
       );
       expect(out.completedReading).toBeUndefined();
     });
