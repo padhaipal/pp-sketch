@@ -103,8 +103,17 @@ Generic key derivation: replace the substring before the first `-` with `_`. Exa
   SELECT * FROM media_metadata
   WHERE state_transition_id = ANY($1::text[])
     AND status = 'ready'
-    AND (wa_media_url IS NOT NULL OR media_type = 'text')
+    AND rolled_back = false
+    AND (wa_media_url IS NOT NULL OR media_type IN ('text', 'flow'))
+    AND COALESCE(media_details->>'sendable', 'true') <> 'false'   -- SENDABLE_SQL
   ```
+  `media_details.sendable === false` (2026-09) is a reversible per-row
+  opt-out from random selection — e.g. a word's text row when an image
+  exists, or a passage explanation's text row (audio is the delivery). Absent
+  key or any other value = sendable. Rollback is NOT the tool for this: it
+  deletes S3 and cascades to children. Drill-word auto-create honours it too:
+  when the `drill-word-auto` row exists but is switched off (or rolled back)
+  the turn sends no text rather than re-sending it.
 5.) Partition rows into two groups by `state_transition_id`: specific-rows and generic-rows. Within each group, sub-group by `media_type`.
 6.) For each media type (audio, video, text, image, sticker):
   * If specific-rows has one or more entries of that type, randomly select one from specific-rows.
@@ -112,6 +121,16 @@ Generic key derivation: replace the substring before the first `-` with `_`. Exa
   * Else omit the key.
 7.) If the result is non-empty, cache it under the **specific** key only with `cacheService.set(CACHE_KEYS.mediaByStateTransitionId(stateTransitionId), result, CACHE_TTL.MEDIA_BY_STATE_TRANSITION)`. Do not write a separate generic-key cache entry.
 8.) Return the `FindMediaByStateTransitionIdResult` object.
+
+## setSendable(mediaId: string, sendable: boolean): Promise<void>
+
+`UPDATE media_metadata SET media_details = COALESCE(media_details,'{}') ||
+jsonb_build_object('sendable', $2::boolean) WHERE id = $1 RETURNING
+state_transition_id` (shallow merge — sibling keys untouched), NotFound on
+zero rows, then `cacheService.del(CACHE_KEYS.mediaByStateTransitionId(stid))`
+so the flip is live on the next turn. Exposed as `PATCH /media-meta-data/:id`
+`{ sendable }`. Ops flipping rows by hand in SQL must also clear the
+`media:stid:<stid>` Redis keys (24h TTL otherwise).
 
 ## markRolledBack(mediaId: string): Promise<void>
 
@@ -333,6 +352,9 @@ After all items processed:
   sarvam-105b's 40 req/min Starter-tier limit) → transactional
   insert of passage → question → options →
   explanations (+ one `media_type='flow'` row when `send_as_flow`) →
+  Explanation TEXT rows are written with `media_details.sendable=false`
+  (2026-09): the student hears the TTS audio only; the text row is the TTS
+  source + dashboard display. If TTS fails, ops flips it on via PATCH.
   ElevenLabs TTS enqueue for each EXPLANATION only (`input_media_id` =
   explanation text row, stid `${optionId}-comprehension-complete`);
   passage/question/option rows are text-only (2026-08).

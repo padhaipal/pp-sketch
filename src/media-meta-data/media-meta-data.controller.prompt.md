@@ -69,6 +69,11 @@ uploadStaticMedia()
   (stid, media_type) for every stid ending in the suffix (≤64 chars); one
   query per family via right()/length(), never LIKE ('_' would be a
   wildcard). Declared before `@Get(':id')`.
+- `PATCH /media-meta-data/:id` `{ sendable: boolean }` (2026-09) — flips
+  `media_details.sendable`, the reversible per-row opt-out from random
+  selection (see service `setSendable`). uuid-guarded. `MediaItemResponse`
+  carries `sendable` (`media_details.sendable !== false`). Coverage counts
+  exclude switched-off rows.
 - `GET /media-meta-data/passage-stats` — live passage counts per (level,
   passage_type, question_type) for the dashboard's seeding counters, plus
   `levels[]` = per passage level `{passages, max_seen}`: total live passages

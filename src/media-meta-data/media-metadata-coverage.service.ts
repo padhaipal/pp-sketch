@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import * as path from 'path';
 import * as fs from 'fs';
+import { SENDABLE_SQL } from './media-meta-data.dto';
 import {
   MediaMetadataCoverageResponse,
   MediaMetadataCoverageRow,
@@ -87,6 +88,7 @@ export class MediaMetadataCoverageService {
       `SELECT state_transition_id, media_type, COUNT(*) AS active
        FROM media_metadata
        WHERE NOT rolled_back
+         AND ${SENDABLE_SQL}
          AND state_transition_id IS NOT NULL
          AND position('-' in state_transition_id) > 0
        GROUP BY state_transition_id, media_type`,

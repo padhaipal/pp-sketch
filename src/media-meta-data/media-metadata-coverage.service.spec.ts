@@ -57,6 +57,14 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
 
     const out = await svc.getCoverage();
 
+    // Counts are of rows the random selector can actually pick: not rolled
+    // back AND not switched off via media_details.sendable.
+    const aggregateSql = query.mock.calls[0][0] as string;
+    expect(aggregateSql).toContain('NOT rolled_back');
+    expect(aggregateSql).toContain(
+      "COALESCE(media_details->>'sendable', 'true') <> 'false'",
+    );
+
     // Static suffix list is in the implementation; verify a couple of known entries.
     expect(out.suffixes).toContain('letter-word-correct-last');
     expect(out.suffixes).toContain('image-image-wrong-first');

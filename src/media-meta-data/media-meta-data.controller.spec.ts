@@ -165,7 +165,37 @@ describe('MediaMetaDataController.listByStateTransitionId', () => {
         content_mime: 'audio/mpeg',
         generation_script: 'hi',
         wa_media_url: 'https://wabot/m/1',
+        sendable: true,
       },
+    ]);
+  });
+
+  it('maps media_details.sendable=false to sendable: false (anything else is true)', async () => {
+    const repo = makeRepo();
+    const base = {
+      id: 'mm-1',
+      media_type: 'text',
+      source: 'dashboard',
+      status: 'ready',
+      created_at: new Date(),
+      state_transition_id: 'stid',
+      text: 'hello',
+      s3_key: null,
+      wa_media_url: null,
+      generation_request_json: null,
+    };
+    repo.find.mockResolvedValue([
+      { ...base, id: 'off', media_details: { sendable: false } },
+      { ...base, id: 'on-str', media_details: { sendable: 'false' } },
+      { ...base, id: 'on-null', media_details: null },
+    ]);
+    const { ctrl } = makeController({ repo });
+
+    const out = await ctrl.listByStateTransitionId('stid');
+    expect(out.map((r) => [r.id, r.sendable])).toEqual([
+      ['off', false],
+      ['on-str', true],
+      ['on-null', true],
     ]);
   });
 
@@ -338,6 +368,35 @@ describe('MediaMetaDataController.getMedia', () => {
       has_content: false,
       generation_script: null,
     });
+  });
+});
+
+describe('MediaMetaDataController.setSendable', () => {
+  const id = '11111111-2222-3333-4444-555555555555';
+
+  it('delegates to MediaMetaDataService.setSendable and echoes the flag', async () => {
+    const setSendable = jest.fn().mockResolvedValue(undefined);
+    const { ctrl } = makeController({ mediaSvc: { setSendable } });
+
+    await expect(ctrl.setSendable(id, { sendable: false })).resolves.toEqual({
+      id,
+      sendable: false,
+    });
+    expect(setSendable).toHaveBeenCalledWith(id, false);
+  });
+
+  it('rejects a non-uuid id and a non-boolean body before touching the service', async () => {
+    const setSendable = jest.fn();
+    const { ctrl } = makeController({ mediaSvc: { setSendable } });
+
+    await expect(
+      ctrl.setSendable('coverage', { sendable: true }),
+    ).rejects.toThrow(BadRequestException);
+    await expect(ctrl.setSendable(id, { sendable: 'yes' })).rejects.toThrow(
+      BadRequestException,
+    );
+    await expect(ctrl.setSendable(id, {})).rejects.toThrow(BadRequestException);
+    expect(setSendable).not.toHaveBeenCalled();
   });
 });
 

@@ -1474,6 +1474,10 @@ describe('findMediaByStateTransitionId — exact SQL + cache keys', () => {
     expect(sql).toContain('state_transition_id = ANY($1::text[])');
     expect(sql).toContain("status = 'ready'");
     expect(sql).toContain('rolled_back = false');
+    // Reversible per-row opt-out — string compare, no cast.
+    expect(sql).toContain(
+      "COALESCE(media_details->>'sendable', 'true') <> 'false'",
+    );
     expect(sql).toContain(
       "(wa_media_url IS NOT NULL OR media_type IN ('text', 'flow'))",
     );
@@ -2651,13 +2655,38 @@ describe('findMediaByStateTransitionId — drill-word auto-create', () => {
     const dsQuery = routedQuery({
       lookup: [],
       insert: () => [],
-      reselect: [winner],
+      reselect: [{ ...winner, deliverable: true }],
     });
     const { service } = makeService({ cache: makeCache(), dsQuery });
 
     const out = await service.findMediaByStateTransitionId(STID);
 
+    // The SQL-side deliverable marker is stripped before the row is sent.
     expect(out.text).toEqual(winner);
+    const reselect = dsQuery.mock.calls.find(
+      ([sql]) =>
+        sql.includes("source = 'drill-word-auto'") && sql.includes('SELECT'),
+    )!;
+    expect(reselect[0]).toContain('rolled_back = false');
+    expect(reselect[0]).toContain(
+      "COALESCE(media_details->>'sendable', 'true') <> 'false'",
+    );
+  });
+
+  it('existing auto row switched off (sendable=false) or rolled back → no text, no INSERT retry, nothing cached', async () => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const cache = makeCache();
+    const dsQuery = routedQuery({
+      lookup: [],
+      insert: () => [],
+      reselect: [{ ...createdRow, deliverable: false }],
+    });
+    const { service } = makeService({ cache, dsQuery });
+
+    const out = await service.findMediaByStateTransitionId(STID);
+
+    expect(out.text).toBeUndefined();
+    expect(cache.set).not.toHaveBeenCalled();
   });
 
   it('a seeded exact-match text row wins — no INSERT happens', async () => {
@@ -3093,6 +3122,10 @@ describe('createLlmGeneratedMedia', () => {
       expect(explanation.state_transition_id).toBe(
         `${explanation.input_media_id as string}-comprehension-complete`,
       );
+      // Delivered as TTS audio only — the text row is never sent.
+      expect(
+        (explanation.media_details as { sendable?: boolean }).sendable,
+      ).toBe(false);
     }
 
     const flow = saved.find((e) => e.media_type === 'flow')!;
@@ -3726,6 +3759,71 @@ describe('listComprehensionStids', () => {
     const metaSql = dsQuery.mock.calls[2][0] as string;
     expect(metaSql).toContain('o.input_media_id'); // 2-hop chain
     expect(dsQuery.mock.calls[2][1]).toEqual([['opt1', 'opt2']]);
+  });
+});
+
+describe('setSendable', () => {
+  function makeCache() {
+    return {
+      get: jest.fn(),
+      set: jest.fn(),
+      del: jest.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it('merges sendable into media_details and drops the stid cache', async () => {
+    const dsQuery = jest
+      .fn()
+      .mockResolvedValueOnce([
+        { state_transition_id: 'क-sentence-word-drillWord' },
+      ]);
+    const cache = makeCache();
+    const { service } = makeService({ dsQuery, cache });
+
+    await service.setSendable('mm-1', false);
+
+    const [sql, params] = dsQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("COALESCE(media_details, '{}'::jsonb)");
+    expect(sql).toContain("jsonb_build_object('sendable', $2::boolean)");
+    expect(sql).toContain('WHERE id = $1');
+    expect(params).toEqual(['mm-1', false]);
+    expect(cache.del).toHaveBeenCalledWith(
+      'media:stid:क-sentence-word-drillWord',
+    );
+  });
+
+  it('skips cache invalidation for a row with no stid', async () => {
+    const dsQuery = jest
+      .fn()
+      .mockResolvedValueOnce([{ state_transition_id: null }]);
+    const cache = makeCache();
+    const { service } = makeService({ dsQuery, cache });
+
+    await service.setSendable('mm-1', true);
+
+    expect(cache.del).not.toHaveBeenCalled();
+  });
+
+  it('throws NotFound when no row matches', async () => {
+    const dsQuery = jest.fn().mockResolvedValueOnce([]);
+    const { service } = makeService({ dsQuery, cache: makeCache() });
+
+    await expect(service.setSendable('missing', true)).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('rejects a non-boolean or empty id before any DB hit', async () => {
+    const dsQuery = jest.fn();
+    const { service } = makeService({ dsQuery, cache: makeCache() });
+
+    await expect(
+      service.setSendable('mm-1', 'no' as unknown as boolean),
+    ).rejects.toThrow(BadRequestException);
+    await expect(service.setSendable('', true)).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(dsQuery).not.toHaveBeenCalled();
   });
 });
 
