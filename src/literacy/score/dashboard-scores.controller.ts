@@ -49,7 +49,7 @@ export class DashboardScoresController {
     );
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="lifteracy-${result.entity.type}-${result.entity.code}-${result.metric}-${result.range}d.csv"`,
+      `attachment; filename="lifteracy-${result.entity.type}-${result.entity.code}-${result.metric}-${result.range === 'all' ? 'all-time' : `${result.range}d`}.csv"`,
     );
     return toCsv(result.children as unknown as Array<Record<string, unknown>>);
   }

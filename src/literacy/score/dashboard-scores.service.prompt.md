@@ -15,7 +15,12 @@ nightly tables); never recomputes a score. Every statement carries a
    teacher's first visit is exactly when the share link matters).
 3. Root: pass_rate/mean/sd from n/pass/sum/sumsq; delta against the newest
    row dated ≤ as_of − range days (null if none); series = rows in
-   (as_of − range, as_of].
+   (as_of − range, as_of]. `range = 'all'` (2026-09, replaced 90): the
+   series has no lower bound and the prior row is the OLDEST row strictly
+   before as_of (delta = change since the first record; a lone row keeps
+   delta null). Module helpers `sinceSql` / `priorSql` / `priorOrder` /
+   `rangeParams` build every window predicate: $2 = as_of, $3 = day count
+   bound only for a numeric range.
 4. Children (non-school roots): `descendants(id, child_type)` — one hop,
    paged at 500 — then three queries over the child ids: the rows at
    `as_of`, the prior rows for delta, and the officials. Each child carries
