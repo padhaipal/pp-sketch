@@ -326,6 +326,9 @@ export async function processWabotInboundJob(
       let userMessageId: string;
       let stateTransitionIds: string[];
       let sentenceText: string | undefined;
+      // Level 11+ flow-mode: passage text for INSIDE the flow (at most one
+      // flow per turn, so one value covers the bundle).
+      let flowPassageText: string | undefined;
       // Runtime text with no media row (sentence prompt, referral link) —
       // sent as text items after the stid media in step 9.
       let texts: string[] = [];
@@ -399,6 +402,7 @@ export async function processWabotInboundJob(
         }
         stateTransitionIds = [...result1.stateTransitionIds];
         sentenceText = result1.sentenceText;
+        flowPassageText = result1.flowPassageText;
 
         // Lesson complete — chain the next lesson's prompt, like the audio
         // path does.
@@ -409,6 +413,7 @@ export async function processWabotInboundJob(
           });
           stateTransitionIds.push(...result2.stateTransitionIds);
           sentenceText = result2.sentenceText;
+          flowPassageText = result2.flowPassageText;
         }
       } else if (payload.message.type !== 'audio') {
         path = 'non-audio-redirect';
@@ -443,6 +448,7 @@ export async function processWabotInboundJob(
         });
         stateTransitionIds = [...result1.stateTransitionIds];
         sentenceText = result1.sentenceText;
+        flowPassageText = result1.flowPassageText;
 
         // If lesson complete, start fresh
         if (result1.isComplete) {
@@ -452,6 +458,7 @@ export async function processWabotInboundJob(
           });
           stateTransitionIds.push(...result2.stateTransitionIds);
           sentenceText = result2.sentenceText;
+          flowPassageText = result2.flowPassageText;
         }
 
         // Reading-speed stid — synthetic like the milestone stids below (the
@@ -512,7 +519,13 @@ export async function processWabotInboundJob(
         // Lesson stids may legitimately be unseeded (reading-speed,
         // milestones); an onboarding prompt with no media is a config gap.
         if (trigger === 'onboarding') warnIfEmpty(stid, media);
-        appendMediaItems(outboundMedia, media, sentRecords, stid);
+        appendMediaItems(
+          outboundMedia,
+          media,
+          sentRecords,
+          stid,
+          flowPassageText,
+        );
       }
 
       // Sentence text is generated at runtime — no media row exists for it,

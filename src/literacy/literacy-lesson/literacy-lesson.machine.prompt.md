@@ -23,3 +23,20 @@
   `${answerId}-comprehension-complete` (no retry); a voice ANSWER while
   waiting re-sends the flow via `…-sentence-comprehension-correct-retry` and
   records nothing.
+
+## 2026-09: level 11+ read-in-flow lessons
+
+- Input/context gained `readInFlow` (boolean; old snapshots rehydrate with
+  undefined = false). Set by the service when the STUDENT's selected level
+  ≥ PASSAGE_FLOW_LEVEL_THRESHOLD (11) and a passage was selected.
+- With `readInFlow`, the initial stid is
+  `${passageId}-passage-comprehension-initial` and the `start` router goes
+  straight to `comprehension`: no `sentence` state, no read-aloud, no word or
+  letter drill, no reading-speed stid. The passage text is shown INSIDE the
+  flow (service returns `flowPassageText`; the processor puts it in
+  `flow_action_payload.data.passage_text` and uses the passage-variant flow
+  asset). Everything from `comprehension` on is unchanged: tap →
+  `${answerId}-comprehension-complete` → complete; voice note → nudge
+  (`…-sentence-comprehension-correct-retry`, records nothing, re-sends the
+  flow — still with the passage inside).
+- Levels 8–10 are untouched (`readInFlow` false → `sentence`).

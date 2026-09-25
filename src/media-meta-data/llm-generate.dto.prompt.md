@@ -44,3 +44,12 @@ enters lessons. Passages containing digits are rejected (2026-09, #85).
 `COMPREHENSION_RUNTIME_STID_RE` matches the machine's runtime
 `${passageId}-sentence-comprehension-correct-first|retry` stids that
 `findMediaByStateTransitionId` maps back to the flow row.
+
+## 2026-09: `${passageId}-passage-comprehension-initial`
+
+Level 11+ lessons open on the flow; the machine's initial stid is
+`passageComprehensionInitialStid(passageId)`. `COMPREHENSION_RUNTIME_STID_RE`
+matches it alongside the `…-sentence-comprehension-correct-first|retry` pair,
+so `findMediaByStateTransitionId` resolves the same stored flow row
+(`${passageId}-sentence-comprehension`). Capture group 1 is still the passage
+id.

@@ -93,3 +93,17 @@ Note
   * If 2XX. Then log INFO, end the span and complete the job. 
   * If 4XX. Then log ERROR, end the span and fail the job. 
   * If 5XX. Then log WARN, end the span and fail the job. 
+
+## 2026-09: level 11+ passage-in-flow
+
+`ProcessAnswerResult.flowPassageText` (result1, overridden by result2 when a
+fresh lesson is chained) is threaded through `appendMediaItems` →
+`appendFlowItem(…, passageText)`. When set, the flow item uses
+`WHATSAPP_COMPREHENSION_PASSAGE_FLOW_ID` (a separately published asset with a
+passage TextBody above the question — wabot-sketch scripts/publish-flow.mjs
+FLOW_VARIANT=passage), the wrapper copy "पाठ पढ़कर सवाल का जवाब देने के लिए
+नीचे बटन दबाओ 👇" / CTA "पढ़ो", and `data.passage_text`. Missing env → error
+log, flow skipped (same as the read-first flow). At most one flow per turn, so
+one value covers the bundle. Milestones, stale restart and the audio-only
+redirect are unaffected; no reading-speed stid is emitted in flow mode
+(there is no read).

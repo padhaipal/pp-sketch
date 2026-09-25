@@ -47,7 +47,13 @@ const SECOND_WORD_ROW_COUNT = 4;
 // selected from media_metadata by media_details.level) instead of single
 // words. Passage levels are computed from word count at seeding time:
 // <10 words → 8, <40 → 9, <70 → 10, <110 → 11, else 12.
+import { PASSAGE_COMPREHENSION_INITIAL_SUFFIX } from '../../media-meta-data/llm-generate.dto';
+
 const SENTENCE_LEVEL_THRESHOLD = 7;
+// Level 11+ (2026-09): no read-aloud — the lesson opens on the comprehension
+// flow with the passage text inside it. Keyed on the STUDENT's selected
+// level, so a nearest-level fallback passage is still read in the flow.
+const PASSAGE_FLOW_LEVEL_THRESHOLD = 11;
 const MAX_LESSON_LEVEL = 12;
 // Ops lever: MAX_LESSON_LEVEL_CAP (env) lowers the selection ceiling — e.g. 7
 // holds every student in the word band while the passage bank is re-seeded
@@ -219,9 +225,13 @@ export class LiteracyLessonService {
           // that leave the student holding the passage awaiting a read get
           // 4 min 58 s; everything else keeps 2 min. The 15-min hard
           // restart above is unchanged.
-          const awaitingPassageRead = PASSAGE_READ_STIDS.has(
-            currentState.snapshot?.context?.stateTransitionId ?? '',
-          );
+          const lastStid =
+            currentState.snapshot?.context?.stateTransitionId ?? '';
+          // Reading the passage INSIDE the flow (level 11+) takes as long as
+          // reading it aloud, so that wait gets the long window too.
+          const awaitingPassageRead =
+            PASSAGE_READ_STIDS.has(lastStid) ||
+            lastStid.endsWith(`-${PASSAGE_COMPREHENSION_INITIAL_SUFFIX}`);
           const staleMs = awaitingPassageRead ? 298_000 : 120_000;
           if (age > 900_000) {
             startFresh = true;
@@ -254,6 +264,9 @@ export class LiteracyLessonService {
               sentence: lesson.sentence ?? undefined,
               passageId: lesson.passageId ?? undefined,
               level: lesson.passageLevel ?? undefined,
+              readInFlow:
+                lesson.passageId != null &&
+                lesson.level >= PASSAGE_FLOW_LEVEL_THRESHOLD,
               userMessageId: validated.user_message_id,
             },
           });
@@ -405,6 +418,26 @@ export class LiteracyLessonService {
           span.setAttribute('pp.lesson.sentence', sentenceText);
         }
 
+        // Level 11+ flow-mode lesson awaiting its tap (initial send or the
+        // voice-note nudge): the passage rides INSIDE the flow, so the caller
+        // gets its raw text for flow_action_payload.data.passage_text and
+        // never a plain text message (sentenceText stays unset here).
+        let flowPassageText: string | undefined;
+        if (
+          snapshot.value === 'comprehension' &&
+          snapshot.context.readInFlow === true &&
+          snapshot.context.passageId
+        ) {
+          const passageRows: Array<{ text: string | null }> =
+            await this.dataSource.query(
+              `SELECT text FROM media_metadata
+               WHERE id = $1 AND rolled_back = false`,
+              [snapshot.context.passageId],
+            );
+          flowPassageText =
+            passageRows[0]?.text ?? snapshot.context.sentence?.join(' ');
+        }
+
         // This turn was a CORRECT passage read (level 8 → done, 9+ → awaiting
         // comprehension — lesson completion is irrelevant): hand the caller
         // the token count so it can derive a reading-speed stid. Token array,
@@ -428,6 +461,7 @@ export class LiteracyLessonService {
           isComplete,
           sentenceText,
           completedReading,
+          flowPassageText,
         };
       } catch (err) {
         span.setStatus({
@@ -674,6 +708,7 @@ export class LiteracyLessonService {
             -- reaches its 'complete' final state; timed-out/abandoned words
             -- never get a done row, so they must not count toward progression.
             SELECT word,
+                   answer_correct,
                    ROW_NUMBER() OVER (ORDER BY created_at DESC) AS rn,
                    (snapshot->>'status' = 'done') AS is_done,
                    snapshot->'context'->>'stateTransitionId' AS stid
@@ -732,7 +767,7 @@ export class LiteracyLessonService {
               ORDER BY s.created_at DESC
               LIMIT 1) AS prev_level,
             COALESCE(
-              (SELECT json_agg(json_build_object('rn', rn, 'is_done', is_done, 'stid', stid) ORDER BY rn ASC)
+              (SELECT json_agg(json_build_object('rn', rn, 'is_done', is_done, 'stid', stid, 'answer_correct', answer_correct) ORDER BY rn ASC)
                FROM recent_rows),
               '[]'::json
             ) AS recent_turns,

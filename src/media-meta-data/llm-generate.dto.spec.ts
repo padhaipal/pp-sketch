@@ -4,6 +4,7 @@ import {
   LlmOutputInvalidError,
   comprehensionCompleteStid,
   comprehensionFlowStid,
+  passageComprehensionInitialStid,
   parseGeneratedContent,
   passageLevelFromWordCount,
   validateLlmGenerateRequest,
@@ -288,6 +289,13 @@ describe('comprehension stid helpers', () => {
       const match = COMPREHENSION_RUNTIME_STID_RE.exec(runtime);
       expect(match?.[1]).toBe(passageId);
     }
+  });
+
+  it('matches the level-11+ passage-initial stid with the passage id as group 1', () => {
+    const initial = passageComprehensionInitialStid(passageId);
+    expect(initial).toBe(`${passageId}-passage-comprehension-initial`);
+    const match = COMPREHENSION_RUNTIME_STID_RE.exec(initial);
+    expect(match?.[1]).toBe(passageId);
   });
 
   it('does not match the stored flow stid or unrelated stids', () => {

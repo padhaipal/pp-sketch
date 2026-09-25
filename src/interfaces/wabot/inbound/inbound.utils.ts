@@ -25,6 +25,12 @@ const logger = new Logger('WabotInboundProcessor');
 // inside the flow.
 const FLOW_MESSAGE_BODY = 'सवाल का जवाब देने के लिए नीचे बटन दबाओ 👇';
 const FLOW_MESSAGE_CTA = 'जवाब दें';
+// Level 11+ passage-in-flow variant (2026-09): a separately published asset
+// with a passage TextBody above the question (WHATSAPP_COMPREHENSION_
+// PASSAGE_FLOW_ID); the wrapper copy asks the child to read, then answer.
+const FLOW_PASSAGE_MESSAGE_BODY =
+  'पाठ पढ़कर सवाल का जवाब देने के लिए नीचे बटन दबाओ 👇';
+const FLOW_PASSAGE_MESSAGE_CTA = 'पढ़ो';
 const FLOW_OPTION_LETTERS = ['A', 'B', 'C', 'D'] as const;
 // Meta cap on RadioButtonsGroup option descriptions (also enforced at
 // creation time in llm-generate.dto.ts and at send time in wabot-sketch).
@@ -74,12 +80,17 @@ export function appendFlowItem(
   entity: { id: string; text?: string | null },
   records?: OutboundSentItem[],
   stateTransitionId?: string,
+  // Set for a level 11+ flow-mode lesson: the passage text rendered inside
+  // the flow → the passage-variant asset is used instead.
+  passageText?: string,
 ): void {
-  const flowId = process.env.WHATSAPP_COMPREHENSION_FLOW_ID;
+  const withPassage = passageText !== undefined;
+  const flowIdEnv = withPassage
+    ? 'WHATSAPP_COMPREHENSION_PASSAGE_FLOW_ID'
+    : 'WHATSAPP_COMPREHENSION_FLOW_ID';
+  const flowId = process.env[flowIdEnv];
   if (!flowId) {
-    logger.error(
-      'WHATSAPP_COMPREHENSION_FLOW_ID is not set — cannot send comprehension flow',
-    );
+    logger.error(`${flowIdEnv} is not set — cannot send comprehension flow`);
     return;
   }
   let payload: FlowMediaPayload;
@@ -107,10 +118,14 @@ export function appendFlowItem(
     type: 'flow',
     flow: {
       flow_id: flowId,
-      body: FLOW_MESSAGE_BODY,
-      cta: FLOW_MESSAGE_CTA,
+      body: withPassage ? FLOW_PASSAGE_MESSAGE_BODY : FLOW_MESSAGE_BODY,
+      cta: withPassage ? FLOW_PASSAGE_MESSAGE_CTA : FLOW_MESSAGE_CTA,
       screen: COMPREHENSION_FLOW_SCREEN,
-      data: { question_text: payload.question_text, options },
+      data: {
+        ...(withPassage && { passage_text: passageText }),
+        question_text: payload.question_text,
+        options,
+      },
     },
   });
   if (records) {
@@ -126,6 +141,7 @@ export function appendMediaItems(
   media: FindMediaByStateTransitionIdResult,
   records?: OutboundSentItem[],
   stateTransitionId?: string,
+  flowPassageText?: string,
 ): void {
   for (const type of ['video', 'audio', 'image', 'sticker', 'text'] as const) {
     const entity = media[type];
@@ -147,7 +163,13 @@ export function appendMediaItems(
   // Flows go LAST so the question lands after any praise/prompt media (order
   // within one bundle is best-effort on WhatsApp's side regardless).
   if (media.flow) {
-    appendFlowItem(items, media.flow, records, stateTransitionId);
+    appendFlowItem(
+      items,
+      media.flow,
+      records,
+      stateTransitionId,
+      flowPassageText,
+    );
   }
 }
 

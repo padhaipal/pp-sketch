@@ -51,6 +51,11 @@ export interface ProcessAnswerResult {
   // Never set on a failed read, the comprehension nudge, or the
   // comprehension-answer path.
   completedReading?: { wordCount: number; level: number };
+  // Level 11+ flow-mode lesson awaiting its tap (initial send or voice-note
+  // nudge): the passage's raw text, to be sent INSIDE the comprehension
+  // flow (flow_action_payload.data.passage_text). Mutually exclusive with
+  // sentenceText.
+  flowPassageText?: string;
 }
 
 export function validateProcessAnswerOptions(

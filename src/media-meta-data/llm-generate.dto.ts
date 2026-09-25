@@ -31,8 +31,13 @@ import type { GateObservability } from './gate-shared';
 // legacy `_`-generic-key derivation (split at first dash) does not apply to
 // these ids — the regexes below are the source of truth.
 export const SENTENCE_COMPREHENSION_STID_SUFFIX = 'sentence-comprehension';
+// Level 11+ (2026-09): the lesson opens on the flow itself — passage text
+// inside the flow, no read-aloud — via `${passageId}-passage-comprehension-
+// initial`, which resolves to the same stored flow row.
+export const PASSAGE_COMPREHENSION_INITIAL_SUFFIX =
+  'passage-comprehension-initial';
 export const COMPREHENSION_RUNTIME_STID_RE =
-  /^(.+)-sentence-comprehension-correct-(?:first|retry)$/;
+  /^(.+)-(?:sentence-comprehension-correct-(?:first|retry)|passage-comprehension-initial)$/;
 export const COMPREHENSION_COMPLETE_STID_SUFFIX = 'comprehension-complete';
 
 // Level-8 passages (<10 words) skip the comprehension state: a correct read
@@ -50,6 +55,10 @@ export function sentenceCompleteMediaStid(attempt: 'first' | 'retry'): string {
 
 export function comprehensionFlowStid(passageId: string): string {
   return `${passageId}-${SENTENCE_COMPREHENSION_STID_SUFFIX}`;
+}
+
+export function passageComprehensionInitialStid(passageId: string): string {
+  return `${passageId}-${PASSAGE_COMPREHENSION_INITIAL_SUFFIX}`;
 }
 
 export function comprehensionCompleteStid(answerId: string): string {
