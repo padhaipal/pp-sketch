@@ -45,3 +45,15 @@ HERE and is imported by the service) plus a lifetime done count.
 Returns the decision plus observability fields the service puts on the
 span: doneInWindow, lowCompletionDecrement, bothFirstTryPass,
 bothEnteredImage, bothFailedOut.
+
+## 2026-09: flow-mode lessons (level 11+)
+
+`TurnRow.answer_correct` (literacy_lesson_states.answer_correct) rides along.
+A lesson is a FLOW-MODE lesson when any of its stids ends
+`-passage-comprehension-initial` and its done row ends
+`-comprehension-complete`. For such a lesson `firstTryPass` = done row
+`answer_correct === true` and `failedOut` = `answer_correct === false`;
+`enteredImage` is impossible (no drill). Rules 1–6 are unchanged, so two
+correct answers increment and two wrong answers decrement; mixed read/flow
+pairs around the 10↔11 boundary combine naturally (a first-try read pass and
+a correct answer both count as a pass).

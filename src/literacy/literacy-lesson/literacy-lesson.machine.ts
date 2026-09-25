@@ -45,6 +45,10 @@ interface Context {
   // (those rehydrate with `level: undefined`, so guards use `=== 8` only).
   // Level 8 (<10 words) skips the comprehension state entirely.
   level: number | null;
+  // Level 11+ (2026-09): the lesson starts in `comprehension` — the passage
+  // rides inside the flow, no read-aloud, no drill. Old snapshots rehydrate
+  // with undefined (= false).
+  readInFlow: boolean;
   sentenceErrors: number;
   wrongLetters: string[];
   wordErrors: number;
@@ -111,6 +115,9 @@ export const machine = setup({
       sentence?: string[];
       passageId?: string;
       level?: number;
+      // Level 11+ (2026-09): skip the read-aloud and open on the
+      // comprehension flow with the passage inside it.
+      readInFlow?: boolean;
     },
   },
 
@@ -178,6 +185,7 @@ export const machine = setup({
       sentence,
       passageId: input.passageId ?? null,
       level: input.level ?? null,
+      readInFlow: input.readInFlow === true && !!input.passageId && !!sentence,
       sentenceErrors: 0,
       wrongLetters: [],
       wordErrors: 0,
@@ -187,9 +195,12 @@ export const machine = setup({
       letterNoImageErrors: 0,
       answer: sentence ? sentence.join(' ') : input.word,
       answerCorrect: null,
-      stateTransitionId: sentence
-        ? 'sentence-start-sentence-initial'
-        : `${input.word}-start-word-initial`,
+      stateTransitionId:
+        input.readInFlow === true && input.passageId && sentence
+          ? `${input.passageId}-passage-comprehension-initial`
+          : sentence
+            ? 'sentence-start-sentence-initial'
+            : `${input.word}-start-word-initial`,
       userMessageId: input.userMessageId,
       pendingCorrect: [],
       pendingIncorrect: [],
@@ -202,6 +213,11 @@ export const machine = setup({
     // sentence layer rehydrate with `sentence: undefined`.
     start: {
       always: [
+        // Level 11+: straight to the question flow (passage inside it).
+        {
+          guard: ({ context }) => context.readInFlow === true,
+          target: 'comprehension',
+        },
         {
           guard: ({ context }) =>
             context.sentence != null && context.sentence.length > 0,

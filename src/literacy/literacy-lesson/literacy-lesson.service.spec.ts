@@ -844,6 +844,27 @@ describe('LiteracyLessonService.processAnswer — lesson-path age boundaries', (
     },
   );
 
+  it('awaiting the level-11+ flow (passage inside it): age 298_000 ms → continue, NOT stale-restart', async () => {
+    const { nowSpy, repo } = stateAt(
+      298_000,
+      'active',
+      'passage-1-passage-comprehension-initial',
+    );
+    const dsQuery = jest.fn().mockResolvedValueOnce([{ id: 'lls-1' }]);
+    mockActorGetSnapshot.mockReturnValue(happySnapshot());
+    const { svc } = makeService({ repo, dsQuery });
+    await svc.processAnswer({
+      user,
+      user_message_id: 'mm-1',
+      transcripts: [{ id: 't1', text: 'कमल' }] as never,
+    });
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.path',
+      'continue',
+    ]);
+    nowSpy.mockRestore();
+  });
+
   it('awaiting a passage read: age 298_001 ms → stale-restart', async () => {
     const { nowSpy, repo } = stateAt(
       298_001,
@@ -2061,6 +2082,64 @@ describe('LiteracyLessonService.processAnswer — sentence persistence + result'
       sentenceSnapshot('sentence'),
     );
     expect(out.sentenceText).toBe('अब कमल');
+  });
+
+  it('level 11+: machine input gets readInFlow and the passage text comes back as flowPassageText, never sentenceText', async () => {
+    xstateMock.createActor.mockClear();
+    const row = progressed({
+      prev_level: 11,
+      recent_words: ['अब कमल'],
+      recent_passage_ids: [],
+    });
+    const inner = routedDsQuery(row);
+    const dsQuery = jest
+      .fn()
+      .mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('SELECT text FROM media_metadata')) {
+          expect(params).toEqual(['passage-1']);
+          return [{ text: 'अब कमल: अब कमल देखो।' }];
+        }
+        return inner(sql, params);
+      });
+    mockActorGetSnapshot.mockReturnValue(
+      happySnapshot({
+        value: 'comprehension',
+        context: {
+          word: '',
+          sentence: ['अब', 'कमल'],
+          passageId: 'passage-1',
+          readInFlow: true,
+          pendingCorrect: [],
+          pendingIncorrect: [],
+          answer: 'अब कमल',
+          answerCorrect: null,
+          stateTransitionId: 'passage-1-passage-comprehension-initial',
+        },
+      }),
+    );
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue(null);
+    const { svc } = makeService({ repo, dsQuery });
+    const out = await svc.processAnswer({ user, user_message_id: 'mm-1' });
+    const input = xstateMock.createActor.mock.calls[0][1].input as {
+      readInFlow?: boolean;
+      passageId?: string;
+    };
+    expect(input.readInFlow).toBe(true);
+    expect(input.passageId).toBe('passage-1');
+    expect(out.stateTransitionIds).toEqual([
+      'passage-1-passage-comprehension-initial',
+    ]);
+    expect(out.flowPassageText).toBe('अब कमल: अब कमल देखो।');
+    expect(out.sentenceText).toBeUndefined();
+    expect(out.completedReading).toBeUndefined();
+  });
+
+  it('below level 11 the machine input has readInFlow false', async () => {
+    const { input } = await freshSentenceStart(
+      progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
+    );
+    expect((input as { readInFlow?: boolean }).readInFlow).toBe(false);
   });
 
   it('prefers the passage row raw text (punctuation intact) over the token join', async () => {

@@ -27,6 +27,9 @@ export interface OutboundFlowData {
   /** Entry screen id (COMPREHENSION_FLOW_SCREEN). */
   screen: string;
   data: {
+    // Level 11+ passage-in-flow variant only: the passage rendered above the
+    // question (its own TextBody, ≤ 4096).
+    passage_text?: string;
     question_text: string;
     options: OutboundFlowOption[];
   };

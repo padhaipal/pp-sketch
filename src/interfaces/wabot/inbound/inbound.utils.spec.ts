@@ -208,6 +208,47 @@ describe('appendFlowItem', () => {
     expect(() => appendFlowItem([], FLOW_ENTITY)).not.toThrow();
   });
 
+  it('level 11+ passage variant: passage flow id, read-then-answer copy, passage_text in data', () => {
+    process.env.WHATSAPP_COMPREHENSION_PASSAGE_FLOW_ID = 'flow-passage-1';
+    try {
+      const items: OutboundMediaItem[] = [];
+      const records: OutboundSentItem[] = [];
+      appendFlowItem(
+        items,
+        FLOW_ENTITY,
+        records,
+        'stid-1',
+        'राम के घर एक गाय है।',
+      );
+      expect(items).toHaveLength(1);
+      const flowItem = items[0] as any;
+      expect(flowItem.flow.flow_id).toBe('flow-passage-1');
+      expect(flowItem.flow.screen).toBe('COMPREHENSION');
+      expect(flowItem.flow.cta).toBe('पढ़ो');
+      expect(flowItem.flow.body).toContain('पाठ पढ़कर');
+      expect(flowItem.flow.data.passage_text).toBe('राम के घर एक गाय है।');
+      expect(flowItem.flow.data.question_text).toBe('कहानी किसके बारे में है?');
+      expect(flowItem.flow.data.options).toHaveLength(3);
+      expect(records).toEqual([
+        { media_metadata_id: 'flow-media-1', state_transition_id: 'stid-1' },
+      ]);
+      // The read-first flow never carries passage_text.
+      const plain: OutboundMediaItem[] = [];
+      appendFlowItem(plain, FLOW_ENTITY);
+      expect((plain[0] as any).flow.flow_id).toBe('flow-asset-1');
+      expect('passage_text' in (plain[0] as any).flow.data).toBe(false);
+    } finally {
+      delete process.env.WHATSAPP_COMPREHENSION_PASSAGE_FLOW_ID;
+    }
+  });
+
+  it('passage variant with its env id missing → skipped, error logged, read-first id NOT used', () => {
+    delete process.env.WHATSAPP_COMPREHENSION_PASSAGE_FLOW_ID;
+    const items: OutboundMediaItem[] = [];
+    appendFlowItem(items, FLOW_ENTITY, undefined, 'stid-1', 'पाठ');
+    expect(items).toHaveLength(0);
+  });
+
   it('skips the item and logs an error when the flow env id is missing', () => {
     delete process.env.WHATSAPP_COMPREHENSION_FLOW_ID;
     const items: OutboundMediaItem[] = [];

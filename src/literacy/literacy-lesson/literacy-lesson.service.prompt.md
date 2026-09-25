@@ -224,3 +224,22 @@ misfired on `sentence-sentence-complete-maxErrors` (failed second read).
 The answerCorrect check exists because the comprehension state's voice-note
 nudge re-emits `…-sentence-comprehension-correct-retry` with answerCorrect
 null.
+
+## 2026-09: level 11+ read-in-flow
+
+- `PASSAGE_FLOW_LEVEL_THRESHOLD = 11`. selectNextString is unchanged; the
+  machine input gets `readInFlow: passageId != null && lesson.level >= 11`
+  (student's level, not the passage's — a nearest-level fallback passage is
+  still read in the flow).
+- `ProcessAnswerResult.flowPassageText`: set whenever the snapshot sits in
+  `comprehension` with `readInFlow` (initial send and the voice-note nudge);
+  the passage row's RAW text (tokenized join as fallback). `sentenceText` is
+  never set in that mode — the passage is not a plain text message.
+- Staleness: a snapshot whose stid ends `-passage-comprehension-initial` gets
+  the long 4 min 58 s window like the read-aloud states (reading the passage
+  inside the flow takes as long).
+- Progression: `recent_turns` now also ships `answer_correct`; see
+  sentence-band-signal.utils.prompt.md — a flow-mode lesson counts as a
+  first-try pass when the tapped option was correct and as failed-out when it
+  was wrong, so both-correct → +1 (cap 12) and both-wrong → −1 (12 → 11 → 10
+  puts the student back on read-aloud lessons).

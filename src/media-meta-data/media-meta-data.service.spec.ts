@@ -4354,6 +4354,31 @@ describe('findMediaByStateTransitionId — comprehension flow mapping', () => {
     expect(params[0]).toContain(STORED);
   });
 
+  it('also resolves the flow for the level-11+ passage-initial runtime stid', async () => {
+    const initial = `${PASSAGE}-passage-comprehension-initial`;
+    const flowRow = {
+      id: 'flow-1',
+      media_type: 'flow',
+      state_transition_id: STORED,
+      status: 'ready',
+      rolled_back: false,
+    };
+    const dsQuery = jest.fn().mockResolvedValue([flowRow]);
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn(),
+      del: jest.fn(),
+    };
+    const { service } = makeService({ dsQuery, cache: cache as never });
+
+    const result = await service.findMediaByStateTransitionId(initial);
+
+    expect(result.flow).toEqual(flowRow);
+    const [, params] = dsQuery.mock.calls[0] as [string, [string[]]];
+    expect(params[0]).toContain(initial);
+    expect(params[0]).toContain(STORED);
+  });
+
   it('picks one flow at random among the passage questions', async () => {
     const rows = ['flow-1', 'flow-2', 'flow-3'].map((id) => ({
       id,

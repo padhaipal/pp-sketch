@@ -1875,6 +1875,63 @@ describe('processWabotInboundJob — reading-speed stids', () => {
     },
   );
 
+  it('level 11+ flow-mode turn: flowPassageText rides inside the passage-variant flow, no plain passage text', async () => {
+    const prev = {
+      flow: process.env.WHATSAPP_COMPREHENSION_FLOW_ID,
+      passage: process.env.WHATSAPP_COMPREHENSION_PASSAGE_FLOW_ID,
+    };
+    process.env.WHATSAPP_COMPREHENSION_FLOW_ID = 'flow-123';
+    process.env.WHATSAPP_COMPREHENSION_PASSAGE_FLOW_ID = 'flow-passage-9';
+    try {
+      const mocks = makeMocks();
+      mocks.mediaMetaDataService.createWhatsappAudioMedia.mockResolvedValue({
+        id: 'audio-entity-1',
+        media_details: { duration_ms: 60_000 },
+      });
+      mocks.literacyLessonService.processAnswer
+        .mockReset()
+        .mockResolvedValueOnce({
+          stateTransitionIds: ['p1-passage-comprehension-initial'],
+          isComplete: false,
+          flowPassageText: 'राम के घर एक गाय है। गाय हरी घास खाती है।',
+        });
+      const flowPayload = JSON.stringify({
+        question_text: 'गाय क्या खाती है?',
+        options: [
+          { id: 'o1', text: 'घास', correct: true },
+          { id: 'o2', text: 'रोटी', correct: false },
+        ],
+      });
+      mocks.mediaMetaDataService.findMediaByStateTransitionId.mockImplementation(
+        async (stid: string) =>
+          stid === 'p1-passage-comprehension-initial'
+            ? { flow: { id: 'f-1', text: flowPayload } }
+            : {},
+      );
+
+      await runJob(createAudioJob(), mocks);
+
+      const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0]
+        .media as Array<{
+        type: string;
+        flow?: { flow_id: string; data: { passage_text?: string } };
+      }>;
+      expect(media.map((m) => m.type)).toEqual(['flow']);
+      expect(media[0].flow!.flow_id).toBe('flow-passage-9');
+      expect(media[0].flow!.data.passage_text).toBe(
+        'राम के घर एक गाय है। गाय हरी घास खाती है।',
+      );
+    } finally {
+      for (const [k, v] of [
+        ['WHATSAPP_COMPREHENSION_FLOW_ID', prev.flow],
+        ['WHATSAPP_COMPREHENSION_PASSAGE_FLOW_ID', prev.passage],
+      ] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+
   it('the comprehension flow is sent after EVERY other item of the turn, including the later reading-speed video', async () => {
     const prevFlowId = process.env.WHATSAPP_COMPREHENSION_FLOW_ID;
     process.env.WHATSAPP_COMPREHENSION_FLOW_ID = 'flow-123';

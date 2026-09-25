@@ -37,11 +37,18 @@ const ENTERED_IMAGE_SUFFIX = '-letter-image-wrong';
 // The two-strikes sentence exit (literacy-lesson.machine.ts); a lesson
 // "failed out" only when its DONE row carries exactly this stid.
 const FAILED_OUT_STID = 'sentence-sentence-complete-maxErrors';
+// Level 11+ flow-mode lesson (2026-09): opens on the flow, no read-aloud.
+// Its pass/fail is the comprehension answer on the done row.
+const FLOW_INITIAL_SUFFIX = '-passage-comprehension-initial';
+const COMPREHENSION_DONE_SUFFIX = '-comprehension-complete';
 
 export interface TurnRow {
   rn: number;
   is_done: boolean;
   stid: string | null;
+  // literacy_lesson_states.answer_correct; on a comprehension done row it
+  // is the tapped option's correctness. Absent in older callers.
+  answer_correct?: boolean | null;
 }
 
 export interface SentenceBandSignal {
@@ -62,12 +69,21 @@ interface LessonFlags {
 function flagsOf(rows: TurnRow[]): LessonFlags {
   // rows[0] is the group's done row (newest of the group by construction).
   const stids = rows.map((r) => r.stid ?? '');
+  // Flow-mode lesson: "first-try pass" = answered correctly, "failed out" =
+  // answered wrongly. Read lessons never carry the flow-initial stid.
+  const flowLesson =
+    stids.some((s) => s.endsWith(FLOW_INITIAL_SUFFIX)) &&
+    stids[0].endsWith(COMPREHENSION_DONE_SUFFIX);
   return {
-    firstTryPass: stids.some((s) =>
-      FIRST_TRY_PASS_SUFFIXES.some((suffix) => s.endsWith(suffix)),
-    ),
+    firstTryPass:
+      stids.some((s) =>
+        FIRST_TRY_PASS_SUFFIXES.some((suffix) => s.endsWith(suffix)),
+      ) ||
+      (flowLesson && rows[0].answer_correct === true),
     enteredImage: stids.some((s) => s.endsWith(ENTERED_IMAGE_SUFFIX)),
-    failedOut: stids[0] === FAILED_OUT_STID,
+    failedOut:
+      stids[0] === FAILED_OUT_STID ||
+      (flowLesson && rows[0].answer_correct === false),
   };
 }
 

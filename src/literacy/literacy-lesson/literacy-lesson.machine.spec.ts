@@ -1291,6 +1291,77 @@ describe('machine — level-8 sentence skips comprehension', () => {
   });
 });
 
+describe('machine — level 11+ read-in-flow (readInFlow)', () => {
+  it('opens on `comprehension` with the passage-initial stid; tap completes it', () => {
+    const a = makeActor({
+      word: '',
+      userMessageId: 'mm-1',
+      sentence: SENTENCE,
+      passageId: PASSAGE_ID,
+      level: 11,
+      readInFlow: true,
+    });
+    const snap = a.snap();
+    expect(snap.value).toBe('comprehension');
+    expect(snap.context.readInFlow).toBe(true);
+    expect(snap.context.stateTransitionId).toBe(
+      `${PASSAGE_ID}-passage-comprehension-initial`,
+    );
+    expect(snap.context.sentence).toEqual(SENTENCE);
+    a.send({
+      type: 'COMPREHENSION_ANSWER',
+      answerId: 'opt-1',
+      answerCorrect: true,
+    });
+    expect(a.snap().value).toBe('complete');
+    expect(a.snap().context.answerCorrect).toBe(true);
+    expect(a.snap().context.stateTransitionId).toBe(
+      'opt-1-comprehension-complete',
+    );
+    a.stop();
+  });
+
+  it('a voice note while waiting nudges (flow re-sent), records nothing', () => {
+    const a = makeActor({
+      word: '',
+      userMessageId: 'mm-1',
+      sentence: SENTENCE,
+      passageId: PASSAGE_ID,
+      readInFlow: true,
+    });
+    a.send({ type: 'ANSWER', studentAnswer: 'कुछ भी' });
+    expect(a.snap().value).toBe('comprehension');
+    expect(a.snap().context.answerCorrect).toBeNull();
+    expect(a.snap().context.stateTransitionId).toBe(
+      `${PASSAGE_ID}-sentence-comprehension-correct-retry`,
+    );
+    a.stop();
+  });
+
+  it('is ignored without a passage or sentence (falls back to the read-aloud / word routes)', () => {
+    const noPassage = makeActor({
+      word: '',
+      userMessageId: 'mm-1',
+      sentence: SENTENCE,
+      readInFlow: true,
+    });
+    expect(noPassage.snap().value).toBe('sentence');
+    expect(noPassage.snap().context.readInFlow).toBe(false);
+    expect(noPassage.snap().context.stateTransitionId).toBe(
+      'sentence-start-sentence-initial',
+    );
+    noPassage.stop();
+    const wordLesson = makeActor({
+      word: 'कमल',
+      userMessageId: 'mm-1',
+      readInFlow: true,
+    });
+    expect(wordLesson.snap().value).toBe('word');
+    expect(wordLesson.snap().context.readInFlow).toBe(false);
+    wordLesson.stop();
+  });
+});
+
 describe('machine — start router', () => {
   it('routes to `sentence` when input.sentence is set, with the fixed initial stid', () => {
     const a = makeSentenceActor();

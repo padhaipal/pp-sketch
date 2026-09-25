@@ -248,3 +248,116 @@ describe('computeSentenceBandSignal', () => {
     expect(signal.doneInWindow).toBe(3);
   });
 });
+
+// Level 11+ flow-mode lesson (2026-09): opens on the flow, no read-aloud; the
+// tapped option's correctness on the done row is the pass/fail signal.
+describe('computeSentenceBandSignal — flow-mode lessons (level 11+)', () => {
+  function flowLesson(correct: boolean | null): TurnRow[] {
+    return [
+      {
+        rn: 0,
+        is_done: true,
+        stid: 'opt1-comprehension-complete',
+        answer_correct: correct,
+      },
+      { rn: 0, is_done: false, stid: 'p1-passage-comprehension-initial' },
+    ];
+  }
+  function renumber(rows: TurnRow[]): TurnRow[] {
+    return rows.map((r, i) => ({ ...r, rn: i + 1 }));
+  }
+
+  it('two correct answers → increment', () => {
+    const out = computeSentenceBandSignal(
+      renumber([...flowLesson(true), ...flowLesson(true)]),
+      5,
+    );
+    expect(out.decision).toBe('increment');
+    expect(out.bothFirstTryPass).toBe(true);
+  });
+
+  it('two wrong answers → decrement (failed-out semantics)', () => {
+    const out = computeSentenceBandSignal(
+      renumber([
+        ...flowLesson(false),
+        ...flowLesson(false),
+        ...flowLesson(true),
+      ]),
+      5,
+    );
+    expect(out.decision).toBe('decrement');
+    expect(out.bothFailedOut).toBe(true);
+    expect(out.bothEnteredImage).toBe(false);
+  });
+
+  it('mixed (correct + wrong, or null answer) → hold', () => {
+    expect(
+      computeSentenceBandSignal(
+        renumber([
+          ...flowLesson(true),
+          ...flowLesson(false),
+          ...flowLesson(true),
+        ]),
+        5,
+      ).decision,
+    ).toBe('hold');
+    expect(
+      computeSentenceBandSignal(
+        renumber([
+          ...flowLesson(null),
+          ...flowLesson(true),
+          ...flowLesson(true),
+        ]),
+        5,
+      ).decision,
+    ).toBe('hold');
+  });
+
+  it('a correct flow answer and a first-try read pass combine to increment (10 ↔ 11 boundary)', () => {
+    const readPass: TurnRow[] = [
+      {
+        rn: 0,
+        is_done: true,
+        stid: 'opt9-comprehension-complete',
+        answer_correct: false,
+      },
+      {
+        rn: 0,
+        is_done: false,
+        stid: 'p2-sentence-comprehension-correct-first',
+      },
+      { rn: 0, is_done: false, stid: 'sentence-start-sentence-initial' },
+    ];
+    const out = computeSentenceBandSignal(
+      renumber([...flowLesson(true), ...readPass, ...flowLesson(true)]),
+      5,
+    );
+    expect(out.decision).toBe('increment');
+  });
+
+  it('a read-aloud lesson is never scored by answer_correct', () => {
+    // Read lesson whose comprehension tap was wrong: not a first-try pass,
+    // but not failed-out either (only the two-strikes read exit is).
+    const readWrongTap: TurnRow[] = [
+      {
+        rn: 0,
+        is_done: true,
+        stid: 'opt9-comprehension-complete',
+        answer_correct: false,
+      },
+      {
+        rn: 0,
+        is_done: false,
+        stid: 'p2-sentence-comprehension-correct-first',
+      },
+      { rn: 0, is_done: false, stid: 'sentence-start-sentence-initial' },
+    ];
+    const out = computeSentenceBandSignal(
+      renumber([...readWrongTap, ...readWrongTap, ...flowLesson(true)]),
+      5,
+    );
+    expect(out.bothFailedOut).toBe(false);
+    // Both are first-try READ passes → increment, regardless of the tap.
+    expect(out.decision).toBe('increment');
+  });
+});
