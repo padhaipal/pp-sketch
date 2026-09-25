@@ -526,6 +526,15 @@ export async function processWabotInboundJob(
         outboundMedia.push({ type: 'text', body: text });
       }
 
+      // Flows go after EVERYTHING else in the turn, not just after their own
+      // stid's media: the question must be the last thing the student sees
+      // (e.g. reading-speed video → then the comprehension flow).
+      const flows = outboundMedia.filter((item) => item.type === 'flow');
+      if (flows.length > 0) {
+        const rest = outboundMedia.filter((item) => item.type !== 'flow');
+        outboundMedia.splice(0, outboundMedia.length, ...rest, ...flows);
+      }
+
       // 10. Send outbound
       const sendResult = await wabotOutbound.sendMessage({
         user_external_id: user.external_id,

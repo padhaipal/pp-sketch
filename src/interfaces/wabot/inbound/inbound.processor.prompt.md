@@ -68,6 +68,7 @@ Processes jobs from the `wabot-inbound` BullMQ queue. Job payload: src/interface
 9.) For each stateTransitionId in the array, call src/media-meta-data/media-meta-data.service.ts/findMediaByStateTransitionId().
   * Each call returns a `FindMediaByStateTransitionIdResult` with one randomly selected entity per media type (audio, video, text, image, sticker, flow), or undefined for types with no matching media.
   * Build an ordered `OutboundMediaItem[]` array from the results with `appendMediaItems(items, media, records, stid)` (inbound.utils.prompt.md): per stateTransitionId, items in the order video, audio, image, sticker, text, then the comprehension flow last (skipping any type that is undefined). If there are two stateTransitionIds, the first stateTransitionId's items come before the second's. `records` collects the entity-backed items for the outbound_messages audit row in step 10.
+  * Flows are moved to the END of the whole bundle after every stid's media and the runtime texts (2026-09: reading-speed video, then the comprehension flow); appendMediaItems only orders within one stid.
   * On the onboarding path an empty lookup logs a WARN (`No media seeded for <stid>`) — onboarding prompts are fixed stids that must be seeded; lesson-path stids (reading-speed, milestones) may legitimately be empty.
   * Then append each entry of `texts` (sentence prompt, referral link, lesson-one passage) as `{ type: 'text', body }` AFTER all stid media.
 

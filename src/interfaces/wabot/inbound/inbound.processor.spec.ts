@@ -1875,6 +1875,62 @@ describe('processWabotInboundJob — reading-speed stids', () => {
     },
   );
 
+  it('the comprehension flow is sent after EVERY other item of the turn, including the later reading-speed video', async () => {
+    const prevFlowId = process.env.WHATSAPP_COMPREHENSION_FLOW_ID;
+    process.env.WHATSAPP_COMPREHENSION_FLOW_ID = 'flow-123';
+    try {
+      const mocks = readingMocks({ wordCount: 63, durationMs: 60_000 });
+      const flowPayload = JSON.stringify({
+        question_text: 'क्या?',
+        options: [
+          { id: 'o1', text: 'हाँ', correct: true },
+          { id: 'o2', text: 'नहीं', correct: false },
+        ],
+      });
+      mocks.mediaMetaDataService.findMediaByStateTransitionId.mockImplementation(
+        async (stid: string) => {
+          if (stid === 'r1-a')
+            return {
+              audio: {
+                id: 'a-1',
+                wa_media_url: 'https://wa/a1',
+                media_details: null,
+              },
+              flow: { id: 'f-1', text: flowPayload },
+            };
+          if (stid === '63-wpm-reading-speed')
+            return {
+              video: {
+                id: 'v-1',
+                wa_media_url: 'https://wa/v1',
+                media_details: null,
+              },
+              text: { id: 't-1', text: 'speed!' },
+            };
+          if (stid === 'r2-a') return { text: { id: 't-2', text: 'next' } };
+          return {};
+        },
+      );
+
+      await runJob(createAudioJob(), mocks);
+
+      const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0]
+        .media as Array<{ type: string }>;
+      // Bundle order is otherwise untouched; only the flow moves to the tail.
+      expect(media.map((m) => m.type)).toEqual([
+        'audio',
+        'video',
+        'text',
+        'text',
+        'flow',
+      ]);
+    } finally {
+      if (prevFlowId === undefined)
+        delete process.env.WHATSAPP_COMPREHENSION_FLOW_ID;
+      else process.env.WHATSAPP_COMPREHENSION_FLOW_ID = prevFlowId;
+    }
+  });
+
   it('emits no stid when duration_ms is missing on the audio entity', async () => {
     const mocks = readingMocks({ wordCount: 63 });
     await runJob(createAudioJob(), mocks);
