@@ -113,7 +113,9 @@ Generic key derivation: replace the substring before the first `-` with `_`. Exa
   key or any other value = sendable. Rollback is NOT the tool for this: it
   deletes S3 and cascades to children. Drill-word auto-create honours it too:
   when the `drill-word-auto` row exists but is switched off (or rolled back)
-  the turn sends no text rather than re-sending it.
+  the turn sends no text rather than re-sending it. Auto-create only runs
+  when the lookup returned NO text, image or sticker — a word sticker
+  already carries the word, so no text row is created beside it (2026-09).
 5.) Partition rows into two groups by `state_transition_id`: specific-rows and generic-rows. Within each group, sub-group by `media_type`.
 6.) For each media type (audio, video, text, image, sticker):
   * If specific-rows has one or more entries of that type, randomly select one from specific-rows.
