@@ -535,10 +535,12 @@ export class MediaMetaDataService {
       }
     }
 
-    // Drill hand-off with no text media (exact or generic): auto-create the
-    // word's text row so the turn always carries the drilled word and can
-    // never produce an empty outbound bundle.
-    if (!result.text) {
+    // Drill hand-off with nothing carrying the word (no text, image or
+    // sticker — exact or generic): auto-create the word's text row so the
+    // turn always shows the drilled word and can never produce an empty
+    // outbound bundle. A seeded image/sticker already shows the word, and
+    // the text would only duplicate it (the 2026-09 sticker+text bug).
+    if (!result.text && !result.image && !result.sticker) {
       const drillMatch = DRILL_WORD_STID_RE.exec(stateTransitionId);
       if (drillMatch && !DRILL_WORD_EXCLUDED_PREFIXES.has(drillMatch[1])) {
         const autoRow = await this.ensureDrillWordTextMedia(

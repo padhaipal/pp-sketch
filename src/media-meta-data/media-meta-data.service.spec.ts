@@ -2619,6 +2619,30 @@ describe('findMediaByStateTransitionId — drill-word auto-create', () => {
     },
   );
 
+  it.each(['image', 'sticker'])(
+    'a seeded %s already carries the word — no text auto-create, nothing textual sent',
+    async (type) => {
+      const visual = {
+        id: `${type}-1`,
+        media_type: type,
+        state_transition_id: STID,
+        wa_media_url: 'https://wabot/m/1',
+      };
+      const dsQuery = routedQuery({ lookup: [visual] });
+      const { service } = makeService({ cache: makeCache(), dsQuery });
+
+      const out = await service.findMediaByStateTransitionId(STID);
+
+      expect((out as Record<string, unknown>)[type]).toEqual(visual);
+      expect(out.text).toBeUndefined();
+      expect(
+        dsQuery.mock.calls.some(([sql]) =>
+          sql.includes('INSERT INTO media_metadata'),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it('the generic key of a word-return stid never auto-creates', async () => {
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     const dsQuery = routedQuery({ lookup: [] });
