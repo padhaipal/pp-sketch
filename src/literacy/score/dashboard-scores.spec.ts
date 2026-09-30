@@ -3,15 +3,19 @@ import type { DataSource } from 'typeorm';
 import { DashboardScoresService } from './dashboard-scores.service';
 import {
   binOf,
+  buildUsageHistory,
   compareStudents,
   delta,
   passRate,
   populationSd,
   studentLabel,
+  timeBin,
+  timeFields,
   toCsv,
   usingLifteracy,
   validateMetric,
   validateRange,
+  validateWindow,
   type ChildRow,
   type StudentRow,
 } from './dashboard-scores.dto';
@@ -109,6 +113,107 @@ describe('dashboard-scores arithmetic', () => {
       'old',
       'neither',
     ]);
+  });
+
+  it('validateWindow: absent → undefined (legacy usage response), else a known window', () => {
+    expect(validateWindow(undefined)).toBeUndefined();
+    expect(validateWindow('')).toBeUndefined();
+    expect(validateWindow(null)).toBeUndefined();
+    expect(validateWindow('yesterday')).toBe('yesterday');
+    expect(validateWindow('7d')).toBe('7d');
+    expect(validateWindow('all')).toBe('all');
+    expect(() => validateWindow('week')).toThrow(
+      /window must be one of: yesterday, 7d, all/,
+    );
+    expect(() => validateWindow(7)).toThrow(/window must be one of/);
+  });
+
+  it('timeFields: minutes per student-day, scaled to the days covered, 1 dp', () => {
+    // one student, 21 minutes over 7 days
+    expect(timeFields(21, 7, 7)).toEqual({
+      time_total: 21,
+      time_per_day: 3,
+      time_days: 7,
+    });
+    // an area: 170 minutes over 12 student-days across 4 stored days
+    expect(timeFields(170, 12, 4)).toEqual({
+      time_total: 56.7,
+      time_per_day: 14.2,
+      time_days: 4,
+    });
+    // nothing to average
+    expect(timeFields(0, 0, 0)).toEqual({
+      time_total: null,
+      time_per_day: null,
+      time_days: 0,
+    });
+    expect(timeFields(10, 0, 3).time_per_day).toBeNull();
+    expect(timeFields(0, 5, 1)).toEqual({
+      time_total: 0,
+      time_per_day: 0,
+      time_days: 1,
+    });
+  });
+
+  it('timeBin: high strictly above 5 min per day, mid for any use, low for none', () => {
+    expect(timeBin(5.1, true)).toBe('high');
+    expect(timeBin(5, true)).toBe('mid');
+    expect(timeBin(0.1, true)).toBe('mid');
+    expect(timeBin(0, true)).toBe('low');
+    expect(timeBin(null, true)).toBe('none');
+    expect(timeBin(undefined, true)).toBe('none');
+    expect(timeBin(30, false)).toBe('none');
+  });
+
+  it('buildUsageHistory: one point per day labelled by the day the minutes were spent, zeros filled in', () => {
+    const rows = [
+      { computed_for: '2026-09-10', minutes: 12.34 },
+      { computed_for: '2026-09-12', minutes: null }, // a row with no minutes
+      { computed_for: '2026-09-13', minutes: 4 },
+    ];
+    // no later nightly → the series ends at the student's newest row
+    expect(buildUsageHistory(rows, null, 'all')).toEqual({
+      as_of: '2026-09-13',
+      range: 'all',
+      points: [
+        { date: '2026-09-09', minutes: 12.3 },
+        { date: '2026-09-10', minutes: 0 },
+        { date: '2026-09-11', minutes: 0 },
+        { date: '2026-09-12', minutes: 4 },
+      ],
+    });
+    // a newer nightly the student was quiet for extends it with zeros
+    const later = buildUsageHistory(rows, '2026-09-15', 'all');
+    expect(later.as_of).toBe('2026-09-15');
+    expect(later.points.slice(-2)).toEqual([
+      { date: '2026-09-13', minutes: 0 },
+      { date: '2026-09-14', minutes: 0 },
+    ]);
+    // an OLDER last run never truncates the student's own rows
+    expect(buildUsageHistory(rows, '2026-09-11', 'all').as_of).toBe(
+      '2026-09-13',
+    );
+    // 30 days: never before the student's first row…
+    expect(buildUsageHistory(rows, null, 30).points).toHaveLength(4);
+    // …and at most the last 30 nightly rows
+    const long = buildUsageHistory(
+      [
+        { computed_for: '2026-06-01', minutes: 1 },
+        { computed_for: '2026-09-13', minutes: 2 },
+      ],
+      null,
+      30,
+    );
+    expect(long.points).toHaveLength(30);
+    expect(long.points[0]).toEqual({ date: '2026-08-14', minutes: 0 });
+    expect(long.points[29]).toEqual({ date: '2026-09-12', minutes: 2 });
+    // no rows at all
+    expect(buildUsageHistory([], '2026-09-13', 30)).toEqual({
+      as_of: '2026-09-13',
+      range: 30,
+      points: [],
+    });
+    expect(buildUsageHistory([], null, 'all').as_of).toBeNull();
   });
 
   it('toCsv escapes and handles an empty list', () => {
@@ -316,6 +421,15 @@ function makeService(fixture: {
         prior_passed: prior ? prior.passed : null,
       }));
   };
+  // The window predicate of a time-* query, read back off its SQL.
+  const windowKeep = (sql: string, asOf: string) => {
+    const from = sql.includes("interval '7 days'")
+      ? dateMs(asOf) - 7 * 86_400_000
+      : /computed_for = \$2::date/.test(sql)
+        ? dateMs(asOf) - 1
+        : -Infinity;
+    return (d: string) => dateMs(d) > from && dateMs(d) <= dateMs(asOf);
+  };
   const children = (id: string, type: string) =>
     fixture.entities.filter(
       (e) =>
@@ -390,7 +504,7 @@ function makeService(fixture: {
       case 'dashboard-scores:students': {
         const school = params[0] as string;
         const metric = /l\.(\w+)_score::float8/.exec(sql)![1];
-        expect(metric).toBe('nipun_g2');
+        expect(['nipun_g2', 'usage']).toContain(metric);
         return memberRows(
           (fixture.students ?? []).filter((s) =>
             s.rows.some((r) => r.geo === school),
@@ -481,6 +595,47 @@ function makeService(fixture: {
                 ? -1
                 : 1,
         );
+      }
+      // Time windows: which rows the window predicate keeps ($2 = as_of).
+      case 'dashboard-scores:time-geo': {
+        const ids = params[0] as string[];
+        const keep = windowKeep(sql, params[1] as string);
+        return ids
+          .map((id) => {
+            const rows = fixture.geoRows.filter(
+              (r) => r.geo_entity_id === id && keep(r.computed_for),
+            );
+            return {
+              geo_entity_id: id,
+              sum: rows.reduce((a, r) => a + r.sum, 0),
+              student_days: rows.reduce((a, r) => a + r.n, 0),
+              days: rows.filter((r) => r.n > 0).length,
+            };
+          })
+          .filter((r) =>
+            fixture.geoRows.some(
+              (g) =>
+                g.geo_entity_id === r.geo_entity_id && keep(g.computed_for),
+            ),
+          );
+      }
+      case 'dashboard-scores:time-students': {
+        const ids = params[0] as string[];
+        const asOf = params[1] as string;
+        const keep = windowKeep(sql, asOf);
+        return (fixture.students ?? [])
+          .filter((s) => ids.includes(s.student_id))
+          .map((s) => {
+            const rows = s.rows.filter((r) => r.created_at <= asOf);
+            return {
+              student_id: s.student_id,
+              total: rows
+                .filter((r) => keep(r.created_at))
+                .reduce((a, r) => a + (r.score ?? 0), 0),
+              first_row: rows.map((r) => r.created_at).sort()[0],
+            };
+          })
+          .filter((r) => r.first_row !== undefined);
       }
       default:
         throw new Error(`unexpected SQL ${tag ?? sql.slice(0, 40)}`);
@@ -1064,5 +1219,352 @@ describe('DashboardScoresService.scores — school level (students)', () => {
     expect(a.map((r) => [r.student_id, r.label])).toEqual(
       b.map((r) => [r.student_id, r.label]),
     );
+  });
+});
+
+// ─── Time windows (usage with `window`) ──────────────────────────────────────
+
+describe('DashboardScoresService.scores — Time windows (usage)', () => {
+  // A geo row's `sum` is the area's minutes that day and `n` its students.
+  const mins = (id: string, date: string, n: number, minutes: number) =>
+    geoRow(id, date, n, 0, [minutes]);
+  const geoFixture = () => ({
+    entities: ENTITIES,
+    geoRows: [
+      mins('B1', AS_OF, 4, 20), // yesterday: 5 min per student
+      mins('B1', '2026-09-12', 4, 40),
+      mins('B1', '2026-09-07', 2, 10), // the oldest day inside "last seven days"
+      mins('B1', '2026-09-06', 2, 100), // just outside it
+      mins('S1', AS_OF, 3, 30), // 10 min per student yesterday
+      mins('S2', AS_OF, 1, 0), // in use, nobody practised yesterday
+      mins('S2', '2026-09-10', 1, 6),
+      // S9: no rows at all
+    ],
+  });
+  const tagsOf = (query: jest.Mock) =>
+    (query.mock.calls as [string][]).map(
+      ([sql]) => /dashboard-scores:([a-z-]+)/.exec(sql)![1],
+    );
+
+  it('yesterday: minutes per student from the row dated as_of; bins from minutes per day; no deltas, no most improved', async () => {
+    const { svc, query } = makeService(geoFixture());
+    const out = await svc.scores('B1', 'usage', 30, 'yesterday');
+    expect(out.window).toBe('yesterday');
+    expect(out.root).toEqual(
+      expect.objectContaining({
+        time_total: 5,
+        time_per_day: 5,
+        time_days: 1,
+        delta: null,
+      }),
+    );
+    // the legacy yesterday figure is still there
+    expect(out.root.mean).toBe(5);
+    expect(out.most_improved).toEqual([]);
+    const byId = new Map((out.children as ChildRow[]).map((c) => [c.id, c]));
+    expect(byId.get('S1')).toEqual(
+      expect.objectContaining({
+        time_total: 10,
+        time_per_day: 10,
+        time_days: 1,
+        bin: 'high',
+        delta: null,
+      }),
+    );
+    expect(byId.get('S2')).toEqual(
+      expect.objectContaining({
+        time_total: 0,
+        time_per_day: 0,
+        time_days: 1,
+        using_lifteracy: true,
+        bin: 'low',
+      }),
+    );
+    // no row in the window → nothing to average, not using → grey
+    expect(byId.get('S9')).toEqual(
+      expect.objectContaining({
+        time_total: null,
+        time_per_day: null,
+        time_days: 0,
+        using_lifteracy: false,
+        bin: 'none',
+      }),
+    );
+    // Time mode never reads a prior row (there are no deltas).
+    expect(tagsOf(query)).not.toContain('prior');
+    expect(tagsOf(query).filter((t) => t === 'time-geo')).toHaveLength(2);
+  });
+
+  it('last seven days: sums the stored days as_of−6 … as_of as student-days', async () => {
+    const { svc, query } = makeService(geoFixture());
+    const out = await svc.scores('B1', 'usage', 30, '7d');
+    expect(out.window).toBe('7d');
+    // (20 + 40 + 10) minutes over (4 + 4 + 2) student-days, 3 stored days
+    expect(out.root).toEqual(
+      expect.objectContaining({
+        time_total: 21,
+        time_per_day: 7,
+        time_days: 3,
+      }),
+    );
+    const byId = new Map((out.children as ChildRow[]).map((c) => [c.id, c]));
+    // S2: 6 minutes over 2 student-days → 3 per day → some use
+    expect(byId.get('S2')).toEqual(
+      expect.objectContaining({
+        time_total: 6,
+        time_per_day: 3,
+        time_days: 2,
+        bin: 'mid',
+      }),
+    );
+    const sql = (query.mock.calls as [string, unknown[]][]).find(([q]) =>
+      q.includes('time-geo'),
+    )!;
+    expect(sql[0]).toContain(
+      "computed_for <= $2::date AND computed_for > ($2::date - interval '7 days')",
+    );
+    expect(sql[0]).toContain(
+      'COUNT(*) FILTER (WHERE usage_n > 0)::int AS days',
+    );
+    expect(sql[1]).toEqual([['B1'], AS_OF]);
+  });
+
+  it('all time: every stored day up to as_of', async () => {
+    const { svc } = makeService(geoFixture());
+    const out = await svc.scores('B1', 'usage', 'all', 'all');
+    // 170 minutes over 12 student-days, 4 stored days
+    expect(out.root).toEqual(
+      expect.objectContaining({
+        time_total: 56.7,
+        time_per_day: 14.2,
+        time_days: 4,
+      }),
+    );
+  });
+
+  it('no window → the usage response is unchanged (deltas, no time fields); a window on a test metric is ignored', async () => {
+    const { svc, query } = makeService(geoFixture());
+    const legacy = await svc.scores('B1', 'usage', 30);
+    expect(legacy.window).toBeUndefined();
+    expect(legacy.root).not.toHaveProperty('time_total');
+    for (const c of legacy.children as ChildRow[]) {
+      expect(c).not.toHaveProperty('time_per_day');
+    }
+    expect(tagsOf(query)).toContain('prior');
+    expect(tagsOf(query)).not.toContain('time-geo');
+
+    const test = await svc.scores('B1', 'nipun_g2', 30, '7d');
+    expect(test.window).toBeUndefined();
+    expect(test.root).not.toHaveProperty('time_total');
+  });
+
+  it('empty root in Time mode: the window is echoed, children listed without figures', async () => {
+    const { svc } = makeService({ entities: ENTITIES, geoRows: [] });
+    const out = await svc.scores('D', 'usage', 30, '7d');
+    expect(out.window).toBe('7d');
+    expect(out.as_of).toBeNull();
+    expect(out.children).toEqual([
+      expect.objectContaining({
+        id: 'B1',
+        time_total: null,
+        time_per_day: null,
+        time_days: 0,
+        bin: 'none',
+        delta: null,
+      }),
+      expect.objectContaining({ id: 'B2', time_per_day: null }),
+    ]);
+  });
+
+  it('spotlight in Time mode: top = most minutes per day among n ≥ 5 (never an area at zero); no most improved', async () => {
+    const f = {
+      entities: ENTITIES,
+      geoRows: [
+        mins('B1', AS_OF, 12, 72),
+        mins('S1', AS_OF, 6, 12), // 2 per day
+        mins('S2', AS_OF, 6, 60), // 10 per day → top
+        mins('S9', AS_OF, 3, 300), // 100 per day but n < 5
+      ],
+      officials: [
+        {
+          geo_entity_id: 'S2',
+          name: 'Ravi',
+          role_title: 'Principal',
+          avatar_seed: 'ravi',
+          spotlight_message: 'Hi',
+          created_at: '2026-06-01',
+        },
+      ],
+    };
+    const { svc } = makeService(f);
+    const out = await svc.spotlight('B1', 'usage', 30, 'yesterday');
+    expect(out.top?.child.id).toBe('S2');
+    expect(out.top?.official?.name).toBe('Ravi');
+    expect(out.most_improved).toBeNull();
+
+    const idle = makeService({
+      entities: ENTITIES,
+      geoRows: [mins('B1', AS_OF, 12, 0), mins('S1', AS_OF, 6, 0)],
+    });
+    await expect(
+      idle.svc.spotlight('B1', 'usage', 30, 'yesterday'),
+    ).resolves.toEqual({ top: null, most_improved: null });
+  });
+
+  // School / class level: from the students' own rows.
+  const row = (date: string, minutes: number | null) => ({
+    geo: 'S1',
+    created_at: date,
+    score: minutes,
+    passed: null,
+    attempts: 1,
+  });
+  const student = (
+    id: string,
+    rows: ReturnType<typeof row>[],
+  ): StudentFixture => ({
+    student_id: id,
+    name: id,
+    created_at: '2026-01-01',
+    birth_year: 2018,
+    birth_month: 7,
+    rows,
+    last_active_at: '2026-09-12T00:00:00Z',
+    referrer_user_id: 'T1',
+  });
+  const T1: TeacherFixture = {
+    id: 'T1',
+    name: 'Asha',
+    role_title: 'Teacher',
+    avatar_seed: 'asha',
+    spotlight_message: null,
+  };
+  const classFixture = () => ({
+    entities: ENTITIES,
+    geoRows: [mins('S1', AS_OF, 3, 16)],
+    students: [
+      // stored since 1 Sep (13 days): 30 then, 9 on the 10th, 12 yesterday
+      student('st-1', [
+        row('2026-09-01', 30),
+        row('2026-09-10', 9),
+        row(AS_OF, 12),
+      ]),
+      // joined two days ago: 8 then 4
+      student('st-2', [row('2026-09-12', 8), row(AS_OF, 4)]),
+      // first row is as_of, no minutes
+      student('st-3', [row(AS_OF, null)]),
+    ],
+    teachers: [T1],
+  });
+
+  it('class level, last seven days: each student over the days they have existed; ordered by minutes; 5-minute mark on minutes per day', async () => {
+    const { svc, query } = makeService(classFixture());
+    const out = await svc.scores('T1', 'usage', 30, '7d');
+    expect(out.window).toBe('7d');
+    const rows = out.children as StudentRow[];
+    expect(
+      rows.map((r) => [
+        r.student_id,
+        r.time_total,
+        r.time_per_day,
+        r.time_days,
+        r.score,
+        r.passed,
+        r.delta,
+      ]),
+    ).toEqual([
+      // 12 + 9 over the full 7 days
+      ['st-1', 21, 3, 7, 21, false, null],
+      // 12 minutes over the 2 days since the first row, not 7
+      ['st-2', 12, 6, 2, 12, true, null],
+      ['st-3', 0, 0, 1, 0, false, null],
+    ]);
+    // the class: 33 minutes over 10 student-days, scaled to the 7-day window
+    expect(out.root).toEqual(
+      expect.objectContaining({
+        time_total: 23.1,
+        time_per_day: 3.3,
+        time_days: 7,
+        delta: null,
+      }),
+    );
+    expect(out.most_improved).toEqual([]);
+    const timeCall = (query.mock.calls as [string, unknown[]][]).find(([q]) =>
+      q.includes('time-students'),
+    )!;
+    expect(timeCall[0]).toContain('MIN(computed_for) AS first_row');
+    expect(timeCall[0]).toContain('AND computed_for <= $2::date');
+    expect(timeCall[1]).toEqual([
+      expect.arrayContaining(['st-1', 'st-2', 'st-3']),
+      AS_OF,
+    ]);
+  });
+
+  it('class level: yesterday is one day for everyone; all time spans each student from their first row', async () => {
+    const { svc } = makeService(classFixture());
+    const yesterday = await svc.scores('T1', 'usage', 30, 'yesterday');
+    expect(
+      (yesterday.children as StudentRow[]).map((r) => [
+        r.student_id,
+        r.time_total,
+        r.time_per_day,
+        r.time_days,
+      ]),
+    ).toEqual([
+      ['st-1', 12, 12, 1],
+      ['st-2', 4, 4, 1],
+      ['st-3', 0, 0, 1],
+    ]);
+    // 16 minutes over 3 student-days
+    expect(yesterday.root.time_per_day).toBe(5.3);
+
+    const all = await svc.scores('T1', 'usage', 'all', 'all');
+    expect(
+      (all.children as StudentRow[]).map((r) => [
+        r.student_id,
+        r.time_total,
+        r.time_per_day,
+        r.time_days,
+      ]),
+    ).toEqual([
+      ['st-1', 51, 3.9, 13],
+      ['st-2', 12, 6, 2],
+      ['st-3', 0, 0, 1],
+    ]);
+  });
+
+  it('class level without a window keeps the legacy student rows (no time fields)', async () => {
+    const { svc, query } = makeService(classFixture());
+    const out = await svc.scores('T1', 'usage', 30);
+    expect(out.window).toBeUndefined();
+    for (const r of out.children as StudentRow[]) {
+      expect(r).not.toHaveProperty('time_total');
+    }
+    expect(tagsOf(query)).not.toContain('time-students');
+  });
+
+  it('school level: one teacher row with the per-student time of their class', async () => {
+    const { svc } = makeService(classFixture());
+    const out = await svc.scores('S1', 'usage', 30, '7d');
+    expect(out.child_type).toBe('teacher');
+    // the school root comes from its nightly vector: 16 minutes, 3 students
+    expect(out.root).toEqual(
+      expect.objectContaining({ time_per_day: 5.3, time_days: 1 }),
+    );
+    expect(out.children).toEqual([
+      expect.objectContaining({
+        id: 'T1',
+        type: 'teacher',
+        students: 3,
+        time_total: 23.1,
+        time_per_day: 3.3,
+        time_days: 7,
+        // one of three students averages more than 5 minutes a day
+        pass_rate: 33.3,
+        bin: 'mid',
+        delta: null,
+      }),
+    ]);
+    expect(out.most_improved).toEqual([]);
   });
 });

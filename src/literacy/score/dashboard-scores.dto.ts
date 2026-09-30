@@ -13,6 +13,24 @@ export const DASHBOARD_METRICS: readonly LiteracyMetric[] = [
 export const DASHBOARD_RANGES = [30, 'all'] as const;
 export type DashboardRange = (typeof DASHBOARD_RANGES)[number];
 export const DEFAULT_RANGE: DashboardRange = 30;
+// "Time" (the usage metric) over a window of stored days. Optional on the
+// wire: a request WITHOUT `window` gets the pre-2026-10 usage response
+// (yesterday's share of students over 5 min, deltas, most improved) so an
+// older dashboard keeps working; with it the response carries the time_*
+// fields below and no deltas / most improved.
+//   yesterday = the last complete IST day (the row dated as_of)
+//   7d        = the last seven days (rows dated as_of−6 … as_of)
+//   all       = every stored day up to as_of
+export const TIME_WINDOWS = ['yesterday', '7d', 'all'] as const;
+export type TimeWindow = (typeof TIME_WINDOWS)[number];
+export const TIME_WINDOW_DAYS: Record<TimeWindow, number | null> = {
+  yesterday: 1,
+  '7d': 7,
+  all: null,
+};
+// Colour rule for an average of minutes per day — the same 5-minute mark the
+// daily-usage pass uses (strictly more than).
+export const TIME_PASS_MINUTES_PER_DAY = 5;
 export const MOST_IMPROVED_MIN_N = 5;
 export const MOST_IMPROVED_LIMIT = 5;
 export const ACTIVE_WINDOW_DAYS = 14;
@@ -61,7 +79,20 @@ export interface GeoRef {
     | null;
 }
 
-export interface RootStats {
+// Active time over the requested window (usage metric with `window` only).
+// A student's own figures; for an area, a teacher or a class they are PER
+// STUDENT (so areas of different sizes compare): `time_per_day` = minutes
+// per student per day, `time_total` = minutes per student over the window.
+export interface TimeFields {
+  // Minutes in the window, 1 dp. Null when there is nothing to average.
+  time_total?: number | null;
+  // Minutes per day, 1 dp — what the colour follows.
+  time_per_day?: number | null;
+  // The days the figures cover (1, up to 7, or the stored history).
+  time_days?: number;
+}
+
+export interface RootStats extends TimeFields {
   pass_rate: number | null;
   mean: number | null;
   sd: number | null;
@@ -101,7 +132,7 @@ export interface Official {
   spotlight_message: string | null;
 }
 
-export interface ChildRow extends GeoRef {
+export interface ChildRow extends GeoRef, TimeFields {
   pass_rate: number | null;
   n: number;
   students_active: number;
@@ -113,7 +144,7 @@ export interface ChildRow extends GeoRef {
   students?: number;
 }
 
-export interface StudentRow {
+export interface StudentRow extends TimeFields {
   student_id: string;
   // Display label: first name, else "Student N" (never phone digits).
   label: string;
@@ -136,6 +167,8 @@ export interface ScoresResponse {
   as_of: string | null;
   metric: LiteracyMetric;
   range: DashboardRange;
+  // Echoed when the request carried one (usage only).
+  window?: TimeWindow;
   entity: GeoRef;
   root: RootStats;
   series: SeriesPoint[];
@@ -179,7 +212,101 @@ export function validateRange(raw: unknown): DashboardRange {
   return n as DashboardRange;
 }
 
+// Absent → undefined (the legacy usage response); anything else must be a
+// known window.
+export function validateWindow(raw: unknown): TimeWindow | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  if (
+    typeof raw !== 'string' ||
+    !(TIME_WINDOWS as readonly string[]).includes(raw)
+  ) {
+    throw new BadRequestException(
+      `window must be one of: ${TIME_WINDOWS.join(', ')}`,
+    );
+  }
+  return raw as TimeWindow;
+}
+
+// GET users/:id/usage-history — a student's active minutes per day. `date`
+// is the day the minutes were spent (not the nightly row's date); days
+// without activity are 0, so the series is continuous from the student's
+// first stored day (or the start of the range) to the last nightly run.
+export interface UsageHistoryPoint {
+  date: string;
+  minutes: number;
+}
+export interface UsageHistoryResponse {
+  as_of: string | null;
+  range: DashboardRange;
+  points: UsageHistoryPoint[];
+}
+
 // ─── Arithmetic (pure; dashboard-scores.spec.ts) ─────────────────────────────
+
+const round1 = (v: number) => Math.round(v * 10) / 10;
+
+// Time figures from a total of minutes spread over `days` days by
+// `students` students (1 for a single student).
+export function timeFields(
+  totalMinutes: number,
+  studentDays: number,
+  days: number,
+): Required<TimeFields> {
+  if (studentDays <= 0 || days <= 0) {
+    return { time_total: null, time_per_day: null, time_days: days };
+  }
+  const perDay = totalMinutes / studentDays;
+  return {
+    time_total: round1(perDay * days),
+    time_per_day: round1(perDay),
+    time_days: days,
+  };
+}
+
+const shiftIsoDay = (iso: string, days: number): string =>
+  new Date(new Date(`${iso}T00:00:00Z`).getTime() + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+
+// A student's daily minutes from their stored rows. A row dated D holds the
+// minutes of the day BEFORE D (the nightly summarises the last complete
+// day), so each point is labelled D − 1. The series runs from the student's
+// first stored row (or the start of the range) to the newest nightly —
+// `lastRun` when the student has been quiet since — with 0 on every day
+// that has no row or no minutes.
+export function buildUsageHistory(
+  rows: ReadonlyArray<{ computed_for: string; minutes: number | null }>,
+  lastRun: string | null,
+  range: DashboardRange,
+): UsageHistoryResponse {
+  if (rows.length === 0) return { as_of: lastRun, range, points: [] };
+  const byDay = new Map(rows.map((r) => [r.computed_for, r.minutes ?? 0]));
+  const dates = [...byDay.keys()].sort();
+  const first = dates[0];
+  const newest = dates[dates.length - 1];
+  const asOf = lastRun !== null && lastRun > newest ? lastRun : newest;
+  const rangeStart = range === 'all' ? first : shiftIsoDay(asOf, -(range - 1));
+  const start = rangeStart > first ? rangeStart : first;
+  const points: UsageHistoryPoint[] = [];
+  for (let d = start; d <= asOf; d = shiftIsoDay(d, 1)) {
+    points.push({
+      date: shiftIsoDay(d, -1),
+      minutes: round1(byDay.get(d) ?? 0),
+    });
+  }
+  return { as_of: asOf, range, points };
+}
+
+// Bin for an average of minutes per day: high above the 5-minute mark, mid
+// for any use, low for none.
+export function timeBin(
+  perDay: number | null | undefined,
+  usingLifteracy: boolean,
+): Bin {
+  if (!usingLifteracy || perDay === null || perDay === undefined) return 'none';
+  if (perDay > TIME_PASS_MINUTES_PER_DAY) return 'high';
+  return perDay > 0 ? 'mid' : 'low';
+}
 
 export function passRate(pass: number, n: number): number | null {
   if (n <= 0) return null;

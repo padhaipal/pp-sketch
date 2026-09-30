@@ -1920,6 +1920,100 @@ describe('UserController.userMedia — flow taps, onboarding turns, public filte
   });
 });
 
+describe('UserController.usageHistory', () => {
+  const STUDENT = '11111111-2222-4333-8444-555555555555';
+
+  function setup(opts: { user?: unknown; rows?: unknown[]; runs?: unknown[] }) {
+    const query = jest.fn(async (sql: string) => {
+      if (sql.includes('usage-history:rows')) return opts.rows ?? [];
+      if (sql.includes('usage-history:last-run')) return opts.runs ?? [];
+      throw new Error(`unexpected SQL ${sql.slice(0, 40)}`);
+    });
+    const findOneBy = jest
+      .fn()
+      .mockResolvedValue('user' in opts ? opts.user : { id: STUDENT });
+    const ctrl = makeController({
+      userRepo: makeRepo({ findOneBy }),
+      scoreRepo: makeRepo({ manager: { query } }),
+    });
+    return { ctrl, query, findOneBy };
+  }
+
+  it('returns the daily minutes from the stored rows, extended with zeros to the newest nightly', async () => {
+    const { ctrl, query } = setup({
+      rows: [
+        // pg hands DATE back as a Date or a string — both are accepted
+        { computed_for: new Date('2026-09-10T00:00:00Z'), minutes: 12.34 },
+        { computed_for: '2026-09-12', minutes: null },
+      ],
+      // the nightly that started 00:15 IST on 14 Sep (18:45 UTC on the 13th)
+      runs: [{ started_at: new Date('2026-09-13T18:45:00Z') }],
+    });
+    const out = await ctrl.usageHistory(STUDENT, 'all');
+    expect(out).toEqual({
+      as_of: '2026-09-14',
+      range: 'all',
+      points: [
+        { date: '2026-09-09', minutes: 12.3 },
+        { date: '2026-09-10', minutes: 0 },
+        { date: '2026-09-11', minutes: 0 },
+        { date: '2026-09-12', minutes: 0 },
+        { date: '2026-09-13', minutes: 0 },
+      ],
+    });
+    const [rowsSql, rowsParams] = (
+      query.mock.calls as unknown as [string, unknown[]][]
+    ).find(([sql]) => sql.includes('usage-history:rows'))!;
+    expect(rowsSql).toContain('usage_score::float8 AS minutes');
+    expect(rowsSql).toContain('FROM test_results_student');
+    expect(rowsSql).toContain('WHERE student_id = $1');
+    expect(rowsSql).toContain('ORDER BY computed_for');
+    expect(rowsParams).toEqual([STUDENT]);
+    const [runSql] = (query.mock.calls as unknown as [string][]).find(([sql]) =>
+      sql.includes('usage-history:last-run'),
+    )!;
+    expect(runSql).toContain("WHERE status = 'ok'");
+    expect(runSql).toContain('ORDER BY started_at DESC');
+    expect(runSql).toContain('LIMIT 1');
+  });
+
+  it('range defaults to 30 days; no finished nightly → ends at the newest row; no rows → no points', async () => {
+    const withRows = setup({
+      rows: [{ computed_for: '2026-09-13', minutes: 4 }],
+      runs: [],
+    });
+    await expect(withRows.ctrl.usageHistory(STUDENT)).resolves.toEqual({
+      as_of: '2026-09-13',
+      range: 30,
+      points: [{ date: '2026-09-12', minutes: 4 }],
+    });
+    const none = setup({ rows: [], runs: [] });
+    await expect(none.ctrl.usageHistory(STUDENT, '30')).resolves.toEqual({
+      as_of: null,
+      range: 30,
+      points: [],
+    });
+  });
+
+  it('rejects a bad range, an unknown user and a malformed id (never reaching the database with it)', async () => {
+    const { ctrl } = setup({});
+    await expect(ctrl.usageHistory(STUDENT, '90')).rejects.toThrow(
+      BadRequestException,
+    );
+    const missing = setup({ user: null });
+    await expect(missing.ctrl.usageHistory(STUDENT)).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(missing.query).not.toHaveBeenCalled();
+    const malformed = setup({});
+    await expect(malformed.ctrl.usageHistory('not-a-uuid')).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(malformed.findOneBy).not.toHaveBeenCalled();
+    expect(malformed.query).not.toHaveBeenCalled();
+  });
+});
+
 describe('UserController.userScores — exact raw SQL', () => {
   it('joins scores with letters and orders ASC; reports is_seed when user_message_id is null', async () => {
     const query = jest.fn().mockResolvedValue([

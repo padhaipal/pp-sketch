@@ -38,9 +38,23 @@ describe('DashboardScoresController', () => {
   it('validates metric and range (range defaults to 30) and forwards to the service', async () => {
     const { ctrl, scores, spotlight } = make();
     await ctrl.getScores(ID, 'mpl_b', 'all');
-    expect(scores).toHaveBeenCalledWith(ID, 'mpl_b', 'all');
+    expect(scores).toHaveBeenCalledWith(ID, 'mpl_b', 'all', undefined);
     await ctrl.getSpotlight(ID, 'nipun_g2', undefined);
-    expect(spotlight).toHaveBeenCalledWith(ID, 'nipun_g2', 30);
+    expect(spotlight).toHaveBeenCalledWith(ID, 'nipun_g2', 30, undefined);
+    // Time window: validated and forwarded; absent stays undefined (the
+    // legacy usage response).
+    await ctrl.getScores(ID, 'usage', '30', '7d');
+    expect(scores).toHaveBeenLastCalledWith(ID, 'usage', 30, '7d');
+    await ctrl.getSpotlight(ID, 'usage', 'all', 'yesterday');
+    expect(spotlight).toHaveBeenLastCalledWith(ID, 'usage', 'all', 'yesterday');
+    await ctrl.getScores(ID, 'usage', '30', '');
+    expect(scores).toHaveBeenLastCalledWith(ID, 'usage', 30, undefined);
+    await expect(ctrl.getScores(ID, 'usage', '30', 'week')).rejects.toThrow(
+      /window must be one of: yesterday, 7d, all/,
+    );
+    await expect(
+      ctrl.getSpotlight(ID, 'usage', '30', 'last-week'),
+    ).rejects.toThrow(BadRequestException);
     await expect(ctrl.getScores(ID, 'x', '30')).rejects.toThrow(
       BadRequestException,
     );
@@ -63,6 +77,25 @@ describe('DashboardScoresController', () => {
     expect(res.setHeader).toHaveBeenCalledWith(
       'Content-Disposition',
       'attachment; filename="lifteracy-block-010101-mpl_b-all-time.csv"',
+    );
+  });
+
+  it('CSV in Time mode: the window is forwarded and named in the filename', async () => {
+    const { ctrl, scores } = make();
+    scores.mockResolvedValue({
+      metric: 'usage',
+      range: 30,
+      window: '7d',
+      entity: { type: 'block', code: '010101' },
+      children: [{ id: 'a', time_total: 21, time_per_day: 3, time_days: 7 }],
+    });
+    const res = { setHeader: jest.fn() };
+    const csv = await ctrl.getScoresCsv(ID, res as never, 'usage', '30', '7d');
+    expect(scores).toHaveBeenCalledWith(ID, 'usage', 30, '7d');
+    expect(csv).toBe('id,time_total,time_per_day,time_days\na,21,3,7');
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'attachment; filename="lifteracy-block-010101-usage-time-7d.csv"',
     );
   });
 

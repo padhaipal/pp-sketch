@@ -30,6 +30,12 @@ import {
   SpotlightResponse,
   StudentRow,
   studentLabel,
+  TIME_PASS_MINUTES_PER_DAY,
+  TIME_WINDOW_DAYS,
+  timeBin,
+  timeFields,
+  TimeFields,
+  TimeWindow,
   usingLifteracy,
 } from './dashboard-scores.dto';
 
@@ -107,7 +113,43 @@ function toStudentRow(m: MemberRow): StudentRow {
     active: m.active,
     last_active_at: m.last_active_at,
     delta: m.delta,
+    ...(m.time_days === undefined
+      ? {}
+      : {
+          time_total: m.time_total,
+          time_per_day: m.time_per_day,
+          time_days: m.time_days,
+        }),
   };
+}
+
+// Per-student time figures of a group (a teacher's students, a class): the
+// students' minutes over their student-days, scaled to the longest span.
+function groupTime(members: MemberRow[]): Required<TimeFields> {
+  const total = members.reduce((a, m) => a + (m.time_total ?? 0), 0);
+  const studentDays = members.reduce((a, m) => a + (m.time_days ?? 0), 0);
+  const days = members.reduce((a, m) => Math.max(a, m.time_days ?? 0), 0);
+  return timeFields(total, studentDays, days);
+}
+
+// Which rows a time window covers. $2 is always as_of.
+function windowSql(window: TimeWindow, col: string): string {
+  switch (window) {
+    case 'yesterday':
+      return `${col} = $2::date`;
+    case '7d':
+      return `${col} <= $2::date AND ${col} > ($2::date - interval '7 days')`;
+    case 'all':
+      return `${col} <= $2::date`;
+  }
+}
+
+function daysBetween(fromIso: string, toIso: string): number {
+  return Math.round(
+    (new Date(`${toIso}T00:00:00Z`).getTime() -
+      new Date(`${fromIso}T00:00:00Z`).getTime()) /
+      86_400_000,
+  );
 }
 
 // Pass rate of the group's prior rows (≤ as_of − range), for a delta.
@@ -131,11 +173,13 @@ function emptyResponse(
   childType: ScoresResponse['child_type'],
   metric: LiteracyMetric,
   range: DashboardRange,
+  window?: TimeWindow,
 ): ScoresResponse {
   return {
     as_of: null,
     metric,
     range,
+    ...(window ? { window } : {}),
     entity,
     root: {
       pass_rate: null,
@@ -186,14 +230,20 @@ export class DashboardScoresService {
     private readonly geoEntityService: GeoEntityService,
   ) {}
 
+  // `window` (usage only — ignored for the test metrics) switches the
+  // response to "Time" mode: time_* fields on the root, the children and the
+  // students over that window, bins from the minutes-per-day average, and no
+  // deltas / most improved. Without it the usage response is unchanged.
   async scores(
     id: string,
     metric: LiteracyMetric,
     range: DashboardRange,
+    window?: TimeWindow,
   ): Promise<ScoresResponse> {
+    const win = metric === 'usage' ? window : undefined;
     const entity = await this.geoEntityService.getById(id);
     // Not a geo entity → a teacher's user id (the class level under a school).
-    if (!entity) return this.classScores(id, metric, range);
+    if (!entity) return this.classScores(id, metric, range, win);
     const childType = CHILD_TYPE_OF[entity.type];
 
     const latest = await this.latestRow(id, metric);
@@ -204,7 +254,7 @@ export class DashboardScoresService {
       // unscored: the map draws its districts / block labels / school dots
       // from them, so a state nobody uses yet must not drill into a bare
       // outline.
-      const empty = emptyResponse(toRef(entity), childType, metric, range);
+      const empty = emptyResponse(toRef(entity), childType, metric, range, win);
       if (childType && childType !== 'teacher' && childType !== 'student') {
         empty.children = await this.geoChildren(
           entity,
@@ -212,12 +262,19 @@ export class DashboardScoresService {
           metric,
           null,
           range,
+          win,
         );
       }
       return empty;
     }
     const asOf = isoDate(latest.computed_for);
-    const prior = await this.priorRows([id], metric, asOf, range);
+    // Time mode has no deltas, so the prior row is never read.
+    const [prior, rootTime] = await Promise.all([
+      win
+        ? new Map<string, number | null>()
+        : this.priorRows([id], metric, asOf, range),
+      win ? this.geoTime([id], asOf, win) : null,
+    ]);
     const rootPass = passRate(latest.pass, latest.n);
     const root: RootStats = {
       pass_rate: rootPass,
@@ -226,19 +283,33 @@ export class DashboardScoresService {
       n: latest.n,
       students_active: latest.students_active,
       students_unbanded: latest.students_unbanded,
-      delta: delta(rootPass, prior.get(id)),
+      delta: win ? null : delta(rootPass, prior.get(id)),
+      ...(rootTime ? (rootTime.get(id) ?? timeFields(0, 0, 0)) : {}),
     };
     const series = await this.series(id, metric, asOf, range);
 
     let children: ChildRow[] | StudentRow[];
     let mostImproved: ChildRow[] = [];
     if (childType === 'teacher') {
-      const members = await this.students({ school: id }, metric, asOf, range);
-      children = await this.teachers(members);
-      mostImproved = rankImproved(children);
+      const members = await this.students(
+        { school: id },
+        metric,
+        asOf,
+        range,
+        win,
+      );
+      children = await this.teachers(members, win);
+      mostImproved = win ? [] : rankImproved(children);
     } else if (childType && childType !== 'student') {
-      children = await this.geoChildren(entity, childType, metric, asOf, range);
-      mostImproved = rankImproved(children);
+      children = await this.geoChildren(
+        entity,
+        childType,
+        metric,
+        asOf,
+        range,
+        win,
+      );
+      mostImproved = win ? [] : rankImproved(children);
     } else {
       children = [];
     }
@@ -247,6 +318,7 @@ export class DashboardScoresService {
       as_of: asOf,
       metric,
       range,
+      ...(win ? { window: win } : {}),
       entity: toRef(entity),
       root,
       series,
@@ -266,6 +338,7 @@ export class DashboardScoresService {
     teacherId: string,
     metric: LiteracyMetric,
     range: DashboardRange,
+    win?: TimeWindow,
   ): Promise<ScoresResponse> {
     const teacher: Array<{ id: string; name: string | null }> =
       await this.dataSource.query(
@@ -293,7 +366,9 @@ export class DashboardScoresService {
         [teacherId],
       );
     const computedFor = asOfRows[0]?.computed_for ?? null;
-    if (!computedFor) return emptyResponse(entity, 'student', metric, range);
+    if (!computedFor) {
+      return emptyResponse(entity, 'student', metric, range, win);
+    }
     const asOf = isoDate(computedFor);
 
     const members = await this.students(
@@ -301,6 +376,7 @@ export class DashboardScoresService {
       metric,
       asOf,
       range,
+      win,
     );
     const scored = members.filter((m) => m.score !== null);
     const n = scored.length;
@@ -317,7 +393,8 @@ export class DashboardScoresService {
       n,
       students_active: members.filter((m) => m.active).length,
       students_unbanded: members.filter((m) => m.unbanded).length,
-      delta: delta(rootPass, priorPassRate(members)),
+      delta: win ? null : delta(rootPass, priorPassRate(members)),
+      ...(win ? groupTime(members) : {}),
     };
 
     interface SeriesRow {
@@ -379,6 +456,7 @@ export class DashboardScoresService {
       as_of: asOf,
       metric,
       range,
+      ...(win ? { window: win } : {}),
       entity,
       root,
       series: seriesRows.map((r) => ({
@@ -400,17 +478,24 @@ export class DashboardScoresService {
     id: string,
     metric: LiteracyMetric,
     range: DashboardRange,
+    window?: TimeWindow,
   ): Promise<SpotlightResponse> {
-    const result = await this.scores(id, metric, range);
+    const result = await this.scores(id, metric, range, window);
     if (result.child_type === 'student' || result.child_type === null) {
       return { top: null, most_improved: null };
     }
     const children = (result.children as ChildRow[]).filter(
       (c) => c.n >= MOST_IMPROVED_MIN_N,
     );
-    const top = [...children]
-      .filter((c) => c.pass_rate !== null)
-      .sort((a, b) => (b.pass_rate ?? 0) - (a.pass_rate ?? 0))[0];
+    // Time mode: the top child is the one with the most minutes per day (an
+    // area nobody practised in is never "top"); there is no most improved.
+    const top = result.window
+      ? [...children]
+          .filter((c) => (c.time_per_day ?? 0) > 0)
+          .sort((a, b) => (b.time_per_day ?? 0) - (a.time_per_day ?? 0))[0]
+      : [...children]
+          .filter((c) => c.pass_rate !== null)
+          .sort((a, b) => (b.pass_rate ?? 0) - (a.pass_rate ?? 0))[0];
     const improved = result.most_improved[0];
     return {
       top: top ? { child: top, official: top.official } : null,
@@ -483,6 +568,80 @@ export class DashboardScoresService {
     }));
   }
 
+  // ─── Time windows (usage) ─────────────────────────────────────────────
+
+  // Per-student time figures of geo entities over the window, from the
+  // nightly vectors: usage_sum is the area's minutes that day and usage_n its
+  // students, so Σsum / Σn is minutes per student per day (a student-day
+  // average — it stays right as an area gains students) and × the days that
+  // have a vector gives minutes per student over the window. No student
+  // rows are read.
+  private async geoTime(
+    ids: string[],
+    asOf: string,
+    window: TimeWindow,
+  ): Promise<Map<string, Required<TimeFields>>> {
+    if (ids.length === 0) return new Map();
+    const rows: Array<{
+      geo_entity_id: string;
+      sum: number;
+      student_days: number;
+      days: number;
+    }> = await this.dataSource.query(
+      `/* dashboard-scores:time-geo */
+       SELECT geo_entity_id,
+              COALESCE(SUM(usage_sum), 0)::float8 AS sum,
+              COALESCE(SUM(usage_n), 0)::float8 AS student_days,
+              COUNT(*) FILTER (WHERE usage_n > 0)::int AS days
+       FROM test_results_geo_entity
+       WHERE geo_entity_id = ANY($1::uuid[])
+         AND ${windowSql(window, 'computed_for')}
+       GROUP BY geo_entity_id`,
+      [ids, asOf],
+    );
+    return new Map(
+      rows.map((r) => [
+        r.geo_entity_id,
+        timeFields(r.sum, r.student_days, r.days),
+      ]),
+    );
+  }
+
+  // A student's minutes in the window and the days it covers FOR THEM: the
+  // window's length, capped at the days since their first stored row, so a
+  // student who joined three days ago is averaged over three days, not seven.
+  private async studentTime(
+    ids: string[],
+    asOf: string,
+    window: TimeWindow,
+  ): Promise<Map<string, Required<TimeFields>>> {
+    if (ids.length === 0) return new Map();
+    const rows: Array<{
+      student_id: string;
+      total: number;
+      first_row: string | Date;
+    }> = await this.dataSource.query(
+      `/* dashboard-scores:time-students */
+       SELECT student_id,
+              COALESCE(SUM(usage_score) FILTER (
+                WHERE ${windowSql(window, 'computed_for')}
+              ), 0)::float8 AS total,
+              MIN(computed_for) AS first_row
+       FROM test_results_student
+       WHERE student_id = ANY($1::uuid[]) AND computed_for <= $2::date
+       GROUP BY student_id`,
+      [ids, asOf],
+    );
+    const cap = TIME_WINDOW_DAYS[window];
+    return new Map(
+      rows.map((r) => {
+        const span = Math.max(1, daysBetween(isoDate(r.first_row), asOf) + 1);
+        const days = cap === null ? span : Math.min(cap, span);
+        return [r.student_id, timeFields(r.total, days, days)];
+      }),
+    );
+  }
+
   // ─── Geo children (one hop via descendants) ───────────────────────────
 
   private async allDescendants(
@@ -521,32 +680,37 @@ export class DashboardScoresService {
     // child's vector is rolled up into every ancestor): refs + officials only.
     asOf: string | null,
     range: DashboardRange,
+    win?: TimeWindow,
   ): Promise<ChildRow[]> {
     const refs = await this.allDescendants(entity.id, childType);
     if (refs.length === 0) return [];
     const ids = refs.map((r) => r.id);
     const noRows: GeoRowMetric[] = [];
-    const [rows, prior, officials] = await Promise.all([
+    const noTime = new Map<string, Required<TimeFields>>();
+    const [rows, prior, officials, time] = await Promise.all([
       asOf ? this.childRows(ids, metric, asOf) : noRows,
-      asOf
+      asOf && !win
         ? this.priorRows(ids, metric, asOf, range)
         : new Map<string, number | null>(),
       this.officials(ids),
+      asOf && win ? this.geoTime(ids, asOf, win) : noTime,
     ]);
     const byId = new Map(rows.map((r) => [r.geo_entity_id, r]));
     return refs.map((ref) => {
       const row = byId.get(ref.id);
       const using = usingLifteracy(row);
       const pr = row ? passRate(row.pass, row.n) : null;
+      const tf = win ? (time.get(ref.id) ?? timeFields(0, 0, 0)) : null;
       return {
         ...ref,
         pass_rate: pr,
         n: row?.n ?? 0,
         students_active: row?.students_active ?? 0,
         using_lifteracy: using,
-        delta: delta(pr, prior.get(ref.id)),
-        bin: binOf(pr, using),
+        delta: tf ? null : delta(pr, prior.get(ref.id)),
+        bin: tf ? timeBin(tf.time_per_day, using) : binOf(pr, using),
         official: officials.get(ref.id) ?? null,
+        ...(tf ?? {}),
       };
     });
   }
@@ -603,6 +767,10 @@ export class DashboardScoresService {
     metric: LiteracyMetric,
     asOf: string,
     range: DashboardRange,
+    // Time mode (usage): `score` becomes the student's minutes over the
+    // window (so the ordering follows it), `passed` the 5-minute mark on
+    // their minutes per day, and there is no delta.
+    win?: TimeWindow,
   ): Promise<MemberRow[]> {
     interface Row {
       student_id: string;
@@ -713,6 +881,21 @@ export class DashboardScoresService {
         unbanded: age === null,
       };
     });
+    if (win) {
+      const time = await this.studentTime(
+        out.map((m) => m.student_id),
+        asOf,
+        win,
+      );
+      const days = TIME_WINDOW_DAYS[win] ?? 1;
+      for (const m of out) {
+        const tf = time.get(m.student_id) ?? timeFields(0, days, days);
+        Object.assign(m, tf);
+        m.score = tf.time_total;
+        m.passed = (tf.time_per_day ?? 0) > TIME_PASS_MINUTES_PER_DAY;
+        m.delta = null;
+      }
+    }
     return out.sort(compareStudents);
   }
 
@@ -720,7 +903,10 @@ export class DashboardScoresService {
   // members, aggregated from their students' rows — pass rate over scored
   // students, delta against the students' prior rows, the teacher's own
   // profile as `official`. Ordered pass_rate desc, then name.
-  private async teachers(members: MemberRow[]): Promise<ChildRow[]> {
+  private async teachers(
+    members: MemberRow[],
+    win?: TimeWindow,
+  ): Promise<ChildRow[]> {
     const groups = new Map<string, MemberRow[]>();
     for (const m of members) {
       if (!m.referrer_user_id) continue;
@@ -744,6 +930,7 @@ export class DashboardScoresService {
         scored.length,
       );
       const u = byId.get(id);
+      const tf = win ? groupTime(studs) : null;
       return {
         id,
         type: 'teacher',
@@ -757,8 +944,9 @@ export class DashboardScoresService {
         students: studs.length,
         students_active: studs.filter((s) => s.active).length,
         using_lifteracy: true,
-        delta: delta(pr, priorPassRate(studs)),
-        bin: binOf(pr, true),
+        delta: tf ? null : delta(pr, priorPassRate(studs)),
+        bin: tf ? timeBin(tf.time_per_day, true) : binOf(pr, true),
+        ...(tf ?? {}),
         official: u
           ? {
               name: u.name,
@@ -769,10 +957,10 @@ export class DashboardScoresService {
           : null,
       };
     });
+    // Time mode orders by minutes per day; otherwise by pass rate.
+    const rank = (c: ChildRow) => (win ? c.time_per_day : c.pass_rate) ?? -1;
     return rows.sort(
-      (a, b) =>
-        (b.pass_rate ?? -1) - (a.pass_rate ?? -1) ||
-        a.name.localeCompare(b.name),
+      (a, b) => rank(b) - rank(a) || a.name.localeCompare(b.name),
     );
   }
 }

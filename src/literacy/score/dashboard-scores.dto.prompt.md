@@ -40,3 +40,30 @@ the class view edits it via PATCH /users/:id/profile), score, passed,
 attempts, in_band, active, last_active_at, delta (points vs the row ≤ as_of −
 range, else null)}`; `SpotlightResponse {top, most_improved}` of `{child,
 official}`; `Official {name, role_title, avatar_seed, spotlight_message}`.
+
+## 2026-09: Time windows (`window`, usage only)
+
+`TIME_WINDOWS = ['yesterday', '7d', 'all']`, `TimeWindow`,
+`TIME_WINDOW_DAYS` (1, 7, null), `validateWindow`. `ScoresResponse.window`
+echoes the window when the request carried one.
+
+`TimeFields` — `time_total` (minutes in the window, 1 dp), `time_per_day`
+(minutes per day, 1 dp — what the colour follows), `time_days` (days the
+figures cover) — optional on `RootStats`, `ChildRow` and `StudentRow`, present
+only in Time mode. A student's are their own; an area's, a teacher's and a
+class's are PER STUDENT, so areas of different sizes compare. Flat, not
+nested, so `toCsv` writes them as columns.
+
+- `timeFields(totalMinutes, studentDays, days)` → per day = total /
+  student-days; total = per day × days; nulls when there is nothing to
+  average.
+- `timeBin(perDay, usingLifteracy)` — high strictly above
+  `TIME_PASS_MINUTES_PER_DAY` (5), mid for any use, low for none, none when
+  not using / null.
+
+`UsageHistoryResponse { as_of, range, points: [{date, minutes}] }` and
+`buildUsageHistory(rows, lastRun, range)` — GET users/:id/usage-history
+(user.controller.ts): a row dated D holds the minutes of D − 1, so points are
+labelled D − 1; the series runs from the student's first stored row (or the
+start of the 30-day range) to the newer of their newest row and the last
+finished nightly, zero-filled.
