@@ -209,6 +209,19 @@ TOGGLE: set/unset the Railway variable. No code change in either direction.
   persists answer/answer_correct/level/passage_id, returns the
   `${answerId}-comprehension-complete` stid. Invalid/mistimed answers return
   `{ignored: true}` and persist nothing.
+- 2026-09: the tap returns TWO stids — the machine's
+  `${answerId}-comprehension-complete` (explanation media, identical for a
+  right and a wrong tap) followed by the fixed `comprehension-answer-correct`
+  or `comprehension-answer-incorrect`
+  (`COMPREHENSION_ANSWER_{CORRECT,INCORRECT}_STATE_TRANSITION_ID`), chosen
+  from the `answerCorrect` already resolved for the event — no extra read.
+  Right/wrong feedback (a sticker) is seeded once under the fixed stid: a
+  per-option row is impractical and the `_` generic key cannot match a
+  UUID-prefixed stid. Returned only — the persisted snapshot keeps the
+  machine's stid (sentence-band progression reads it back). An unseeded
+  outcome stid sends nothing. The processor needs no change: result1's stids
+  precede the chained lesson's, so the order is explanation → outcome media →
+  next lesson → flow last.
 
 ## completedReading — reading-speed hook gate (2026-09)
 

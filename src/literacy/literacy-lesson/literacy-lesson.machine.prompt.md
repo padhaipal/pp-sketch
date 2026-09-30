@@ -24,6 +24,15 @@
   waiting re-sends the flow via `…-sentence-comprehension-correct-retry` and
   records nothing.
 
+## 2026-09: comprehension outcome stids (not machine transitions)
+
+`COMPREHENSION_ANSWER_CORRECT_STATE_TRANSITION_ID` /
+`COMPREHENSION_ANSWER_INCORRECT_STATE_TRANSITION_ID`
+(`comprehension-answer-correct|incorrect`) are exported here beside the other
+fixed stids but the machine never emits them: `COMPREHENSION_ANSWER →
+complete` still sets only `${answerId}-comprehension-complete`. The service
+appends the outcome stid to what it returns (literacy-lesson.service.prompt.md).
+
 ## 2026-09: level 11+ read-in-flow lessons
 
 - Input/context gained `readInFlow` (boolean; old snapshots rehydrate with
