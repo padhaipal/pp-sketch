@@ -711,6 +711,68 @@ describe('DashboardScoresService.scores — geo levels', () => {
     expect(query).toHaveBeenCalledTimes(1);
   });
 
+  it('empty root above school level: still lists its children, unscored, with officials', async () => {
+    const { svc, query, geo } = makeService({
+      entities: ENTITIES,
+      geoRows: [],
+      officials: [
+        {
+          geo_entity_id: 'B2',
+          name: 'Meena',
+          role_title: 'BEO',
+          avatar_seed: 'meena',
+          spotlight_message: null,
+          created_at: '2026-06-01',
+        },
+      ],
+    });
+    const out = await svc.scores('D', 'nipun_g2', 30);
+    expect(out.as_of).toBeNull();
+    expect(out.root.n).toBeNull();
+    expect(out.series).toEqual([]);
+    expect(out.most_improved).toEqual([]);
+    expect(out.child_type).toBe('block');
+    expect(geo.descendants).toHaveBeenCalledWith('D', 'block', {
+      cursor: null,
+      limit: 500,
+    });
+    expect(out.children).toEqual([
+      {
+        id: 'B1',
+        type: 'block',
+        code: '010101',
+        name: 'Kupwara',
+        has_boundary: false,
+        lat: 34.5,
+        lng: 74.4,
+        management_group: null,
+        pass_rate: null,
+        n: 0,
+        students_active: 0,
+        using_lifteracy: false,
+        delta: null,
+        bin: 'none',
+        official: null,
+      },
+      expect.objectContaining({
+        id: 'B2',
+        using_lifteracy: false,
+        bin: 'none',
+        official: expect.objectContaining({ name: 'Meena' }),
+      }),
+    ]);
+    // No as_of → the children / prior score reads are skipped.
+    expect(
+      (query.mock.calls as [string][]).map(
+        ([sql]) => /dashboard-scores:([a-z-]+)/.exec(sql)![1],
+      ),
+    ).toEqual(['latest', 'officials']);
+    await expect(svc.spotlight('D', 'nipun_g2', 30)).resolves.toEqual({
+      top: null,
+      most_improved: null,
+    });
+  });
+
   it('404s for an unknown entity', async () => {
     const { svc } = makeService({ entities: ENTITIES, geoRows: [] });
     await expect(svc.scores('nope', 'nipun_g2', 30)).rejects.toThrow(

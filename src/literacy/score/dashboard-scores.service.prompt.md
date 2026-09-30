@@ -10,9 +10,16 @@ nightly tables); never recomputes a score. Every statement carries a
    as a TEACHER's user id (see "Class level" below); 404 only when it is
    neither. `child_type` from `CHILD_TYPE_OF` (school → `teacher`).
 2. Latest `test_results_geo_entity` row for the root → `as_of`. **No row →
-   200 with root fields null, series/children/most_improved empty, as_of
-   null** (a new school, or any entity before its first nightly run — a new
-   teacher's first visit is exactly when the share link matters).
+   200 with root fields null, series/most_improved empty, as_of null** (a
+   new school, or any entity before its first nightly run — a new teacher's
+   first visit is exactly when the share link matters). `children` is empty
+   at school level only; a country/state/district/block root still lists
+   its `descendants(id, child_type)` unscored (`using_lifteracy` false, `n`
+   0, `pass_rate`/`delta` null, bin `none`, `official` as in step 4) via
+   `geoChildren(…, asOf = null)`, which skips the children/prior reads — a
+   root without a row has no child with one. The dashboard map draws its
+   districts / block labels / school dots from `children`, so without this
+   every state with no student yet drilled into a bare outline.
 3. Root: pass_rate/mean/sd from n/pass/sum/sumsq; delta against the newest
    row dated ≤ as_of − range days (null if none); series = rows in
    (as_of − range, as_of]. `range = 'all'` (2026-09, replaced 90): the

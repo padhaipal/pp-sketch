@@ -200,8 +200,21 @@ export class DashboardScoresService {
     if (!latest) {
       // A new school, or any entity before its first nightly run: 200 with
       // nulls — a brand-new teacher's first visit is when the share link
-      // matters most.
-      return emptyResponse(toRef(entity), childType, metric, range);
+      // matters most. Above school level the children are still listed,
+      // unscored: the map draws its districts / block labels / school dots
+      // from them, so a state nobody uses yet must not drill into a bare
+      // outline.
+      const empty = emptyResponse(toRef(entity), childType, metric, range);
+      if (childType && childType !== 'teacher' && childType !== 'student') {
+        empty.children = await this.geoChildren(
+          entity,
+          childType,
+          metric,
+          null,
+          range,
+        );
+      }
+      return empty;
     }
     const asOf = isoDate(latest.computed_for);
     const prior = await this.priorRows([id], metric, asOf, range);
@@ -504,15 +517,20 @@ export class DashboardScoresService {
     entity: GeoEntity,
     childType: Exclude<GeoEntityType, 'cluster' | 'country'>,
     metric: LiteracyMetric,
-    asOf: string,
+    // null = the root has no row yet, so no child can have one either (a
+    // child's vector is rolled up into every ancestor): refs + officials only.
+    asOf: string | null,
     range: DashboardRange,
   ): Promise<ChildRow[]> {
     const refs = await this.allDescendants(entity.id, childType);
     if (refs.length === 0) return [];
     const ids = refs.map((r) => r.id);
+    const noRows: GeoRowMetric[] = [];
     const [rows, prior, officials] = await Promise.all([
-      this.childRows(ids, metric, asOf),
-      this.priorRows(ids, metric, asOf, range),
+      asOf ? this.childRows(ids, metric, asOf) : noRows,
+      asOf
+        ? this.priorRows(ids, metric, asOf, range)
+        : new Map<string, number | null>(),
       this.officials(ids),
     ]);
     const byId = new Map(rows.map((r) => [r.geo_entity_id, r]));
