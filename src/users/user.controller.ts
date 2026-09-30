@@ -77,6 +77,11 @@ import {
 } from '../notifier/report-card/report-card.utils';
 import { INTERACTION_MEDIA_SQL } from './active-time';
 import {
+  buildUsageHistory,
+  validateRange,
+  type UsageHistoryResponse,
+} from '../literacy/score/dashboard-scores.dto';
+import {
   describeOnboardingTurns,
   type OnboardingTurnRow,
 } from '../onboarding/onboarding-turns';
@@ -375,6 +380,54 @@ export class UserController {
     const scores = await this.userService.getLiteracyTestScores(id);
     if (!scores) throw new NotFoundException('User not found');
     return scores;
+  }
+
+  // The student's active minutes per day for the teacher dashboard's student
+  // pop-up ("Time" chart). Public like literacy-test-scores (pp-dashboard
+  // proxy allowlist). Read from the stored nightly usage rows — the same
+  // numbers the class view totals — never recomputed from voice notes, so
+  // the chart starts where the stored history starts.
+  @Get(':id/usage-history')
+  async usageHistory(
+    @Param('id') id: string,
+    @Query('range') rangeRaw?: string,
+  ): Promise<UsageHistoryResponse> {
+    const range = validateRange(rangeRaw);
+    const user = UUID_RE.test(id)
+      ? await this.userRepo.findOneBy({ id })
+      : null;
+    if (!user) throw new NotFoundException('User not found');
+    const iso = (v: string | Date) =>
+      v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10);
+    const rowsQuery: Promise<
+      { computed_for: string | Date; minutes: number | null }[]
+    > = this.scoreRepo.manager.query(
+      `/* usage-history:rows */
+       SELECT computed_for, usage_score::float8 AS minutes
+       FROM test_results_student
+       WHERE student_id = $1
+       ORDER BY computed_for`,
+      [id],
+    );
+    // The newest finished nightly: its rows are dated the IST day it
+    // started on, so a student quiet since still gets zeros up to it.
+    const runsQuery: Promise<{ started_at: string | Date }[]> =
+      this.scoreRepo.manager.query(
+        `/* usage-history:last-run */
+         SELECT started_at FROM test_runs
+         WHERE status = 'ok'
+         ORDER BY started_at DESC
+         LIMIT 1`,
+      );
+    const [rows, runs] = await Promise.all([rowsQuery, runsQuery]);
+    return buildUsageHistory(
+      rows.map((r) => ({
+        computed_for: iso(r.computed_for),
+        minutes: r.minutes,
+      })),
+      runs[0] ? istDateIso(new Date(runs[0].started_at)) : null,
+      range,
+    );
   }
 
   @Get(':id/metrics')

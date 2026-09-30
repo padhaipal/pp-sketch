@@ -327,3 +327,16 @@ src/onboarding/onboarding-turns.ts).
   an `onboarding_states` row. A parent stating the child's name and age —
   recorded before recording permission exists — must never be reachable
   from a shared link.
+
+## 2026-09: `GET users/:id/usage-history?range=30|all`
+
+Public (pp-dashboard proxy allowlist), for the teacher dashboard's student
+pop-up "Time" chart. `{ as_of, range, points: [{ date, minutes }] }`
+(`buildUsageHistory`, literacy/score/dashboard-scores.dto): the student's
+active minutes per day from the STORED nightly rows
+(`test_results_student.usage_score` — `usage-history:rows`), the same numbers
+the class view totals; never recomputed from voice notes, so it starts where
+the stored history starts. Days without activity are 0 up to the newest
+finished nightly (`usage-history:last-run`: latest `test_runs` row with
+status `ok`; its rows are dated the IST day it started). 404 for an unknown
+or malformed id, 400 for a bad range.

@@ -14,3 +14,12 @@ so a link holder can walk country → … → school and read student rows
 nationally. Mitigations: student labels carry no phone digits, the page is
 noindex, responses are cached. Follow-up: a per-user HMAC token in the link
 scoping reads to the holder's subtree.
+
+## 2026-09: `window` — "Time" mode for the usage metric
+
+All three GETs take an optional `window` = `yesterday` | `7d` | `all`
+(`validateWindow`; anything else → 400; absent or empty → undefined) and
+forward it to the service. It only has an effect with `metric=usage`. In Time
+mode the CSV filename is `lifteracy-<type>-<code>-usage-time-<window>.csv`
+and its rows carry the flat `time_total`, `time_per_day`, `time_days`
+columns.

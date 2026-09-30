@@ -93,3 +93,41 @@ Over `scores()`: `top` = highest pass_rate among children with n ≥ 5,
 `most_improved` = `most_improved[0]`; each with its official. At school
 level the children are teachers, so this spotlights teachers; both null at
 class level (children are students).
+
+## 2026-09: Time mode — `scores(id, metric, range, window?)`
+
+`window` is honoured only for `metric = 'usage'` (`win`); for the test
+metrics it is ignored. WITHOUT a window the usage response is exactly what it
+was (yesterday's share of students over 5 minutes, deltas, most improved) —
+an older dashboard keeps working. WITH one:
+
+- Rows a window covers (`windowSql`, $2 = as_of): `yesterday` the row dated
+  as_of (it holds the last complete IST day); `7d` rows dated as_of − 6 …
+  as_of ("the last seven days"); `all` every row ≤ as_of. No backfill: "all"
+  starts where the stored usage history starts.
+- Geo root and geo children — `geoTime(ids, asOf, win)`
+  (`dashboard-scores:time-geo`), one GROUP BY over `test_results_geo_entity`:
+  Σ `usage_sum` / Σ `usage_n` = minutes per student per day (a student-day
+  average — right as an area gains students), × the days that have a vector
+  (`usage_n > 0`) = minutes per student over the window. No student rows are
+  read. A child with no row in the window gets null figures.
+- Students — `studentTime(ids, asOf, win)` (`dashboard-scores:time-students`):
+  Σ `usage_score` in the window, over the window's days capped at the days
+  since the student's first stored row (a student who joined three days ago
+  is averaged over three days, not seven; `all` = the whole span).
+  `score` becomes the window total (so `compareStudents` orders by it),
+  `passed` = minutes per day > 5, `delta` null.
+- Teachers (school root) and the class root — `groupTime(members)`: the
+  students' minutes over their student-days, scaled to the longest span.
+  Teacher rows order by minutes per day; their `pass_rate` is the share of
+  students averaging more than 5 minutes a day.
+- `bin` = `timeBin(time_per_day, using_lifteracy)` on every child.
+- No deltas (`delta` null everywhere — the prior rows are not even read) and
+  `most_improved` = [].
+- `spotlight(…, window)`: `top` = the child with the most minutes per day
+  among n ≥ 5 (never one at zero); `most_improved` null.
+
+All-time cost: `time-geo` reads every stored day of every child on each
+request (index `(geo_entity_id, computed_for)`; responses are cached five
+minutes). Fine at pilot size; a stored running total is the follow-up when a
+block's schools × days gets large.

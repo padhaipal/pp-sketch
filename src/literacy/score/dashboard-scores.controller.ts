@@ -9,6 +9,7 @@ import {
   toCsv,
   validateMetric,
   validateRange,
+  validateWindow,
 } from './dashboard-scores.dto';
 
 // Public, unauthenticated reads for the teacher dashboard (/d/:id). These
@@ -25,11 +26,14 @@ export class DashboardScoresController {
     @Param('id') id: string,
     @Query('metric') metric?: string,
     @Query('range') range?: string,
+    // usage ("Time") only: yesterday | 7d | all — see TIME_WINDOWS.
+    @Query('window') window?: string,
   ): Promise<ScoresResponse> {
     return this.scores.scores(
       validateGeoEntityId(id),
       validateMetric(metric),
       validateRange(range),
+      validateWindow(window),
     );
   }
 
@@ -41,15 +45,17 @@ export class DashboardScoresController {
     @Res({ passthrough: true }) res: Response,
     @Query('metric') metric?: string,
     @Query('range') range?: string,
+    @Query('window') window?: string,
   ): Promise<string> {
     const result = await this.scores.scores(
       validateGeoEntityId(id),
       validateMetric(metric),
       validateRange(range),
+      validateWindow(window),
     );
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="lifteracy-${result.entity.type}-${result.entity.code}-${result.metric}-${result.range === 'all' ? 'all-time' : `${result.range}d`}.csv"`,
+      `attachment; filename="lifteracy-${result.entity.type}-${result.entity.code}-${result.metric}-${result.window ? `time-${result.window}` : result.range === 'all' ? 'all-time' : `${result.range}d`}.csv"`,
     );
     return toCsv(result.children as unknown as Array<Record<string, unknown>>);
   }
@@ -60,11 +66,13 @@ export class DashboardScoresController {
     @Param('id') id: string,
     @Query('metric') metric?: string,
     @Query('range') range?: string,
+    @Query('window') window?: string,
   ): Promise<SpotlightResponse> {
     return this.scores.spotlight(
       validateGeoEntityId(id),
       validateMetric(metric),
       validateRange(range),
+      validateWindow(window),
     );
   }
 }
