@@ -17,9 +17,11 @@ whole minutes 0…29 and 30+).
 
 `METRICS = [...TEST_METRICS, 'usage']`. A student's `usage_score` on the row
 dated D is their active minutes on the IST day **before** D (the last
-complete day at the 00:15 IST run): the voice-note gap rule in
-users/active-time.ts (`activeMs`, gaps < 120 s) over `media_metadata`
-whatsapp audio, 1 dp; `usage_attempts` = notes that day; `usage_passed` =
+complete day at the 00:15 IST run): the gap rule in users/active-time.ts
+(`activeMs`) over the student's activity events — `media_metadata` whatsapp
+voice notes AND comprehension flow taps (2026-09); a gap counts when shorter
+than 120 s ending in a voice note or 298 s ending in a tap — 1 dp;
+`usage_attempts` = events (notes + taps) that day; `usage_passed` =
 minutes **strictly** > `USAGE_PASS_MINUTES` (5). A student with no note
 that day gets NULL/NULL/0 — zero is never stored; every reader treats
 absence as zero. Per area: `usage_n` counts EVERY student in the geo step

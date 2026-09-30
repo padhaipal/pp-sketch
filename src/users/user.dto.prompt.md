@@ -292,3 +292,38 @@ export function validateCreateUserOptions(options: unknown): CreateUserOptions {
 - `PublicProfile` — the forwardable GET /users/:id/public shape: `{id, name, role_title, avatar_seed, spotlight_message, geo_entity, ancestors, share_link, explainer_url}`. NEVER external_id, staff_notes or password_hash (user.controller.spec pins the allow-list with an inline snapshot).
 - `explainer_url` is the "What is Lifteracy?" clip's `wa_media_url`, resolved by the controller from `EXPLAINER_VIDEO_STATE_TRANSITION_ID` (`lifteracy-explainer`, literacy-lesson.machine.ts) — ready, not rolled back, video preferred over audio. Null when the clip is unseeded in this environment (warn logged, never throws; the dashboard then omits the link). A hit is memoised for the process lifetime, a miss is not, so seeding the clip later needs no redeploy. Swapping the clip is an upload under that stid, not a deploy.
 - `UpdateUserOptions` gains `new_spotlight_message` (string | null) and `new_avatar_seed`.
+
+## 2026-09: `GET users/:id/media` — interactions feed (taps, onboarding turns)
+
+`MediaRow` gained `kind: 'voice' | 'tap' | 'onboarding'`, `level`, `tap`
+(`TapDetail | null`) and `onboarding` (`OnboardingTurn | null`,
+src/onboarding/onboarding-turns.ts).
+
+- Rows = the user's interactions, newest first, 100 per page (`offset`):
+  WhatsApp voice notes and comprehension flow taps (`INTERACTION_MEDIA_SQL`,
+  users/active-time.ts). History view — no `rolled_back` filter, as before.
+- **tap** rows: `has_audio` false, `tap = { question, chosen, correct }`
+  (option → question text; no `rolled_back` filter — it is what the student
+  was asked), `answer` = the correct option's text, `answer_correct` from the
+  tap's lesson row (null = the tap was not awaited), states
+  `comprehension → complete`. The tap's `text` is a device-supplied option
+  id: only well-formed uuids are looked up. A tap resets the
+  displayed-answer walk (its lesson is over).
+- Starting/final state come from `statesOfStid` (user.controller.ts): word
+  and letter stids split as before; passage and comprehension stids carry a
+  UUID prefix (passage or answer id), which is stripped first — previously
+  those two columns showed UUID fragments.
+- **onboarding** rows — only with `?onboarding=1`. The pp-dashboard proxy
+  forwards that param for staff sessions only. Each carries the turn's
+  question (state before), next state, what the reply was taken to mean and
+  what it saved (derived from consecutive `onboarding_states` rows — the
+  classifier's reading is never stored). The completing turn is also
+  lesson one's start, so its lesson columns are filled too.
+- Without the flag (the PUBLIC teacher dashboard's student pop-up reads this
+  feed) onboarding voice notes are excluded at the source, three ways,
+  because an onboarding row can be missing (a rolled-back turn deletes it):
+  an un-onboarded user (`UserService.isOnboarded`) returns nothing; nothing
+  created at or before `recording_permissions_obtained_at`; nothing that has
+  an `onboarding_states` row. A parent stating the child's name and age —
+  recorded before recording permission exists — must never be reachable
+  from a shared link.

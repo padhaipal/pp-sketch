@@ -242,6 +242,30 @@ export async function sendAudioOnlyRedirect(
   }
 }
 
+// Re-arms the user's hail-mary timer against their latest inbound message
+// (a voice note or a comprehension flow tap — the hail-mary job treats any
+// whatsapp media row as "the latest message"). Best effort: a failure is
+// logged and never fails the turn.
+export async function rearmHailMaryBestEffort(options: {
+  user: User;
+  userMessageId: string;
+  span: Span;
+}): Promise<void> {
+  const { user, userMessageId, span } = options;
+  try {
+    await rearmHailMary({
+      user_id: user.id,
+      user_external_id: user.external_id,
+      user_message_id: userMessageId,
+      otel_carrier: injectCarrier(span),
+    });
+  } catch (err) {
+    logger.warn(
+      `rearmHailMary failed for user ${toLogId(user.external_id)}: ${(err as Error).message}`,
+    );
+  }
+}
+
 // Persists an inbound voice note (idempotent by wa_media_url, so retries
 // reuse the same entity), re-arms the hail-mary timer (best effort) and
 // returns the STT transcripts. Throws when no transcript exists — the job
@@ -257,18 +281,7 @@ export async function persistAndTranscribeAudio(
     otel_carrier: injectCarrier(span),
   });
 
-  try {
-    await rearmHailMary({
-      user_id: user.id,
-      user_external_id: user.external_id,
-      user_message_id: audioEntity.id,
-      otel_carrier: injectCarrier(span),
-    });
-  } catch (err) {
-    logger.warn(
-      `rearmHailMary failed for user ${toLogId(user.external_id)}: ${(err as Error).message}`,
-    );
-  }
+  await rearmHailMaryBestEffort({ user, userMessageId: audioEntity.id, span });
 
   const transcripts = await mediaMetaDataService.findTranscripts({
     media_metadata: audioEntity,

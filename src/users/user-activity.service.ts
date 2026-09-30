@@ -22,9 +22,12 @@ import {
 } from '../notifier/report-card/report-card.utils';
 
 import {
-  ACTIVE_GAP_THRESHOLD_MS,
+  ACTIVITY_EVENT_SQL,
+  COUNTED_GAP_SQL,
+  IS_TAP_SQL,
   STREAK_DAY_MIN_ACTIVE_MS,
   activeMs,
+  type ActivityEvent,
 } from './active-time';
 const FIVE_MIN_MS = 5 * 60 * 1000;
 // SQL fragment: IST calendar date of a timestamptz. IST is a fixed +5:30 (no
@@ -37,9 +40,10 @@ interface ParsedWindow {
   end: Date;
 }
 
-interface VoiceMessageRow {
+interface ActivityEventRow {
   user_id: string;
   created_at: Date;
+  tap: boolean;
 }
 
 @Injectable()
@@ -59,9 +63,10 @@ export class UserActivityService {
   // IST day from the earliest record in the DB through today. Heavy full-table
   // scans, so the result is cached (past days are immutable; only today
   // drifts). Definitions mirror the per-user endpoints exactly:
-  //   - active_ms / users_over_5min: computeActiveMs gap rule, expressed in
-  //     SQL (gap between consecutive voice messages of the same user, both in
-  //     the same IST day, 0 < gap < ACTIVE_GAP_THRESHOLD_MS)
+  //   - active_ms / users_over_5min: the active-time.ts gap rule, expressed
+  //     in SQL (gap between consecutive activity events — voice notes and
+  //     flow taps — of the same user, both in the same IST day, shorter than
+  //     the allowance of the event that ends it: COUNTED_GAP_SQL)
   //   - letters_learnt: getLetterBins "learnt" bin evaluated as of each score
   //     event, so the stock rises the day the rule is first met and falls the
   //     day a regression breaks it
@@ -84,18 +89,16 @@ export class UserActivityService {
         { date: string; users_over_5min: number; active_ms: string }[]
       >(
         `WITH msgs AS (
-           SELECT user_id, created_at,
+           SELECT user_id, created_at, ${IS_TAP_SQL()} AS is_tap,
                   LAG(created_at) OVER (
                     PARTITION BY user_id ORDER BY created_at
                   ) AS prev_created_at
            FROM media_metadata
            WHERE user_id IS NOT NULL
-             AND source = 'whatsapp'
-             AND media_type = 'audio'
-             AND rolled_back = false
+             AND ${ACTIVITY_EVENT_SQL()}
          ),
          gaps AS (
-           SELECT user_id,
+           SELECT user_id, is_tap,
                   ${IST_DATE_SQL('created_at')} AS ist_date,
                   ${IST_DATE_SQL('prev_created_at')} AS prev_ist_date,
                   EXTRACT(EPOCH FROM (created_at - prev_created_at)) * 1000
@@ -105,20 +108,20 @@ export class UserActivityService {
          per_user_day AS (
            SELECT user_id, ist_date,
                   COALESCE(SUM(gap_ms) FILTER (
-                    WHERE gap_ms > 0 AND gap_ms < $1
+                    WHERE ${COUNTED_GAP_SQL('gap_ms', 'is_tap')}
                       AND prev_ist_date = ist_date
                   ), 0) AS active_ms
            FROM gaps
            GROUP BY user_id, ist_date
          )
          SELECT ist_date::text AS date,
-                COUNT(*) FILTER (WHERE active_ms > $2)::int
+                COUNT(*) FILTER (WHERE active_ms > $1)::int
                   AS users_over_5min,
                 ROUND(SUM(active_ms)) AS active_ms
          FROM per_user_day
          GROUP BY ist_date
          ORDER BY ist_date`,
-        [ACTIVE_GAP_THRESHOLD_MS, FIVE_MIN_MS],
+        [FIVE_MIN_MS],
       ),
       manager.query<{ date: string; learnt_delta: number }[]>(
         `WITH events AS (
@@ -203,8 +206,9 @@ export class UserActivityService {
   }
 
   // Returns ms each user was "active" inside each window. Active ms = sum of
-  // gaps between consecutive whatsapp voice messages where both messages fall
-  // inside the window AND the gap is < ACTIVE_GAP_THRESHOLD_MS (120 s).
+  // gaps between consecutive activity events (voice notes + flow taps) where
+  // both fall inside the window AND the gap passes the active-time.ts rule
+  // (< 120 s ending in a voice note, < 298 s ending in a tap).
   // Windows may overlap; each is computed independently.
   async getActivityTime(
     request: ActivityTimeRequestDto,
@@ -229,7 +233,7 @@ export class UserActivityService {
       parsedWindows[0].end,
     );
 
-    const messagesByUser = await this.fetchVoiceMessages(
+    const messagesByUser = await this.fetchActivityEvents(
       userIds,
       earliestStart,
       latestEnd,
@@ -254,19 +258,18 @@ export class UserActivityService {
     return { results };
   }
 
-  private async fetchVoiceMessages(
+  private async fetchActivityEvents(
     userIds: string[],
     earliestStart: Date,
     latestEnd: Date,
-  ): Promise<Map<string, Date[]>> {
+  ): Promise<Map<string, ActivityEvent[]>> {
     const rows = await this.mediaRepo
       .createQueryBuilder('mm')
       .select('mm.user_id', 'user_id')
       .addSelect('mm.created_at', 'created_at')
+      .addSelect(IS_TAP_SQL('mm'), 'tap')
       .where('mm.user_id IN (:...userIds)', { userIds })
-      .andWhere('mm.source = :source', { source: 'whatsapp' })
-      .andWhere('mm.media_type = :media_type', { media_type: 'audio' })
-      .andWhere('mm.rolled_back = :rolled_back', { rolled_back: false })
+      .andWhere(ACTIVITY_EVENT_SQL('mm'))
       .andWhere(
         new Brackets((qb) => {
           qb.where('mm.created_at >= :earliestStart', {
@@ -276,9 +279,9 @@ export class UserActivityService {
       )
       .orderBy('mm.user_id', 'ASC')
       .addOrderBy('mm.created_at', 'ASC')
-      .getRawMany<VoiceMessageRow>();
+      .getRawMany<ActivityEventRow>();
 
-    const messagesByUser = new Map<string, Date[]>();
+    const messagesByUser = new Map<string, ActivityEvent[]>();
     for (const row of rows) {
       const ts =
         row.created_at instanceof Date
@@ -287,25 +290,27 @@ export class UserActivityService {
       if (!messagesByUser.has(row.user_id)) {
         messagesByUser.set(row.user_id, []);
       }
-      messagesByUser.get(row.user_id)!.push(ts);
+      messagesByUser
+        .get(row.user_id)!
+        .push({ at: ts.getTime(), tap: row.tap === true });
     }
     return messagesByUser;
   }
 
-  // One round-trip per voice turn feeding every usage milestone the inbound
-  // processor emits. A single SQL aggregate over ALL the user's whatsapp
-  // voice messages returns one row per active IST day (same gap rule as
-  // getDashboardSummary: consecutive messages in the same IST day, 0 < gap <
-  // ACTIVE_GAP_THRESHOLD_MS) plus the gap the day's last message added.
+  // One round-trip per turn (voice note or flow tap) feeding every usage
+  // milestone the inbound processor emits. A single SQL aggregate over ALL
+  // the user's activity events returns one row per active IST day (same gap
+  // rule as getDashboardSummary: consecutive events in the same IST day,
+  // COUNTED_GAP_SQL) plus the gap the day's last event added.
   //   - withLatestTurn / withoutLatestTurn: today's active ms including and
-  //     excluding the most recent voice message. Comparing the two lets a
+  //     excluding the most recent event. Comparing the two lets a
   //     caller detect a threshold crossing caused by the latest turn
   //     (withoutLatestTurn < T && withLatestTurn >= T) exactly once per day.
   //   - totalWithLatestTurn / totalWithoutLatestTurn: the same pair summed
   //     over every day — all active time counts, whatever that day totalled.
   //   - priorStreakDays: consecutive IST days immediately before today with
   //     at least STREAK_DAY_MIN_ACTIVE_MS each (today itself not counted).
-  // Values are milliseconds; no voice messages → everything 0.
+  // Values are milliseconds; no activity events → everything 0.
   async getTodayActiveTime(user_id: string): Promise<{
     withLatestTurn: number;
     withoutLatestTurn: number;
@@ -317,16 +322,14 @@ export class UserActivityService {
       { date: string; active_ms: string; latest_gap_ms: string }[]
     >(
       `WITH msgs AS (
-         SELECT created_at,
+         SELECT created_at, ${IS_TAP_SQL()} AS is_tap,
                 LAG(created_at) OVER (ORDER BY created_at) AS prev_created_at
          FROM media_metadata
          WHERE user_id = $1
-           AND source = 'whatsapp'
-           AND media_type = 'audio'
-           AND rolled_back = false
+           AND ${ACTIVITY_EVENT_SQL()}
        ),
        gaps AS (
-         SELECT created_at,
+         SELECT created_at, is_tap,
                 ${IST_DATE_SQL('created_at')} AS ist_date,
                 ${IST_DATE_SQL('prev_created_at')} AS prev_ist_date,
                 EXTRACT(EPOCH FROM (created_at - prev_created_at)) * 1000
@@ -335,7 +338,7 @@ export class UserActivityService {
        ),
        counted AS (
          SELECT created_at, ist_date,
-                CASE WHEN gap_ms > 0 AND gap_ms < $2
+                CASE WHEN ${COUNTED_GAP_SQL('gap_ms', 'is_tap')}
                           AND prev_ist_date = ist_date
                      THEN gap_ms ELSE 0 END AS counted_ms
          FROM gaps
@@ -347,7 +350,7 @@ export class UserActivityService {
        FROM counted
        GROUP BY ist_date
        ORDER BY ist_date`,
-      [user_id, ACTIVE_GAP_THRESHOLD_MS],
+      [user_id],
     );
 
     const activeByDate = new Map(
@@ -383,15 +386,16 @@ export class UserActivityService {
     };
   }
 
-  private computeActiveMs(sortedMsgs: Date[], window: ParsedWindow): number {
+  private computeActiveMs(
+    sortedEvents: ActivityEvent[],
+    window: ParsedWindow,
+  ): number {
     const startMs = window.start.getTime();
     const endMs = window.end.getTime();
     // The window is one contiguous interval, so dropping out-of-window
-    // messages is the same as resetting across them.
+    // events is the same as resetting across them.
     return activeMs(
-      sortedMsgs
-        .map((m) => m.getTime())
-        .filter((t) => t >= startMs && t <= endMs),
+      sortedEvents.filter((e) => e.at >= startMs && e.at <= endMs),
     );
   }
 

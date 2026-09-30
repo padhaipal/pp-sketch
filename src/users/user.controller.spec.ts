@@ -26,7 +26,7 @@ import {
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import type { Repository } from 'typeorm';
-import { UserController } from './user.controller';
+import { UserController, statesOfStid } from './user.controller';
 import { INTERACTIONS_BATCH_SIZE } from './interactions-csv';
 import type { UserEntity } from './user.entity';
 import type { MediaMetaDataEntity } from '../media-meta-data/media-meta-data.entity';
@@ -103,9 +103,28 @@ function makeController(opts: {
     (opts.lessonStateRepo ??
       makeRepo()) as unknown as Repository<LiteracyLessonStateEntity>,
     (opts.activitySvc ?? {}) as UserActivityService,
-    (opts.userSvc ?? { delete: jest.fn() }) as UserService,
+    (opts.userSvc ?? {
+      delete: jest.fn(),
+      isOnboarded: () => true,
+    }) as unknown as UserService,
     (opts.geoSvc ?? {}) as GeoEntityService,
   );
+}
+
+// mediaRepo.manager for users/:id/media: dispatches on the SQL tag — the
+// interaction rows, the tapped options and the user's onboarding rows.
+function mediaManager(
+  rows: unknown[],
+  extra: { taps?: unknown[]; onboarding?: unknown[] } = {},
+): { query: jest.Mock } {
+  return {
+    query: jest.fn(async (sql: string) => {
+      if (sql.includes('user-media:rows')) return rows;
+      if (sql.includes('user-media:taps')) return extra.taps ?? [];
+      if (sql.includes('user-media:onboarding')) return extra.onboarding ?? [];
+      throw new Error(`unexpected SQL ${sql.slice(0, 40)}`);
+    }),
+  };
 }
 
 // A UserService.update mock that applies the options to `user` the way the
@@ -332,7 +351,7 @@ describe('UserController.userMedia', () => {
         external_id: '919999990001',
       }),
     });
-    const mediaRepo = makeRepo({ find: jest.fn().mockResolvedValue([]) });
+    const mediaRepo = makeRepo({ manager: mediaManager([]) });
     const ctrl = makeController({ userRepo, mediaRepo });
 
     const out = await ctrl.userMedia('u1');
@@ -426,7 +445,7 @@ describe('UserController.userMedia', () => {
 
     const userRepo = makeRepo({ findOneBy: jest.fn().mockResolvedValue(user) });
     const mediaRepo = makeRepo({
-      find: jest.fn().mockResolvedValue(media),
+      manager: mediaManager(media),
       createQueryBuilder: jest.fn().mockReturnValue(makeQB(transcripts)),
     });
     const lessonStateRepo = makeRepo({
@@ -528,7 +547,7 @@ describe('UserController.userMedia', () => {
     const ctrl = makeController({
       userRepo: makeRepo({ findOneBy: jest.fn().mockResolvedValue(user) }),
       mediaRepo: makeRepo({
-        find: jest.fn().mockResolvedValue(media),
+        manager: mediaManager(media),
         createQueryBuilder: jest.fn().mockReturnValue(makeQB([])),
       }),
       lessonStateRepo: makeRepo({
@@ -1287,9 +1306,9 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
     ];
     const transcriptQB = makeQB(transcriptRows);
     const lessonQB = makeQB(lessonStateRows);
-    const find = jest.fn().mockResolvedValue(mediaRows);
+    const manager = mediaManager(mediaRows);
     const mediaRepo = makeRepo({
-      find,
+      manager,
       createQueryBuilder: jest.fn().mockReturnValueOnce(transcriptQB),
     });
     const userRepo = makeRepo({
@@ -1322,13 +1341,26 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
 
     const out = await ctrl.userMedia('u1', '20');
 
-    // media.find exact shape
-    expect(find).toHaveBeenCalledWith({
-      where: { user_id: 'u1', source: 'whatsapp', media_type: 'audio' },
-      order: { created_at: 'DESC' },
-      skip: 20,
-      take: 100,
-    });
+    // The interactions read: voice notes + flow taps, newest first, paged.
+    // No onboarding flag → onboarding voice notes are excluded at the
+    // source and nothing but this one read touches the media manager.
+    expect(manager.query).toHaveBeenCalledTimes(1);
+    const [rowsSql, rowsParams] = manager.query.mock.calls[0] as [
+      string,
+      unknown[],
+    ];
+    expect(rowsSql).toContain('/* user-media:rows */');
+    expect(rowsSql).toContain('mm.user_id = $1');
+    expect(rowsSql).toContain(
+      "mm.source = 'whatsapp' AND (mm.media_type = 'audio' OR (mm.media_type = 'text' AND mm.media_details->>'nfm_reply' = 'true'))",
+    );
+    expect(rowsSql).toContain('NOT EXISTS (SELECT 1 FROM onboarding_states os');
+    expect(rowsSql).toContain('os.user_message_id = mm.id');
+    expect(rowsSql).toContain('$4::timestamptz IS NULL OR mm.created_at > $4');
+    expect(rowsSql).toContain('ORDER BY mm.created_at DESC');
+    expect(rowsSql).toContain('OFFSET $2 LIMIT $3');
+    expect(rowsSql).not.toContain('rolled_back');
+    expect(rowsParams).toEqual(['u1', 20, 100, null]);
 
     // transcripts QB
     expect(mediaRepo.createQueryBuilder).toHaveBeenCalledWith('mm');
@@ -1409,7 +1441,7 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
       },
     ];
     const mediaRepo = makeRepo({
-      find: jest.fn().mockResolvedValue(mediaRows),
+      manager: mediaManager(mediaRows),
       createQueryBuilder: jest.fn().mockReturnValue(makeQB([])),
     });
     const lessonStateRepo = makeRepo({
@@ -1468,7 +1500,7 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
       },
     ];
     const mediaRepo = makeRepo({
-      find: jest.fn().mockResolvedValue(mediaRows),
+      manager: mediaManager(mediaRows),
       createQueryBuilder: jest.fn().mockReturnValue(makeQB([])),
     });
     const lessonStateRepo = makeRepo({
@@ -1497,13 +1529,394 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
     const userRepo = makeRepo({
       findOneBy: jest.fn().mockResolvedValue(userRow),
     });
-    const mediaRepo = makeRepo({ find: jest.fn().mockResolvedValue([]) });
+    const mediaRepo = makeRepo({ manager: mediaManager([]) });
     const ctrl = makeController({ userRepo, mediaRepo });
     const out = await ctrl.userMedia('u1');
     expect(out).toEqual({
       user: { name: 'Alice', phone: '919999990001' },
       media: [],
     });
+  });
+});
+
+describe('UserController.userMedia — flow taps, onboarding turns, public filters', () => {
+  const OPT = '11111111-2222-4333-8444-555555555555';
+  const PASSAGE = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const userRow = {
+    id: 'u1',
+    name: 'Alice',
+    external_id: '919999990001',
+    recording_permissions_obtained_at: null,
+  };
+
+  function setup(opts: {
+    media: unknown[];
+    lessons?: unknown[];
+    taps?: unknown[];
+    onboarding?: unknown[];
+    user?: Record<string, unknown>;
+    isOnboarded?: boolean;
+  }) {
+    const manager = mediaManager(opts.media, {
+      taps: opts.taps,
+      onboarding: opts.onboarding,
+    });
+    const ctrl = makeController({
+      userRepo: makeRepo({
+        findOneBy: jest.fn().mockResolvedValue(opts.user ?? userRow),
+      }),
+      mediaRepo: makeRepo({
+        manager,
+        createQueryBuilder: jest.fn().mockReturnValue(makeQB([])),
+      }),
+      lessonStateRepo: makeRepo({
+        createQueryBuilder: jest
+          .fn()
+          .mockReturnValue(makeQB(opts.lessons ?? [])),
+      }),
+      scoreRepo: makeRepo({
+        manager: { query: jest.fn().mockResolvedValue([]) },
+      }),
+      userSvc: {
+        isOnboarded: jest.fn().mockReturnValue(opts.isOnboarded ?? true),
+      },
+    });
+    return { ctrl, manager };
+  }
+
+  it('statesOfStid: dash-free prefix vs UUID-prefixed passage / answer stids', () => {
+    expect(statesOfStid('कमल-word-letter-wrong')).toEqual(['word', 'letter']);
+    expect(statesOfStid('sentence-start-sentence-initial')).toEqual([
+      'start',
+      'sentence',
+    ]);
+    expect(
+      statesOfStid(`${PASSAGE}-sentence-comprehension-correct-first`),
+    ).toEqual(['sentence', 'comprehension']);
+    expect(statesOfStid(`${PASSAGE}-passage-comprehension-initial`)).toEqual([
+      'passage',
+      'comprehension',
+    ]);
+    expect(statesOfStid(`${OPT}-comprehension-complete`)).toEqual([
+      'comprehension',
+      'complete',
+    ]);
+    // A UUID prefix with a single segment after it has no state pair.
+    expect(statesOfStid(`${OPT}-complete`)).toEqual([null, null]);
+    expect(statesOfStid('foo-bar')).toEqual([null, null]);
+    expect(statesOfStid(undefined)).toEqual([null, null]);
+    expect(statesOfStid(null)).toEqual([null, null]);
+  });
+
+  it('tap rows: kind tap, question / chosen / correct text, no audio, states from the answer-id stid; voice rows unchanged', async () => {
+    const media = [
+      // newest: the tap (its text IS the tapped option id)
+      {
+        id: 'tap-1',
+        created_at: new Date('2026-09-30T10:02:00Z'),
+        s3_key: null,
+        media_type: 'text',
+        text: OPT,
+        media_details: { nfm_reply: true },
+      },
+      // the passage read that led to the question
+      {
+        id: 'v-1',
+        created_at: new Date('2026-09-30T10:00:00Z'),
+        s3_key: 's3-1',
+        media_type: 'audio',
+        text: null,
+        media_details: { duration_ms: 12_000 },
+      },
+    ];
+    const lessons = [
+      {
+        user_message_id: 'v-1',
+        word: 'अब कमल इधर आ',
+        answer: 'अब कमल इधर आ',
+        answer_correct: true,
+        snapshot: {
+          context: {
+            stateTransitionId: `${PASSAGE}-sentence-comprehension-correct-first`,
+          },
+        },
+        level: 9,
+      },
+      {
+        user_message_id: 'tap-1',
+        word: 'अब कमल इधर आ',
+        answer: OPT,
+        answer_correct: false,
+        snapshot: {
+          context: { stateTransitionId: `${OPT}-comprehension-complete` },
+        },
+        level: 9,
+      },
+      // the chained next lesson under the same message — ignored (first wins)
+      {
+        user_message_id: 'tap-1',
+        word: 'नया पाठ यहाँ',
+        answer: 'नया पाठ यहाँ',
+        answer_correct: null,
+        snapshot: {
+          context: { stateTransitionId: 'sentence-start-sentence-initial' },
+        },
+        level: 9,
+      },
+    ];
+    const { ctrl, manager } = setup({
+      media,
+      lessons,
+      taps: [
+        {
+          id: OPT,
+          chosen: 'बाज़ार',
+          question: 'कमल कहाँ गया?',
+          correct: 'घर',
+        },
+      ],
+    });
+
+    const out = await ctrl.userMedia('u1');
+
+    const tapsCall = (manager.query.mock.calls as [string, unknown[]][]).find(
+      ([sql]) => sql.includes('user-media:taps'),
+    )!;
+    expect(tapsCall[1]).toEqual([[OPT]]);
+    expect(tapsCall[0]).toContain("o.media_details->>'role' = 'option'");
+    expect(tapsCall[0]).toContain("c.media_details->>'correct' = 'true'");
+    // Public call: the onboarding rows are never read.
+    expect(
+      (manager.query.mock.calls as [string][]).some(([sql]) =>
+        sql.includes('user-media:onboarding'),
+      ),
+    ).toBe(false);
+
+    const [tap, voice] = out.media;
+    expect(tap).toEqual(
+      expect.objectContaining({
+        id: 'tap-1',
+        kind: 'tap',
+        has_audio: false,
+        tap: { question: 'कमल कहाँ गया?', chosen: 'बाज़ार', correct: 'घर' },
+        // the correct option's text, never the option id
+        answer: 'घर',
+        answer_correct: false,
+        starting_state: 'comprehension',
+        final_state: 'complete',
+        level: 9,
+        wpm: null,
+        onboarding: null,
+      }),
+    );
+    expect(voice).toEqual(
+      expect.objectContaining({
+        id: 'v-1',
+        kind: 'voice',
+        has_audio: true,
+        tap: null,
+        onboarding: null,
+        starting_state: 'sentence',
+        final_state: 'comprehension',
+        answer: 'अब कमल इधर आ',
+        wpm: 20,
+      }),
+    );
+  });
+
+  it('a tap ends its lesson: the next row of the SAME passage shows its own text, not the option id; malformed / unknown taps are shown without details', async () => {
+    const media = [
+      {
+        id: 'v-2',
+        created_at: new Date('2026-09-30T10:05:00Z'),
+        s3_key: 's3',
+        media_type: 'audio',
+        text: null,
+        media_details: null,
+      },
+      // device sent something that is not a uuid → never looked up
+      {
+        id: 'tap-bad',
+        created_at: new Date('2026-09-30T10:04:00Z'),
+        s3_key: null,
+        media_type: 'text',
+        text: 'not-a-uuid',
+        media_details: { nfm_reply: true },
+      },
+      // a well-formed id that resolves to nothing (not awaited, no lesson row)
+      {
+        id: 'tap-1',
+        created_at: new Date('2026-09-30T10:02:00Z'),
+        s3_key: null,
+        media_type: 'text',
+        text: OPT,
+        media_details: { nfm_reply: true },
+      },
+      {
+        id: 'v-1',
+        created_at: new Date('2026-09-30T10:00:00Z'),
+        s3_key: 's3',
+        media_type: 'audio',
+        text: null,
+        media_details: null,
+      },
+    ];
+    const lessons = ['v-1', 'v-2'].map((id) => ({
+      user_message_id: id,
+      word: 'अब कमल',
+      answer: 'अब कमल',
+      answer_correct: true,
+      snapshot: {},
+      level: 9,
+    }));
+    const { ctrl, manager } = setup({ media, lessons, taps: [] });
+    const out = await ctrl.userMedia('u1');
+    const tapsCall = (manager.query.mock.calls as [string, unknown[]][]).find(
+      ([sql]) => sql.includes('user-media:taps'),
+    )!;
+    expect(tapsCall[1]).toEqual([[OPT]]);
+    const byId = new Map(out.media.map((m) => [m.id, m]));
+    for (const id of ['tap-bad', 'tap-1']) {
+      expect(byId.get(id)).toEqual(
+        expect.objectContaining({
+          kind: 'tap',
+          tap: { question: null, chosen: null, correct: null },
+          answer: null,
+          answer_correct: null,
+          level: null,
+        }),
+      );
+    }
+    // Without the reset v-2 (same word as v-1) would show v-1's answer walk.
+    expect(byId.get('v-2')!.answer).toBe('अब कमल');
+  });
+
+  it('no taps on the page → the option lookup is skipped', async () => {
+    const { ctrl, manager } = setup({
+      media: [
+        {
+          id: 'v-1',
+          created_at: new Date(),
+          s3_key: 's3',
+          media_type: 'audio',
+          text: null,
+          media_details: null,
+        },
+      ],
+    });
+    await ctrl.userMedia('u1');
+    expect(manager.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('public call: an un-onboarded user returns nothing and reads nothing', async () => {
+    const { ctrl, manager } = setup({
+      media: [{ id: 'v-1' }],
+      isOnboarded: false,
+    });
+    await expect(ctrl.userMedia('u1')).resolves.toEqual({
+      user: { name: 'Alice', phone: '919999990001' },
+      media: [],
+    });
+    expect(manager.query).not.toHaveBeenCalled();
+  });
+
+  it('public call: only media created AFTER recording permission was obtained', async () => {
+    const consentAt = new Date('2026-09-20T08:00:00Z');
+    const { ctrl, manager } = setup({
+      media: [],
+      user: { ...userRow, recording_permissions_obtained_at: consentAt },
+    });
+    await ctrl.userMedia('u1', '0');
+    expect((manager.query.mock.calls[0] as [string, unknown[]])[1]).toEqual([
+      'u1',
+      0,
+      100,
+      consentAt,
+    ]);
+  });
+
+  it('onboarding=1 (staff): onboarding voice notes are included and described; any other value stays public', async () => {
+    const media = [
+      {
+        id: 'ob-2',
+        created_at: new Date('2026-09-20T08:01:00Z'),
+        s3_key: 's3',
+        media_type: 'audio',
+        text: null,
+        media_details: null,
+      },
+      {
+        id: 'ob-1',
+        created_at: new Date('2026-09-20T08:00:00Z'),
+        s3_key: 's3',
+        media_type: 'audio',
+        text: null,
+        media_details: null,
+      },
+    ];
+    const onboarding = [
+      {
+        user_message_id: 'ob-1',
+        created_at: new Date('2026-09-20T08:00:00Z'),
+        snapshot: {
+          status: 'active',
+          value: 'askGuardian',
+          context: { stateTransitionIds: ['onboarding-ask-guardian'] },
+        },
+      },
+      {
+        user_message_id: 'ob-2',
+        created_at: new Date('2026-09-20T08:01:00Z'),
+        snapshot: {
+          status: 'active',
+          value: 'askConsent',
+          context: { stateTransitionIds: ['onboarding-ask-consent'] },
+        },
+      },
+    ];
+    // Staff see an un-onboarded user's rows too.
+    const { ctrl, manager } = setup({ media, onboarding, isOnboarded: false });
+    const out = await ctrl.userMedia('u1', undefined, '1');
+
+    const [rowsSql, rowsParams] = manager.query.mock.calls[0] as [
+      string,
+      unknown[],
+    ];
+    expect(rowsSql).not.toContain('onboarding_states');
+    expect(rowsSql).not.toContain('$4');
+    expect(rowsParams).toEqual(['u1', 0, 100]);
+    const obCall = (manager.query.mock.calls as [string, unknown[]][]).find(
+      ([sql]) => sql.includes('user-media:onboarding'),
+    )!;
+    expect(obCall[0]).toContain('WHERE user_id = $1');
+    expect(obCall[0]).toContain('ORDER BY created_at');
+    expect(obCall[1]).toEqual(['u1']);
+
+    expect(out.media.map((m) => [m.id, m.kind])).toEqual([
+      ['ob-2', 'onboarding'],
+      ['ob-1', 'onboarding'],
+    ]);
+    expect(out.media[0].onboarding).toEqual({
+      question: 'askGuardian',
+      next: 'askConsent',
+      understood: 'YES',
+      saved: [],
+      completed: false,
+    });
+    expect(out.media[1].onboarding).toEqual({
+      question: null,
+      next: 'askGuardian',
+      understood: null,
+      saved: [],
+      completed: false,
+    });
+
+    // Only the exact flag opts in.
+    const pub = setup({ media: [], onboarding });
+    await pub.ctrl.userMedia('u1', undefined, 'true');
+    expect((pub.manager.query.mock.calls[0] as [string])[0]).toContain(
+      'onboarding_states',
+    );
   });
 });
 

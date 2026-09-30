@@ -71,6 +71,8 @@ class FakeDb {
   students: Student[] = [];
   lessons = new Map<string, Date[]>();
   voiceNotes = new Map<string, Date[]>();
+  // Comprehension flow taps (activity events alongside the voice notes).
+  taps = new Map<string, Date[]>();
   answers = new Map<string, ComprehensionRow[]>();
   results: ResultRow[] = [];
   geo: GeoRow[] = [];
@@ -143,11 +145,22 @@ class FakeDb {
           const ids = params[0] as string[];
           const start = (params[1] as Date).getTime();
           const end = (params[2] as Date).getTime();
+          // Live voice notes + flow taps, one shared predicate (active-time.ts).
+          expect(sql).toContain(
+            "source = 'whatsapp' AND (media_type = 'audio' OR (media_type = 'text' AND media_details->>'nfm_reply' = 'true')) AND rolled_back = false",
+          );
+          expect(sql).toContain("(media_type = 'text') AS tap");
           return ids.flatMap((id) =>
-            (this.voiceNotes.get(id) ?? [])
-              .filter((t) => t.getTime() >= start && t.getTime() < end)
-              .sort((a, b) => a.getTime() - b.getTime())
-              .map((t) => ({ user_id: id, created_at: t })),
+            [
+              ...(this.voiceNotes.get(id) ?? []).map((t) => ({
+                t,
+                tap: false,
+              })),
+              ...(this.taps.get(id) ?? []).map((t) => ({ t, tap: true })),
+            ]
+              .filter(({ t }) => t.getTime() >= start && t.getTime() < end)
+              .sort((a, b) => a.t.getTime() - b.t.getTime())
+              .map(({ t, tap }) => ({ user_id: id, created_at: t, tap })),
           );
         }
         case 'test-results:upsert-students': {
@@ -709,6 +722,21 @@ describe('TestResultsService.run — usage (active minutes, day before computed_
     expect(s3.pass).toBe(1);
     expect(s3.hist[0]).toBe(1); // F: absent → 0
     expect(s3.hist[6]).toBe(1); // G
+  });
+
+  it('flow taps are activity events: a tap-only student accrues reading time (298 s allowance) and taps count as attempts', async () => {
+    const db = new FakeDb();
+    seed(db);
+    // A: tap-only (level 11+) — three taps 4 min apart → 8.0 min, pass.
+    db.taps = new Map([['A', minutesApart('2026-09-12T04:00:00Z', 3, 4)]]);
+    // B: voice notes 4 min apart → over the 120 s voice allowance → 0 min.
+    db.voiceNotes = new Map([
+      ['B', minutesApart('2026-09-12T04:00:00Z', 3, 4)],
+    ]);
+    const { svc } = makeService(db);
+    await svc.run({ full: false, now: NOW });
+    expect(usageOf(db, 'A')).toEqual({ minutes: 8, passed: true, notes: 3 });
+    expect(usageOf(db, 'B')).toEqual({ minutes: 0, passed: false, notes: 3 });
   });
 
   it('a voice note alone (no lesson row) makes a student a candidate', async () => {

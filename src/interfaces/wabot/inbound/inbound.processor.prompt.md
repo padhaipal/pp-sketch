@@ -107,3 +107,25 @@ log, flow skipped (same as the read-first flow). At most one flow per turn, so
 one value covers the bundle. Milestones, stale restart and the audio-only
 redirect are unaffected; no reading-speed stid is emitted in flow mode
 (there is no read).
+
+## 2026-09: a flow tap is a full turn (hail-mary, usage milestones)
+
+Step 4b (comprehension flow submission) now also:
+
+- rolls back the tap's anchor row when `processAnswer` returns
+  `ignored: true` (`markRolledBack`, best effort — a failure is WARN-logged
+  and the job still ends `skipped`): a tap that did nothing must not count
+  as an activity event (users/active-time.ts reads `rolled_back = false`)
+  nor as the user's latest message. No hail-mary re-arm, no milestones.
+- re-arms the hail-mary timer against the tap row
+  (`rearmHailMaryBestEffort`, inbound.utils) — a tap-only (level 11+)
+  student otherwise never re-arms it.
+- prepends the usage milestones the tap crossed
+  (`usageMilestoneStids(userActivityService, user.id)` — the same helper
+  the audio path uses; one `getTodayActiveTime` call). A tap is an activity
+  event: it closes the time spent reading the passage and question (up to
+  298 s), so it can cross the daily-minutes, day-streak and total-hours
+  thresholds. At most one threshold of each kind per turn still holds
+  (a turn adds < 298 s; thresholds are ≥ 5 min apart).
+
+Reading-speed stays voice-only (a tap has no recording).
