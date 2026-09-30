@@ -64,7 +64,13 @@ function createAudioJob(
 function makeMocks(
   opts: {
     isComplete?: boolean;
-    activeTime?: { withLatestTurn: number; withoutLatestTurn: number };
+    activeTime?: {
+      withLatestTurn?: number;
+      withoutLatestTurn?: number;
+      totalWithLatestTurn?: number;
+      totalWithoutLatestTurn?: number;
+      priorStreakDays?: number;
+    };
   } = {},
 ) {
   const user = { id: 'user-1', external_id: '+910000000001' };
@@ -98,11 +104,14 @@ function makeMocks(
       .mockResolvedValue({ status: 200, body: { delivered: true } }),
   };
   const userActivityService = {
-    getTodayActiveTime: jest
-      .fn()
-      .mockResolvedValue(
-        opts.activeTime ?? { withLatestTurn: 0, withoutLatestTurn: 0 },
-      ),
+    getTodayActiveTime: jest.fn().mockResolvedValue({
+      withLatestTurn: 0,
+      withoutLatestTurn: 0,
+      totalWithLatestTurn: 0,
+      totalWithoutLatestTurn: 0,
+      priorStreakDays: 0,
+      ...opts.activeTime,
+    }),
   };
   const outboundMessages = {
     recordSent: jest.fn().mockResolvedValue(undefined),
@@ -784,6 +793,260 @@ describe('processWabotInboundJob — active-minute milestones', () => {
     expect(mocks.userActivityService.getTodayActiveTime).toHaveBeenCalledWith(
       'user-1',
     );
+  });
+});
+
+describe('processWabotInboundJob — day-streak milestones', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  const MIN = 60_000;
+  // The turn that lifts today over the 5-minute streak minimum.
+  const TIPPING = {
+    withLatestTurn: 5 * MIN + 1_000,
+    withoutLatestTurn: 5 * MIN - 1_000,
+  };
+
+  function calledStids(mocks: ReturnType<typeof makeMocks>): string[] {
+    return mocks.mediaMetaDataService.findMediaByStateTransitionId.mock.calls.map(
+      (c: any[]) => c[0],
+    );
+  }
+
+  it('emits {N}-day-streak after the daily stid on the tipping turn (1 prior day → 2)', async () => {
+    const mocks = makeMocks({
+      activeTime: { ...TIPPING, priorStreakDays: 1 },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toEqual([
+      'threshold-reached-5-active-minutes-today',
+      '2-day-streak',
+      'sid-1',
+    ]);
+  });
+
+  it('emits no streak stid on day one (no prior qualifying day)', async () => {
+    const mocks = makeMocks({
+      activeTime: { ...TIPPING, priorStreakDays: 0 },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toEqual([
+      'threshold-reached-5-active-minutes-today',
+      'sid-1',
+    ]);
+  });
+
+  it('emits the top streak of 100 days (99 prior days)', async () => {
+    const mocks = makeMocks({
+      activeTime: { ...TIPPING, priorStreakDays: 99 },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)[1]).toBe('100-day-streak');
+  });
+
+  it('is silent for streaks longer than 100 days', async () => {
+    const mocks = makeMocks({
+      activeTime: { ...TIPPING, priorStreakDays: 100 },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toEqual([
+      'threshold-reached-5-active-minutes-today',
+      'sid-1',
+    ]);
+  });
+
+  it('fires when today lands EXACTLY on 5 minutes (>= not >)', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        withLatestTurn: 5 * MIN,
+        withoutLatestTurn: 5 * MIN - 1,
+        priorStreakDays: 4,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toContain('5-day-streak');
+  });
+
+  it('does NOT fire before today reaches 5 minutes', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        withLatestTurn: 4 * MIN,
+        withoutLatestTurn: 3 * MIN,
+        priorStreakDays: 4,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toEqual(['sid-1']);
+  });
+
+  it('does NOT re-fire on later turns the same day (withoutLatestTurn already at 5 minutes)', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        withLatestTurn: 5 * MIN + 30_000,
+        withoutLatestTurn: 5 * MIN,
+        priorStreakDays: 4,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toEqual(['sid-1']);
+  });
+
+  it('does NOT fire on a later daily threshold (10 minutes)', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        withLatestTurn: 10 * MIN + 500,
+        withoutLatestTurn: 10 * MIN - 500,
+        priorStreakDays: 4,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toEqual([
+      'threshold-reached-10-active-minutes-today',
+      'sid-1',
+    ]);
+  });
+});
+
+describe('processWabotInboundJob — total active-hour milestones', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  const MIN = 60_000;
+  const HOUR = 60 * MIN;
+
+  function calledStids(mocks: ReturnType<typeof makeMocks>): string[] {
+    return mocks.mediaMetaDataService.findMediaByStateTransitionId.mock.calls.map(
+      (c: any[]) => c[0],
+    );
+  }
+
+  it.each([1, 2, 5, 10, 20, 50, 100])(
+    'emits %i-active-hours-total when the latest turn crosses that many hours',
+    async (hours) => {
+      const mocks = makeMocks({
+        activeTime: {
+          totalWithLatestTurn: hours * HOUR + 500,
+          totalWithoutLatestTurn: hours * HOUR - 500,
+        },
+      });
+      await runJob(createAudioJob(), mocks);
+
+      expect(calledStids(mocks)).toEqual([
+        `${hours}-active-hours-total`,
+        'sid-1',
+      ]);
+    },
+  );
+
+  it('emits nothing between thresholds (3 hours)', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        totalWithLatestTurn: 3 * HOUR + 500,
+        totalWithoutLatestTurn: 3 * HOUR - 500,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toEqual(['sid-1']);
+  });
+
+  it('fires when the total lands EXACTLY on the threshold (>= not >)', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        totalWithLatestTurn: HOUR,
+        totalWithoutLatestTurn: HOUR - 1,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)[0]).toBe('1-active-hours-total');
+  });
+
+  it('does NOT re-fire on the next turn when the total without the latest turn EXACTLY equals the threshold (< not <=)', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        totalWithLatestTurn: HOUR + 30_000,
+        totalWithoutLatestTurn: HOUR,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toEqual(['sid-1']);
+  });
+
+  it('emits at most ONE hour milestone even if the values straddle several', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        totalWithLatestTurn: 6 * HOUR,
+        totalWithoutLatestTurn: 30 * MIN,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toEqual(['1-active-hours-total', 'sid-1']);
+  });
+
+  it('is independent of the daily thresholds — fires on a day under 5 minutes', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        withLatestTurn: 2 * MIN,
+        withoutLatestTurn: 1 * MIN,
+        totalWithLatestTurn: 2 * HOUR + 500,
+        totalWithoutLatestTurn: 2 * HOUR - 500,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toEqual(['2-active-hours-total', 'sid-1']);
+  });
+
+  it('orders the milestones daily → streak → total, ahead of the lesson stids', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        withLatestTurn: 5 * MIN + 1_000,
+        withoutLatestTurn: 5 * MIN - 1_000,
+        priorStreakDays: 6,
+        totalWithLatestTurn: 10 * HOUR + 1_000,
+        totalWithoutLatestTurn: 10 * HOUR - 1_000,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toEqual([
+      'threshold-reached-5-active-minutes-today',
+      '7-day-streak',
+      '10-active-hours-total',
+      'sid-1',
+    ]);
+  });
+
+  it('puts the total stid straight after the daily stid on a turn with no streak stid', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        withLatestTurn: 10 * MIN + 500,
+        withoutLatestTurn: 10 * MIN - 500,
+        priorStreakDays: 6,
+        totalWithLatestTurn: HOUR + 500,
+        totalWithoutLatestTurn: HOUR - 500,
+      },
+    });
+    await runJob(createAudioJob(), mocks);
+
+    expect(calledStids(mocks)).toEqual([
+      'threshold-reached-10-active-minutes-today',
+      '1-active-hours-total',
+      'sid-1',
+    ]);
   });
 });
 

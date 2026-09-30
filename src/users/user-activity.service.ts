@@ -21,7 +21,11 @@ import {
   istMidnightUtc,
 } from '../notifier/report-card/report-card.utils';
 
-import { ACTIVE_GAP_THRESHOLD_MS, activeMs } from './active-time';
+import {
+  ACTIVE_GAP_THRESHOLD_MS,
+  STREAK_DAY_MIN_ACTIVE_MS,
+  activeMs,
+} from './active-time';
 const FIVE_MIN_MS = 5 * 60 * 1000;
 // SQL fragment: IST calendar date of a timestamptz. IST is a fixed +5:30 (no
 // DST) so a plain interval add matches the JS helpers in report-card.utils.
@@ -288,34 +292,94 @@ export class UserActivityService {
     return messagesByUser;
   }
 
-  // Returns the user's active_ms since today's IST midnight, both including
-  // and excluding the most recent whatsapp voice message. Comparing the two
-  // lets a caller detect a threshold crossing caused by the latest turn
-  // (withoutLatestTurn < T && withLatestTurn >= T) exactly once per day.
-  // Values are milliseconds; fewer than 2 messages today → both 0.
+  // One round-trip per voice turn feeding every usage milestone the inbound
+  // processor emits. A single SQL aggregate over ALL the user's whatsapp
+  // voice messages returns one row per active IST day (same gap rule as
+  // getDashboardSummary: consecutive messages in the same IST day, 0 < gap <
+  // ACTIVE_GAP_THRESHOLD_MS) plus the gap the day's last message added.
+  //   - withLatestTurn / withoutLatestTurn: today's active ms including and
+  //     excluding the most recent voice message. Comparing the two lets a
+  //     caller detect a threshold crossing caused by the latest turn
+  //     (withoutLatestTurn < T && withLatestTurn >= T) exactly once per day.
+  //   - totalWithLatestTurn / totalWithoutLatestTurn: the same pair summed
+  //     over every day — all active time counts, whatever that day totalled.
+  //   - priorStreakDays: consecutive IST days immediately before today with
+  //     at least STREAK_DAY_MIN_ACTIVE_MS each (today itself not counted).
+  // Values are milliseconds; no voice messages → everything 0.
   async getTodayActiveTime(user_id: string): Promise<{
     withLatestTurn: number;
     withoutLatestTurn: number;
+    totalWithLatestTurn: number;
+    totalWithoutLatestTurn: number;
+    priorStreakDays: number;
   }> {
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const now = new Date();
-    const istNow = new Date(now.getTime() + IST_OFFSET_MS);
-    const istMidnight = new Date(
-      Date.UTC(
-        istNow.getUTCFullYear(),
-        istNow.getUTCMonth(),
-        istNow.getUTCDate(),
-      ),
+    const rows = await this.mediaRepo.manager.query<
+      { date: string; active_ms: string; latest_gap_ms: string }[]
+    >(
+      `WITH msgs AS (
+         SELECT created_at,
+                LAG(created_at) OVER (ORDER BY created_at) AS prev_created_at
+         FROM media_metadata
+         WHERE user_id = $1
+           AND source = 'whatsapp'
+           AND media_type = 'audio'
+           AND rolled_back = false
+       ),
+       gaps AS (
+         SELECT created_at,
+                ${IST_DATE_SQL('created_at')} AS ist_date,
+                ${IST_DATE_SQL('prev_created_at')} AS prev_ist_date,
+                EXTRACT(EPOCH FROM (created_at - prev_created_at)) * 1000
+                  AS gap_ms
+         FROM msgs
+       ),
+       counted AS (
+         SELECT created_at, ist_date,
+                CASE WHEN gap_ms > 0 AND gap_ms < $2
+                          AND prev_ist_date = ist_date
+                     THEN gap_ms ELSE 0 END AS counted_ms
+         FROM gaps
+       )
+       SELECT ist_date::text AS date,
+              ROUND(SUM(counted_ms)) AS active_ms,
+              ROUND((ARRAY_AGG(counted_ms ORDER BY created_at DESC))[1])
+                AS latest_gap_ms
+       FROM counted
+       GROUP BY ist_date
+       ORDER BY ist_date`,
+      [user_id, ACTIVE_GAP_THRESHOLD_MS],
     );
-    const midnight = new Date(istMidnight.getTime() - IST_OFFSET_MS);
 
-    const byUser = await this.fetchVoiceMessages([user_id], midnight, now);
-    const msgs = byUser.get(user_id) ?? [];
+    const activeByDate = new Map(
+      rows.map((r) => [r.date, Number(r.active_ms)]),
+    );
+    const todayMid = istMidnightUtc(new Date());
+    const today = istDateIso(todayMid);
 
-    const window: ParsedWindow = { start: midnight, end: now };
+    // Rows are date-ordered, so the last row holds the latest message and
+    // latest_gap_ms is what that message (the current turn) contributed.
+    const latest = rows[rows.length - 1] as (typeof rows)[number] | undefined;
+    const latestGap = latest ? Number(latest.latest_gap_ms) : 0;
+    const withLatestTurn = activeByDate.get(today) ?? 0;
+    let totalWithLatestTurn = 0;
+    for (const ms of activeByDate.values()) totalWithLatestTurn += ms;
+
+    let priorStreakDays = 0;
+    for (
+      let dayMid = addDays(todayMid, -1);
+      (activeByDate.get(istDateIso(dayMid)) ?? 0) >= STREAK_DAY_MIN_ACTIVE_MS;
+      dayMid = addDays(dayMid, -1)
+    ) {
+      priorStreakDays++;
+    }
+
     return {
-      withLatestTurn: this.computeActiveMs(msgs, window),
-      withoutLatestTurn: this.computeActiveMs(msgs.slice(0, -1), window),
+      withLatestTurn,
+      withoutLatestTurn:
+        latest?.date === today ? withLatestTurn - latestGap : withLatestTurn,
+      totalWithLatestTurn,
+      totalWithoutLatestTurn: totalWithLatestTurn - latestGap,
+      priorStreakDays,
     };
   }
 

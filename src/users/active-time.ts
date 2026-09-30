@@ -4,6 +4,10 @@
 // as time spent; a longer gap is a break. Pure.
 export const ACTIVE_GAP_THRESHOLD_MS = 120_000;
 
+// An IST day counts towards a usage streak once it holds at least this much
+// active time (the 5-minute daily milestone).
+export const STREAK_DAY_MIN_ACTIVE_MS = 5 * 60_000;
+
 export function activeMs(sortedTimesMs: readonly number[]): number {
   let active = 0;
   for (let i = 1; i < sortedTimesMs.length; i++) {
