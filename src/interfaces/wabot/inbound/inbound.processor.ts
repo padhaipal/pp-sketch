@@ -6,6 +6,7 @@ import { context, SpanStatusCode } from '@opentelemetry/api';
 import { MessageJobDto } from './wabot-inbound.dto';
 import { UserService } from '../../../users/user.service';
 import { UserActivityService } from '../../../users/user-activity.service';
+import { STREAK_DAY_MIN_ACTIVE_MS } from '../../../users/active-time';
 import { MediaMetaDataService } from '../../../media-meta-data/media-meta-data.service';
 import { LiteracyLessonService } from '../../../literacy/literacy-lesson/literacy-lesson.service';
 import { WabotOutboundService } from '../outbound/outbound.service';
@@ -45,6 +46,17 @@ const logger = new Logger('WabotInboundProcessor');
 // is prepended to the outbound state transition ids — at most once per day
 // per threshold (the crossing test only matches the tipping turn).
 const ACTIVE_MINUTE_THRESHOLDS = [5, 10, 15, 20, 25, 30, 45, 60];
+
+// Day-streak milestones. On the turn that makes today count towards the
+// streak (today's active time crossing STREAK_DAY_MIN_ACTIVE_MS),
+// `{days}-day-streak` is emitted for streaks of 2…MAX_STREAK_DAYS consecutive
+// IST days — at most once per day. Longer streaks are silent.
+const MAX_STREAK_DAYS = 100;
+
+// All-time active-hour milestones. When the latest turn lifts the user's
+// total active time (every session, every day) over one of these,
+// `{hours}-active-hours-total` is emitted — once ever per threshold.
+const ACTIVE_HOUR_THRESHOLDS = [1, 2, 5, 10, 20, 50, 100];
 
 type JobOutcome = 'success' | 'skipped' | 'error';
 
@@ -491,15 +503,22 @@ export async function processWabotInboundJob(
         }
 
         // Voice-turn-driven milestones only — a flow tap adds no active time.
-        const { withLatestTurn, withoutLatestTurn } =
-          await userActivityService.getTodayActiveTime(user.id);
+        // Prepended in a fixed order: daily usage, day streak, total usage.
+        const {
+          withLatestTurn,
+          withoutLatestTurn,
+          totalWithLatestTurn,
+          totalWithoutLatestTurn,
+          priorStreakDays,
+        } = await userActivityService.getTodayActiveTime(user.id);
+        const milestones: string[] = [];
         for (const minutes of ACTIVE_MINUTE_THRESHOLDS) {
           const thresholdMs = minutes * 60_000;
           if (
             withoutLatestTurn < thresholdMs &&
             withLatestTurn >= thresholdMs
           ) {
-            stateTransitionIds.unshift(
+            milestones.push(
               `threshold-reached-${minutes}-active-minutes-today`,
             );
             // A single turn adds <120s of active time (ACTIVE_GAP_THRESHOLD_MS)
@@ -507,6 +526,27 @@ export async function processWabotInboundJob(
             break;
           }
         }
+        if (
+          withoutLatestTurn < STREAK_DAY_MIN_ACTIVE_MS &&
+          withLatestTurn >= STREAK_DAY_MIN_ACTIVE_MS
+        ) {
+          const streakDays = priorStreakDays + 1;
+          if (streakDays >= 2 && streakDays <= MAX_STREAK_DAYS) {
+            milestones.push(`${streakDays}-day-streak`);
+          }
+        }
+        for (const hours of ACTIVE_HOUR_THRESHOLDS) {
+          const thresholdMs = hours * 3_600_000;
+          if (
+            totalWithoutLatestTurn < thresholdMs &&
+            totalWithLatestTurn >= thresholdMs
+          ) {
+            milestones.push(`${hours}-active-hours-total`);
+            // Thresholds are ≥1h apart — at most one can cross per turn.
+            break;
+          }
+        }
+        stateTransitionIds.unshift(...milestones);
       }
 
       // 9. Build outbound media

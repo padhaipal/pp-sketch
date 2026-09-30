@@ -39,3 +39,19 @@ result list returned without error if all inputs fail to resolve.
 - The fetch is one query for _all_ users + windows; bucketing happens in
   memory. Cheap enough for a few users × ≤ 10 windows; for very large fan-outs
   a per-user CTE would be more efficient — not needed today.
+
+## getTodayActiveTime(user_id)
+
+Called by the wabot inbound processor on every voice turn; feeds all usage
+milestones (daily minutes, day streak, total hours) from ONE raw-SQL
+aggregate over all the user's whatsapp voice messages: one row per active
+IST day (same gap rule as the dashboard summary — consecutive messages in
+the same IST day, `0 < gap < ACTIVE_GAP_THRESHOLD_MS`) plus the gap that
+day's last message added.
+
+- `withLatestTurn` / `withoutLatestTurn`: today's (IST) active ms including
+  and excluding the most recent voice message.
+- `totalWithLatestTurn` / `totalWithoutLatestTurn`: the same pair summed over
+  every day — all active time counts, whatever that day totalled.
+- `priorStreakDays`: consecutive IST days immediately before today with at
+  least `STREAK_DAY_MIN_ACTIVE_MS` (5 min) each; today is not counted.
