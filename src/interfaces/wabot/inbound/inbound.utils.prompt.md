@@ -70,3 +70,11 @@ into WhatsApp media.
   ERROR and throw `No transcripts` — the job cannot proceed. Does NOT run
   `cleanupPartialState`; the processor does that after this returns and
   before `processAnswer`.
+
+## 2026-09: rearmHailMaryBestEffort
+
+`rearmHailMaryBestEffort({ user, userMessageId, span })` — `rearmHailMary`
+for the user against the given inbound message row, failures WARN-logged
+(`rearmHailMary failed for user …`) and swallowed. Used by
+`persistAndTranscribeAudio` (voice notes) and by the processor's flow-tap
+branch.

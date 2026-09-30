@@ -2048,8 +2048,87 @@ describe('processWabotInboundJob — comprehension flow replies', () => {
       'pp.path',
       'comprehension-answer',
     );
-    // No activity thresholds on tap turns.
-    expect(mocks.userActivityService.getTodayActiveTime).not.toHaveBeenCalled();
+    // A tap is an activity event: the usage milestones are checked once.
+    expect(mocks.userActivityService.getTodayActiveTime).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(mocks.userActivityService.getTodayActiveTime).toHaveBeenCalledWith(
+      'user-1',
+    );
+    // …and it re-arms the hail-mary timer against the tap's own row.
+    const { rearmHailMary } = jest.requireMock(
+      '../../../notifier/hail-mary.processor',
+    );
+    expect(rearmHailMary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user_id: 'user-1',
+        user_external_id: '+910000000001',
+        user_message_id: 'tap-entity-1',
+      }),
+    );
+  });
+
+  it('prepends the usage milestones a tap crosses (daily minutes, streak, total hours)', async () => {
+    const mocks = makeMocks({
+      activeTime: {
+        // This tap closed a 4-minute read: 3 → 7 min today, 59 → 63 min total.
+        withoutLatestTurn: 3 * 60_000,
+        withLatestTurn: 7 * 60_000,
+        totalWithoutLatestTurn: 59 * 60_000,
+        totalWithLatestTurn: 63 * 60_000,
+        priorStreakDays: 2,
+      },
+    });
+    mocks.mediaMetaDataService.createTextMedia.mockResolvedValue({
+      id: 'tap-entity-1',
+    });
+    mocks.literacyLessonService.processAnswer
+      .mockResolvedValueOnce({
+        stateTransitionIds: [
+          'opt-9-comprehension-complete',
+          'comprehension-answer-correct',
+        ],
+        isComplete: true,
+      })
+      .mockResolvedValueOnce({
+        stateTransitionIds: ['p2-passage-comprehension-initial'],
+        isComplete: false,
+      });
+
+    await runJob(createInteractiveJob('{"answer_id":"opt-9"}'), mocks);
+
+    expect(
+      mocks.mediaMetaDataService.findMediaByStateTransitionId.mock.calls.map(
+        (c: unknown[]) => c[0],
+      ),
+    ).toEqual([
+      'threshold-reached-5-active-minutes-today',
+      '3-day-streak',
+      '1-active-hours-total',
+      'opt-9-comprehension-complete',
+      'comprehension-answer-correct',
+      'p2-passage-comprehension-initial',
+    ]);
+  });
+
+  it('tolerates rearmHailMary throwing on a tap (logs, still replies)', async () => {
+    const { rearmHailMary } = jest.requireMock(
+      '../../../notifier/hail-mary.processor',
+    );
+    rearmHailMary.mockRejectedValueOnce(new Error('queue down'));
+    const mocks = makeMocks();
+    mocks.mediaMetaDataService.createTextMedia.mockResolvedValue({
+      id: 'tap-entity-1',
+    });
+    mocks.literacyLessonService.processAnswer.mockResolvedValue({
+      stateTransitionIds: ['opt-9-comprehension-complete'],
+      isComplete: false,
+    });
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockResolvedValue({
+      audio: { id: 'm-expl', wa_media_url: 'https://wa/expl.ogg' },
+    });
+    await runJob(createInteractiveJob('{"answer_id":"opt-9"}'), mocks);
+    expect(mocks.wabotOutbound.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it('sends the outcome stid media after the explanation and before the next lesson', async () => {
@@ -2106,6 +2185,35 @@ describe('processWabotInboundJob — comprehension flow replies', () => {
       isComplete: false,
       ignored: true,
     });
+    const { rearmHailMary } = jest.requireMock(
+      '../../../notifier/hail-mary.processor',
+    );
+    rearmHailMary.mockClear();
+    await runJob(createInteractiveJob('{"answer_id":"opt-9"}'), mocks);
+    expect(mocks.wabotOutbound.sendMessage).not.toHaveBeenCalled();
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith('pp.outcome', 'skipped');
+    // The tap did nothing: its anchor row is rolled back so it is neither an
+    // activity event nor the user's latest message; no timer, no milestones.
+    expect(mocks.mediaMetaDataService.markRolledBack).toHaveBeenCalledWith(
+      'tap-entity-1',
+    );
+    expect(rearmHailMary).not.toHaveBeenCalled();
+    expect(mocks.userActivityService.getTodayActiveTime).not.toHaveBeenCalled();
+  });
+
+  it('an ignored tap is still skipped when rolling its row back fails', async () => {
+    const mocks = makeMocks();
+    mocks.mediaMetaDataService.createTextMedia.mockResolvedValue({
+      id: 'tap-entity-1',
+    });
+    mocks.literacyLessonService.processAnswer.mockResolvedValue({
+      stateTransitionIds: [],
+      isComplete: false,
+      ignored: true,
+    });
+    mocks.mediaMetaDataService.markRolledBack.mockRejectedValueOnce(
+      new Error('db down'),
+    );
     await runJob(createInteractiveJob('{"answer_id":"opt-9"}'), mocks);
     expect(mocks.wabotOutbound.sendMessage).not.toHaveBeenCalled();
     expect(mockSpanSetAttribute).toHaveBeenCalledWith('pp.outcome', 'skipped');

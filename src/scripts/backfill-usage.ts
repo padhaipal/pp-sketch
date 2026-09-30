@@ -6,7 +6,12 @@
  * history along); school rows come only through a referrer with a school,
  * as in the nightly. Never writes NIPUN/MPL-B. Pure over injected I/O; CLI in backfill-usage.main.ts.
  */
-import { activeMs } from '../users/active-time';
+import {
+  ACTIVITY_EVENT_SQL,
+  IS_TAP_SQL,
+  activeMs,
+  type ActivityEvent,
+} from '../users/active-time';
 import { istDateIso } from '../notifier/report-card/report-card.utils';
 import {
   ACTIVE_WINDOW_DAYS,
@@ -115,19 +120,20 @@ export async function backfillUsage(
   const noteEnd = nightlyInstant(options.to);
   const notes = (await deps.query(
     `/* backfill-usage:voice-notes */
-     SELECT user_id, created_at FROM media_metadata
+     SELECT user_id, created_at, ${IS_TAP_SQL()} AS tap FROM media_metadata
      WHERE user_id = ANY($1::uuid[])
-       AND source = 'whatsapp' AND media_type = 'audio' AND rolled_back = false
+       AND ${ACTIVITY_EVENT_SQL()}
        AND created_at >= $2 AND created_at < $3
      ORDER BY user_id, created_at`,
     [ids, noteStart, noteEnd],
-  )) as StampRow[];
-  const noteTimes = new Map<string, number[]>(); // `${id}|${istDay}` → ms
+  )) as (StampRow & { tap?: boolean })[];
+  // `${id}|${istDay}` → that day's activity events (voice notes + flow taps)
+  const noteTimes = new Map<string, ActivityEvent[]>();
   for (const n of notes) {
     const at = new Date(n.created_at);
     const key = `${n.user_id}|${istDateIso(at)}`;
     const list = noteTimes.get(key) ?? [];
-    list.push(at.getTime());
+    list.push({ at: at.getTime(), tap: n.tap === true });
     noteTimes.set(key, list);
   }
 

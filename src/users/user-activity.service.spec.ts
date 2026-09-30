@@ -482,15 +482,14 @@ describe('UserActivityService — exact query shape', () => {
     expect(qb.where).toHaveBeenCalledWith('mm.user_id IN (:...userIds)', {
       userIds: [UUID_A],
     });
-    expect(qb.andWhere).toHaveBeenCalledWith('mm.source = :source', {
-      source: 'whatsapp',
-    });
-    expect(qb.andWhere).toHaveBeenCalledWith('mm.media_type = :media_type', {
-      media_type: 'audio',
-    });
-    expect(qb.andWhere).toHaveBeenCalledWith('mm.rolled_back = :rolled_back', {
-      rolled_back: false,
-    });
+    // Activity events = live voice notes + flow taps (active-time.ts).
+    expect(qb.addSelect).toHaveBeenCalledWith(
+      "(mm.media_type = 'text')",
+      'tap',
+    );
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      "mm.source = 'whatsapp' AND (mm.media_type = 'audio' OR (mm.media_type = 'text' AND mm.media_details->>'nfm_reply' = 'true')) AND mm.rolled_back = false",
+    );
     expect(qb.orderBy).toHaveBeenCalledWith('mm.user_id', 'ASC');
     expect(qb.addOrderBy).toHaveBeenCalledWith('mm.created_at', 'ASC');
     // Inner Brackets clause — executed by the mock so the inner calls register.
@@ -578,6 +577,33 @@ describe('UserActivityService.getActivityTime — boundary conditions', () => {
     expect(out.results[0].windows[0].active_ms).toBe(30_000);
   });
 
+  it('a gap ending in a flow tap gets the 298 s allowance; the same gap ending in a voice note is a break', async () => {
+    const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
+    const rows = [
+      { user_id: UUID_A, created_at: new Date('2026-04-27T09:00:00Z') },
+      // +200 s, a tap: the student was reading the passage in the flow ✓
+      {
+        user_id: UUID_A,
+        created_at: new Date('2026-04-27T09:03:20Z'),
+        tap: true,
+      },
+      // +200 s, a voice note: over the 120 s voice allowance ✗
+      { user_id: UUID_A, created_at: new Date('2026-04-27T09:06:40Z') },
+      // +298 s exactly, a tap: the allowance is strict ✗
+      {
+        user_id: UUID_A,
+        created_at: new Date('2026-04-27T09:11:38Z'),
+        tap: true,
+      },
+    ];
+    const svc = makeService(userRepo, makeMediaRepo(rows));
+    const out = await svc.getActivityTime({
+      users: [UUID_A],
+      windows: [{ start: '2026-04-27T09:00:00Z', end: '2026-04-27T11:00:00Z' }],
+    });
+    expect(out.results[0].windows[0].active_ms).toBe(200_000);
+  });
+
   it('a zero-length window (start === end) is allowed (kills start > end → >=)', async () => {
     const userRepo = makeUserRepo(jest.fn().mockResolvedValue([userA]));
     const mediaRepo = makeMediaRepo([]);
@@ -638,7 +664,7 @@ describe('UserActivityService.getTodayActiveTime — IST day + query shape', () 
     });
   });
 
-  it('runs exactly one query, scoped to the user, with the visibility filters and the 120s gap rule', async () => {
+  it('runs exactly one query, scoped to the user, with the visibility filters and the 120s / 298s gap rule', async () => {
     const mediaRepo = makeDayRepo([]);
     const svc = makeService(makeUserRepo(jest.fn()), mediaRepo);
     await svc.getTodayActiveTime(UUID_A);
@@ -649,12 +675,19 @@ describe('UserActivityService.getTodayActiveTime — IST day + query shape', () 
       string,
       unknown[],
     ];
-    expect(params).toEqual([UUID_A, 120_000]);
+    expect(params).toEqual([UUID_A]);
     expect(sql).toContain('user_id = $1');
     expect(sql).toContain("source = 'whatsapp'");
-    expect(sql).toContain("media_type = 'audio'");
+    // voice notes AND comprehension flow taps
+    expect(sql).toContain(
+      "(media_type = 'audio' OR (media_type = 'text' AND media_details->>'nfm_reply' = 'true'))",
+    );
     expect(sql).toContain('rolled_back = false');
-    expect(sql).toContain('gap_ms > 0 AND gap_ms < $2');
+    expect(sql).toContain("(media_type = 'text') AS is_tap");
+    // a gap ending in a tap gets the 4 min 58 s passage-read allowance
+    expect(sql).toContain(
+      'gap_ms > 0 AND gap_ms < CASE WHEN is_tap THEN 298000 ELSE 120000 END',
+    );
     expect(sql).toContain('prev_ist_date = ist_date');
     expect(sql).toContain("interval '330 minutes'");
   });

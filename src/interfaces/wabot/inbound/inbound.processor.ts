@@ -35,6 +35,7 @@ import {
   handleSendResult,
   parseNfmReplyAnswerId,
   persistAndTranscribeAudio,
+  rearmHailMaryBestEffort,
   sendAudioOnlyRedirect,
   sendFallbackAndHandle,
 } from './inbound.utils';
@@ -59,6 +60,55 @@ const MAX_STREAK_DAYS = 100;
 const ACTIVE_HOUR_THRESHOLDS = [1, 2, 5, 10, 20, 50, 100];
 
 type JobOutcome = 'success' | 'skipped' | 'error';
+
+// Usage milestone stids the turn just crossed, in send order: daily usage,
+// day streak, total usage. Runs on every lesson turn — voice note or flow
+// tap, both are activity events (users/active-time.ts) — after the turn's
+// media row exists, so "the latest turn" is this one.
+async function usageMilestoneStids(
+  userActivityService: UserActivityService,
+  userId: string,
+): Promise<string[]> {
+  const {
+    withLatestTurn,
+    withoutLatestTurn,
+    totalWithLatestTurn,
+    totalWithoutLatestTurn,
+    priorStreakDays,
+  } = await userActivityService.getTodayActiveTime(userId);
+  const milestones: string[] = [];
+  for (const minutes of ACTIVE_MINUTE_THRESHOLDS) {
+    const thresholdMs = minutes * 60_000;
+    if (withoutLatestTurn < thresholdMs && withLatestTurn >= thresholdMs) {
+      milestones.push(`threshold-reached-${minutes}-active-minutes-today`);
+      // A single turn adds <298s of active time (a gap ending in a flow
+      // tap; <120s ending in a voice note — active-time.ts) while thresholds
+      // are ≥5min apart, so at most one can cross.
+      break;
+    }
+  }
+  if (
+    withoutLatestTurn < STREAK_DAY_MIN_ACTIVE_MS &&
+    withLatestTurn >= STREAK_DAY_MIN_ACTIVE_MS
+  ) {
+    const streakDays = priorStreakDays + 1;
+    if (streakDays >= 2 && streakDays <= MAX_STREAK_DAYS) {
+      milestones.push(`${streakDays}-day-streak`);
+    }
+  }
+  for (const hours of ACTIVE_HOUR_THRESHOLDS) {
+    const thresholdMs = hours * 3_600_000;
+    if (
+      totalWithoutLatestTurn < thresholdMs &&
+      totalWithLatestTurn >= thresholdMs
+    ) {
+      milestones.push(`${hours}-active-hours-total`);
+      // Thresholds are ≥1h apart — at most one can cross per turn.
+      break;
+    }
+  }
+  return milestones;
+}
 
 export async function processWabotInboundJob(
   job: Job<MessageJobDto>,
@@ -409,9 +459,22 @@ export async function processWabotInboundJob(
           logger.warn(
             `Comprehension answer ignored for ${toLogId(user.external_id)} — no lesson awaiting it`,
           );
+          // The tap did nothing, so its anchor row must not count as an
+          // activity event (active-time.ts reads rolled_back = false) or as
+          // the user's latest message.
+          try {
+            await mediaMetaDataService.markRolledBack(userMessageId);
+          } catch (err) {
+            logger.warn(
+              `Failed to roll back ignored tap ${userMessageId}: ${(err as Error).message}`,
+            );
+          }
           outcome = 'skipped';
           return;
         }
+        // A tap is the user's latest message just like a voice note — without
+        // this a tap-only (level 11+) student never re-arms the timer.
+        await rearmHailMaryBestEffort({ user, userMessageId, span });
         stateTransitionIds = [...result1.stateTransitionIds];
         sentenceText = result1.sentenceText;
         flowPassageText = result1.flowPassageText;
@@ -427,6 +490,12 @@ export async function processWabotInboundJob(
           sentenceText = result2.sentenceText;
           flowPassageText = result2.flowPassageText;
         }
+
+        // A tap is an activity event too (it closes the time spent reading
+        // the passage and question), so it can cross a usage milestone.
+        stateTransitionIds.unshift(
+          ...(await usageMilestoneStids(userActivityService, user.id)),
+        );
       } else if (payload.message.type !== 'audio') {
         path = 'non-audio-redirect';
         await sendAudioOnlyRedirect(mediaMetaDataService, wabotOutbound, {
@@ -502,51 +571,11 @@ export async function processWabotInboundJob(
           stateTransitionIds.splice(result1.stateTransitionIds.length, 0, stid);
         }
 
-        // Voice-turn-driven milestones only — a flow tap adds no active time.
-        // Prepended in a fixed order: daily usage, day streak, total usage.
-        const {
-          withLatestTurn,
-          withoutLatestTurn,
-          totalWithLatestTurn,
-          totalWithoutLatestTurn,
-          priorStreakDays,
-        } = await userActivityService.getTodayActiveTime(user.id);
-        const milestones: string[] = [];
-        for (const minutes of ACTIVE_MINUTE_THRESHOLDS) {
-          const thresholdMs = minutes * 60_000;
-          if (
-            withoutLatestTurn < thresholdMs &&
-            withLatestTurn >= thresholdMs
-          ) {
-            milestones.push(
-              `threshold-reached-${minutes}-active-minutes-today`,
-            );
-            // A single turn adds <120s of active time (ACTIVE_GAP_THRESHOLD_MS)
-            // while thresholds are ≥5min apart, so at most one can cross.
-            break;
-          }
-        }
-        if (
-          withoutLatestTurn < STREAK_DAY_MIN_ACTIVE_MS &&
-          withLatestTurn >= STREAK_DAY_MIN_ACTIVE_MS
-        ) {
-          const streakDays = priorStreakDays + 1;
-          if (streakDays >= 2 && streakDays <= MAX_STREAK_DAYS) {
-            milestones.push(`${streakDays}-day-streak`);
-          }
-        }
-        for (const hours of ACTIVE_HOUR_THRESHOLDS) {
-          const thresholdMs = hours * 3_600_000;
-          if (
-            totalWithoutLatestTurn < thresholdMs &&
-            totalWithLatestTurn >= thresholdMs
-          ) {
-            milestones.push(`${hours}-active-hours-total`);
-            // Thresholds are ≥1h apart — at most one can cross per turn.
-            break;
-          }
-        }
-        stateTransitionIds.unshift(...milestones);
+        // Usage milestones, prepended in a fixed order: daily usage, day
+        // streak, total usage.
+        stateTransitionIds.unshift(
+          ...(await usageMilestoneStids(userActivityService, user.id)),
+        );
       }
 
       // 9. Build outbound media

@@ -40,3 +40,11 @@ Run (dry run first):
 `railway ssh --service pp-sketch -- node dist/scripts/backfill-usage.main.js --dry-run`
 then without the flag; `--from` / `--to` accept YYYY-MM-DD. Afterwards
 `POST /admin/test-results/run?full=1` so today's rows include everyone.
+
+## 2026-09: taps
+
+The `backfill-usage:voice-notes` read now selects activity events — voice
+notes AND comprehension flow taps, with a `tap` flag — through the shared
+fragments in users/active-time.ts, so a re-run applies the same rule the
+nightly does (298 s allowance for a gap ending in a tap; `notes` counts
+both). Rows already written are NOT rewritten unless the script is run.

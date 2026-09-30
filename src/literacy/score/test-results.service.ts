@@ -11,7 +11,12 @@ import {
   NIPUN_QUESTION_COUNT,
 } from './literacy-test-scores';
 import { ageOn, inBand, LiteracyMetric, TestMetric } from './age-bands';
-import { activeMs } from '../../users/active-time';
+import {
+  ACTIVITY_EVENT_SQL,
+  IS_TAP_SQL,
+  activeMs,
+  type ActivityEvent,
+} from '../../users/active-time';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -413,8 +418,9 @@ export class TestResultsService {
   }
 
   // Active minutes per student on the IST day before `computedFor`, from
-  // their WhatsApp voice notes. Students with no note that day are absent
-  // from the map (never a zero row).
+  // their activity events (WhatsApp voice notes + comprehension flow taps —
+  // users/active-time.ts). `notes` counts both. Students with no event that
+  // day are absent from the map (never a zero row).
   private async usageForBatch(
     ids: string[],
     computedFor: string,
@@ -423,20 +429,23 @@ export class TestResultsService {
       new Date(`${computedFor}T00:00:00Z`).getTime() - IST_OFFSET_MS,
     );
     const dayStart = new Date(dayEnd.getTime() - 86_400_000);
-    const rows: Array<{ user_id: string; created_at: Date | string }> =
-      await this.dataSource.query(
-        `/* test-results:voice-notes */
-         SELECT user_id, created_at FROM media_metadata
+    const rows: Array<{
+      user_id: string;
+      created_at: Date | string;
+      tap: boolean;
+    }> = await this.dataSource.query(
+      `/* test-results:voice-notes */
+         SELECT user_id, created_at, ${IS_TAP_SQL()} AS tap FROM media_metadata
          WHERE user_id = ANY($1::uuid[])
-           AND source = 'whatsapp' AND media_type = 'audio' AND rolled_back = false
+           AND ${ACTIVITY_EVENT_SQL()}
            AND created_at >= $2 AND created_at < $3
          ORDER BY user_id, created_at`,
-        [ids, dayStart, dayEnd],
-      );
-    const times = new Map<string, number[]>();
+      [ids, dayStart, dayEnd],
+    );
+    const times = new Map<string, ActivityEvent[]>();
     for (const r of rows) {
       const list = times.get(r.user_id) ?? [];
-      list.push(new Date(r.created_at).getTime());
+      list.push({ at: new Date(r.created_at).getTime(), tap: r.tap === true });
       times.set(r.user_id, list);
     }
     return new Map(

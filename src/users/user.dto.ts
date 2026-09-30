@@ -392,8 +392,22 @@ export interface ScoreChangeRow {
   prev_score: number | null;
 }
 
+// One interaction of the student (users/:id/media):
+//   voice      — a WhatsApp voice note answered by the lesson machine
+//   tap        — a comprehension flow answer (no audio)
+//   onboarding — a parent-onboarding voice note (staff view only)
+export type MediaRowKind = 'voice' | 'tap' | 'onboarding';
+
+// Tap rows: what was asked and answered, as text.
+export interface TapDetail {
+  question: string | null;
+  chosen: string | null;
+  correct: string | null;
+}
+
 export interface MediaRow {
   id: string;
+  kind: MediaRowKind;
   created_at: Date;
   has_audio: boolean;
   transcripts: TranscriptRow[];
@@ -403,9 +417,16 @@ export interface MediaRow {
   answer_correct: boolean | null;
   score_changes: ScoreChangeRow[];
   final_state: string | null;
+  level: number | null;
   // Reading speed of a passage-read recording (words / container-parsed
   // duration); null for word/drill turns and rows without duration_ms.
   wpm: number | null;
+  // Set on tap rows only. `answer` is then the correct option's text and
+  // `answer_correct` whether the tapped option was it (null = the tap was
+  // not awaited, nothing was recorded).
+  tap: TapDetail | null;
+  // Set on onboarding rows only (onboarding-turns.ts).
+  onboarding: import('../onboarding/onboarding-turns').OnboardingTurn | null;
 }
 
 export interface UserInfoRow {

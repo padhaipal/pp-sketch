@@ -75,6 +75,40 @@ import {
   istDateIso,
   istMidnightUtc,
 } from '../notifier/report-card/report-card.utils';
+import { INTERACTION_MEDIA_SQL } from './active-time';
+import {
+  describeOnboardingTurns,
+  type OnboardingTurnRow,
+} from '../onboarding/onboarding-turns';
+
+// One media_metadata row of the interactions feed (users/:id/media).
+interface UserMediaSourceRow {
+  id: string;
+  created_at: Date;
+  s3_key: string | null;
+  media_type: string;
+  text: string | null;
+  media_details: { duration_ms?: number } | null;
+}
+
+const LEADING_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i;
+
+// [starting state, final state] of a lesson stid. Word/letter stids are
+// `${prefix}-${from}-${to}-…` with a dash-free prefix; passage and
+// comprehension stids carry a UUID prefix (passage or answer id, which
+// itself contains dashes) followed by `${from}-${to}-…`.
+export function statesOfStid(
+  stid: string | null | undefined,
+): [string | null, string | null] {
+  if (!stid) return [null, null];
+  if (LEADING_UUID_RE.test(stid)) {
+    const parts = stid.replace(LEADING_UUID_RE, '').split('-');
+    return parts.length >= 2 ? [parts[0], parts[1]] : [null, null];
+  }
+  const parts = stid.split('-');
+  return parts.length >= 3 ? [parts[1], parts[2]] : [null, null];
+}
 
 function withLink(row: StaffLookupRow): StaffUserRow {
   return { ...row, link: staffDashboardLink(row.id) };
@@ -380,32 +414,64 @@ export class UserController {
     };
   }
 
+  // The student's interactions, newest first: WhatsApp voice notes AND
+  // comprehension flow taps (`kind`), 100 per page.
+  //
+  // `onboarding=1` (staff only — the pp-dashboard proxy drops the param for
+  // sessionless callers) also returns the parent-onboarding voice notes,
+  // each with what the turn was taken to mean and what it saved
+  // (onboarding-turns.ts). Without it they are excluded at the source: this
+  // feed backs the PUBLIC teacher dashboard, and a parent stating the
+  // child's name and age — recorded before recording permission exists —
+  // must never be reachable from a shared link. Three filters, because an
+  // onboarding row can be missing (a rolled-back turn deletes it): an
+  // un-onboarded user returns nothing, nothing at or before the moment
+  // permission was recorded, and nothing that still has an onboarding row.
   @Get(':id/media')
   async userMedia(
     @Param('id') id: string,
     @Query('offset') offsetStr?: string,
+    @Query('onboarding') onboardingStr?: string,
   ): Promise<UserMediaResponse> {
     const offset = Math.max(0, parseInt(offsetStr || '0', 10) || 0);
     const limit = 100;
+    const includeOnboarding = onboardingStr === '1';
 
     // Fetch user details
     const user = await this.userRepo.findOneBy({ id });
     if (!user) throw new NotFoundException('User not found');
+    const userInfo = { name: user.name, phone: user.external_id };
 
-    // 100 most recent whatsapp audio for this user
-    const media = await this.mediaRepo.find({
-      where: {
-        user_id: id,
-        source: 'whatsapp',
-        media_type: 'audio',
-      },
-      order: { created_at: 'DESC' },
-      skip: offset,
-      take: limit,
-    });
+    if (!includeOnboarding && !this.userService.isOnboarded(user)) {
+      return { user: userInfo, media: [] };
+    }
+
+    // History view: no rolled_back filter (as before — a rolled-back turn is
+    // still something the student sent).
+    const consentAt = includeOnboarding
+      ? null
+      : (user.recording_permissions_obtained_at ?? null);
+    const media: UserMediaSourceRow[] = await this.mediaRepo.manager.query(
+      `/* user-media:rows */
+       SELECT mm.id, mm.created_at, mm.s3_key, mm.media_type, mm.text,
+              mm.media_details
+       FROM media_metadata mm
+       WHERE mm.user_id = $1
+         AND ${INTERACTION_MEDIA_SQL('mm')}
+         ${
+           includeOnboarding
+             ? ''
+             : `AND NOT EXISTS (SELECT 1 FROM onboarding_states os
+                                WHERE os.user_message_id = mm.id)
+                AND ($4::timestamptz IS NULL OR mm.created_at > $4)`
+         }
+       ORDER BY mm.created_at DESC
+       OFFSET $2 LIMIT $3`,
+      includeOnboarding ? [id, offset, limit] : [id, offset, limit, consentAt],
+    );
 
     if (media.length === 0) {
-      return { user: { name: user.name, phone: user.external_id }, media: [] };
+      return { user: userInfo, media: [] };
     }
 
     const mediaIds = media.map((m) => m.id);
@@ -472,16 +538,9 @@ export class UserController {
       const snapshotContext = (
         ls.snapshot as { context?: { stateTransitionId?: string } }
       ).context;
-      const transitionId = snapshotContext?.stateTransitionId;
-      let startingState: string | null = null;
-      let finalState: string | null = null;
-      if (transitionId) {
-        const parts = transitionId.split('-');
-        if (parts.length >= 3) {
-          startingState = parts[1];
-          finalState = parts[2];
-        }
-      }
+      const [startingState, finalState] = statesOfStid(
+        snapshotContext?.stateTransitionId,
+      );
       lessonMap.set(ls.user_message_id, {
         // Passage lessons may have a null word column; the map renders text.
         word: ls.word ?? '',
@@ -528,16 +587,79 @@ export class UserController {
       });
     }
 
+    // Flow taps: the tap's text IS the tapped option's id (device input —
+    // only well-formed uuids are looked up). Question, chosen option and the
+    // correct option, for display. No rolled_back filter: this is what the
+    // student was actually asked, even if the passage was culled since.
+    const isTap = (m: UserMediaSourceRow) => m.media_type === 'text';
+    const tapOptionIds = [
+      ...new Set(
+        media
+          .filter(isTap)
+          .map((m) => m.text ?? '')
+          .filter((t) => UUID_RE.test(t)),
+      ),
+    ];
+    const tapRows: {
+      id: string;
+      chosen: string | null;
+      question: string | null;
+      correct: string | null;
+    }[] =
+      tapOptionIds.length === 0
+        ? []
+        : await this.mediaRepo.manager.query(
+            `/* user-media:taps */
+             SELECT o.id, o.text AS chosen, q.text AS question,
+                    (SELECT c.text FROM media_metadata c
+                     WHERE c.input_media_id = q.id
+                       AND c.media_details->>'role' = 'option'
+                       AND c.media_details->>'correct' = 'true'
+                     ORDER BY c.created_at
+                     LIMIT 1) AS correct
+             FROM media_metadata o
+             LEFT JOIN media_metadata q ON q.id = o.input_media_id
+             WHERE o.id = ANY($1::uuid[])
+               AND o.media_details->>'role' = 'option'`,
+            [tapOptionIds],
+          );
+    const tapMap = new Map(tapRows.map((r) => [r.id, r]));
+
+    // Onboarding turns (staff view only): every onboarding row of the user,
+    // oldest first — each turn is described against the one before it.
+    const onboardingRows: OnboardingTurnRow[] = includeOnboarding
+      ? await this.mediaRepo.manager.query(
+          `/* user-media:onboarding */
+           SELECT user_message_id, snapshot, created_at
+           FROM onboarding_states
+           WHERE user_id = $1
+           ORDER BY created_at`,
+          [id],
+        )
+      : [];
+    const onboardingTurns = describeOnboardingTurns(onboardingRows);
+
     // The DB answer column holds the correct answer for the NEXT state (after
     // entry actions run), not for the state the user just answered in. To display
     // the correct answer the user was asked, we offset by one: each row's
     // displayed answer is the chronologically previous lesson state's answer.
     // When a new word starts (or for the first row), use lesson.word instead.
     // Media is ordered created_at DESC, so iterate in reverse for chronological order.
+    // A tap ends its lesson and its row's answer column is an option id, so
+    // it displays the correct option's text and resets the walk.
     const displayedAnswerMap = new Map<string, string | null>();
     let prevAnswer: string | null = null;
     let prevWord: string | null = null;
     for (let i = media.length - 1; i >= 0; i--) {
+      if (isTap(media[i])) {
+        displayedAnswerMap.set(
+          media[i].id,
+          tapMap.get(media[i].text ?? '')?.correct ?? null,
+        );
+        prevAnswer = null;
+        prevWord = null;
+        continue;
+      }
       const lesson = lessonMap.get(media[i].id);
       if (!lesson) {
         displayedAnswerMap.set(media[i].id, null);
@@ -553,22 +675,25 @@ export class UserController {
     }
 
     return {
-      user: { name: user.name, phone: user.external_id },
+      user: userInfo,
       media: media.map((m) => {
         const lesson = lessonMap.get(m.id);
+        const tap = isTap(m);
+        const tapDetail = tap ? tapMap.get(m.text ?? '') : undefined;
+        const onboarding = onboardingTurns.get(m.id) ?? null;
         // Reading speed for passage-read turns only: the lesson row's word
         // column stores the joined sentence there (>= 2 tokens; drill turns
         // store a single word), and duration_ms is the container-parsed
         // voice-note length captured at ingest (audio-duration.utils.ts).
         const words = (lesson?.word ?? '').split(/\s+/).filter(Boolean).length;
-        const durationMs = (m.media_details as { duration_ms?: number } | null)
-          ?.duration_ms;
+        const durationMs = m.media_details?.duration_ms;
         const wpm =
           words >= 2 && typeof durationMs === 'number' && durationMs > 0
             ? Math.round(words / (durationMs / 60_000))
             : null;
         return {
           id: m.id,
+          kind: tap ? 'tap' : onboarding ? 'onboarding' : 'voice',
           created_at: m.created_at,
           has_audio: !!m.s3_key,
           transcripts: transcriptMap.get(m.id) ?? [],
@@ -580,6 +705,14 @@ export class UserController {
           final_state: lesson?.final_state ?? null,
           level: lesson?.level ?? null,
           wpm,
+          tap: tap
+            ? {
+                question: tapDetail?.question ?? null,
+                chosen: tapDetail?.chosen ?? null,
+                correct: tapDetail?.correct ?? null,
+              }
+            : null,
+          onboarding,
         };
       }),
     };

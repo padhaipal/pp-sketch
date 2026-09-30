@@ -29,7 +29,7 @@ interface Fixture {
     created_at: Date;
     geo_entity_id: string | null;
   }>;
-  notes: Array<{ user_id: string; created_at: Date }>;
+  notes: Array<{ user_id: string; created_at: Date; tap?: boolean }>;
   lessons: Array<{ user_id: string; created_at: Date }>;
   ancestors: Record<string, string[]>;
 }
@@ -212,6 +212,34 @@ describe('backfillUsage', () => {
     expect(s1d4.students_active).toBe(1);
     // ancestors() resolved once per school.
     expect(deps.ancestors).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads flow taps as activity events: a gap ending in a tap gets the 298 s allowance', async () => {
+    const { deps, query, studentWrites } = makeDeps({
+      ...FIXTURE,
+      notes: [
+        // voice note, then a tap 4 min later (was reading in the flow) → 4.0
+        { user_id: 'A', created_at: ist('2026-06-01T10:00:00') },
+        { user_id: 'A', created_at: ist('2026-06-01T10:04:00'), tap: true },
+        // …then a voice note 4 min after the tap → a break
+        { user_id: 'A', created_at: ist('2026-06-01T10:08:00') },
+      ],
+    });
+    await backfillUsage(deps, {
+      from: '2026-06-02',
+      to: '2026-06-02',
+      dryRun: false,
+    });
+    const notesSql = query.mock.calls.find(([sql]) =>
+      sql.includes('voice-notes'),
+    )![0];
+    expect(notesSql).toContain(
+      "source = 'whatsapp' AND (media_type = 'audio' OR (media_type = 'text' AND media_details->>'nfm_reply' = 'true')) AND rolled_back = false",
+    );
+    expect(notesSql).toContain("(media_type = 'text') AS tap");
+    expect(studentWrites[0][0]).toEqual([
+      { student_id: 'A', geo_entity_id: 'S1', minutes: 4, notes: 3 },
+    ]);
   });
 
   it('dry run reads everything and writes nothing', async () => {

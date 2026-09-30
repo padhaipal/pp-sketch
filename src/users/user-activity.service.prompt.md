@@ -55,3 +55,34 @@ day's last message added.
   every day — all active time counts, whatever that day totalled.
 - `priorStreakDays`: consecutive IST days immediately before today with at
   least `STREAK_DAY_MIN_ACTIVE_MS` (5 min) each; today is not counted.
+
+## 2026-09: flow taps are activity events (active-time.ts)
+
+The active-time rule now lives ONLY in `users/active-time.ts` and every
+reader goes through it — `activeMs(events)` in TS, and the SQL fragments
+`ACTIVITY_EVENT_SQL` / `IS_TAP_SQL` / `COUNTED_GAP_SQL` for the two raw-SQL
+aggregates here (dashboard summary, `getTodayActiveTime`), the nightly usage
+metric and the usage backfill. This supersedes the voice-only wording above.
+
+- Events = the student's WhatsApp voice notes AND comprehension flow taps
+  (the `media_type = 'text'` row with `media_details.nfm_reply = true` the
+  inbound processor anchors a tap to), `rolled_back = false`.
+- A gap between two consecutive events counts when it is shorter than the
+  allowance of the event that ENDS it: 120 s for a voice note
+  (`ACTIVE_GAP_THRESHOLD_MS`), 298 s for a tap
+  (`TAP_ACTIVE_GAP_THRESHOLD_MS` — the student was reading the passage and
+  question inside the flow; same 4 min 58 s the lesson allows a passage read
+  before it goes stale). Both strict.
+- Why: a level 11–12 lesson is tap-only, so those students earned zero
+  minutes, no milestones, no streaks and zero on the teacher dashboard's
+  usage metric.
+- `getActivityTime` fetches `{at, tap}` events (`fetchActivityEvents`);
+  `getTodayActiveTime` is called on every lesson turn — voice note OR tap —
+  and its "latest turn" is the latest event of either kind. Its only bound
+  parameter is the user id (the allowances are inlined constants).
+- An IGNORED tap (no lesson awaiting it) is rolled back by the processor and
+  therefore never an event.
+- Not retroactive for STORED figures: `test_results_student.usage_*` rows
+  already written keep their voice-only minutes unless the backfill script is
+  re-run. Views computed live from `media_metadata` (dashboard summary,
+  `/users/:id/metrics`, milestone totals) include past taps from this deploy.
