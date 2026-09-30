@@ -9,6 +9,8 @@ import { LiteracyLessonStateEntity } from './literacy-lesson-state.entity';
 import { ScoreService } from '../score/score.service';
 import { tracer } from '../../otel/otel';
 import {
+  COMPREHENSION_ANSWER_CORRECT_STATE_TRANSITION_ID,
+  COMPREHENSION_ANSWER_INCORRECT_STATE_TRANSITION_ID,
   machine,
   STALE_LESSON_RESTART_STATE_TRANSITION_ID,
 } from './literacy-lesson.machine';
@@ -567,8 +569,17 @@ export class LiteracyLessonService {
     this.logger.log(
       `handleComprehensionAnswer: user ${userId} answered ${answerId} correct=${String(answerCorrect)}`,
     );
+    // The machine's stid is the same for a right and a wrong tap (it is the
+    // tapped option's explanation key), so the outcome rides on a second,
+    // fixed stid. Returned only — the persisted snapshot keeps the machine's
+    // stid, which is what sentence-band progression reads back.
     return {
-      stateTransitionIds: [snapshot.context.stateTransitionId],
+      stateTransitionIds: [
+        snapshot.context.stateTransitionId,
+        answerCorrect
+          ? COMPREHENSION_ANSWER_CORRECT_STATE_TRANSITION_ID
+          : COMPREHENSION_ANSWER_INCORRECT_STATE_TRANSITION_ID,
+      ],
       isComplete: snapshot.status === 'done',
     };
   }

@@ -2946,7 +2946,12 @@ describe('LiteracyLessonService.processAnswer — comprehension answers', () => 
       user_message_id: 'mm-9',
       comprehension_answer_id: 'opt-1',
     });
-    expect(out.stateTransitionIds).toEqual(['opt-1-comprehension-complete']);
+    // The machine's stid (the option's explanation key), then the fixed
+    // outcome stid.
+    expect(out.stateTransitionIds).toEqual([
+      'opt-1-comprehension-complete',
+      'comprehension-answer-correct',
+    ]);
     expect(out.isComplete).toBe(true);
     expect(out.ignored).toBeUndefined();
     expect(mockActorSend).toHaveBeenCalledWith({
@@ -2963,11 +2968,11 @@ describe('LiteracyLessonService.processAnswer — comprehension answers', () => 
   });
 
   it('records an incorrect answer when the option is not the correct one', async () => {
-    const { svc } = comprehensionSetup({
+    const { svc, dsQuery } = comprehensionSetup({
       state: comprehensionState(),
       optionRows: [{ id: 'opt-2', media_details: { correct: false } }],
     });
-    await svc.processAnswer({
+    const out = await svc.processAnswer({
       user,
       user_message_id: 'mm-9',
       comprehension_answer_id: 'opt-2',
@@ -2977,6 +2982,15 @@ describe('LiteracyLessonService.processAnswer — comprehension answers', () => 
       answerId: 'opt-2',
       answerCorrect: false,
     });
+    expect(out.stateTransitionIds[1]).toBe('comprehension-answer-incorrect');
+    // The outcome stid is returned only: the persisted snapshot keeps the
+    // machine's own stid (sentence-band progression reads it back).
+    const snapshot = JSON.parse(insertParamsOf(dsQuery)[5] as string) as {
+      context: { stateTransitionId: string };
+    };
+    expect(snapshot.context.stateTransitionId).toBe(
+      'opt-1-comprehension-complete',
+    );
   });
 
   it('ignores an answer id that does not belong to the lesson passage', async () => {

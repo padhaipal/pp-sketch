@@ -20,6 +20,15 @@ export const AUDIO_ONLY_REQUEST_STATE_TRANSITION_ID = 'audio-only-request';
 // under this stid, not a deploy.
 export const EXPLAINER_VIDEO_STATE_TRANSITION_ID = 'lifteracy-explainer';
 export const STALE_LESSON_RESTART_STATE_TRANSITION_ID = 'stale-lesson-restart';
+// Not machine transitions: the service appends one of these after the
+// machine's `${answerId}-comprehension-complete` stid on a comprehension flow
+// tap, so right/wrong feedback (e.g. a sticker) is seeded ONCE under a fixed
+// stid instead of per answer option (whose UUID prefix defeats the `_`
+// generic key). Swapping the media is an upload, not a deploy.
+export const COMPREHENSION_ANSWER_CORRECT_STATE_TRANSITION_ID =
+  'comprehension-answer-correct';
+export const COMPREHENSION_ANSWER_INCORRECT_STATE_TRANSITION_ID =
+  'comprehension-answer-incorrect';
 // Sentence failed but no teachable drill word exists (every badly-read word
 // contains a conjunct/nukta/other grapheme outside TEACHABLE_GRAPHEMES, or
 // the failure was ordering) — the child simply retries the sentence.

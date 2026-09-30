@@ -2052,6 +2052,50 @@ describe('processWabotInboundJob — comprehension flow replies', () => {
     expect(mocks.userActivityService.getTodayActiveTime).not.toHaveBeenCalled();
   });
 
+  it('sends the outcome stid media after the explanation and before the next lesson', async () => {
+    const mocks = makeMocks();
+    mocks.mediaMetaDataService.createTextMedia.mockResolvedValue({
+      id: 'tap-entity-1',
+    });
+    mocks.literacyLessonService.processAnswer
+      .mockResolvedValueOnce({
+        stateTransitionIds: [
+          'opt-9-comprehension-complete',
+          'comprehension-answer-correct',
+        ],
+        isComplete: true,
+      })
+      .mockResolvedValueOnce({
+        stateTransitionIds: ['sentence-start-sentence-initial'],
+        isComplete: false,
+      });
+    const mediaByStid: Record<string, unknown> = {
+      'opt-9-comprehension-complete': {
+        audio: { id: 'm-expl', wa_media_url: 'https://wa/expl.ogg' },
+      },
+      'comprehension-answer-correct': {
+        sticker: { id: 'm-sticker', wa_media_url: 'https://wa/star.webp' },
+      },
+      'sentence-start-sentence-initial': {
+        audio: { id: 'm-next', wa_media_url: 'https://wa/next.ogg' },
+      },
+    };
+    mocks.mediaMetaDataService.findMediaByStateTransitionId.mockImplementation(
+      async (stid: string) => mediaByStid[stid] ?? {},
+    );
+
+    await runJob(createInteractiveJob('{"answer_id":"opt-9"}'), mocks);
+
+    const media = mocks.wabotOutbound.sendMessage.mock.calls[0][0].media as {
+      url: string;
+    }[];
+    expect(media.map((m) => m.url)).toEqual([
+      'https://wa/expl.ogg',
+      'https://wa/star.webp',
+      'https://wa/next.ogg',
+    ]);
+  });
+
   it('skips (no send, no rows) when the lesson was not awaiting an answer', async () => {
     const mocks = makeMocks();
     mocks.mediaMetaDataService.createTextMedia.mockResolvedValue({
