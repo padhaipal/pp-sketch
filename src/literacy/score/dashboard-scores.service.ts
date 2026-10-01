@@ -30,6 +30,7 @@ import {
   SpotlightResponse,
   StudentRow,
   studentLabel,
+  testMeta,
   TIME_PASS_MINUTES_PER_DAY,
   TIME_WINDOW_DAYS,
   timeBin,
@@ -180,6 +181,7 @@ function emptyResponse(
     metric,
     range,
     ...(window ? { window } : {}),
+    ...testMeta(metric),
     entity,
     root: {
       pass_rate: null,
@@ -319,6 +321,7 @@ export class DashboardScoresService {
       metric,
       range,
       ...(win ? { window: win } : {}),
+      ...testMeta(metric),
       entity: toRef(entity),
       root,
       series,
@@ -457,6 +460,7 @@ export class DashboardScoresService {
       metric,
       range,
       ...(win ? { window: win } : {}),
+      ...testMeta(metric),
       entity,
       root,
       series: seriesRows.map((r) => ({

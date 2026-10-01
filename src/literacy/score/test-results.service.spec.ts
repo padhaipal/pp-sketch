@@ -334,7 +334,7 @@ const COMPUTED_FOR_DATE = new Date(`${COMPUTED_FOR}T00:00:00Z`);
 function seed(db: FakeDb) {
   // birth 2018-07 → age 8 on 2026-09-13: in g2 [7,9), g3 [8,10), mpl_b [8,10).
   db.students = [
-    { id: 'A', birth_year: 2018, birth_month: 7, referrer_geo: 'S1' }, // g2 0.75 pass
+    { id: 'A', birth_year: 2018, birth_month: 7, referrer_geo: 'S1' }, // g2 0.75 — a fail at the > 0.8 NIPUN mark
     { id: 'B', birth_year: 2018, birth_month: 7, referrer_geo: 'S1' }, // g2 0.25 fail
     { id: 'C', birth_year: 2018, birth_month: 7, referrer_geo: 'S2' }, // insufficient → scored=0
     { id: 'E', birth_year: 2010, birth_month: 1, referrer_geo: 'S2' }, // age 16: out of every band
@@ -417,7 +417,7 @@ describe('TestResultsService.run — candidates and skip criterion', () => {
     expect(a.computed_for).toBe(COMPUTED_FOR);
     expect(a.scores).toEqual([
       0.75,
-      true,
+      false,
       4,
       null,
       null,
@@ -627,7 +627,7 @@ describe('TestResultsService.run — geo aggregation and roll-up', () => {
       n: 2,
       sum: 1,
       sumsq: 0.625,
-      pass: 1,
+      pass: 0, // 0.75 and 0.25: neither clears the > 0.8 NIPUN mark
       hist: [0, 1, 0, 1, 0],
     });
     expect(s1.nipun_g3).toEqual({

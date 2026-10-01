@@ -28,8 +28,12 @@ export interface FirstAttempt {
   question_type: string | null;
 }
 
-// All tests pass on score STRICTLY greater than 0.5.
-export const TEST_PASS_THRESHOLD = 0.5;
+// Pass marks, STRICTLY greater than. NIPUN (4 questions): more than 80 % —
+// i.e. all four right; MPL-B (20 questions): more than half, 11/20 up.
+// pp-dashboard's trend charts draw the same marks (dashboard-types.ts
+// PASS_MARK_PCT) — keep in sync.
+export const NIPUN_PASS_THRESHOLD = 0.8;
+export const MPL_B_PASS_THRESHOLD = 0.5;
 
 export const NIPUN_QUESTION_COUNT = 4;
 // NIPUN reading proxies use the retrieve subconstructs only.
@@ -61,7 +65,7 @@ export function nipunSnapshot(
   if (pool.length < count) return null;
   const selected = pool.slice(-count);
   const score = selected.filter((a) => a.correct).length / count;
-  return { score, passed: score > TEST_PASS_THRESHOLD };
+  return { score, passed: score > NIPUN_PASS_THRESHOLD };
 }
 
 // MPL-B snapshot over a pool of level-11/12 first attempts (chronological).
@@ -116,7 +120,7 @@ export function mplBSnapshot(
 
   const score =
     [...selected].filter((a) => a.correct).length / MPL_B_QUESTION_COUNT;
-  return { score, passed: score > TEST_PASS_THRESHOLD };
+  return { score, passed: score > MPL_B_PASS_THRESHOLD };
 }
 
 // history[] = the snapshot algorithm replayed over every chronological prefix
