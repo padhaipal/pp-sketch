@@ -32,6 +32,25 @@ const FLOW_PASSAGE_MESSAGE_BODY =
   'पाठ पढ़कर सवाल का जवाब देने के लिए नीचे बटन दबाओ 👇';
 const FLOW_PASSAGE_MESSAGE_CTA = 'पढ़ो';
 const FLOW_OPTION_LETTERS = ['A', 'B', 'C', 'D'] as const;
+
+// The question as shown in the flow: "Q: " + the question, in bold when the
+// flow asset renders markdown. Any markdown the raw question happens to carry
+// (a stray ** from the LLM, a leading #) is stripped first so it can neither
+// break the bold nor render oddly. The passage-in-flow asset has always been
+// published with markdown on its question; the read-first (mcq) asset only
+// from the comprehension-mcq-v2 publish — until that id is live,
+// WHATSAPP_COMPREHENSION_FLOW_MARKDOWN=1 is what turns bold on for it
+// (literal asterisks would show otherwise).
+export function formatFlowQuestion(raw: string, markdown: boolean): string {
+  const plain = raw
+    .replace(/[*_~`]+/g, '')
+    .replace(/^\s*#+\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^q[:.]\s*/i, '');
+  const text = `Q: ${plain}`;
+  return markdown ? `**${text}**` : text;
+}
 // Meta cap on RadioButtonsGroup option descriptions (also enforced at
 // creation time in llm-generate.dto.ts and at send time in wabot-sketch).
 const FLOW_OPTION_DESCRIPTION_MAX = 300;
@@ -123,7 +142,11 @@ export function appendFlowItem(
       screen: COMPREHENSION_FLOW_SCREEN,
       data: {
         ...(withPassage && { passage_text: passageText }),
-        question_text: payload.question_text,
+        question_text: formatFlowQuestion(
+          payload.question_text,
+          withPassage ||
+            process.env.WHATSAPP_COMPREHENSION_FLOW_MARKDOWN === '1',
+        ),
         options,
       },
     },
