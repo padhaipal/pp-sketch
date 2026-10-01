@@ -20,6 +20,11 @@ const logger = new Logger('HailMaryProcessor');
 export const HAIL_MARY_DELAY_MS = 1435 * 60 * 1000; // 23h55m
 export const HAIL_MARY_STATE_TRANSITION_ID = 'hail-mary';
 
+// One pending job per user. BullMQ rejects a custom id containing ':', so
+// the id is hyphenated — the old `hail-mary:<id>` threw on every turn and
+// the timer never armed (2026-07 → 2026-10).
+export const hailMaryJobId = (userId: string) => `hail-mary-${userId}`;
+
 export interface HailMaryJobData {
   user_id: string;
   user_external_id: string;
@@ -29,7 +34,7 @@ export interface HailMaryJobData {
 
 export async function rearmHailMary(args: HailMaryJobData): Promise<void> {
   const queue = createQueue(QUEUE_NAMES.HAIL_MARY);
-  const jobId = `hail-mary:${args.user_id}`;
+  const jobId = hailMaryJobId(args.user_id);
   await queue.remove(jobId);
   await queue.add('hail-mary', args, {
     jobId,
@@ -87,7 +92,7 @@ export async function processHailMaryJob(
         span.setAttribute('hail_mary.skip_reason', 'stale');
 
         const queue = createQueue(QUEUE_NAMES.HAIL_MARY);
-        const jobId = `hail-mary:${job.data.user_id}`;
+        const jobId = hailMaryJobId(job.data.user_id);
         const existing = await queue.getJob(jobId);
         // Self exclusion: while this worker runs, the active job carries the
         // same jobId. Treat 'active' as no delayed job present.
@@ -183,24 +188,51 @@ export async function processHailMaryJob(
         return;
       }
 
-      const result = await wabotOutbound.sendMessage({
+      // Sent like the daily reminders (evening-reminder.processor.ts):
+      // sendNotification posts straight to WhatsApp. sendMessage would first
+      // claim the "inflight" record wabot keeps for a message the user just
+      // sent — there is none here, so it answered delivered:false and nothing
+      // ever went out.
+      const result = await wabotOutbound.sendNotification({
         user_external_id: job.data.user_external_id,
-        wamid: '',
         media,
-        otel_carrier: injectCarrier(span),
       });
       span.setAttribute('http.response.status_code', result.status);
+      if (result.error_code !== undefined) {
+        span.setAttribute('wabot.error_code', result.error_code);
+      }
+      span.setAttribute('hail_mary.delivered', result.delivered === true);
+
+      if (result.error_code === 130429) {
+        // Thrown so BullMQ retries on the queue's backoff.
+        throw new Error(
+          `hail-mary: WhatsApp rate-limit (130429) for user ${toLogId(job.data.user_external_id)} — will retry`,
+        );
+      }
+      if (result.error_code === 131047) {
+        // The free-message window closed before this ran (clock skew past
+        // the 24h guard above): nothing can be sent without a template.
+        logger.warn(
+          `hail-mary: 24-hour window expired (131047) for user ${toLogId(job.data.user_external_id)}`,
+        );
+        span.setAttribute('hail_mary.skip_reason', 'window-expired');
+        return;
+      }
+      if (!result.delivered) {
+        throw new Error(
+          `hail-mary: not delivered for user ${toLogId(job.data.user_external_id)}: status=${String(result.status)} error_code=${String(result.error_code)}`,
+        );
+      }
+
       logger.log(
         `hail-mary: sent to user ${toLogId(job.data.user_external_id)} status=${result.status}`,
       );
-      if (result.status >= 200 && result.status < 300) {
-        await outboundMessages.recordSent({
-          user_id: job.data.user_id,
-          user_message_id: latest.id,
-          trigger: 'hail-mary',
-          items: records,
-        });
-      }
+      await outboundMessages.recordSent({
+        user_id: job.data.user_id,
+        user_message_id: latest.id,
+        trigger: 'hail-mary',
+        items: records,
+      });
     } catch (err) {
       span.setStatus({
         code: SpanStatusCode.ERROR,
