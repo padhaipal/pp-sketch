@@ -29,6 +29,12 @@ export const COMPREHENSION_ANSWER_CORRECT_STATE_TRANSITION_ID =
   'comprehension-answer-correct';
 export const COMPREHENSION_ANSWER_INCORRECT_STATE_TRANSITION_ID =
   'comprehension-answer-incorrect';
+// Not a machine transition either: the service appends
+// `${letter}-letter-score-floor` at the end of a turn's stids whenever a
+// wrong answer tried to push that letter's score below ScoreService's
+// MIN_SCORE (-10) and was held there. Per letter, so it is a column in the
+// /media-metadata coverage grid (media-metadata-coverage.service.ts).
+export const LETTER_SCORE_FLOOR_STID_SUFFIX = 'letter-score-floor';
 // Sentence failed but no teachable drill word exists (every badly-read word
 // contains a conjunct/nukta/other grapheme outside TEACHABLE_GRAPHEMES, or
 // the failure was ordering) — the child simply retries the sentence.

@@ -30,6 +30,9 @@ const SUFFIXES = [
   'image-letterImage-maxErrors',
   'letter-image-wrong',
   'letter-routeWrongLetter-correct-more',
+  // Not a machine transition: appended by literacy-lesson.service.ts when a
+  // wrong answer held the letter's score at the -10 floor.
+  'letter-score-floor',
   'letter-word-correct-last',
   'letterImage-letterImage-wrong-first',
   'letterImage-letterImage-wrong-second',

@@ -67,8 +67,9 @@ The main entry point called by the inbound processor at step 7. Handles the full
   * incorrect: `pendingIncorrect` (omit if empty)
   * userMessageId: `options.user_message_id`
 * Await the result. If `gradeAndRecord()` throws, log WARN but do NOT re-throw — a scoring failure must not prevent the outbound message from being sent to the student.
+* The result's `floored` graphemes (wrong answers that hit ScoreService's `MIN_SCORE` -10 floor — reported every time, including while pinned there) each become a `${grapheme}-${LETTER_SCORE_FLOOR_STID_SUFFIX}` (`…-letter-score-floor`) stid, appended at the END of this turn's `stateTransitionIds` in step 10. The machine penalises one letter per turn, so at most one. Media for it is per letter — a column of the /media-metadata coverage grid. On a scoring failure nothing is appended.
 
-10.) Build `stateTransitionIds`: if `isStaleRestart` is true, prepend `STALE_LESSON_RESTART_STATE_TRANSITION_ID` before the snapshot's `stateTransitionId`; otherwise the array contains only the snapshot's `stateTransitionId`. Return `{ stateTransitionIds, isComplete: snapshot.status === 'done' }`.
+10.) Build `stateTransitionIds`: if `isStaleRestart` is true, prepend `STALE_LESSON_RESTART_STATE_TRANSITION_ID` before the snapshot's `stateTransitionId`; otherwise the array contains only the snapshot's `stateTransitionId`. Then append the floor stids from step 9. Return `{ stateTransitionIds, isComplete: snapshot.status === 'done' }`.
 
 ## findCurrentState(userId: string): Promise\<LiteracyLessonState | null>
 
