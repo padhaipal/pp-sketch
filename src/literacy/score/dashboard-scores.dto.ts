@@ -152,6 +152,10 @@ export interface StudentRow extends TimeFields {
   student_id: string;
   // Display label: first name, else "Student N" (never phone digits).
   label: string;
+  // The student's WhatsApp number (users.external_id), shown beside the name
+  // on the teacher dashboard so a teacher can tell students apart (2026-10,
+  // deliberately uncensored — the link holder is the teacher).
+  phone: string;
   // The full name as stored (null until a parent/teacher sets one) — the
   // class view shows and edits this via PATCH /users/:id/profile.
   name: string | null;

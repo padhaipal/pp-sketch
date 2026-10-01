@@ -106,6 +106,7 @@ function toStudentRow(m: MemberRow): StudentRow {
   return {
     student_id: m.student_id,
     label: m.label,
+    phone: m.phone,
     name: m.name,
     score: m.score,
     passed: m.passed,
@@ -779,6 +780,7 @@ export class DashboardScoresService {
     interface Row {
       student_id: string;
       name: string | null;
+      external_id: string;
       created_at: Date;
       birth_year: number | null;
       birth_month: number | null;
@@ -829,7 +831,7 @@ export class DashboardScoresService {
          JOIN members m ON m.student_id = l.user_id
          GROUP BY l.user_id
        )
-       SELECT l.student_id, u.name, u.created_at, u.birth_year, u.birth_month,
+       SELECT l.student_id, u.name, u.external_id, u.created_at, u.birth_year, u.birth_month,
               u.referrer_user_id,
               ${scoreSql} AS score, l.${metric}_passed AS passed,
               l.${metric}_attempts::int AS attempts, a.last_active_at,
@@ -866,6 +868,7 @@ export class DashboardScoresService {
       return {
         student_id: r.student_id,
         label: studentLabel(r.name, ordinal.get(r.student_id) ?? 0),
+        phone: r.external_id,
         name: r.name,
         score,
         passed: usage ? score! > USAGE_PASS_MINUTES : r.passed,

@@ -417,6 +417,8 @@ function makeService(fixture: {
       .map(({ s, latest, prior }) => ({
         student_id: s.student_id,
         name: s.name,
+        // the fake's phone: derived from the id, like users.external_id
+        external_id: `91${s.student_id.replace(/\D/g, '').padStart(10, '0')}`,
         created_at: new Date(s.created_at),
         birth_year: s.birth_year,
         birth_month: s.birth_month,
@@ -1163,6 +1165,10 @@ describe('DashboardScoresService.scores — school level (students)', () => {
       'Student 5',
     ]);
     for (const r of rows) expect(r.label).not.toMatch(/\d{5,}/);
+    // …but every row carries the student's number for the teacher
+    expect(rows.map((r) => r.phone)).toEqual(
+      rows.map((r) => `91${r.student_id.replace(/\D/g, '').padStart(10, '0')}`),
+    );
     expect(rows[0]).toEqual(
       expect.objectContaining({
         score: 1,
