@@ -67,6 +67,8 @@ describe('MediaMetadataCoverageService.getCoverage', () => {
 
     // Static suffix list is in the implementation; verify a couple of known entries.
     expect(out.suffixes).toContain('letter-word-correct-last');
+    // Appended by the lesson service, not a machine transition.
+    expect(out.suffixes).toContain('letter-score-floor');
     expect(out.suffixes).toContain('image-image-wrong-first');
     expect(out.media_types).toEqual([
       'audio',

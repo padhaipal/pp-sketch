@@ -86,7 +86,11 @@ function makeService(opts: {
     svc: new LiteracyLessonService(
       repo as unknown as Repository<LiteracyLessonStateEntity>,
       ds,
-      (opts.scoreSvc ?? { gradeAndRecord: jest.fn() }) as ScoreService,
+      (opts.scoreSvc ?? {
+        gradeAndRecord: jest
+          .fn()
+          .mockResolvedValue({ scores: [], floored: [] }),
+      }) as ScoreService,
     ),
     repo,
     dsQuery: ds.query as jest.Mock,
@@ -370,10 +374,12 @@ describe('LiteracyLessonService.processAnswer — score recording', () => {
     pendingCorrect,
     pendingIncorrect,
     gradeReject,
+    floored = [],
   }: {
     pendingCorrect: string[];
     pendingIncorrect: string[];
     gradeReject?: Error;
+    floored?: string[];
   }) {
     const repo = makeRepo();
     repo.findOne.mockResolvedValue(null);
@@ -402,7 +408,7 @@ describe('LiteracyLessonService.processAnswer — score recording', () => {
       .mockResolvedValueOnce([{ id: 'lls-1' }]);
     const gradeAndRecord = gradeReject
       ? jest.fn().mockRejectedValue(gradeReject)
-      : jest.fn().mockResolvedValue([]);
+      : jest.fn().mockResolvedValue({ scores: [], floored });
     return {
       ...makeService({ repo, dsQuery, scoreSvc: { gradeAndRecord } }),
       gradeAndRecord,
@@ -453,9 +459,30 @@ describe('LiteracyLessonService.processAnswer — score recording', () => {
       pendingIncorrect: [],
       gradeReject: new Error('score svc down'),
     });
-    await expect(
-      svc.processAnswer({ user, user_message_id: 'mm-1' }),
-    ).resolves.toBeDefined();
+    const out = await svc.processAnswer({ user, user_message_id: 'mm-1' });
+    expect(out).toBeDefined();
+    // No scoring → no floor stid either.
+    expect(out.stateTransitionIds).toEqual(['sid']);
+  });
+
+  it('appends `${letter}-letter-score-floor` at the END of the turn when the wrong answer hit the -10 floor', async () => {
+    const { svc } = setup({
+      pendingCorrect: [],
+      pendingIncorrect: ['ल'],
+      floored: ['ल'],
+    });
+    const out = await svc.processAnswer({ user, user_message_id: 'mm-1' });
+    expect(out.stateTransitionIds).toEqual(['sid', 'ल-letter-score-floor']);
+  });
+
+  it('appends no floor stid when nothing floored', async () => {
+    const { svc } = setup({
+      pendingCorrect: [],
+      pendingIncorrect: ['ल'],
+      floored: [],
+    });
+    const out = await svc.processAnswer({ user, user_message_id: 'mm-1' });
+    expect(out.stateTransitionIds).toEqual(['sid']);
   });
 });
 
@@ -1581,7 +1608,9 @@ describe('LiteracyLessonService — pending-score defaults (L139/L141)', () => {
       .fn()
       .mockResolvedValueOnce([freshRow()])
       .mockResolvedValueOnce([{ id: 'lls-1' }]);
-    const gradeAndRecord = jest.fn().mockResolvedValue([]);
+    const gradeAndRecord = jest
+      .fn()
+      .mockResolvedValue({ scores: [], floored: [] });
     const { svc } = makeService({
       repo,
       dsQuery,

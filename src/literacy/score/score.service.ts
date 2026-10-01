@@ -79,15 +79,24 @@ function buildLetterWhere(
 // score arbitrarily negative and recovery takes hundreds of correct answers.
 // Clamped on write only — historical rows below the floor stay untouched and
 // simply jump to MIN_SCORE on the user's next interaction with that letter.
-const MIN_SCORE = -10;
+export const MIN_SCORE = -10;
 
+// `floored`: a WRONG answer tried to push the score below MIN_SCORE and was
+// held at it. Reported every time it happens (a letter pinned at -10 floors
+// on every further wrong answer), so the lesson can emit the per-letter
+// `${letter}-letter-score-floor` stid. A correct answer never floors, even
+// when a legacy below-floor row is being clamped up to -10.
 function calculateNewScore(
   _average: number,
   previousScore: number | undefined,
   correct: boolean,
-): number {
+): { score: number; floored: boolean } {
   const base = previousScore ?? 0;
-  return Math.max(MIN_SCORE, correct ? base + 1.01 : base - 3.001);
+  const raw = correct ? base + 1.01 : base - 3.001;
+  return {
+    score: Math.max(MIN_SCORE, raw),
+    floored: !correct && raw < MIN_SCORE,
+  };
 }
 
 const SEED_SCORES: { grapheme: string; score: number }[] = [
@@ -167,7 +176,8 @@ export class ScoreService {
 
     params.push(validated.user_message_id);
     const umIdx = idx++;
-    params.push(validated.score);
+    // Manual writes respect the same floor as graded ones.
+    params.push(Math.max(MIN_SCORE, validated.score));
     const scoreIdx = idx++;
 
     const rows: Score[] = await this.dataSource.query(
@@ -251,7 +261,12 @@ export class ScoreService {
     return rows;
   }
 
-  async gradeAndRecord(options: GradeAndRecordOptions): Promise<Score[]> {
+  // `floored`: graphemes (in `incorrect` order) whose wrong answer hit the
+  // MIN_SCORE floor this turn — see calculateNewScore. Empty when nothing was
+  // inserted (rolled-back media), since no score moved.
+  async gradeAndRecord(
+    options: GradeAndRecordOptions,
+  ): Promise<{ scores: Score[]; floored: string[] }> {
     const validated = validateGradeAndRecordOptions(options);
     const { _correct, _incorrect } = validated;
 
@@ -317,14 +332,14 @@ export class ScoreService {
       allGraphemes.push({ grapheme: g, isCorrect: false });
     }
 
-    if (allGraphemes.length === 0) return [];
+    if (allGraphemes.length === 0) return { scores: [], floored: [] };
 
     // Compute new scores
     const newScores = allGraphemes.map(({ grapheme, isCorrect }) => {
       const previousScore = graphemeToScore.get(grapheme);
       return {
         grapheme,
-        score: calculateNewScore(average, previousScore, isCorrect),
+        ...calculateNewScore(average, previousScore, isCorrect),
       };
     });
 
@@ -365,10 +380,13 @@ export class ScoreService {
       this.logger.warn(
         `gradeAndRecord: no rows inserted — media ${validated.userMessageId} may have been rolled back`,
       );
-      return [];
+      return { scores: [], floored: [] };
     }
 
-    return rows;
+    return {
+      scores: rows,
+      floored: newScores.filter((s) => s.floored).map((s) => s.grapheme),
+    };
   }
 
   async getLetterBins(

@@ -57,6 +57,19 @@ describe('ScoreService.create', () => {
     expect(params).toEqual(['u1', 'l1', 'mm-1', 1.5]);
   });
 
+  it('clamps a manual score to the -10 floor', async () => {
+    const { service, query } = makeService(
+      jest.fn().mockResolvedValue([{ id: 's1', score: -10 }]),
+    );
+    await service.create({
+      user_id: 'u1',
+      letter_id: 'l1',
+      user_message_id: 'mm-1',
+      score: -42,
+    });
+    expect(query.mock.calls[0][1]).toEqual(['u1', 'l1', 'mm-1', -10]);
+  });
+
   it('throws NotFoundException when no row was inserted (user/letter/media missing)', async () => {
     const { service } = makeService(jest.fn().mockResolvedValue([]));
 
@@ -261,7 +274,8 @@ describe('ScoreService.gradeAndRecord', () => {
       userMessageId: 'mm-now',
     });
 
-    expect(out).toBe(insertedRows);
+    expect(out.scores).toBe(insertedRows);
+    expect(out.floored).toEqual([]);
 
     // Check INSERT params: [user_param, userMessageId, grapheme1, score1, grapheme2, score2]
     const insertCall = query.mock.calls[2];
@@ -295,7 +309,7 @@ describe('ScoreService.gradeAndRecord', () => {
       .mockResolvedValueOnce([{ score: -10 }]);
     const { service } = makeService(query);
 
-    await service.gradeAndRecord({
+    const out = await service.gradeAndRecord({
       user_id: 'u1',
       incorrect: 'क',
       userMessageId: 'mm-1',
@@ -303,9 +317,10 @@ describe('ScoreService.gradeAndRecord', () => {
 
     const params = query.mock.calls[2][1];
     expect(params[3]).toBe(-10);
+    expect(out.floored).toEqual(['क']);
   });
 
-  it('a wrong answer at exactly -10 stays pinned at -10', async () => {
+  it('a wrong answer at exactly -10 stays pinned at -10 (and floors again)', async () => {
     const findRows = [
       {
         id: 's1',
@@ -323,7 +338,7 @@ describe('ScoreService.gradeAndRecord', () => {
       .mockResolvedValueOnce([{ score: -10 }]);
     const { service } = makeService(query);
 
-    await service.gradeAndRecord({
+    const out = await service.gradeAndRecord({
       user_id: 'u1',
       incorrect: 'क',
       userMessageId: 'mm-1',
@@ -331,6 +346,8 @@ describe('ScoreService.gradeAndRecord', () => {
 
     const params = query.mock.calls[2][1];
     expect(params[3]).toBe(-10);
+    // Reported every time, not just on the first clamp.
+    expect(out.floored).toEqual(['क']);
   });
 
   it('a legacy below-floor score bumps up to exactly -10 on the next interaction (even a correct one)', async () => {
@@ -353,7 +370,7 @@ describe('ScoreService.gradeAndRecord', () => {
       .mockResolvedValueOnce([{ score: -10 }]);
     const { service } = makeService(query);
 
-    await service.gradeAndRecord({
+    const out = await service.gradeAndRecord({
       user_id: 'u1',
       correct: 'क',
       userMessageId: 'mm-1',
@@ -361,6 +378,8 @@ describe('ScoreService.gradeAndRecord', () => {
 
     const params = query.mock.calls[2][1];
     expect(params[3]).toBe(-10);
+    // A correct answer never floors — nothing tried to DROP below -10.
+    expect(out.floored).toEqual([]);
   });
 
   it('a correct answer at the floor recovers normally (clamp is a no-op above -10)', async () => {
@@ -382,7 +401,7 @@ describe('ScoreService.gradeAndRecord', () => {
       .mockResolvedValueOnce([{ score: -8.99 }]);
     const { service } = makeService(query);
 
-    await service.gradeAndRecord({
+    const out = await service.gradeAndRecord({
       user_id: 'u1',
       correct: 'क',
       userMessageId: 'mm-1',
@@ -390,6 +409,97 @@ describe('ScoreService.gradeAndRecord', () => {
 
     const params = query.mock.calls[2][1];
     expect(params[3]).toBeCloseTo(-8.99, 5);
+    expect(out.floored).toEqual([]);
+  });
+
+  it('a new user cannot drop below -10: floors on the 4th wrong answer, never before', async () => {
+    // 0 → -3.001 → -6.002 → -9.003 → -10 (floored) → -10 (floored) …
+    let previous: number | undefined;
+    const seen: { score: number; floored: boolean }[] = [];
+    for (let i = 0; i < 6; i++) {
+      const findRows =
+        previous === undefined
+          ? []
+          : [
+              {
+                id: `s${i}`,
+                letter_id: 'l-ka',
+                user_id: 'u1',
+                score: previous,
+                user_message_id: `mm-${i}`,
+                created_at: new Date(`2026-04-27T10:0${i}:00Z`),
+              },
+            ];
+      const query = jest.fn().mockResolvedValueOnce(findRows);
+      if (findRows.length > 0) {
+        query.mockResolvedValueOnce([{ id: 'l-ka', grapheme: 'क' }]);
+      }
+      query.mockResolvedValueOnce([{ score: 0 }]);
+      const { service } = makeService(query);
+      const out = await service.gradeAndRecord({
+        user_id: 'u1',
+        incorrect: 'क',
+        userMessageId: `mm-${i}`,
+      });
+      const insertParams = query.mock.calls[query.mock.calls.length - 1][1];
+      previous = insertParams[3] as number;
+      seen.push({ score: previous, floored: out.floored.length > 0 });
+    }
+    expect(seen.map((s) => Number(s.score.toFixed(3)))).toEqual([
+      -3.001, -6.002, -9.003, -10, -10, -10,
+    ]);
+    expect(seen.map((s) => s.floored)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+    ]);
+    expect(Math.min(...seen.map((s) => s.score))).toBe(-10);
+  });
+
+  it('reports only the floored grapheme when several letters are graded', async () => {
+    const findRows = [
+      {
+        id: 's1',
+        letter_id: 'l-ka',
+        user_id: 'u1',
+        score: -10,
+        user_message_id: 'mm-x',
+        created_at: new Date('2026-04-27T10:00:00Z'),
+      },
+      {
+        id: 's2',
+        letter_id: 'l-kha',
+        user_id: 'u1',
+        score: -1,
+        user_message_id: 'mm-x',
+        created_at: new Date('2026-04-27T10:00:00Z'),
+      },
+    ];
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(findRows)
+      .mockResolvedValueOnce([
+        { id: 'l-ka', grapheme: 'क' },
+        { id: 'l-kha', grapheme: 'ख' },
+      ])
+      .mockResolvedValueOnce([
+        { score: 1.01 },
+        { score: -10 },
+        { score: -4.001 },
+      ]);
+    const { service } = makeService(query);
+
+    const out = await service.gradeAndRecord({
+      user_id: 'u1',
+      correct: ['ग'],
+      incorrect: ['क', 'ख'],
+      userMessageId: 'mm-1',
+    });
+
+    expect(out.floored).toEqual(['क']);
   });
 
   it('uses 0 as baseline for new (never-seen) graphemes', async () => {
@@ -427,7 +537,7 @@ describe('ScoreService.gradeAndRecord', () => {
       userMessageId: 'mm-1',
     });
 
-    expect(out).toEqual([]);
+    expect(out).toEqual({ scores: [], floored: [] });
   });
 
   it('routes user_external_id into u.external_id WHERE in the INSERT UNION', async () => {
@@ -1029,7 +1139,7 @@ describe('ScoreService.gradeAndRecord — placeholders + score math', () => {
         correct: 'क',
         userMessageId: 'mm-1',
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ scores: [], floored: [] });
   });
 });
 

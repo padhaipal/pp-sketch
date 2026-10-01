@@ -13,6 +13,7 @@ import {
   COMPREHENSION_ANSWER_INCORRECT_STATE_TRANSITION_ID,
   machine,
   STALE_LESSON_RESTART_STATE_TRANSITION_ID,
+  LETTER_SCORE_FLOOR_STID_SUFFIX,
 } from './literacy-lesson.machine';
 import {
   LessonSnapshot,
@@ -352,16 +353,23 @@ export class LiteracyLessonService {
             'Media was rolled back — cannot persist lesson state',
           );
         }
-        // 9. Record scores
+        // 9. Record scores. Letters whose wrong answer hit the -10 floor
+        // get `${letter}-letter-score-floor` appended at the END of this
+        // turn's stids (after the turn's own outcome media), every time it
+        // happens. The machine penalises one letter per turn, so at most one.
+        const flooredStids: string[] = [];
         if (pendingCorrect.length > 0 || pendingIncorrect.length > 0) {
           try {
-            await this.scoreService.gradeAndRecord({
+            const { floored } = await this.scoreService.gradeAndRecord({
               user: validated.user,
               correct: pendingCorrect.length > 0 ? pendingCorrect : undefined,
               incorrect:
                 pendingIncorrect.length > 0 ? pendingIncorrect : undefined,
               userMessageId: validated.user_message_id,
             });
+            flooredStids.push(
+              ...floored.map((g) => `${g}-${LETTER_SCORE_FLOOR_STID_SUFFIX}`),
+            );
           } catch (err) {
             this.logger.warn(
               `processAnswer: gradeAndRecord failed: ${(err as Error).message}`,
@@ -380,6 +388,7 @@ export class LiteracyLessonService {
               snapshotContext.stateTransitionId,
             ]
           : [snapshotContext.stateTransitionId];
+        stateTransitionIds.push(...flooredStids);
 
         const isComplete = snapshot.status === 'done';
         span.setAttribute(
