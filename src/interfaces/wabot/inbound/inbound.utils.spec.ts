@@ -4,6 +4,7 @@ import { Logger } from '@nestjs/common';
 import {
   appendFlowItem,
   appendMediaItems,
+  formatFlowQuestion,
   handleSendResult,
   parseNfmReplyAnswerId,
   persistAndTranscribeAudio,
@@ -165,7 +166,10 @@ describe('appendFlowItem', () => {
     expect(flowItem.type).toBe('flow');
     expect(flowItem.flow.flow_id).toBe('flow-asset-1');
     expect(flowItem.flow.screen).toBe('COMPREHENSION');
-    expect(flowItem.flow.data.question_text).toBe('कहानी किसके बारे में है?');
+    // read-first asset: "Q: " prefix, plain until WHATSAPP_COMPREHENSION_FLOW_MARKDOWN=1
+    expect(flowItem.flow.data.question_text).toBe(
+      'Q: कहानी किसके बारे में है?',
+    );
     expect(flowItem.flow.data.options.map((o: any) => o.title)).toEqual([
       'A',
       'B',
@@ -227,7 +231,10 @@ describe('appendFlowItem', () => {
       expect(flowItem.flow.cta).toBe('पढ़ो');
       expect(flowItem.flow.body).toContain('पाठ पढ़कर');
       expect(flowItem.flow.data.passage_text).toBe('राम के घर एक गाय है।');
-      expect(flowItem.flow.data.question_text).toBe('कहानी किसके बारे में है?');
+      // the passage asset renders markdown: the question is bold with its "Q: "
+      expect(flowItem.flow.data.question_text).toBe(
+        '**Q: कहानी किसके बारे में है?**',
+      );
       expect(flowItem.flow.data.options).toHaveLength(3);
       expect(records).toEqual([
         { media_metadata_id: 'flow-media-1', state_transition_id: 'stid-1' },
@@ -637,5 +644,64 @@ describe('persistAndTranscribeAudio', () => {
     expect(log.errors()).toMatch(
       /No transcripts found for audio audio-entity-1/,
     );
+  });
+});
+
+describe('formatFlowQuestion', () => {
+  it('prefixes "Q: " and bolds when the asset renders markdown', () => {
+    expect(formatFlowQuestion('कहानी किसके बारे में है?', true)).toBe(
+      '**Q: कहानी किसके बारे में है?**',
+    );
+    expect(formatFlowQuestion('कहानी किसके बारे में है?', false)).toBe(
+      'Q: कहानी किसके बारे में है?',
+    );
+  });
+
+  it('strips markdown the raw question carries so it cannot break the bold', () => {
+    expect(formatFlowQuestion('**कहानी** किसके _बारे_ में ~~है~~?', true)).toBe(
+      '**Q: कहानी किसके बारे में है?**',
+    );
+    expect(formatFlowQuestion('# `कहानी` *किसके* बारे में है?', true)).toBe(
+      '**Q: कहानी किसके बारे में है?**',
+    );
+    expect(formatFlowQuestion('**कहानी**', false)).toBe('Q: कहानी');
+  });
+
+  it('never doubles an existing "Q:" and tidies whitespace', () => {
+    expect(formatFlowQuestion('Q: कहानी?', true)).toBe('**Q: कहानी?**');
+    expect(formatFlowQuestion('q. कहानी?', false)).toBe('Q: कहानी?');
+    expect(formatFlowQuestion('  कहानी \n किसके   बारे में?  ', false)).toBe(
+      'Q: कहानी किसके बारे में?',
+    );
+  });
+
+  it('the read-first asset goes bold once WHATSAPP_COMPREHENSION_FLOW_MARKDOWN=1', () => {
+    const prev = process.env.WHATSAPP_COMPREHENSION_FLOW_MARKDOWN;
+    const prevId = process.env.WHATSAPP_COMPREHENSION_FLOW_ID;
+    process.env.WHATSAPP_COMPREHENSION_FLOW_MARKDOWN = '1';
+    process.env.WHATSAPP_COMPREHENSION_FLOW_ID = 'flow-asset-2';
+    try {
+      const items: OutboundMediaItem[] = [];
+      appendFlowItem(items, {
+        id: 'flow-media-2',
+        text: JSON.stringify({
+          question_text: 'कहानी किसके बारे में है?',
+          options: [
+            { id: 'opt-a', text: 'पहला', correct: true },
+            { id: 'opt-b', text: 'दूसरा', correct: false },
+          ],
+        }),
+      });
+      expect((items[0] as any).flow.data.question_text).toBe(
+        '**Q: कहानी किसके बारे में है?**',
+      );
+    } finally {
+      if (prev === undefined)
+        delete process.env.WHATSAPP_COMPREHENSION_FLOW_MARKDOWN;
+      else process.env.WHATSAPP_COMPREHENSION_FLOW_MARKDOWN = prev;
+      if (prevId === undefined)
+        delete process.env.WHATSAPP_COMPREHENSION_FLOW_ID;
+      else process.env.WHATSAPP_COMPREHENSION_FLOW_ID = prevId;
+    }
   });
 });

@@ -78,3 +78,18 @@ for the user against the given inbound message row, failures WARN-logged
 (`rearmHailMary failed for user …`) and swallowed. Used by
 `persistAndTranscribeAudio` (voice notes) and by the processor's flow-tap
 branch.
+
+## 2026-10: the flow question reads "Q: …" in bold
+
+`formatFlowQuestion(raw, markdown)` → `"Q: " + the question`, wrapped in
+`**…**` when `markdown` is true. Markdown the raw question happens to carry
+(`*`, `_`, `~`, backticks, a leading `#`) is stripped first — an LLM
+occasionally emits its own `**` — and an existing "Q:" / "q." prefix is not
+doubled; whitespace is collapsed. `appendFlowItem` applies it to
+`data.question_text`: markdown is on for the passage-in-flow asset (published
+with `markdown: true` on its question since 2026-09) and, for the read-first
+(mcq) asset, when `WHATSAPP_COMPREHENSION_FLOW_MARKDOWN=1` — set it once the
+`comprehension-mcq-v2` flow (wabot-sketch publish-flow.mjs, markdown on both
+variants) is published and its id is in `WHATSAPP_COMPREHENSION_FLOW_ID`;
+before that the mcq asset would show the asterisks literally, so the
+question is sent as plain "Q: …".
