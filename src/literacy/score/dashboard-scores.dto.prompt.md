@@ -76,3 +76,10 @@ age-bands.ts `METRIC_AGE_BANDS` and literacy-test-scores.ts
 usage. Spread into every `ScoresResponse` (root, class, empty) so the
 dashboard's headline ("{n}% of 7–8 year old students pass the …") and its
 trend pass-mark line come from the code that decides them, never a copy.
+
+## 2026-10: `StudentRow.phone`
+
+Every class-level student row carries `phone` = `users.external_id` (the
+WhatsApp number), uncensored, so the teacher dashboard can show it beside
+the name (and in place of one for an unnamed student). `label` stays free of
+phone digits.
