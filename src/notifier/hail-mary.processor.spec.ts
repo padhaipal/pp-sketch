@@ -79,8 +79,8 @@ function makeMedia(
 function makeLesson(processAnswer: jest.Mock): LiteracyLessonService {
   return { processAnswer } as unknown as LiteracyLessonService;
 }
-function makeWabot(sendMessage: jest.Mock): WabotOutboundService {
-  return { sendMessage } as unknown as WabotOutboundService;
+function makeWabot(sendNotification: jest.Mock): WabotOutboundService {
+  return { sendNotification } as unknown as WabotOutboundService;
 }
 
 beforeEach(() => {
@@ -109,11 +109,13 @@ describe('rearmHailMary', () => {
       otel_carrier: { traceparent: 'tp' } as never,
     });
 
-    expect(mockQueueRemove).toHaveBeenCalledWith('hail-mary:u1');
+    // BullMQ rejects a custom id with ':' — the old `hail-mary:u1` threw on
+    // every turn and the timer never armed.
+    expect(mockQueueRemove).toHaveBeenCalledWith('hail-mary-u1');
     expect(mockQueueAdd).toHaveBeenCalledWith(
       'hail-mary',
       expect.objectContaining({ user_id: 'u1', user_message_id: 'mm-1' }),
-      { jobId: 'hail-mary:u1', delay: HAIL_MARY_DELAY_MS },
+      { jobId: 'hail-mary-u1', delay: HAIL_MARY_DELAY_MS },
     );
   });
 });
@@ -158,7 +160,7 @@ describe('processHailMaryJob — early exits', () => {
       'stale',
     );
     // rearm: remove + add
-    expect(mockQueueRemove).toHaveBeenCalledWith('hail-mary:u1');
+    expect(mockQueueRemove).toHaveBeenCalledWith('hail-mary-u1');
     expect(mockQueueAdd).toHaveBeenCalled();
   });
 
@@ -277,7 +279,9 @@ describe('processHailMaryJob — happy + media tolerance', () => {
     const ds = {
       query: makeQuery([{ id: 'mm-9', created_at: new Date() }]),
     } as unknown as DataSource;
-    const wabot = makeWabot(jest.fn().mockResolvedValue({ status: 200 }));
+    const wabot = makeWabot(
+      jest.fn().mockResolvedValue({ status: 200, delivered: true }),
+    );
     const media = makeMedia(
       jest
         .fn()
@@ -307,8 +311,8 @@ describe('processHailMaryJob — happy + media tolerance', () => {
       outboundMock(),
     );
 
-    expect(wabot.sendMessage).toHaveBeenCalledTimes(1);
-    const [args] = (wabot.sendMessage as jest.Mock).mock.calls[0];
+    expect(wabot.sendNotification).toHaveBeenCalledTimes(1);
+    const [args] = (wabot.sendNotification as jest.Mock).mock.calls[0];
     expect(args.media).toEqual([
       { type: 'video', url: 'https://wa/v.mp4', mime_type: 'video/mp4' },
       { type: 'text', body: 'good job' },
@@ -319,7 +323,9 @@ describe('processHailMaryJob — happy + media tolerance', () => {
     const ds = {
       query: makeQuery([{ id: 'mm-9', created_at: new Date() }]),
     } as unknown as DataSource;
-    const wabot = makeWabot(jest.fn().mockResolvedValue({ status: 200 }));
+    const wabot = makeWabot(
+      jest.fn().mockResolvedValue({ status: 200, delivered: true }),
+    );
     // intro-media call rejects, processAnswer rejects entirely
     const findMedia = jest
       .fn()
@@ -339,7 +345,7 @@ describe('processHailMaryJob — happy + media tolerance', () => {
     );
 
     // No media at all → skip; no send
-    expect(wabot.sendMessage).not.toHaveBeenCalled();
+    expect(wabot.sendNotification).not.toHaveBeenCalled();
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'hail_mary.skip_reason',
       'no-media',
@@ -350,7 +356,9 @@ describe('processHailMaryJob — happy + media tolerance', () => {
     const ds = {
       query: makeQuery([{ id: 'mm-9', created_at: new Date() }]),
     } as unknown as DataSource;
-    const wabot = makeWabot(jest.fn().mockResolvedValue({ status: 200 }));
+    const wabot = makeWabot(
+      jest.fn().mockResolvedValue({ status: 200, delivered: true }),
+    );
     const media = makeMedia(
       jest
         .fn()
@@ -373,7 +381,7 @@ describe('processHailMaryJob — happy + media tolerance', () => {
       outboundMock(),
     );
 
-    expect(wabot.sendMessage).toHaveBeenCalledTimes(1);
+    expect(wabot.sendNotification).toHaveBeenCalledTimes(1);
   });
 
   it('rethrows + sets span ERROR when the wabot send call fails', async () => {
@@ -446,9 +454,9 @@ describe('rearmHailMary — exact queue call shape', () => {
     };
     await rearmHailMary(data);
     expect(mockCreateQueue).toHaveBeenCalledWith('hail-mary');
-    expect(mockQueueRemove).toHaveBeenCalledWith('hail-mary:u1');
+    expect(mockQueueRemove).toHaveBeenCalledWith('hail-mary-u1');
     expect(mockQueueAdd).toHaveBeenCalledWith('hail-mary', data, {
-      jobId: 'hail-mary:u1',
+      jobId: 'hail-mary-u1',
       delay: HAIL_MARY_DELAY_MS,
     });
   });
@@ -639,9 +647,11 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
     warn.mockRestore();
   });
 
-  it('on success: sends to wabot with wamid="" + the assembled media + logs the delivery log', async () => {
+  it('on success: sends through sendNotification (no inflight claim) with the assembled media, logs the delivery, records the audit row', async () => {
     const { log } = spyLog2();
-    const sendMessage = jest.fn().mockResolvedValue({ status: 200 });
+    const sendNotification = jest
+      .fn()
+      .mockResolvedValue({ status: 200, delivered: true });
     await processHailMaryJob(
       makeJob2(),
       dsWith([{ id: 'mm-1', created_at: new Date() }]),
@@ -661,18 +671,15 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
       {
         processAnswer: jest.fn().mockResolvedValue({ stateTransitionIds: [] }),
       } as unknown as LiteracyLessonService,
-      { sendMessage } as unknown as WabotOutboundService,
+      { sendNotification } as unknown as WabotOutboundService,
       outboundMock(),
     );
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        user_external_id: '919999990001',
-        wamid: '',
-        media: expect.arrayContaining([
-          expect.objectContaining({ type: 'video', url: 'wa://v1' }),
-        ]),
-      }),
-    );
+    expect(sendNotification).toHaveBeenCalledWith({
+      user_external_id: '919999990001',
+      media: expect.arrayContaining([
+        expect.objectContaining({ type: 'video', url: 'wa://v1' }),
+      ]),
+    });
     expect(mockSpanSetAttribute).toHaveBeenCalledWith(
       'http.response.status_code',
       200,
@@ -699,10 +706,109 @@ describe('processHailMaryJob — span name + attributes + log messages', () => {
       {
         processAnswer: jest.fn().mockResolvedValue({ stateTransitionIds: [] }),
       } as unknown as LiteracyLessonService,
-      { sendMessage: jest.fn() } as unknown as WabotOutboundService,
+      { sendNotification: jest.fn() } as unknown as WabotOutboundService,
       outboundMock(),
     );
     // The first call to findMediaByStateTransitionId is the hail-mary stid.
     expect(findMediaByStateTransitionId).toHaveBeenCalledWith('hail-mary');
+  });
+});
+
+// ─── delivery outcomes (mirrors evening-reminder) ──────────────────────────
+
+describe('processHailMaryJob — delivery outcomes', () => {
+  const run = (sendNotification: jest.Mock, outbound = outboundMock()) =>
+    processHailMaryJob(
+      makeJob({ user_message_id: 'mm-1' }),
+      {
+        query: makeQuery([{ id: 'mm-1', created_at: new Date() }]),
+      } as unknown as DataSource,
+      {
+        find: jest
+          .fn()
+          .mockResolvedValue({ id: 'u1', external_id: '919999990001' }),
+      } as unknown as UserService,
+      {
+        findMediaByStateTransitionId: jest.fn().mockResolvedValue({
+          video: { wa_media_url: 'wa://v1', media_details: null },
+        }),
+      } as unknown as MediaMetaDataService,
+      {
+        processAnswer: jest.fn().mockResolvedValue({ stateTransitionIds: [] }),
+      } as unknown as LiteracyLessonService,
+      { sendNotification } as unknown as WabotOutboundService,
+      outbound,
+    );
+
+  it('records the audit row only on a delivered send', async () => {
+    const outbound = outboundMock();
+    await run(
+      jest.fn().mockResolvedValue({ status: 200, delivered: true }),
+      outbound,
+    );
+    expect(
+      (outbound as { recordSent: jest.Mock }).recordSent,
+    ).toHaveBeenCalledWith({
+      user_id: 'u1',
+      user_message_id: 'mm-1',
+      trigger: 'hail-mary',
+      items: expect.arrayContaining([
+        expect.objectContaining({ state_transition_id: 'hail-mary' }),
+      ]),
+    });
+  });
+
+  it('a WhatsApp rate-limit (130429) throws so the queue retries', async () => {
+    const outbound = outboundMock();
+    await expect(
+      run(
+        jest.fn().mockResolvedValue({
+          status: 429,
+          delivered: false,
+          error_code: 130429,
+        }),
+        outbound,
+      ),
+    ).rejects.toThrow(/rate-limit \(130429\)/);
+    expect(
+      (outbound as { recordSent: jest.Mock }).recordSent,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('a closed 24-hour window (131047) is skipped, not retried', async () => {
+    const { warn } = spyLog2();
+    const outbound = outboundMock();
+    await run(
+      jest.fn().mockResolvedValue({
+        status: 400,
+        delivered: false,
+        error_code: 131047,
+      }),
+      outbound,
+    );
+    expect(mockSpanSetAttribute).toHaveBeenCalledWith(
+      'hail_mary.skip_reason',
+      'window-expired',
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/24-hour window expired \(131047\)/),
+    );
+    expect(
+      (outbound as { recordSent: jest.Mock }).recordSent,
+    ).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('an undelivered send throws (a failed job, visible in the logs) and records nothing', async () => {
+    const outbound = outboundMock();
+    await expect(
+      run(
+        jest.fn().mockResolvedValue({ status: 200, delivered: false }),
+        outbound,
+      ),
+    ).rejects.toThrow(/not delivered .* status=200/);
+    expect(
+      (outbound as { recordSent: jest.Mock }).recordSent,
+    ).not.toHaveBeenCalled();
   });
 });

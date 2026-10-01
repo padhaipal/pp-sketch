@@ -81,10 +81,13 @@ export const DEFAULT_JOB_OPTIONS: Record<string, JobsOptions> = {
     removeOnComplete: true,
     removeOnFail: { count: 5000 },
   },
+  // Sent like the evening reminder (NOTIFIER_SEND): a WhatsApp rate-limit
+  // or an undelivered send throws, and the retries ride this backoff.
   [QUEUE_NAMES.HAIL_MARY]: {
-    attempts: 1,
+    attempts: 5,
+    backoff: { type: 'exponential', delay: 3000 },
     removeOnComplete: true,
-    removeOnFail: { count: 500 },
+    removeOnFail: { count: 5000 },
   },
   // Mirror is fired by GH Actions on a daily cron. attempts:1 — no in-run
   // retry; next-day trigger is the retry path. Singleton jobId is set by the

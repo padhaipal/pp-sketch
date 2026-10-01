@@ -212,10 +212,12 @@ describe('DEFAULT_JOB_OPTIONS — exact per-queue shape', () => {
       removeOnComplete: true,
       removeOnFail: { count: 5000 },
     },
+    // sent like the evening reminder: rate-limit / undelivered → retried
     [QUEUE_NAMES.HAIL_MARY]: {
-      attempts: 1,
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 3000 },
       removeOnComplete: true,
-      removeOnFail: { count: 500 },
+      removeOnFail: { count: 5000 },
     },
   };
 
