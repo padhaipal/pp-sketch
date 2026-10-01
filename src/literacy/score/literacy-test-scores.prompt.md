@@ -29,7 +29,7 @@ requested user (legacy single-user fixtures), otherwise dropped.
 - `mplBSnapshot(pool)`: four filters most-recent-first — <20 → null; one per
   distinct type until 4 types (<4 → null); batch quotas R1.x ×5, R2.x ×5,
   R3.x ×1; fill to 20 → correct/20.
-- Pass is STRICTLY > 0.5.
+- Pass is STRICTLY > the test's mark (2026-10): NIPUN `NIPUN_PASS_THRESHOLD` 0.8 (all four right), MPL-B `MPL_B_PASS_THRESHOLD` 0.5 (11/20 up). Was > 0.5 for both; `test_results_*` rows written before the change keep the old flags until recomputed (a `full` nightly run redoes every student's latest row and the geo vectors for that date; earlier dates stay as they were).
 - `snapshotSeries` replays the snapshot over every prefix (history[] +
   latest) — what GET /users/:id/literacy-test-scores returns
   (`scoresFromAttempts` / `computeLiteracyTestScores`).

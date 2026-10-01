@@ -9,6 +9,7 @@ import {
   passRate,
   populationSd,
   studentLabel,
+  testMeta,
   timeBin,
   timeFields,
   toCsv,
@@ -214,6 +215,13 @@ describe('dashboard-scores arithmetic', () => {
       points: [],
     });
     expect(buildUsageHistory([], null, 'all').as_of).toBeNull();
+  });
+
+  it('testMeta: the age band and pass mark of a test metric, nothing for usage', () => {
+    expect(testMeta('nipun_g2')).toEqual({ age_band: [7, 9], pass_mark: 80 });
+    expect(testMeta('nipun_g3')).toEqual({ age_band: [8, 10], pass_mark: 80 });
+    expect(testMeta('mpl_b')).toEqual({ age_band: [8, 10], pass_mark: 50 });
+    expect(testMeta('usage')).toEqual({});
   });
 
   it('toCsv escapes and handles an empty list', () => {
@@ -848,6 +856,8 @@ describe('DashboardScoresService.scores — geo levels', () => {
       as_of: null,
       metric: 'nipun_g2',
       range: 30,
+      age_band: [7, 9],
+      pass_mark: 80,
       entity: expect.objectContaining({ id: 'S9' }),
       root: {
         pass_rate: null,

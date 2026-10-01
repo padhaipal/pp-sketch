@@ -1144,7 +1144,8 @@ describe('UserService.getLiteracyTestScores', () => {
     expect(g2.status).toBe('ok');
     expect(g2.attempts_available).toBe(4);
     expect(g2.latest!.score).toBe(0.75); // f,t,t,t — not 1.0
-    expect(g2.latest!.passed).toBe(true);
+    // NIPUN passes only with all four right (> 0.8)
+    expect(g2.latest!.passed).toBe(false);
   });
 
   it('computes NIPUN grade 2 from level-10 R1.x first attempts only', async () => {
@@ -1167,9 +1168,9 @@ describe('UserService.getLiteracyTestScores', () => {
     // (prefix-recomputed, same method as MPL-B).
     expect(g2.history).toEqual([
       { at: day(4), score: 1, passed: true },
-      { at: day(5), score: 0.75, passed: true },
+      { at: day(5), score: 0.75, passed: false },
     ]);
-    expect(g2.latest).toEqual({ at: day(5), score: 0.75, passed: true });
+    expect(g2.latest).toEqual({ at: day(5), score: 0.75, passed: false });
     expect(g2.latest).toBe(g2.history![g2.history!.length - 1]);
   });
 
@@ -1201,7 +1202,7 @@ describe('UserService.getLiteracyTestScores', () => {
     const g3 = scores.nipun_grade_3;
     expect(g3.status).toBe('ok');
     expect(g3.attempts_available).toBe(4);
-    expect(g3.latest).toEqual({ at: day(4), score: 0.75, passed: true });
+    expect(g3.latest).toEqual({ at: day(4), score: 0.75, passed: false });
     expect(scores.nipun_grade_2.attempts_available).toBe(1);
   });
 
@@ -1222,7 +1223,7 @@ describe('UserService.getLiteracyTestScores', () => {
     // Prefix-recomputed snapshots (most recent 4 at each qualifying prefix,
     // same method as MPL-B): t,f,t,t → t/f,t,t,f → t,t,f,f.
     expect(g3.history).toEqual([
-      { at: day(4), score: 0.75, passed: true },
+      { at: day(4), score: 0.75, passed: false },
       { at: day(5), score: 0.5, passed: false },
       { at: day(6), score: 0.5, passed: false },
     ]);

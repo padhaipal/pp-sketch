@@ -67,3 +67,12 @@ nested, so `toCsv` writes them as columns.
 labelled D − 1; the series runs from the student's first stored row (or the
 start of the 30-day range) to the newer of their newest row and the last
 finished nightly, zero-filled.
+
+## 2026-10: `age_band` + `pass_mark` on every test-metric response
+
+`testMeta(metric)` → `{ age_band: [min, max), pass_mark }` from
+age-bands.ts `METRIC_AGE_BANDS` and literacy-test-scores.ts
+(`NIPUN_PASS_THRESHOLD` 0.8 → 80, `MPL_B_PASS_THRESHOLD` 0.5 → 50); `{}` for
+usage. Spread into every `ScoresResponse` (root, class, empty) so the
+dashboard's headline ("{n}% of 7–8 year old students pass the …") and its
+trend pass-mark line come from the code that decides them, never a copy.

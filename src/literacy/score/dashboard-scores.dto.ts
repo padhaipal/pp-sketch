@@ -1,5 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
-import type { LiteracyMetric } from './age-bands';
+import { METRIC_AGE_BANDS, type LiteracyMetric } from './age-bands';
+import {
+  MPL_B_PASS_THRESHOLD,
+  NIPUN_PASS_THRESHOLD,
+} from './literacy-test-scores';
 import type { GeoEntityType } from '../../geo-entities/geo-entity.dto';
 
 export const DASHBOARD_METRICS: readonly LiteracyMetric[] = [
@@ -169,6 +173,13 @@ export interface ScoresResponse {
   range: DashboardRange;
   // Echoed when the request carried one (usage only).
   window?: TimeWindow;
+  // Test metrics only: the age band the metric counts ([min, max) whole
+  // years — age-bands.ts) and the pass mark as a percentage (a pass is
+  // STRICTLY above it — literacy-test-scores.ts), so the dashboard's
+  // "{n}% of 7–8 year old students pass …" and its pass-mark line come from
+  // the code that decides them.
+  age_band?: [number, number];
+  pass_mark?: number;
   entity: GeoRef;
   root: RootStats;
   series: SeriesPoint[];
@@ -210,6 +221,19 @@ export function validateRange(raw: unknown): DashboardRange {
     );
   }
   return n as DashboardRange;
+}
+
+// The age band and pass mark of a test metric; nothing for usage.
+export function testMeta(
+  metric: LiteracyMetric,
+): Pick<ScoresResponse, 'age_band' | 'pass_mark'> {
+  if (metric === 'usage') return {};
+  return {
+    age_band: [...METRIC_AGE_BANDS[metric]],
+    pass_mark: Math.round(
+      (metric === 'mpl_b' ? MPL_B_PASS_THRESHOLD : NIPUN_PASS_THRESHOLD) * 100,
+    ),
+  };
 }
 
 // Absent → undefined (the legacy usage response); anything else must be a
