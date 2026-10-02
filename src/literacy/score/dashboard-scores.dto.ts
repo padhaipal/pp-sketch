@@ -5,6 +5,7 @@ import {
   NIPUN_PASS_THRESHOLD,
 } from './literacy-test-scores';
 import type { GeoEntityType } from '../../geo-entities/geo-entity.dto';
+import type { PiiVisibility } from '../../users/pii-mask';
 
 export const DASHBOARD_METRICS: readonly LiteracyMetric[] = [
   'usage',
@@ -38,9 +39,11 @@ export const TIME_PASS_MINUTES_PER_DAY = 5;
 export const MOST_IMPROVED_MIN_N = 5;
 export const MOST_IMPROVED_LIMIT = 5;
 export const ACTIVE_WINDOW_DAYS = 14;
-// Public responses are cached: the data changes once a night and these are
-// the heaviest unauthenticated queries in the app.
-export const PUBLIC_CACHE_CONTROL = 'public, max-age=300';
+// Dashboard responses are cached for five minutes: the data changes once a
+// night and these are the heaviest queries in the app. `private`, because
+// the same URL answers differently per viewer (dashboard-scores.pii.ts) and
+// must never be served from a shared cache.
+export const PUBLIC_CACHE_CONTROL = 'private, max-age=300';
 
 export type ChildType =
   | 'state'
@@ -130,10 +133,16 @@ export interface StudentSeries {
 export type Bin = 'high' | 'mid' | 'low' | 'none';
 
 export interface Official {
+  // users.id — what PiiAccessService decides visibility by.
+  id: string;
   name: string | null;
   role_title: string | null;
   avatar_seed: string | null;
   spotlight_message: string | null;
+  // The official's WhatsApp number (users.external_id), in full only for
+  // the viewer directly above them in the hierarchy; masked otherwise.
+  phone: string | null;
+  pii: PiiVisibility;
 }
 
 export interface ChildRow extends GeoRef, TimeFields {
@@ -153,12 +162,16 @@ export interface StudentRow extends TimeFields {
   // Display label: first name, else "Student N" (never phone digits).
   label: string;
   // The student's WhatsApp number (users.external_id), shown beside the name
-  // on the teacher dashboard so a teacher can tell students apart (2026-10,
-  // deliberately uncensored — the link holder is the teacher).
+  // on the teacher dashboard so a teacher can tell students apart. In full
+  // only for the student's own teacher (PiiAccessService); masked to
+  // first…last otherwise, like `label` and `name`.
   phone: string;
   // The full name as stored (null until a parent/teacher sets one) — the
   // class view shows and edits this via PATCH /users/:id/profile.
   name: string | null;
+  // Whether label / name / phone above are as stored or masked; the class
+  // view only offers the rename control when 'full'.
+  pii: PiiVisibility;
   score: number | null;
   passed: boolean | null;
   attempts: number;

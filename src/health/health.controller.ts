@@ -4,7 +4,10 @@ import type { Response } from 'express';
 import { DataSource } from 'typeorm';
 import { queueRedisConnection } from '../interfaces/redis/queues';
 import { CacheService } from '../interfaces/redis/cache';
+import { Public } from '../auth/public.decorator';
 
+// Liveness probe: no badge (Railway polls it), exposes only up/down + latency.
+@Public()
 @ApiTags('health')
 @Controller('health')
 export class HealthController {

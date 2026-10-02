@@ -52,6 +52,7 @@ import { CacheService } from './interfaces/redis/cache';
 import { OnboardingService } from './onboarding/onboarding.service';
 import { assertOnboardingEnv } from './onboarding/onboarding.config';
 import { assertDashboardEnv } from './interfaces/dashboard/dashboard-url';
+import { assertApiKeyEnv } from './auth/api-keys';
 import { TestResultsService } from './literacy/score/test-results.service';
 import {
   processTestResultsJob,
@@ -67,6 +68,9 @@ async function bootstrap() {
   assertOnboardingEnv();
   // Every dashboard link (referral, staff) is built from DASHBOARD_PUBLIC_URL.
   assertDashboardEnv();
+  // ApiKeyGuard rejects every call without a configured badge — a boot with
+  // no key would take the dashboard and wabot down silently.
+  assertApiKeyEnv();
 
   const app = await NestFactory.create(AppModule, {
     rawBody: true,

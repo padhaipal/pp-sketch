@@ -35,6 +35,8 @@ import type { LiteracyLessonStateEntity } from '../literacy/literacy-lesson/lite
 import type { UserActivityService } from './user-activity.service';
 import type { UserService } from './user.service';
 import type { GeoEntityService } from '../geo-entities/geo-entity.service';
+import type { PiiAccessService } from './pii-access.service';
+import { STAFF, type ViewerContext } from '../auth/viewer';
 
 type SimpleRepo = {
   findOneBy: jest.Mock;
@@ -94,6 +96,9 @@ function makeController(opts: {
   activitySvc?: Partial<UserActivityService>;
   userSvc?: Partial<UserService>;
   geoSvc?: Partial<GeoEntityService>;
+  // Default: the viewer may see everything (the staff /user/[id] page); the
+  // PII tests override it.
+  piiAccess?: Partial<PiiAccessService>;
 }): UserController {
   return new UserController(
     (opts.userRepo ?? makeRepo()) as unknown as Repository<UserEntity>,
@@ -108,6 +113,12 @@ function makeController(opts: {
       isOnboarded: () => true,
     }) as unknown as UserService,
     (opts.geoSvc ?? {}) as GeoEntityService,
+    (opts.piiAccess ?? {
+      canSee: jest.fn().mockResolvedValue(true),
+      visibleTo: jest.fn(
+        async (_v: ViewerContext, ids: string[]) => new Set(ids),
+      ),
+    }) as unknown as PiiAccessService,
   );
 }
 
@@ -356,7 +367,7 @@ describe('UserController.userMedia', () => {
 
     const out = await ctrl.userMedia('u1');
     expect(out).toEqual({
-      user: { name: 'Alice', phone: '919999990001' },
+      user: { name: 'Alice', phone: '919999990001', pii: 'full' },
       media: [],
     });
   });
@@ -464,7 +475,11 @@ describe('UserController.userMedia', () => {
 
     const out = await ctrl.userMedia('u1');
 
-    expect(out.user).toEqual({ name: 'A', phone: '919999990001' });
+    expect(out.user).toEqual({
+      name: 'A',
+      phone: '919999990001',
+      pii: 'full',
+    });
     expect(out.media).toHaveLength(3);
     // m1 has audio + transcript + lesson + score; starting/final states from "lesson-A-B-C"
     const m1 = out.media.find((m) => m.id === 'm1')!;
@@ -1405,6 +1420,7 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
       [
         {
           text: 'hi',
+          redactions: 0,
           source: 'sarvam',
           created_at: expect.any(Date),
         },
@@ -1533,7 +1549,7 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
     const ctrl = makeController({ userRepo, mediaRepo });
     const out = await ctrl.userMedia('u1');
     expect(out).toEqual({
-      user: { name: 'Alice', phone: '919999990001' },
+      user: { name: 'Alice', phone: '919999990001', pii: 'full' },
       media: [],
     });
   });
@@ -1814,7 +1830,7 @@ describe('UserController.userMedia — flow taps, onboarding turns, public filte
       isOnboarded: false,
     });
     await expect(ctrl.userMedia('u1')).resolves.toEqual({
-      user: { name: 'Alice', phone: '919999990001' },
+      user: { name: 'Alice', phone: '919999990001', pii: 'full' },
       media: [],
     });
     expect(manager.query).not.toHaveBeenCalled();
@@ -2476,5 +2492,154 @@ describe('UserController public profile + profile PATCH', () => {
     await expect(
       ctrl.patchProfile(studentId, { name: 'Rani' }),
     ).rejects.toThrow(NotFoundException);
+  });
+});
+
+// ─── Personal data follows the viewer ──────────────────────────────────────
+
+describe('UserController — PII by viewer', () => {
+  const STUDENT_ID = '5c2a6f0e-1a2b-4c3d-9e8f-0a1b2c3d4e5f';
+  const TEACHER = {
+    kind: 'user' as const,
+    id: '7d1b2c3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e',
+  };
+  const user = {
+    id: STUDENT_ID,
+    name: 'Rani Devi',
+    external_id: '919999990001',
+  };
+  const media = [
+    {
+      id: 'm1',
+      created_at: new Date('2026-04-27T10:00:00Z'),
+      s3_key: 's3-1',
+      media_details: { duration_ms: 12_000 },
+    },
+    { id: 'm2', created_at: new Date('2026-04-27T09:00:00Z'), s3_key: null },
+  ];
+  const transcripts = [
+    {
+      id: 't1',
+      input_media_id: 'm1',
+      text: 'mera naam Rani hai, 9876543210',
+      source: 'sarvam',
+      created_at: new Date(),
+    },
+  ];
+  function make(canSee: boolean) {
+    const piiAccess = {
+      canSee: jest.fn().mockResolvedValue(canSee),
+      visibleTo: jest.fn(),
+    };
+    const ctrl = makeController({
+      userRepo: makeRepo({ findOneBy: jest.fn().mockResolvedValue(user) }),
+      mediaRepo: makeRepo({
+        manager: mediaManager(media),
+        createQueryBuilder: jest.fn().mockReturnValue(makeQB(transcripts)),
+      }),
+      lessonStateRepo: makeRepo({
+        createQueryBuilder: jest.fn().mockReturnValue(makeQB([])),
+      }),
+      scoreRepo: makeRepo({
+        manager: { query: jest.fn().mockResolvedValue([]) },
+      }),
+      piiAccess,
+    });
+    return { ctrl, piiAccess };
+  }
+
+  it('media: the viewer directly above the student sees name + phone as stored, pii full, with each note’s duration', async () => {
+    const { ctrl, piiAccess } = make(true);
+    const out = await ctrl.userMedia(STUDENT_ID, undefined, undefined, TEACHER);
+    expect(piiAccess.canSee).toHaveBeenCalledWith(TEACHER, STUDENT_ID);
+    expect(out.user).toEqual({
+      name: 'Rani Devi',
+      phone: '919999990001',
+      pii: 'full',
+    });
+    expect(out.media.map((m) => m.duration_ms)).toEqual([12_000, null]);
+  });
+
+  it('media: anyone else gets name and phone masked and pii masked; the rows themselves are unchanged', async () => {
+    const { ctrl } = make(false);
+    const out = await ctrl.userMedia(STUDENT_ID);
+    expect(out.user).toEqual({ name: 'R...i', phone: '9...1', pii: 'masked' });
+    expect(out.media.map((m) => [m.id, m.has_audio, m.duration_ms])).toEqual([
+      ['m1', true, 12_000],
+      ['m2', false, null],
+    ]);
+  });
+
+  it('media: transcripts are censored for EVERY viewer — spoken phone numbers, "mera naam …" and the student’s own name', async () => {
+    for (const canSee of [true, false]) {
+      const { ctrl } = make(canSee);
+      const out = await ctrl.userMedia(
+        STUDENT_ID,
+        undefined,
+        undefined,
+        TEACHER,
+      );
+      expect(out.media[0].transcripts).toEqual([
+        expect.objectContaining({
+          text: 'mera naam [removed] hai, [removed]',
+          redactions: 2,
+          source: 'sarvam',
+        }),
+      ]);
+    }
+  });
+
+  it('PATCH :id/profile on a student: 403 unless the viewer is directly above them; the rename itself unchanged', async () => {
+    const student = {
+      id: STUDENT_ID,
+      role: 'student',
+      deleted_at: null,
+      name: null,
+    };
+    const update = jest.fn().mockResolvedValue(student);
+    const canSee = jest.fn().mockResolvedValue(false);
+    const ctrl = makeController({
+      userSvc: {
+        getPublicProfileRow: jest.fn().mockResolvedValue(null),
+        findByIdOrExternalId: jest.fn().mockResolvedValue(student),
+        update,
+      },
+      piiAccess: { canSee, visibleTo: jest.fn() },
+    });
+    await expect(
+      ctrl.patchProfile(STUDENT_ID, { name: 'Rani' }),
+    ).rejects.toThrow(ForbiddenException);
+    await expect(
+      ctrl.patchProfile(STUDENT_ID, { name: 'Rani' }, TEACHER),
+    ).rejects.toThrow(ForbiddenException);
+    expect(canSee).toHaveBeenLastCalledWith(TEACHER, STUDENT_ID);
+    expect(update).not.toHaveBeenCalled();
+
+    canSee.mockResolvedValue(true);
+    await expect(
+      ctrl.patchProfile(STUDENT_ID, { name: 'Rani' }, TEACHER),
+    ).resolves.toEqual({
+      id: STUDENT_ID,
+      name: 'Rani',
+    });
+    expect(update).toHaveBeenCalledWith({ id: STUDENT_ID, new_name: 'Rani' });
+  });
+
+  it('GET :id/literacy-test-scores: staff may use a phone; a link holder or anonymous caller must use a uuid', async () => {
+    const getLiteracyTestScores = jest.fn().mockResolvedValue({ ok: true });
+    const ctrl = makeController({ userSvc: { getLiteracyTestScores } });
+    await expect(
+      ctrl.literacyTestScores('919999990001', STAFF),
+    ).resolves.toEqual({ ok: true });
+    await expect(ctrl.literacyTestScores(STUDENT_ID, TEACHER)).resolves.toEqual(
+      { ok: true },
+    );
+    await expect(
+      ctrl.literacyTestScores('919999990001', TEACHER),
+    ).rejects.toThrow(BadRequestException);
+    await expect(ctrl.literacyTestScores('919999990001')).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(getLiteracyTestScores).toHaveBeenCalledTimes(2);
   });
 });

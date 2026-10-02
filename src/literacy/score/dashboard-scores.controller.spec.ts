@@ -3,6 +3,7 @@ import { BadRequestException } from '@nestjs/common';
 import { DashboardScoresController } from './dashboard-scores.controller';
 import type { DashboardScoresService } from './dashboard-scores.service';
 import { PUBLIC_CACHE_CONTROL } from './dashboard-scores.dto';
+import { ANONYMOUS, STAFF } from '../../auth/viewer';
 
 const ID = '11111111-1111-4111-8111-111111111111';
 
@@ -38,17 +39,41 @@ describe('DashboardScoresController', () => {
   it('validates metric and range (range defaults to 30) and forwards to the service', async () => {
     const { ctrl, scores, spotlight } = make();
     await ctrl.getScores(ID, 'mpl_b', 'all');
-    expect(scores).toHaveBeenCalledWith(ID, 'mpl_b', 'all', undefined);
+    expect(scores).toHaveBeenCalledWith(
+      ID,
+      'mpl_b',
+      'all',
+      undefined,
+      ANONYMOUS,
+    );
     await ctrl.getSpotlight(ID, 'nipun_g2', undefined);
-    expect(spotlight).toHaveBeenCalledWith(ID, 'nipun_g2', 30, undefined);
+    expect(spotlight).toHaveBeenCalledWith(
+      ID,
+      'nipun_g2',
+      30,
+      undefined,
+      ANONYMOUS,
+    );
     // Time window: validated and forwarded; absent stays undefined (the
     // legacy usage response).
     await ctrl.getScores(ID, 'usage', '30', '7d');
-    expect(scores).toHaveBeenLastCalledWith(ID, 'usage', 30, '7d');
+    expect(scores).toHaveBeenLastCalledWith(ID, 'usage', 30, '7d', ANONYMOUS);
     await ctrl.getSpotlight(ID, 'usage', 'all', 'yesterday');
-    expect(spotlight).toHaveBeenLastCalledWith(ID, 'usage', 'all', 'yesterday');
+    expect(spotlight).toHaveBeenLastCalledWith(
+      ID,
+      'usage',
+      'all',
+      'yesterday',
+      ANONYMOUS,
+    );
     await ctrl.getScores(ID, 'usage', '30', '');
-    expect(scores).toHaveBeenLastCalledWith(ID, 'usage', 30, undefined);
+    expect(scores).toHaveBeenLastCalledWith(
+      ID,
+      'usage',
+      30,
+      undefined,
+      ANONYMOUS,
+    );
     await expect(ctrl.getScores(ID, 'usage', '30', 'week')).rejects.toThrow(
       /window must be one of: yesterday, 7d, all/,
     );
@@ -90,8 +115,15 @@ describe('DashboardScoresController', () => {
       children: [{ id: 'a', time_total: 21, time_per_day: 3, time_days: 7 }],
     });
     const res = { setHeader: jest.fn() };
-    const csv = await ctrl.getScoresCsv(ID, res as never, 'usage', '30', '7d');
-    expect(scores).toHaveBeenCalledWith(ID, 'usage', 30, '7d');
+    const csv = await ctrl.getScoresCsv(
+      ID,
+      res as never,
+      'usage',
+      '30',
+      '7d',
+      STAFF,
+    );
+    expect(scores).toHaveBeenCalledWith(ID, 'usage', 30, '7d', STAFF);
     expect(csv).toBe('id,time_total,time_per_day,time_days\na,21,3,7');
     expect(res.setHeader).toHaveBeenCalledWith(
       'Content-Disposition',
@@ -99,7 +131,28 @@ describe('DashboardScoresController', () => {
     );
   });
 
-  it('sets Cache-Control on all three public GETs and text/csv on the CSV', () => {
+  it('forwards the viewer to the service on every read (who is looking decides the masking)', async () => {
+    const { ctrl, scores, spotlight } = make();
+    const viewer = { kind: 'user' as const, id: ID };
+    await ctrl.getScores(ID, 'mpl_b', 'all', undefined, viewer);
+    expect(scores).toHaveBeenLastCalledWith(
+      ID,
+      'mpl_b',
+      'all',
+      undefined,
+      viewer,
+    );
+    await ctrl.getSpotlight(ID, 'mpl_b', 'all', undefined, viewer);
+    expect(spotlight).toHaveBeenLastCalledWith(
+      ID,
+      'mpl_b',
+      'all',
+      undefined,
+      viewer,
+    );
+  });
+
+  it('sets a PRIVATE Cache-Control on all three GETs (responses differ per viewer) and text/csv on the CSV', () => {
     const proto = DashboardScoresController.prototype;
     for (const method of ['getScores', 'getScoresCsv', 'getSpotlight']) {
       expect(headers(proto, method)).toEqual(
@@ -113,6 +166,6 @@ describe('DashboardScoresController', () => {
         { name: 'Content-Type', value: 'text/csv; charset=utf-8' },
       ]),
     );
-    expect(PUBLIC_CACHE_CONTROL).toBe('public, max-age=300');
+    expect(PUBLIC_CACHE_CONTROL).toBe('private, max-age=300');
   });
 });

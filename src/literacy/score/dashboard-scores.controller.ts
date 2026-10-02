@@ -2,6 +2,7 @@ import { Controller, Get, Header, Param, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { validateGeoEntityId } from '../../geo-entities/geo-entity.dto';
 import { DashboardScoresService } from './dashboard-scores.service';
+import { ANONYMOUS, Viewer, type ViewerContext } from '../../auth/viewer';
 import {
   PUBLIC_CACHE_CONTROL,
   ScoresResponse,
@@ -12,10 +13,11 @@ import {
   validateWindow,
 } from './dashboard-scores.dto';
 
-// Public, unauthenticated reads for the teacher dashboard (/d/:id). These
-// three paths are on the pp-dashboard proxy's PUBLIC_ALLOWED list. Cached
-// for five minutes: the data changes once a night and these are the
-// heaviest queries in the app.
+// Reads for the teacher dashboard (/d/:id). These three paths are on the
+// pp-dashboard proxy's PUBLIC_ALLOWED list, so no session is needed — the
+// proxy forwards who is looking (auth/viewer.ts) and the service masks
+// names / phones accordingly. Cached for five minutes: the data changes
+// once a night and these are the heaviest queries in the app.
 @Controller('geo-entities')
 export class DashboardScoresController {
   constructor(private readonly scores: DashboardScoresService) {}
@@ -28,12 +30,14 @@ export class DashboardScoresController {
     @Query('range') range?: string,
     // usage ("Time") only: yesterday | 7d | all — see TIME_WINDOWS.
     @Query('window') window?: string,
+    @Viewer() viewer: ViewerContext = ANONYMOUS,
   ): Promise<ScoresResponse> {
     return this.scores.scores(
       validateGeoEntityId(id),
       validateMetric(metric),
       validateRange(range),
       validateWindow(window),
+      viewer,
     );
   }
 
@@ -46,12 +50,14 @@ export class DashboardScoresController {
     @Query('metric') metric?: string,
     @Query('range') range?: string,
     @Query('window') window?: string,
+    @Viewer() viewer: ViewerContext = ANONYMOUS,
   ): Promise<string> {
     const result = await this.scores.scores(
       validateGeoEntityId(id),
       validateMetric(metric),
       validateRange(range),
       validateWindow(window),
+      viewer,
     );
     res.setHeader(
       'Content-Disposition',
@@ -67,12 +73,14 @@ export class DashboardScoresController {
     @Query('metric') metric?: string,
     @Query('range') range?: string,
     @Query('window') window?: string,
+    @Viewer() viewer: ViewerContext = ANONYMOUS,
   ): Promise<SpotlightResponse> {
     return this.scores.spotlight(
       validateGeoEntityId(id),
       validateMetric(metric),
       validateRange(range),
       validateWindow(window),
+      viewer,
     );
   }
 }

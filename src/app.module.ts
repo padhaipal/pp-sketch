@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -20,6 +21,7 @@ import { OutboundMessageModule } from './outbound-messages/outbound-message.modu
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { GeoEntityModule } from './geo-entities/geo-entity.module';
 import { TestResultsModule } from './literacy/score/test-results.module';
+import { ApiKeyGuard } from './auth/api-key.guard';
 
 @Module({
   imports: [
@@ -44,6 +46,11 @@ import { TestResultsModule } from './literacy/score/test-results.module';
     WabotInboundController,
     HeygenInboundController,
   ],
-  providers: [AppService, CacheService],
+  providers: [
+    AppService,
+    CacheService,
+    // Every route needs an x-api-key badge unless @Public() (auth/api-keys.ts).
+    { provide: APP_GUARD, useClass: ApiKeyGuard },
+  ],
 })
 export class AppModule {}

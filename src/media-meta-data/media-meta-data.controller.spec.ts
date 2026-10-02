@@ -45,13 +45,19 @@ jest.mock('@opentelemetry/api', () => ({
   },
 }));
 
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import type { Repository } from 'typeorm';
 import { MediaMetaDataController } from './media-meta-data.controller';
 import type { MediaMetaDataService } from './media-meta-data.service';
 import type { MediaMetadataCoverageService } from './media-metadata-coverage.service';
 import type { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound.service';
 import type { MediaMetaDataEntity } from './media-meta-data.entity';
+import type { PiiAccessService } from '../users/pii-access.service';
+import { ANONYMOUS, STAFF } from '../auth/viewer';
 
 type RepoMock = {
   find: jest.Mock;
@@ -76,6 +82,9 @@ function makeController(opts: {
   coverageSvc?: Partial<MediaMetadataCoverageService>;
   bucket?: Partial<MediaBucketService>;
   repo?: RepoMock;
+  // Default: nobody's recording is visible (the anonymous rule); the audio
+  // tests override it.
+  piiAccess?: Partial<PiiAccessService>;
 }): { ctrl: MediaMetaDataController; repo: RepoMock } {
   const repo = opts.repo ?? makeRepo();
   return {
@@ -84,6 +93,9 @@ function makeController(opts: {
       (opts.coverageSvc ?? {}) as MediaMetadataCoverageService,
       (opts.bucket ?? {}) as MediaBucketService,
       repo as unknown as Repository<MediaMetaDataEntity>,
+      (opts.piiAccess ?? {
+        canSee: jest.fn().mockResolvedValue(false),
+      }) as unknown as PiiAccessService,
     ),
     repo,
   };
@@ -447,6 +459,67 @@ describe('MediaMetaDataController.getAudio', () => {
     expect(res.set).toHaveBeenCalledWith('Content-Type', 'audio/mpeg');
     expect(res.set).toHaveBeenCalledWith('Content-Length', '3');
     expect(res.send).toHaveBeenCalledWith(Buffer.from('abc'));
+  });
+
+  it("a student's recording: 403 unless the viewer is directly above them (PiiAccessService); staff always", async () => {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue({
+      id: 'mm-1',
+      s3_key: 's3-1',
+      user_id: 'student-1',
+    });
+    const getBuffer = jest.fn().mockResolvedValue({
+      buffer: Buffer.from('abc'),
+      content_type: 'audio/ogg',
+    });
+    const canSee = jest.fn(
+      async (viewer: { kind: string }) => viewer.kind === 'staff',
+    );
+    const { ctrl } = makeController({
+      repo,
+      bucket: { getBuffer } as unknown as MediaBucketService,
+      piiAccess: { canSee },
+    });
+    const teacher = { kind: 'user' as const, id: 'teacher-1' };
+
+    await expect(ctrl.getAudio('mm-1', makeRes(), teacher)).rejects.toThrow(
+      ForbiddenException,
+    );
+    expect(canSee).toHaveBeenCalledWith(teacher, 'student-1');
+    // default viewer = anonymous
+    await expect(ctrl.getAudio('mm-1', makeRes())).rejects.toThrow(
+      ForbiddenException,
+    );
+    expect(canSee).toHaveBeenLastCalledWith(ANONYMOUS, 'student-1');
+    expect(getBuffer).not.toHaveBeenCalled();
+
+    const res = makeRes();
+    await ctrl.getAudio('mm-1', res, STAFF);
+    expect(res.send).toHaveBeenCalledWith(Buffer.from('abc'));
+  });
+
+  it('generated media (no user_id) is not personal: plays for any authenticated caller', async () => {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue({
+      id: 'mm-1',
+      s3_key: 's3-1',
+      user_id: null,
+    });
+    const canSee = jest.fn();
+    const { ctrl } = makeController({
+      repo,
+      bucket: {
+        getBuffer: jest.fn().mockResolvedValue({
+          buffer: Buffer.from('x'),
+          content_type: 'audio/ogg',
+        }),
+      } as unknown as MediaBucketService,
+      piiAccess: { canSee },
+    });
+    const res = makeRes();
+    await ctrl.getAudio('mm-1', res);
+    expect(canSee).not.toHaveBeenCalled();
+    expect(res.send).toHaveBeenCalledWith(Buffer.from('x'));
   });
 });
 
