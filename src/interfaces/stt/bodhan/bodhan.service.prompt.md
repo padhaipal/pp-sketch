@@ -50,3 +50,9 @@ run(audioBuffer: Buffer, parentMedia: MediaMetaData, userExternalId?: string): P
 //   histogram_quantile(0.95, sum by (le) (rate(pp_stt_request_duration_ms_milliseconds_bucket{provider="bodhan"}[5m])))
 //   sum by (outcome) (increase(pp_stt_request_duration_ms_milliseconds_count{provider="bodhan"}[1h]))
 // Loki: {service_name="pp-sketch"} |~ "Bodhan"
+
+// Dashboard: src/docs/grafana/pp-stt-dashboard.json (uid pp-stt) — import in Grafana Cloud
+// (Dashboards → New → Import → paste JSON). Panels: Bodhan success rate + call count (1h),
+// outcomes/5m stacked, p50/p95/p99, per-engine undici p95 (api.bodhan.ai beside
+// api.sarvam.ai / Azure speechtotext), and a Loki pane filtered on "Bodhan". The saved
+// claude-debug-readonly token cannot create dashboards, hence the JSON lives here.
