@@ -11,3 +11,4 @@ For the backing provider, use [LaunchDarkly](https://launchdarkly.com/). If the 
 | `stt.sarvam.enabled` | boolean | Enable/disable Sarvam STT provider |
 | `stt.azure.enabled` | boolean | Enable/disable Azure STT provider |
 | `stt.reverie.enabled` | boolean | Enable/disable Reverie STT provider |
+| `stt.bodhan.enabled` | boolean | Enable/disable Bodhan (indic-transcribe) STT provider — default on |

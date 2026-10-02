@@ -11,6 +11,7 @@ import { MediaBucketModule } from '../interfaces/media-bucket/outbound/outbound.
 import { SarvamService } from '../interfaces/stt/sarvam/sarvam.service';
 import { AzureService } from '../interfaces/stt/azure/azure.service';
 import { ReverieService } from '../interfaces/stt/reverie/reverie.service';
+import { BodhanService } from '../interfaces/stt/bodhan/bodhan.service';
 import { OpenaiLlmService } from '../interfaces/llm/openai/openai-llm.service';
 import { AnthropicLlmService } from '../interfaces/llm/anthropic/anthropic-llm.service';
 import { GoogleLlmService } from '../interfaces/llm/google/google-llm.service';
@@ -34,6 +35,7 @@ import { PiiAccessModule } from '../users/pii-access.module';
     SarvamService,
     AzureService,
     ReverieService,
+    BodhanService,
     OpenaiLlmService,
     AnthropicLlmService,
     GoogleLlmService,

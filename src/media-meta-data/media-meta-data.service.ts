@@ -21,6 +21,7 @@ import { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound
 import { SarvamService } from '../interfaces/stt/sarvam/sarvam.service';
 import { AzureService } from '../interfaces/stt/azure/azure.service';
 import { ReverieService } from '../interfaces/stt/reverie/reverie.service';
+import { BodhanService } from '../interfaces/stt/bodhan/bodhan.service';
 import { OpenaiLlmService } from '../interfaces/llm/openai/openai-llm.service';
 import { AnthropicLlmService } from '../interfaces/llm/anthropic/anthropic-llm.service';
 import { GoogleLlmService } from '../interfaces/llm/google/google-llm.service';
@@ -114,6 +115,8 @@ const STT_DEFAULTS: Record<string, boolean> = {
   sarvam: true,
   azure: true,
   reverie: false,
+  // Bodhan indic-transcribe, on everywhere (staging + prod) since 2026-10.
+  bodhan: true,
 };
 async function isSttEnabled(provider: string): Promise<boolean> {
   const fallback = STT_DEFAULTS[provider] ?? false;
@@ -182,6 +185,7 @@ export class MediaMetaDataService {
     private readonly sarvamService: SarvamService,
     private readonly azureService: AzureService,
     private readonly reverieService: ReverieService,
+    private readonly bodhanService: BodhanService,
     private readonly openaiLlmService: OpenaiLlmService,
     private readonly anthropicLlmService: AnthropicLlmService,
     private readonly googleLlmService: GoogleLlmService,
@@ -293,11 +297,13 @@ export class MediaMetaDataService {
     // STT providers in parallel (feature flag gated)
     const sttPromises: Promise<MediaMetaData | null>[] = [];
 
-    const [sarvamEnabled, azureEnabled, reverieEnabled] = await Promise.all([
-      isSttEnabled('sarvam'),
-      isSttEnabled('azure'),
-      isSttEnabled('reverie'),
-    ]);
+    const [sarvamEnabled, azureEnabled, reverieEnabled, bodhanEnabled] =
+      await Promise.all([
+        isSttEnabled('sarvam'),
+        isSttEnabled('azure'),
+        isSttEnabled('reverie'),
+        isSttEnabled('bodhan'),
+      ]);
 
     if (sarvamEnabled) {
       sttPromises.push(
@@ -330,6 +336,18 @@ export class MediaMetaDataService {
           .catch((err) => {
             this.logger.warn(
               `Reverie STT failed for ${entity.id}: ${(err as Error).message}`,
+            );
+            return null;
+          }),
+      );
+    }
+    if (bodhanEnabled) {
+      sttPromises.push(
+        this.bodhanService
+          .run(audioBuffer, entity, userExternalId)
+          .catch((err) => {
+            this.logger.warn(
+              `Bodhan STT failed for ${entity.id}: ${(err as Error).message}`,
             );
             return null;
           }),

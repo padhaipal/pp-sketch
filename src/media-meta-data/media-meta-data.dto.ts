@@ -33,6 +33,8 @@ const VALID_MEDIA_SOURCES = [
   'azure',
   'sarvam',
   'reverie',
+  // Bodhan.ai indic-transcribe (src/interfaces/stt/bodhan), 2026-10.
+  'bodhan',
   'dashboard',
   'morning-update',
   // Text rows auto-created on lookup miss for {word}-sentence-word-drillWord
