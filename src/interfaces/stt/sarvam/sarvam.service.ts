@@ -52,7 +52,7 @@ export class SarvamService {
       }),
       `${parentMedia.id}.ogg`,
     );
-    formData.append('model', 'saaras:v3');
+    formData.append('model', 'saaras:v4');
     formData.append('mode', 'verbatim');
     formData.append('language_code', 'hi-IN');
 

@@ -1,7 +1,7 @@
 // pp-sketch/src/interfaces/stt/sarvam/sarvam.service.prompt.md
 
 // Sarvam speech-to-text service.
-// Uses the Sarvam REST API (model saaras:v3) for synchronous transcription.
+// Uses the Sarvam REST API (model saaras:v4) for synchronous transcription.
 // Called in parallel with other STT services from createWhatsappAudioMedia (step 4).
 // Environment variables: SARVAM_API_KEY (.env), STT_TIME_CAP (.env, seconds).
 // See src/docs/feature-flags.md — gated by `stt.sarvam.enabled`.
@@ -15,7 +15,7 @@ run(audioStream: NodeJS.ReadableStream, parentMedia: MediaMetaData): Promise<Med
   * Header: `api-subscription-key: ${SARVAM_API_KEY}`.
   * Form fields:
     - file: the buffered audio bytes (filename: `${parentMedia.id}.ogg`, content-type: parentMedia.media_details?.mime_type ?? 'audio/ogg').
-    - model: `saaras:v3`.
+    - model: `saaras:v4`.
     - mode: `transcribe`.
     - language_code: `unknown` (auto-detect; Sarvam supports 22 Indian languages + English).
   * Timeout: STT_TIME_CAP seconds. Enforce with AbortController; abort on timeout.
