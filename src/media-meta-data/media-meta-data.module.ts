@@ -16,12 +16,14 @@ import { AnthropicLlmService } from '../interfaces/llm/anthropic/anthropic-llm.s
 import { GoogleLlmService } from '../interfaces/llm/google/google-llm.service';
 import { MistralLlmService } from '../interfaces/llm/mistral/mistral-llm.service';
 import { SarvamLlmService } from '../interfaces/llm/sarvam/sarvam-llm.service';
+import { PiiAccessModule } from '../users/pii-access.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([MediaMetaDataEntity]),
     UserModule,
     MediaBucketModule,
+    PiiAccessModule,
   ],
   controllers: [MediaMetaDataController],
   providers: [

@@ -37,6 +37,7 @@ import {
   DashboardSummaryResponse,
   DashboardUserRow,
   UserMediaResponse,
+  TranscriptRow,
   ScoreRow,
   LoginResponse,
   UserResponse,
@@ -58,6 +59,15 @@ import {
 import { UserActivityService } from './user-activity.service';
 import { UserService, StaffLookupRow } from './user.service';
 import { GeoEntityService } from '../geo-entities/geo-entity.service';
+import { PiiAccessService } from './pii-access.service';
+import { maskPii, visibilityOf } from './pii-mask';
+import { censorTranscript } from './transcript-censor';
+import {
+  ANONYMOUS,
+  assertUuidUnlessStaff,
+  Viewer,
+  type ViewerContext,
+} from '../auth/viewer';
 import { DEFAULT_ROLE_TITLE_BY_TYPE } from '../geo-entities/geo-entity.dto';
 import {
   referralUrl,
@@ -136,6 +146,7 @@ export class UserController {
     private readonly userActivityService: UserActivityService,
     private readonly userService: UserService,
     private readonly geoEntityService: GeoEntityService,
+    private readonly piiAccess: PiiAccessService,
   ) {}
 
   // ─── Staff accounts (education officials) ─────────────────────────────
@@ -376,7 +387,13 @@ export class UserController {
   // snapshot score + score-over-time history per test, or
   // 'insufficient_data' while there is not enough answer history yet.
   @Get(':id/literacy-test-scores')
-  async literacyTestScores(@Param('id') id: string) {
+  async literacyTestScores(
+    @Param('id') id: string,
+    @Viewer() viewer: ViewerContext = ANONYMOUS,
+  ) {
+    // Staff may look a student up by phone; a /d link holder may not learn
+    // whether a number belongs to a student.
+    assertUuidUnlessStaff(viewer, id);
     const scores = await this.userService.getLiteracyTestScores(id);
     if (!scores) throw new NotFoundException('User not found');
     return scores;
@@ -480,11 +497,17 @@ export class UserController {
   // onboarding row can be missing (a rolled-back turn deletes it): an
   // un-onboarded user returns nothing, nothing at or before the moment
   // permission was recorded, and nothing that still has an onboarding row.
+  //
+  // Personal data follows the viewer (auth/viewer.ts, PiiAccessService):
+  // the student's own teacher sees name and phone as stored and may play
+  // the recordings; everyone else gets them masked and `pii: 'masked'`.
+  // Transcripts are censored for every viewer (transcript-censor.ts).
   @Get(':id/media')
   async userMedia(
     @Param('id') id: string,
     @Query('offset') offsetStr?: string,
     @Query('onboarding') onboardingStr?: string,
+    @Viewer() viewer: ViewerContext = ANONYMOUS,
   ): Promise<UserMediaResponse> {
     const offset = Math.max(0, parseInt(offsetStr || '0', 10) || 0);
     const limit = 100;
@@ -493,7 +516,16 @@ export class UserController {
     // Fetch user details
     const user = await this.userRepo.findOneBy({ id });
     if (!user) throw new NotFoundException('User not found');
-    const userInfo = { name: user.name, phone: user.external_id };
+    const canSeePii = await this.piiAccess.canSee(viewer, user.id);
+    const userInfo = {
+      name: canSeePii ? user.name : maskPii(user.name),
+      phone: canSeePii ? user.external_id : maskPii(user.external_id),
+      pii: visibilityOf(canSeePii),
+    };
+    const censor = (text: string | null) =>
+      text === null
+        ? { text, redactions: 0 }
+        : censorTranscript(text, [user.name]);
 
     if (!includeOnboarding && !this.userService.isOnboarded(user)) {
       return { user: userInfo, media: [] };
@@ -543,17 +575,16 @@ export class UserController {
       .getMany();
 
     // Group transcripts by input_media_id
-    const transcriptMap = new Map<
-      string,
-      { text: string | null; source: string; created_at: Date }[]
-    >();
+    const transcriptMap = new Map<string, TranscriptRow[]>();
     for (const t of transcripts) {
       if (!t.input_media_id) continue;
       if (!transcriptMap.has(t.input_media_id))
         transcriptMap.set(t.input_media_id, []);
-      transcriptMap
-        .get(t.input_media_id)!
-        .push({ text: t.text, source: t.source, created_at: t.created_at });
+      transcriptMap.get(t.input_media_id)!.push({
+        ...censor(t.text),
+        source: t.source,
+        created_at: t.created_at,
+      });
     }
 
     // Find lesson states where user_message_id matches any of these media IDs.
@@ -739,9 +770,12 @@ export class UserController {
         // store a single word), and duration_ms is the container-parsed
         // voice-note length captured at ingest (audio-duration.utils.ts).
         const words = (lesson?.word ?? '').split(/\s+/).filter(Boolean).length;
-        const durationMs = m.media_details?.duration_ms;
+        const durationMs =
+          typeof m.media_details?.duration_ms === 'number'
+            ? m.media_details.duration_ms
+            : null;
         const wpm =
-          words >= 2 && typeof durationMs === 'number' && durationMs > 0
+          words >= 2 && durationMs !== null && durationMs > 0
             ? Math.round(words / (durationMs / 60_000))
             : null;
         return {
@@ -758,6 +792,7 @@ export class UserController {
           final_state: lesson?.final_state ?? null,
           level: lesson?.level ?? null,
           wpm,
+          duration_ms: durationMs,
           tap: tap
             ? {
                 question: tapDetail?.question ?? null,
@@ -815,18 +850,25 @@ export class UserController {
   async patchProfile(
     @Param('id') id: string,
     @Body() body: ProfilePatchDto,
+    @Viewer() viewer: ViewerContext = ANONYMOUS,
   ): Promise<PublicProfile | { id: string; name: string }> {
     const staff = await this.userService.getPublicProfileRow(id);
     if (!staff) {
-      // Not staff → a STUDENT renamed from the class view (/d, the teacher's
-      // link is the credential): `name` only, never spotlight/avatar. 404
-      // for anything else, so the write never touches a deleted or unknown
+      // Not staff → a STUDENT renamed from the class view (/d): `name` only,
+      // never spotlight/avatar, and only by the viewer directly above the
+      // student (their own teacher, or staff — PiiAccessService). 404 for
+      // anything else, so the write never touches a deleted or unknown
       // account; the id must be a uuid (no phone-number lookups here).
       const student = UUID_RE.test(id)
         ? await this.userService.findByIdOrExternalId(id)
         : null;
       if (!student || student.role !== 'student' || student.deleted_at) {
         throw new NotFoundException('This link is not active');
+      }
+      if (!(await this.piiAccess.canSee(viewer, student.id))) {
+        throw new ForbiddenException(
+          'Only the referring teacher can rename a student',
+        );
       }
       const fields = validateProfilePatch(body);
       if (

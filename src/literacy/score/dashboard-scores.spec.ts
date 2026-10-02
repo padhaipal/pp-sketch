@@ -21,6 +21,8 @@ import {
   type StudentRow,
 } from './dashboard-scores.dto';
 import type { GeoEntityService } from '../../geo-entities/geo-entity.service';
+import { PiiAccessService } from '../../users/pii-access.service';
+import { STAFF } from '../../auth/viewer';
 
 // ─── Arithmetic ──────────────────────────────────────────────────────────────
 
@@ -365,6 +367,7 @@ interface TeacherFixture {
   role_title: string | null;
   avatar_seed: string | null;
   spotlight_message: string | null;
+  external_id?: string;
 }
 
 function makeService(fixture: {
@@ -372,14 +375,19 @@ function makeService(fixture: {
   geoRows: GeoRow[];
   officials?: Array<{
     geo_entity_id: string;
+    id?: string;
     name: string;
     role_title: string;
     avatar_seed: string;
     spotlight_message: string | null;
     created_at: string;
+    external_id?: string;
   }>;
   students?: StudentFixture[];
   teachers?: TeacherFixture[];
+  // User ids whose PII a (non-staff) viewer may see — what the real
+  // pii-access:visible query would return for them.
+  visible?: string[];
 }) {
   const byId = new Map(
     fixture.entities.map((e) => [(e as { id: string }).id, e]),
@@ -507,9 +515,21 @@ function makeService(fixture: {
             latest.set(o.geo_entity_id, o);
         }
         return [...latest.values()].map((o) => {
-          const { created_at: _c, ...rest } = o as Record<string, unknown>;
-          return rest;
+          const { created_at: _c, ...rest } = o as Record<string, unknown> & {
+            geo_entity_id: string;
+          };
+          return {
+            id: `official-${rest.geo_entity_id}`,
+            external_id: null,
+            ...rest,
+          };
         });
+      }
+      case 'pii-access:visible': {
+        const ids = params[1] as string[];
+        return (fixture.visible ?? [])
+          .filter((id) => ids.includes(id))
+          .map((id) => ({ id }));
       }
       case 'dashboard-scores:students': {
         const school = params[0] as string;
@@ -535,7 +555,9 @@ function makeService(fixture: {
       }
       case 'dashboard-scores:teachers': {
         const ids = params[0] as string[];
-        return (fixture.teachers ?? []).filter((t) => ids.includes(t.id));
+        return (fixture.teachers ?? [])
+          .filter((t) => ids.includes(t.id))
+          .map((t) => ({ external_id: null, ...t }));
       }
       case 'dashboard-scores:teacher': {
         return (fixture.teachers ?? [])
@@ -673,6 +695,7 @@ function makeService(fixture: {
     svc: new DashboardScoresService(
       { query } as unknown as DataSource,
       geo as unknown as GeoEntityService,
+      new PiiAccessService({ query } as unknown as DataSource),
     ),
     query,
     geo,
@@ -775,12 +798,16 @@ describe('DashboardScoresService.scores — geo levels', () => {
         delta: 66.7,
       }),
     );
-    // official is on every child and is the NEWEST education_official.
+    // official is on every child and is the NEWEST education_official; the
+    // phone is masked for the default (anonymous) viewer.
     expect(s1.official).toEqual({
+      id: 'official-S1',
       name: 'Asha',
       role_title: 'Teacher',
       avatar_seed: 'asha',
       spotlight_message: 'Read daily!',
+      phone: null,
+      pii: 'masked',
     });
     // S2: a row at as_of with only unbanded students → uses Lifteracy, n = 0 → bin none.
     const s2 = children[1];
@@ -1157,18 +1184,52 @@ describe('DashboardScoresService.scores — school level (students)', () => {
       'st-c',
       'st-d',
     ]);
+    // Named students' labels are masked for the default (anonymous) viewer;
+    // "Student N" identifies nobody and stays.
     expect(rows.map((r) => r.label)).toEqual([
+      'Student 1',
+      'G...e',
+      'B...u',
+      'Student 4',
+      'Student 5',
+    ]);
+    // name masks the FULL stored name ("Bittu Yadav" → "B...v"), label the
+    // first name ("Bittu" → "B...u").
+    expect(rows.map((r) => r.name)).toEqual([
+      null,
+      'G...e',
+      'B...v',
+      null,
+      null,
+    ]);
+    for (const r of rows) expect(r.label).not.toMatch(/\d{5,}/);
+    // …and every row carries the student's number — MASKED for the default
+    // (anonymous) viewer: first and last digit only.
+    expect(rows.map((r) => r.phone)).toEqual(
+      rows.map((r) => {
+        const full = `91${r.student_id.replace(/\D/g, '').padStart(10, '0')}`;
+        return `${full[0]}...${full[full.length - 1]}`;
+      }),
+    );
+    expect(rows.every((r) => r.pii === 'masked')).toBe(true);
+
+    // Staff see the class as stored.
+    const staffRows = (await svc.scores('T1', 'nipun_g2', 30, undefined, STAFF))
+      .children as StudentRow[];
+    expect(staffRows.map((r) => r.label)).toEqual([
       'Student 1',
       'Gone',
       'Bittu',
       'Student 4',
       'Student 5',
     ]);
-    for (const r of rows) expect(r.label).not.toMatch(/\d{5,}/);
-    // …but every row carries the student's number for the teacher
-    expect(rows.map((r) => r.phone)).toEqual(
-      rows.map((r) => `91${r.student_id.replace(/\D/g, '').padStart(10, '0')}`),
+    expect(staffRows.map((r) => r.phone)).toEqual(
+      staffRows.map(
+        (r) => `91${r.student_id.replace(/\D/g, '').padStart(10, '0')}`,
+      ),
     );
+    expect(staffRows.every((r) => r.pii === 'full')).toBe(true);
+
     expect(rows[0]).toEqual(
       expect.objectContaining({
         score: 1,

@@ -18,9 +18,12 @@ import { plainToInstance } from 'class-transformer';
 import { HeygenWebhookDto } from './inbound.dto';
 import { createQueue, QUEUE_NAMES } from '../../redis/queues';
 import { startRootSpan, injectCarrier } from '../../../otel/otel';
+import { Public } from '../../../auth/public.decorator';
 
 const heygenInboundQueue = createQueue(QUEUE_NAMES.HEYGEN_INBOUND);
 
+// HeyGen cannot send our badge; the HMAC below is this route's proof.
+@Public()
 @ApiTags('heygen-webhook')
 @Controller('heygen/webhook')
 export class HeygenInboundController {

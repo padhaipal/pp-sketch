@@ -10,6 +10,7 @@ import { TestResultsController } from './test-results.controller';
 import { DashboardScoresService } from './dashboard-scores.service';
 import { DashboardScoresController } from './dashboard-scores.controller';
 import { GeoEntityModule } from '../../geo-entities/geo-entity.module';
+import { PiiAccessModule } from '../../users/pii-access.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { GeoEntityModule } from '../../geo-entities/geo-entity.module';
       TestRunEntity,
     ]),
     GeoEntityModule,
+    PiiAccessModule,
   ],
   controllers: [TestResultsController, DashboardScoresController],
   providers: [TestResultsService, DashboardScoresService],

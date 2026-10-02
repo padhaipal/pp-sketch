@@ -11,6 +11,7 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  ForbiddenException,
   NotFoundException,
   UseInterceptors,
   UploadedFiles,
@@ -25,6 +26,8 @@ import { MediaMetaDataService } from './media-meta-data.service';
 import { passagesCsv } from './passages-csv';
 import { MediaMetadataCoverageService } from './media-metadata-coverage.service';
 import { MediaBucketService } from '../interfaces/media-bucket/outbound/outbound.service';
+import { PiiAccessService } from '../users/pii-access.service';
+import { ANONYMOUS, Viewer, type ViewerContext } from '../auth/viewer';
 import {
   validateCreateHeygenMediaOptions,
   validateCreateElevenlabsMediaOptions,
@@ -55,6 +58,7 @@ export class MediaMetaDataController {
     private readonly mediaBucket: MediaBucketService,
     @InjectRepository(MediaMetaDataEntity)
     private readonly mediaRepo: Repository<MediaMetaDataEntity>,
+    private readonly piiAccess: PiiAccessService,
   ) {}
 
   @Get('coverage')
@@ -260,11 +264,27 @@ export class MediaMetaDataController {
     return { id, sendable: body.sendable };
   }
 
+  // A student's recording plays only for the viewer directly above them
+  // (their own teacher) and for staff — PiiAccessService; anyone else gets
+  // 403 and the dashboard offers a sample clip instead. Generated media
+  // (no user_id) is not personal and plays for every authenticated caller.
   @Get(':id/audio')
-  async getAudio(@Param('id') id: string, @Res() res: Response) {
+  async getAudio(
+    @Param('id') id: string,
+    @Res() res: Response,
+    @Viewer() viewer: ViewerContext = ANONYMOUS,
+  ) {
     const media = await this.mediaRepo.findOneBy({ id });
     if (!media || !media.s3_key) {
       throw new NotFoundException('Media not found or no audio available');
+    }
+    if (
+      media.user_id &&
+      !(await this.piiAccess.canSee(viewer, media.user_id))
+    ) {
+      throw new ForbiddenException(
+        'This recording is only available to the referring teacher',
+      );
     }
     const { buffer, content_type } = await this.mediaBucket.getBuffer(
       media.s3_key,

@@ -11,6 +11,7 @@ import { CacheService } from '../interfaces/redis/cache';
 import { ScoreModule } from '../literacy/score/score.module';
 import { MediaBucketModule } from '../interfaces/media-bucket/outbound/outbound.module';
 import { GeoEntityModule } from '../geo-entities/geo-entity.module';
+import { PiiAccessModule } from './pii-access.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { GeoEntityModule } from '../geo-entities/geo-entity.module';
     ScoreModule,
     MediaBucketModule,
     GeoEntityModule,
+    PiiAccessModule,
   ],
   controllers: [UserController],
   providers: [UserService, UserActivityService, CacheService],

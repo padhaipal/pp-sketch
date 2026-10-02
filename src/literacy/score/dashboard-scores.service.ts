@@ -8,6 +8,9 @@ import type {
 import { DESCENDANTS_MAX_LIMIT } from '../../geo-entities/geo-entity.dto';
 import { ageOn, inBand, LiteracyMetric } from './age-bands';
 import { USAGE_PASS_MINUTES } from './test-results.service';
+import { PiiAccessService } from '../../users/pii-access.service';
+import { ANONYMOUS, type ViewerContext } from '../../auth/viewer';
+import { piiSubjects, redactScores } from './dashboard-scores.pii';
 import {
   ACTIVE_WINDOW_DAYS,
   binOf,
@@ -71,6 +74,29 @@ function toRef(e: GeoEntity): GeoRef {
   };
 }
 
+// A users row as the officials / teachers queries select it.
+interface OfficialRow {
+  id: string;
+  name: string | null;
+  role_title: string | null;
+  avatar_seed: string | null;
+  spotlight_message: string | null;
+  external_id: string | null;
+}
+
+// As stored; scores() masks the phone per viewer before responding.
+function toOfficial(row: OfficialRow): Official {
+  return {
+    id: row.id,
+    name: row.name,
+    role_title: row.role_title,
+    avatar_seed: row.avatar_seed,
+    spotlight_message: row.spotlight_message,
+    phone: row.external_id,
+    pii: 'full',
+  };
+}
+
 function isoDate(value: string | Date): string {
   return value instanceof Date
     ? value.toISOString().slice(0, 10)
@@ -108,6 +134,7 @@ function toStudentRow(m: MemberRow): StudentRow {
     label: m.label,
     phone: m.phone,
     name: m.name,
+    pii: m.pii,
     score: m.score,
     passed: m.passed,
     attempts: m.attempts,
@@ -231,13 +258,34 @@ export class DashboardScoresService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly geoEntityService: GeoEntityService,
+    private readonly piiAccess: PiiAccessService,
   ) {}
 
   // `window` (usage only — ignored for the test metrics) switches the
   // response to "Time" mode: time_* fields on the root, the children and the
   // students over that window, bins from the minutes-per-day average, and no
   // deltas / most improved. Without it the usage response is unchanged.
+  //
+  // `viewer` decides whose names / phones come back in full
+  // (PiiAccessService); every response leaves through redactScores, so a
+  // caller that forgets the viewer gets the fully-masked (anonymous) view.
   async scores(
+    id: string,
+    metric: LiteracyMetric,
+    range: DashboardRange,
+    window?: TimeWindow,
+    viewer: ViewerContext = ANONYMOUS,
+  ): Promise<ScoresResponse> {
+    const unredacted = await this.buildScores(id, metric, range, window);
+    const visible = await this.piiAccess.visibleTo(
+      viewer,
+      piiSubjects(unredacted),
+    );
+    return redactScores(unredacted, visible);
+  }
+
+  // The response as stored: names and phones in full. Internal — see scores().
+  private async buildScores(
     id: string,
     metric: LiteracyMetric,
     range: DashboardRange,
@@ -484,8 +532,9 @@ export class DashboardScoresService {
     metric: LiteracyMetric,
     range: DashboardRange,
     window?: TimeWindow,
+    viewer: ViewerContext = ANONYMOUS,
   ): Promise<SpotlightResponse> {
-    const result = await this.scores(id, metric, range, window);
+    const result = await this.scores(id, metric, range, window, viewer);
     if (result.child_type === 'student' || result.child_type === null) {
       return { top: null, most_improved: null };
     }
@@ -738,11 +787,11 @@ export class DashboardScoresService {
   // The newest non-deleted education_official per child — on EVERY child,
   // because the teacher modal opens from any row.
   private async officials(ids: string[]): Promise<Map<string, Official>> {
-    const rows: Array<Official & { geo_entity_id: string }> =
+    const rows: Array<OfficialRow & { geo_entity_id: string }> =
       await this.dataSource.query(
         `/* dashboard-scores:officials */
-         SELECT DISTINCT ON (geo_entity_id) geo_entity_id, name, role_title,
-                avatar_seed, spotlight_message
+         SELECT DISTINCT ON (geo_entity_id) geo_entity_id, id, name, role_title,
+                avatar_seed, spotlight_message, external_id
          FROM users
          WHERE geo_entity_id = ANY($1::uuid[])
            AND role = 'education_official' AND deleted_at IS NULL
@@ -750,7 +799,7 @@ export class DashboardScoresService {
         [ids],
       );
     return new Map(
-      rows.map(({ geo_entity_id, ...official }) => [geo_entity_id, official]),
+      rows.map(({ geo_entity_id, ...row }) => [geo_entity_id, toOfficial(row)]),
     );
   }
 
@@ -870,6 +919,8 @@ export class DashboardScoresService {
         label: studentLabel(r.name, ordinal.get(r.student_id) ?? 0),
         phone: r.external_id,
         name: r.name,
+        // As stored; scores() masks per viewer before responding.
+        pii: 'full',
         score,
         passed: usage ? score! > USAGE_PASS_MINUTES : r.passed,
         attempts: r.attempts,
@@ -922,9 +973,9 @@ export class DashboardScoresService {
       else groups.set(m.referrer_user_id, [m]);
     }
     if (groups.size === 0) return [];
-    const users: Array<Official & { id: string }> = await this.dataSource.query(
+    const users: OfficialRow[] = await this.dataSource.query(
       `/* dashboard-scores:teachers */
-       SELECT id, name, role_title, avatar_seed, spotlight_message
+       SELECT id, name, role_title, avatar_seed, spotlight_message, external_id
        FROM users
        WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
       [[...groups.keys()]],
@@ -955,12 +1006,7 @@ export class DashboardScoresService {
         bin: tf ? timeBin(tf.time_per_day, true) : binOf(pr, true),
         ...(tf ?? {}),
         official: u
-          ? {
-              name: u.name,
-              role_title: u.role_title ?? 'Teacher',
-              avatar_seed: u.avatar_seed,
-              spotlight_message: u.spotlight_message,
-            }
+          ? toOfficial({ ...u, role_title: u.role_title ?? 'Teacher' })
           : null,
       };
     });
