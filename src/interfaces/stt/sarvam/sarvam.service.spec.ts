@@ -274,7 +274,7 @@ describe('SarvamService.run — exact request payload', () => {
     );
   });
 
-  it('forwards model="saaras:v3", mode="verbatim", language_code="hi-IN" form fields', async () => {
+  it('forwards model="saaras:v4", mode="verbatim", language_code="hi-IN" form fields', async () => {
     const fetchSpy = jest.fn().mockResolvedValue(
       fakeResponse({
         status: 200,
@@ -290,7 +290,7 @@ describe('SarvamService.run — exact request payload', () => {
     const svc = makeService(makeRepo());
     await svc.run(Buffer.from('a'), parentMedia);
     const body = fetchSpy.mock.calls[0][1].body as FormData;
-    expect(body.get('model')).toBe('saaras:v3');
+    expect(body.get('model')).toBe('saaras:v4');
     expect(body.get('mode')).toBe('verbatim');
     expect(body.get('language_code')).toBe('hi-IN');
     // file is the FormData blob; filename includes parent id + .ogg
