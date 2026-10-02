@@ -1,10 +1,7 @@
 {
   "uid": "pp-stt",
   "title": "pp-sketch STT (Bodhan)",
-  "tags": [
-    "pp-sketch",
-    "stt"
-  ],
+  "tags": ["pp-sketch", "stt"],
   "timezone": "browser",
   "schemaVersion": 39,
   "time": {
@@ -156,6 +153,36 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rejected"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "decode"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
           }
         ]
       },
@@ -165,7 +192,8 @@
           "legendFormat": "{{outcome}}",
           "expr": "sum by (outcome) (increase(pp_stt_request_duration_ms_milliseconds_count{provider=\"bodhan\", deployment_environment=\"$env\"}[5m]))"
         }
-      ]
+      ],
+      "description": "rejected = clip ≥ 29 s, never sent to Bodhan; decode = Ogg/Opus → WAV failed before upload"
     },
     {
       "id": 4,
