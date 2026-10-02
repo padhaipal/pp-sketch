@@ -83,6 +83,7 @@ export class UserService {
               t.sarvam AS sarvam_transcript,
               t.azure AS azure_transcript,
               t.reverie AS reverie_transcript,
+              t.bodhan AS bodhan_transcript,
               (um.media_details->>'duration_ms')::int AS audio_duration_ms,
               sc.score_change,
               sc.letters_touched,
@@ -114,10 +115,11 @@ export class UserService {
        LEFT JOIN LATERAL (
          SELECT MAX(m.text) FILTER (WHERE m.source = 'sarvam') AS sarvam,
                 MAX(m.text) FILTER (WHERE m.source = 'azure') AS azure,
-                MAX(m.text) FILTER (WHERE m.source = 'reverie') AS reverie
+                MAX(m.text) FILTER (WHERE m.source = 'reverie') AS reverie,
+                MAX(m.text) FILTER (WHERE m.source = 'bodhan') AS bodhan
          FROM media_metadata m
          WHERE m.input_media_id = l.user_message_id
-           AND m.source IN ('sarvam', 'azure', 'reverie')
+           AND m.source IN ('sarvam', 'azure', 'reverie', 'bodhan')
            AND m.rolled_back = false
        ) t ON true
        LEFT JOIN LATERAL (

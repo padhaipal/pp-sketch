@@ -45,6 +45,7 @@ import type { MediaBucketService } from '../interfaces/media-bucket/outbound/out
 import type { SarvamService } from '../interfaces/stt/sarvam/sarvam.service';
 import type { AzureService } from '../interfaces/stt/azure/azure.service';
 import type { ReverieService } from '../interfaces/stt/reverie/reverie.service';
+import type { BodhanService } from '../interfaces/stt/bodhan/bodhan.service';
 import type { OpenaiLlmService } from '../interfaces/llm/openai/openai-llm.service';
 import type { AnthropicLlmService } from '../interfaces/llm/anthropic/anthropic-llm.service';
 import type { GoogleLlmService } from '../interfaces/llm/google/google-llm.service';
@@ -82,6 +83,7 @@ function makeService(opts: {
   sarvam?: Partial<SarvamService>;
   azure?: Partial<AzureService>;
   reverie?: Partial<ReverieService>;
+  bodhan?: Partial<BodhanService>;
   openaiLlm?: Partial<OpenaiLlmService>;
   anthropicLlm?: Partial<AnthropicLlmService>;
   googleLlm?: Partial<GoogleLlmService>;
@@ -111,6 +113,12 @@ function makeService(opts: {
       (opts.sarvam ?? { run: jest.fn() }) as SarvamService,
       (opts.azure ?? { run: jest.fn() }) as AzureService,
       (opts.reverie ?? { run: jest.fn() }) as ReverieService,
+      // Bodhan is on by default (STT_DEFAULTS), so the fallback must return a
+      // promise like a real provider — tests that need it to fail pass their own.
+      (opts.bodhan ??
+        ({
+          run: jest.fn().mockResolvedValue(undefined),
+        } as unknown)) as BodhanService,
       (opts.openaiLlm ?? { complete: jest.fn() }) as OpenaiLlmService,
       (opts.anthropicLlm ?? { complete: jest.fn() }) as AnthropicLlmService,
       (opts.googleLlm ?? { complete: jest.fn() }) as GoogleLlmService,
@@ -365,13 +373,21 @@ describe('MediaMetaDataService.createWhatsappAudioMedia', () => {
       }),
     };
     const bucket = { stream: jest.fn().mockResolvedValue('s3/key') };
-    // The defaults (sarvam:true, azure:true, reverie:false) are returned when
-    // OpenFeature is unreachable — which is always under jest CJS. So sarvam +
-    // azure both run.
+    // The defaults (sarvam:true, azure:true, reverie:false, bodhan:true) are
+    // returned when OpenFeature is unreachable — which is always under jest
+    // CJS. So sarvam + azure + bodhan all run.
     const sarvam = { run: jest.fn().mockRejectedValue(new Error('s1')) };
     const azure = { run: jest.fn().mockRejectedValue(new Error('s2')) };
+    const bodhan = { run: jest.fn().mockRejectedValue(new Error('s3')) };
 
-    const { service } = makeService({ repo, wabot, bucket, sarvam, azure });
+    const { service } = makeService({
+      repo,
+      wabot,
+      bucket,
+      sarvam,
+      azure,
+      bodhan,
+    });
 
     await expect(
       service.createWhatsappAudioMedia({
@@ -2256,6 +2272,7 @@ describe('createWhatsappAudioMedia — exact warn/error messages', () => {
     const sarvam = { run: jest.fn().mockRejectedValue(new Error('s1')) };
     const azure = { run: jest.fn().mockRejectedValue(new Error('s2')) };
     const reverie = { run: jest.fn().mockRejectedValue(new Error('s3')) };
+    const bodhan = { run: jest.fn().mockRejectedValue(new Error('s4')) };
     const { service } = makeService({
       repo,
       wabot,
@@ -2263,6 +2280,7 @@ describe('createWhatsappAudioMedia — exact warn/error messages', () => {
       sarvam,
       azure,
       reverie,
+      bodhan,
     });
     await expect(
       service.createWhatsappAudioMedia({
@@ -2275,6 +2293,37 @@ describe('createWhatsappAudioMedia — exact warn/error messages', () => {
       expect.stringMatching(
         /createWhatsappAudioMedia: all STT providers failed for/,
       ),
+    );
+    warn.mockRestore();
+  });
+
+  it('Bodhan runs by default (STT_DEFAULTS.bodhan = true) and its rejection warns "Bodhan STT failed for <id>: <msg>" without failing the turn', async () => {
+    const { warn } = spyLogger();
+    const { repo, wabot, bucket } = setup();
+    const sarvam = { run: jest.fn().mockResolvedValue({ id: 'stt' }) };
+    const azure = { run: jest.fn().mockResolvedValue({ id: 'stt' }) };
+    const bodhan = {
+      run: jest.fn().mockRejectedValue(new Error('Bodhan STT failed: 429')),
+    };
+    const { service } = makeService({
+      repo,
+      wabot,
+      bucket,
+      sarvam,
+      azure,
+      bodhan,
+    });
+    const out = await service.createWhatsappAudioMedia({
+      wa_media_url: 'https://wa/m/1',
+      user: { id: 'u1' } as never,
+      otel_carrier: carrier,
+    });
+    expect(out.status).toBe('ready');
+    expect(bodhan.run).toHaveBeenCalledTimes(1);
+    // same (buffer, entity, external id) contract as the other engines
+    expect(bodhan.run.mock.calls[0][0]).toBeInstanceOf(Buffer);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/Bodhan STT failed for .*Bodhan STT failed: 429/),
     );
     warn.mockRestore();
   });

@@ -1376,6 +1376,7 @@ describe('UserService.findInteractionsPage', () => {
     expect(sql).toContain("FILTER (WHERE m.source = 'sarvam')");
     expect(sql).toContain("FILTER (WHERE m.source = 'azure')");
     expect(sql).toContain("FILTER (WHERE m.source = 'reverie')");
+    expect(sql).toContain("FILTER (WHERE m.source = 'bodhan')");
     expect(sql).toContain("AT TIME ZONE 'Asia/Kolkata'");
     expect(sql).toContain('r.id = u.referrer_user_id');
     expect(sql).toContain("l.snapshot->'context'->>'stateTransitionId'");

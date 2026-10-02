@@ -42,9 +42,10 @@ describe('metrics module', () => {
   });
 
   it('defines wabotInboundJobDuration with the documented name, unit, and bucket boundaries', () => {
-    // Two histograms live in this module: the wabot-inbound job duration and
-    // pp.llm.request_duration_ms (2026-07).
-    expect(mockCreateHistogram).toHaveBeenCalledTimes(2);
+    // Three histograms live in this module: the wabot-inbound job duration,
+    // pp.llm.request_duration_ms (2026-07) and pp.stt.request_duration_ms
+    // (2026-10, Bodhan).
+    expect(mockCreateHistogram).toHaveBeenCalledTimes(3);
     const [name, options] = mockCreateHistogram.mock.calls[0] as [
       string,
       {
@@ -73,6 +74,26 @@ describe('metrics module', () => {
 
   it('exports the histogram instance returned by createHistogram', () => {
     expect(wabotInboundJobDuration).toBe(mockHistogram);
+  });
+
+  it('defines pp.stt.request_duration_ms in ms with increasing buckets under the 5 s STT_TIME_CAP plus tail', () => {
+    const call = mockCreateHistogram.mock.calls.find(
+      (c) => (c as [string])[0] === 'pp.stt.request_duration_ms',
+    ) as
+      | [
+          string,
+          { unit: string; advice: { explicitBucketBoundaries: number[] } },
+        ]
+      | undefined;
+    expect(call).toBeDefined();
+    const [, options] = call!;
+    expect(options.unit).toBe('ms');
+    const buckets = options.advice.explicitBucketBoundaries;
+    for (let i = 1; i < buckets.length; i++) {
+      expect(buckets[i]).toBeGreaterThan(buckets[i - 1]);
+    }
+    expect(buckets).toContain(5000);
+    expect(buckets[buckets.length - 1]).toBeGreaterThanOrEqual(10_000);
   });
 });
 

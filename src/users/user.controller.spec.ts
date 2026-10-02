@@ -2147,6 +2147,7 @@ describe('UserController.interactionsCsv', () => {
     sarvam_transcript: null,
     azure_transcript: null,
     reverie_transcript: null,
+    bodhan_transcript: null,
     audio_duration_ms: 4120,
     score_change: null,
     letters_touched: null,

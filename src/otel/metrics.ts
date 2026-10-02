@@ -96,6 +96,38 @@ export const llmRequestDuration = meter.createHistogram(
 // throws — delivery proceeds, but the audit trail has a hole). A non-zero
 // rate means "what did we send this user" queries are incomplete for the
 // affected window.
+/**
+ * Milliseconds per speech-to-text provider call, one record per call.
+ * Attributes (low cardinality on purpose — Grafana Cloud series cap):
+ *   provider: "bodhan" (Sarvam / Azure / Reverie predate this instrument)
+ *   outcome:  "ok" | "timeout" | "network" | "rate_limited" | "rejected"
+ *             | "http_4xx" | "http_5xx" | "error"
+ * Error rate = sum(outcome!="ok") / sum(all) over the histogram count.
+ * Boundaries sit under the 5 s STT_TIME_CAP default with tail headroom.
+ */
+export const sttRequestDuration = meter.createHistogram(
+  'pp.stt.request_duration_ms',
+  {
+    description: 'Milliseconds per STT provider call (one record per call).',
+    unit: 'ms',
+    advice: {
+      explicitBucketBoundaries: [
+        100, 250, 500, 1000, 2000, 3000, 5000, 10000, 20000,
+      ],
+    },
+  },
+);
+
+export type SttOutcome =
+  | 'ok'
+  | 'timeout'
+  | 'network'
+  | 'rate_limited'
+  | 'rejected'
+  | 'http_4xx'
+  | 'http_5xx'
+  | 'error';
+
 export const outboundRecordFailure = meter.createCounter(
   'pp.outbound.record_failure_total',
   {
