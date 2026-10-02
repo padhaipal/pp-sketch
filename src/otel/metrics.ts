@@ -101,7 +101,8 @@ export const llmRequestDuration = meter.createHistogram(
  * Attributes (low cardinality on purpose — Grafana Cloud series cap):
  *   provider: "bodhan" (Sarvam / Azure / Reverie predate this instrument)
  *   outcome:  "ok" | "timeout" | "network" | "rate_limited" | "rejected"
- *             | "http_4xx" | "http_5xx" | "error"
+ *             | "decode" | "http_4xx" | "http_5xx" | "error"
+ *             (rejected = clip ≥ 29 s, never sent; decode = Opus → WAV failed)
  * Error rate = sum(outcome!="ok") / sum(all) over the histogram count.
  * Boundaries sit under the 5 s STT_TIME_CAP default with tail headroom.
  */
@@ -124,6 +125,7 @@ export type SttOutcome =
   | 'network'
   | 'rate_limited'
   | 'rejected'
+  | 'decode'
   | 'http_4xx'
   | 'http_5xx'
   | 'error';

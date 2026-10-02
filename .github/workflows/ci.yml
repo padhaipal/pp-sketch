@@ -38,6 +38,10 @@ jobs:
 
       - run: npm run build
 
+      # Real ogg-opus-decoder (ESM/WASM) through the compiled CJS module —
+      # Jest cannot load it, so the Bodhan WAV path is proven here.
+      - run: npm run test:opus
+
       - name: Gitleaks (PR diff)
         if: github.event_name == 'pull_request'
         env:

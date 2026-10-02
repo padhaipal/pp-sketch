@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { SpanStatusCode } from '@opentelemetry/api';
 import { Repository } from 'typeorm';
@@ -17,12 +17,15 @@ import {
   loadTestDelay,
   saveStubTranscript,
 } from '../load-test-stub';
+import { oggOpusToWav16k, warmUpOpusDecoder } from './opus-to-wav';
 
 export const BODHAN_STT_URL = 'https://api.bodhan.ai/v1/audio/transcriptions';
 export const BODHAN_STT_MODEL = 'indic-transcribe';
-// Bodhan rejects audio over 30 s (HTTP 415) — recorded as its own outcome so
-// the dashboard separates "clip too long" from real API failures.
-export const BODHAN_MAX_AUDIO_MS = 30_000;
+// Bodhan rejects audio over 30 s. Clips of 29 s or more are never sent
+// (outcome 'rejected', no network call) — the margin covers rounding and
+// Bodhan's own duration measurement; the other engines still transcribe
+// the note. Product decision 2026-10-02.
+export const BODHAN_MAX_AUDIO_MS = 29_000;
 
 // Per-key allowances Bodhan returns on every response (not documented as
 // numbers anywhere — "read them off the response rather than hardcoding").
@@ -40,13 +43,18 @@ const RATE_LIMIT_HEADERS = [
  * source 'bodhan'. Env: BODHAN_API_KEY (a Bodhan key is per model — this one
  * is the indic-transcribe key), STT_TIME_CAP (seconds, shared by all STT).
  *
+ * Unlike the other engines this branch uploads 16 kHz mono WAV: Bodhan's
+ * vendor rejects WhatsApp's Ogg/Opus (502 after 5–6 s, measured 2026-10-02)
+ * but transcribes WAV in ~1.5 s. The decode (opus-to-wav.ts, a few ms) runs
+ * inside this branch only, after the other engines are already in flight.
+ *
  * Observability: span `stt.bodhan` (status, rate-limit headers, outcome),
  * histogram pp.stt.request_duration_ms{provider="bodhan",outcome}, and WARN
  * logs carrying the Bodhan error body. 429 is logged with retry-after so a
  * too-low per-key allowance is visible from Loki on day one.
  */
 @Injectable()
-export class BodhanService {
+export class BodhanService implements OnModuleInit {
   private readonly logger = new Logger(BodhanService.name);
   // Logged once per process so the key's allowance is in Loki after boot.
   private allowanceLogged = false;
@@ -55,6 +63,16 @@ export class BodhanService {
     @InjectRepository(MediaMetaDataEntity)
     private readonly mediaRepo: Repository<MediaMetaDataEntity>,
   ) {}
+
+  // Compile the Opus WASM at boot so the first voice note doesn't pay for
+  // it. Never fatal: a failure is logged and the first call retries.
+  onModuleInit(): void {
+    void warmUpOpusDecoder().catch((err: unknown) => {
+      this.logger.warn(
+        `Bodhan: opus decoder warm-up failed: ${(err as Error).message}`,
+      );
+    });
+  }
 
   async run(
     audioBuffer: Buffer,
@@ -106,6 +124,37 @@ export class BodhanService {
     parentMedia: MediaMetaData,
     span: { setAttribute: (k: string, v: string | number) => unknown },
   ): Promise<MediaMetaData> {
+    // 1. Ogg/Opus → WAV (this branch only). Errors here never reach the
+    // network; they surface as outcome 'decode'.
+    let wav: Buffer;
+    let durationMs: number;
+    try {
+      ({ wav, durationMs } = await oggOpusToWav16k(audioBuffer));
+    } catch (err) {
+      this.logger.warn(
+        `Bodhan: opus decode failed for ${parentMedia.id}: ${(err as Error).message}`,
+      );
+      throw withOutcome(
+        new Error(`Bodhan STT failed: decode (${(err as Error).message})`),
+        'decode',
+      );
+    }
+    span.setAttribute('audio.duration_ms', durationMs);
+    span.setAttribute('audio.wav_bytes', wav.length);
+
+    // 2. Length gate: 29 s or longer is never sent (Bodhan would 415 after
+    // ~5 s anyway, and the other engines cover the note).
+    if (durationMs >= BODHAN_MAX_AUDIO_MS) {
+      this.logger.warn(
+        `Bodhan: clip ${durationMs}ms ≥ ${BODHAN_MAX_AUDIO_MS}ms for ${parentMedia.id} — not sent`,
+      );
+      throw withOutcome(
+        new Error(`Bodhan STT failed: clip too long (${durationMs}ms)`),
+        'rejected',
+      );
+    }
+
+    // 3. POST the WAV. The time cap starts here, after decoding.
     const sttTimeCap = parseInt(process.env.STT_TIME_CAP ?? '5') * 1000;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), sttTimeCap);
@@ -113,10 +162,8 @@ export class BodhanService {
     const formData = new FormData();
     formData.append(
       'file',
-      new Blob([Uint8Array.from(audioBuffer)], {
-        type: (parentMedia.media_details?.mime_type as string) ?? 'audio/ogg',
-      }),
-      `${parentMedia.id}.ogg`,
+      new Blob([Uint8Array.from(wav)], { type: 'audio/wav' }),
+      `${parentMedia.id}.wav`,
     );
     formData.append('model', BODHAN_STT_MODEL);
     formData.append('language', 'hi');
@@ -164,7 +211,7 @@ export class BodhanService {
     if (response.status === 415) {
       const body = await response.text();
       this.logger.warn(
-        `Bodhan 415 for ${parentMedia.id}: clip over ${BODHAN_MAX_AUDIO_MS / 1000}s or unsupported container ${body}`,
+        `Bodhan 415 for ${parentMedia.id}: duration unmeasurable or unsupported container ${body}`,
       );
       throw withOutcome(new Error(`Bodhan STT failed: 415`), 'rejected');
     }
@@ -213,6 +260,10 @@ export class BodhanService {
       media_details: {
         model: BODHAN_STT_MODEL,
         language: 'hi',
+        // What Bodhan actually received (the stored audio stays Ogg/Opus).
+        upload_format: 'wav-16k-mono',
+        upload_bytes: wav.length,
+        duration_ms: durationMs,
         ...(Object.keys(limits).length > 0 && { rate_limit: limits }),
       },
     });

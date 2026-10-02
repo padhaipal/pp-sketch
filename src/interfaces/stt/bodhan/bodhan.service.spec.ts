@@ -5,6 +5,16 @@ jest.mock('../../../otel/metrics', () => ({
   sttRequestDuration: { record: (...a: unknown[]) => recordMock(...a) },
 }));
 
+// The Opus → WAV step has its own spec (opus-to-wav.spec.ts); here it is a
+// stub so the service's branches are exercised without WASM.
+const FAKE_WAV = Buffer.from('RIFF-fake-wav');
+const toWavMock = jest.fn();
+const warmUpMock = jest.fn();
+jest.mock('./opus-to-wav', () => ({
+  oggOpusToWav16k: (...a: unknown[]) => toWavMock(...a),
+  warmUpOpusDecoder: (...a: unknown[]) => warmUpMock(...a),
+}));
+
 process.env.BODHAN_API_KEY = 'bodhan-key';
 
 import { Logger as NestLogger } from '@nestjs/common';
@@ -66,6 +76,10 @@ function spyWarn() {
 }
 
 const globalFetch = global.fetch;
+beforeEach(() => {
+  toWavMock.mockReset().mockResolvedValue({ wav: FAKE_WAV, durationMs: 4830 });
+  warmUpMock.mockReset().mockResolvedValue(undefined);
+});
 afterEach(() => {
   global.fetch = globalFetch;
   recordMock.mockClear();
@@ -107,9 +121,13 @@ describe('BodhanService.run', () => {
     const body = init.body as FormData;
     expect(body.get('model')).toBe(BODHAN_STT_MODEL);
     expect(body.get('language')).toBe('hi');
+    // Bodhan gets the decoded WAV, never the Ogg/Opus bytes
     const file = body.get('file') as File;
-    expect(file.name).toBe('parent-1.ogg');
-    expect(file.type).toBe('audio/ogg');
+    expect(file.name).toBe('parent-1.wav');
+    expect(file.type).toBe('audio/wav');
+    expect(file.size).toBe(FAKE_WAV.length);
+    expect(toWavMock).toHaveBeenCalledTimes(1);
+    expect(toWavMock.mock.calls[0][0]).toBeInstanceOf(Buffer);
 
     expect(out.text).toBe('नमस्ते');
     expect(out.source).toBe('bodhan');
@@ -121,6 +139,9 @@ describe('BodhanService.run', () => {
     expect(out.media_details).toEqual({
       model: 'indic-transcribe',
       language: 'hi',
+      upload_format: 'wav-16k-mono',
+      upload_bytes: FAKE_WAV.length,
+      duration_ms: 4830,
       rate_limit: {
         'x-ratelimit-limit-requests': '8',
         'x-ratelimit-limit-parallel-requests': '2',
@@ -142,6 +163,9 @@ describe('BodhanService.run', () => {
     expect(out.media_details).toEqual({
       model: 'indic-transcribe',
       language: 'hi',
+      upload_format: 'wav-16k-mono',
+      upload_bytes: FAKE_WAV.length,
+      duration_ms: 4830,
     });
   });
 
@@ -169,19 +193,61 @@ describe('BodhanService.run', () => {
     log.mockRestore();
   });
 
-  it('falls back to audio/ogg when the parent has no mime_type', async () => {
+  it('decode failure → warns, throws, outcome decode, no network call', async () => {
+    const warn = spyWarn();
+    toWavMock.mockRejectedValue(new Error('no audio decoded'));
+    const fetchSpy = jest.fn();
+    global.fetch = fetchSpy as never;
+    await expect(
+      makeService(makeRepo()).run(Buffer.from('a'), parentMedia),
+    ).rejects.toThrow('Bodhan STT failed: decode (no audio decoded)');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      'Bodhan: opus decode failed for parent-1: no audio decoded',
+    );
+    expect(outcomeOf()).toBe('decode');
+    warn.mockRestore();
+  });
+
+  it('clip of exactly 29 s is NOT sent (outcome rejected); 28.999 s is', async () => {
+    const warn = spyWarn();
     const fetchSpy = jest
       .fn()
       .mockResolvedValue(fakeResponse({ status: 200, json: { text: 'x' } }));
-    global.fetch = fetchSpy;
-    await makeService(makeRepo()).run(Buffer.from('a'), {
-      ...parentMedia,
-      media_details: null,
-    } as MediaMetaData);
-    const file = (fetchSpy.mock.calls[0][1].body as FormData).get(
-      'file',
-    ) as Blob;
-    expect(file.type).toBe('audio/ogg');
+    global.fetch = fetchSpy as never;
+
+    toWavMock.mockResolvedValue({ wav: FAKE_WAV, durationMs: 29_000 });
+    await expect(
+      makeService(makeRepo()).run(Buffer.from('a'), parentMedia),
+    ).rejects.toThrow('Bodhan STT failed: clip too long (29000ms)');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      'Bodhan: clip 29000ms ≥ 29000ms for parent-1 — not sent',
+    );
+    expect(outcomeOf(0)).toBe('rejected');
+
+    toWavMock.mockResolvedValue({ wav: FAKE_WAV, durationMs: 28_999 });
+    await makeService(makeRepo()).run(Buffer.from('a'), parentMedia);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(outcomeOf(1)).toBe('ok');
+    warn.mockRestore();
+  });
+
+  it('onModuleInit warms the decoder and only warns when that fails', async () => {
+    const warn = spyWarn();
+    const svc = makeService(makeRepo());
+    svc.onModuleInit();
+    await new Promise((r) => setImmediate(r));
+    expect(warmUpMock).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+
+    warmUpMock.mockRejectedValue(new Error('wasm missing'));
+    svc.onModuleInit();
+    await new Promise((r) => setImmediate(r));
+    expect(warn).toHaveBeenCalledWith(
+      'Bodhan: opus decoder warm-up failed: wasm missing',
+    );
+    warn.mockRestore();
   });
 
   it('2XX without a text field → warns, throws, outcome error', async () => {
@@ -227,7 +293,7 @@ describe('BodhanService.run', () => {
       makeService(makeRepo()).run(Buffer.from('a'), parentMedia),
     ).rejects.toThrow('Bodhan STT failed: 415');
     expect(warn).toHaveBeenCalledWith(
-      'Bodhan 415 for parent-1: clip over 30s or unsupported container too long',
+      'Bodhan 415 for parent-1: duration unmeasurable or unsupported container too long',
     );
     expect(outcomeOf()).toBe('rejected');
     warn.mockRestore();
@@ -318,6 +384,7 @@ describe('BodhanService.run — load-test phone-prefix stub', () => {
       `${PREFIX}123456`,
     );
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(toWavMock).not.toHaveBeenCalled();
     expect(out.source).toBe('bodhan');
     expect(out.text).toBe('<load-test stub transcript>');
     expect(recordMock).not.toHaveBeenCalled();
