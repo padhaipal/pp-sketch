@@ -49,24 +49,42 @@ loki_ds_uid="${LOKI_DATASOURCE_UID:-grafanacloud-logs}"
 loki_proxy="${grafana_url}/api/datasources/proxy/uid/${loki_ds_uid}/loki/api/v1"
 echo "Using Loki datasource uid=${loki_ds_uid} via ${loki_proxy}" >&2
 
-# Grafana Cloud free-tier stacks HIBERNATE after a few days without UI
-# logins: /api/health serves 404/503 and datasource proxy calls fail with
-# DatasourceError until the first request wakes the stack (~1-3 min).
-# The digest is often that first request (scheduled, nobody logged in),
-# which is exactly how the 2026-07-16/17 runs died. Poll health until the
-# stack is up; give it 5 minutes before declaring a real outage.
-wake_deadline=$(( $(date -u +%s) + 300 ))
-until [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${grafana_url}/api/health" 2>/dev/null)" == "200" ]]; do
-  if (( $(date -u +%s) >= wake_deadline )); then
-    echo "ERROR: Grafana at ${grafana_url} not healthy after 5 min of wake attempts" >&2
-    exit 1
-  fi
-  echo "Grafana not ready (hibernating?) — retrying in 15s" >&2
-  sleep 15
-done
-
 # Body separator used by curl to write http status on its own line
 SEP='__HTTP_STATUS__'
+
+# Grafana Cloud free-tier stacks PAUSE after a few days without UI logins.
+# While paused, every datasource-proxy call answers instantly with a 503
+# {"code":"Loading"} (or a DatasourceError body), and the FIRST such call
+# is what triggers the ~1-3 min cold start. /api/health does NOT wake the
+# stack (confirmed by Grafana: terraform-provider-grafana#1725), which is
+# why the 2026-07-18 → 2026-10-01 scheduled digests all died polling it.
+# So: wake by hitting the Loki proxy itself (cheap `labels` call), retry
+# until it answers 200 + status=success, give it 5 minutes.
+wake_deadline=$(( $(date -u +%s) + 300 ))
+wake_attempt=0
+while :; do
+  wake_attempt=$(( wake_attempt + 1 ))
+  wake_raw=$(curl -sS -G -H "$auth_hdr" --max-time 20 \
+    -w "\n${SEP}%{http_code}" \
+    --data-urlencode "start=$start_ns" \
+    --data-urlencode "end=$now_ns" \
+    "${loki_proxy}/labels" 2>&1 || true)
+  wake_status="${wake_raw##*${SEP}}"
+  wake_body="${wake_raw%${SEP}*}"
+  if [[ "$wake_status" == "200" ]] \
+     && printf '%s' "$wake_body" | jq -e '.status == "success"' >/dev/null 2>&1; then
+    echo "Grafana/Loki awake after ${wake_attempt} attempt(s)" >&2
+    break
+  fi
+  if (( $(date -u +%s) >= wake_deadline )); then
+    echo "ERROR: Loki at ${loki_proxy} not answering after 5 min of wake attempts. Last HTTP status=${wake_status}. Body (first 500B):" >&2
+    printf '%s' "$wake_body" | head -c 500 >&2
+    echo >&2
+    exit 1
+  fi
+  echo "Loki not ready (attempt ${wake_attempt}, HTTP ${wake_status}: $(printf '%s' "$wake_body" | tr -d '\n' | head -c 120)) — retrying in 15s" >&2
+  sleep 15
+done
 
 # Wraps curl response { body, http_status } and validates the response is JSON;
 # prints body + status on failure.
