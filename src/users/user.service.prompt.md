@@ -119,7 +119,7 @@ Digital-proxy literacy test scores:
   most-recent-first — (1) pool < 20 → insufficient; (2) one per distinct
   type until 4 types (≤3 distinct types → insufficient); (3) batch quotas
   R1.x ×5, R2.x ×5, R3.x ×1 (filter-2 picks count); (4) fill to 20.
-- Snapshot tests score correct/selected, pass STRICTLY > the test's mark (NIPUN 0.8, MPL-B 0.5 — literacy-test-scores.ts), and return
+- Snapshot tests score correct/selected, pass at NIPUN ≥ 0.75 / MPL-B strictly > 0.5 (literacy-test-scores.ts), carry `counted_message_ids` (the taps behind the latest two points), and return
   history[] = the snapshot replayed over every chronological prefix
   (insufficient prefixes skipped); latest = final history entry.
   Question types/levels come from media_details on the option's question row

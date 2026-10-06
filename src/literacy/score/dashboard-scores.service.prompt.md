@@ -50,13 +50,14 @@ nightly tables); never recomputes a score. Every statement carries a
 6. Students (`students(scope)`, `MemberRow` — internal fields stripped by
    `toStudentRow`) — the deliberate exception to "results tables only",
    commented in the SQL and not to be optimised away:
-   - School scope (`dashboard-scores:students`): membership = the
-     student's LATEST `test_results_student` row's `geo_entity_id` (the
-     compute-time school the geo vectors were built from), NOT
-     `referrer.geo_entity_id`, which may have moved since the nightly run —
-     a student must never be inside one school's n while listed under
-     another. Candidates are students with any row for the school; members
-     are those whose latest row is still there.
+   - School scope (`dashboard-scores:students`): membership = students
+     whose referrer's CURRENT `geo_entity_id` is the school — the same join
+     the nightly geo roll-up uses (test-results:latest-students), so the
+     school's n and its teacher cards agree. NOT the latest row's own
+     `geo_entity_id` (2026-10 bug: it is stamped only when a student is
+     re-scored, so students quiet since their teacher joined the school
+     were missing from the teacher's card — "1 students" for eight). A
+     student still needs a `test_results_student` row to appear.
    - Class scope (`dashboard-scores:class`): membership =
      `users.referrer_user_id = teacher`, wherever the latest row sits.
    - `prior_score` / `prior_passed`: the student's newest row dated

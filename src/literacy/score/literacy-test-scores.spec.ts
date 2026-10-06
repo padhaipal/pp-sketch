@@ -4,6 +4,9 @@
 // JSON.stringify of getLiteracyTestScores per user — and must never be
 // regenerated from the new code. If the algorithm is meant to change, the
 // change is a product decision and this literal is updated deliberately.
+// Updated 2026-10: NIPUN pass is ≥ 0.75 (three of four), and every test
+// carries `counted_message_ids` (empty here — the fixture rows have no tap
+// ids).
 jest.mock('uuid', () => ({
   v4: jest.fn(() => 'gen-uuid'),
   validate: (s: unknown): boolean =>
@@ -13,6 +16,7 @@ jest.mock('uuid', () => ({
 
 import { UserService } from '../../users/user.service';
 import {
+  COMPREHENSION_ANSWERS_SQL,
   computeLatestLiteracyTestScores,
   computeLiteracyTestScores,
   dedupeFirstAttempts,
@@ -113,7 +117,7 @@ export function goldenFixtureRows(userId: string): GoldenRow[] {
 }
 
 const GOLDEN_JSON =
-  '{"11111111-1111-4111-8111-111111111111":{"nipun_grade_2":{"status":"ok","attempts_available":6,"latest":{"at":"2026-07-09T00:00:00.000Z","score":0.75,"passed":false},"history":[{"at":"2026-07-05T00:00:00.000Z","score":0.75,"passed":false},{"at":"2026-07-08T00:00:00.000Z","score":0.5,"passed":false},{"at":"2026-07-09T00:00:00.000Z","score":0.75,"passed":false}]},"nipun_grade_3":{"status":"ok","attempts_available":10,"latest":{"at":"2026-07-30T00:00:00.000Z","score":0.75,"passed":false},"history":[{"at":"2026-07-18T00:00:00.000Z","score":0.75,"passed":false},{"at":"2026-07-19T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-22T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-24T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-26T00:00:00.000Z","score":0.75,"passed":false},{"at":"2026-07-28T00:00:00.000Z","score":0.75,"passed":false},{"at":"2026-07-30T00:00:00.000Z","score":0.75,"passed":false}]},"mpl_b":{"status":"ok","attempts_available":23,"latest":{"at":"2026-08-12T00:00:00.000Z","score":0.65,"passed":true},"history":[{"at":"2026-07-30T00:00:00.000Z","score":0.65,"passed":true},{"at":"2026-07-31T00:00:00.000Z","score":0.7,"passed":true},{"at":"2026-08-01T00:00:00.000Z","score":0.65,"passed":true},{"at":"2026-08-12T00:00:00.000Z","score":0.65,"passed":true}]}},"22222222-2222-4222-8222-222222222222":{"nipun_grade_2":{"status":"insufficient_data","attempts_available":1},"nipun_grade_3":{"status":"insufficient_data","attempts_available":1},"mpl_b":{"status":"insufficient_data","attempts_available":2}},"33333333-3333-4333-8333-333333333333":{"nipun_grade_2":{"status":"insufficient_data","attempts_available":0},"nipun_grade_3":{"status":"insufficient_data","attempts_available":0},"mpl_b":{"status":"insufficient_data","attempts_available":0}}}';
+  '{"11111111-1111-4111-8111-111111111111":{"nipun_grade_2":{"status":"ok","attempts_available":6,"latest":{"at":"2026-07-09T00:00:00.000Z","score":0.75,"passed":true},"history":[{"at":"2026-07-05T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-08T00:00:00.000Z","score":0.5,"passed":false},{"at":"2026-07-09T00:00:00.000Z","score":0.75,"passed":true}],"counted_message_ids":[]},"nipun_grade_3":{"status":"ok","attempts_available":10,"latest":{"at":"2026-07-30T00:00:00.000Z","score":0.75,"passed":true},"history":[{"at":"2026-07-18T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-19T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-22T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-24T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-26T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-28T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-30T00:00:00.000Z","score":0.75,"passed":true}],"counted_message_ids":[]},"mpl_b":{"status":"ok","attempts_available":23,"latest":{"at":"2026-08-12T00:00:00.000Z","score":0.65,"passed":true},"history":[{"at":"2026-07-30T00:00:00.000Z","score":0.65,"passed":true},{"at":"2026-07-31T00:00:00.000Z","score":0.7,"passed":true},{"at":"2026-08-01T00:00:00.000Z","score":0.65,"passed":true},{"at":"2026-08-12T00:00:00.000Z","score":0.65,"passed":true}],"counted_message_ids":[]}},"22222222-2222-4222-8222-222222222222":{"nipun_grade_2":{"status":"insufficient_data","attempts_available":1,"counted_message_ids":[]},"nipun_grade_3":{"status":"insufficient_data","attempts_available":1,"counted_message_ids":[]},"mpl_b":{"status":"insufficient_data","attempts_available":2,"counted_message_ids":[]}},"33333333-3333-4333-8333-333333333333":{"nipun_grade_2":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[]},"nipun_grade_3":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[]},"mpl_b":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[]}}}';
 
 function queryFor(rowsByUser: (id: string) => ComprehensionRow[]) {
   return jest.fn(async (sql: string, params?: unknown[]) => {
@@ -160,6 +164,81 @@ describe('literacy test scores — golden output', () => {
     for (const id of GOLDEN_USERS) {
       expect(JSON.stringify(scores.get(id))).toBe(JSON.stringify(expected[id]));
     }
+  });
+});
+
+describe('counted_message_ids', () => {
+  const att = (n: number, correct = true, type = 'R1.1'): FirstAttempt => ({
+    at: new Date(Date.UTC(2026, 6, n)),
+    correct,
+    question_id: `q${n}`,
+    message_id: `m${n}`,
+    level: 10,
+    question_type: type,
+  });
+  const nipun = (p: FirstAttempt[]) => nipunSnapshot(p, NIPUN_QUESTION_COUNT);
+
+  it('NIPUN: the taps behind the latest snapshot and the one before it (the last five attempts)', () => {
+    const pool = [1, 2, 3, 4, 5, 6, 7].map((n) => att(n));
+    const out = snapshotSeries(pool, nipun);
+    expect(out.status).toBe('ok');
+    expect(out.counted_message_ids).toEqual(['m3', 'm4', 'm5', 'm6', 'm7']);
+    // exactly four attempts: one history point, so just those four
+    expect(snapshotSeries(pool.slice(0, 4), nipun).counted_message_ids).toEqual(
+      ['m1', 'm2', 'm3', 'm4'],
+    );
+  });
+
+  it('insufficient data: every attempt answered so far; none → []', () => {
+    const out = snapshotSeries([att(1), att(2)], nipun);
+    expect(out.status).toBe('insufficient_data');
+    expect(out.counted_message_ids).toEqual(['m1', 'm2']);
+    expect(snapshotSeries([], nipun).counted_message_ids).toEqual([]);
+  });
+
+  it('skips attempts without a tap id and never repeats one', () => {
+    const pool = [att(1), att(2), { ...att(3), message_id: null }, att(4)];
+    expect(snapshotSeries(pool, nipun).counted_message_ids).toEqual([
+      'm1',
+      'm2',
+      'm4',
+    ]);
+  });
+
+  it('3 of 4 right passes NIPUN (≥ 0.75); 2 of 4 does not', () => {
+    expect(nipun([att(1), att(2), att(3), att(4, false)])?.passed).toBe(true);
+    expect(nipun([att(1), att(2), att(3, false), att(4, false)])?.passed).toBe(
+      false,
+    );
+  });
+
+  it('the comprehension query carries the tap id through to the attempt', () => {
+    const rows: ComprehensionRow[] = [
+      {
+        user_id: 'u',
+        created_at: new Date(0),
+        answer_correct: true,
+        question_id: 'q1',
+        message_id: 'tap-1',
+        question_type: 'R1.1',
+        level: 10,
+      },
+      {
+        user_id: 'u',
+        created_at: new Date(1),
+        answer_correct: true,
+        question_id: 'q1',
+        message_id: 'tap-2',
+        question_type: 'R1.1',
+        level: 10,
+      },
+    ];
+    expect(dedupeFirstAttempts(rows).map((a) => a.message_id)).toEqual([
+      'tap-1',
+    ]);
+    expect(COMPREHENSION_ANSWERS_SQL).toMatch(
+      /s\.user_message_id AS message_id/,
+    );
   });
 });
 
