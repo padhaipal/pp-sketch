@@ -191,8 +191,8 @@ export interface ScoresResponse {
   // Echoed when the request carried one (usage only).
   window?: TimeWindow;
   // Test metrics only: the age band the metric counts ([min, max) whole
-  // years — age-bands.ts) and the pass mark as a percentage (a pass is
-  // STRICTLY above it — literacy-test-scores.ts), so the dashboard's
+  // years — age-bands.ts) and the pass mark as a percentage (NIPUN passes
+  // AT it, MPL-B strictly above — literacy-test-scores.ts), so the dashboard's
   // "{n}% of 7–8 year old students pass …" and its pass-mark line come from
   // the code that decides them.
   age_band?: [number, number];

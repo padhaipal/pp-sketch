@@ -921,14 +921,18 @@ export interface SnapshotTestScore {
   attempts_available: number;
   latest?: TestSnapshotPoint;
   history?: TestSnapshotPoint[];
+  // The taps (media_metadata ids) behind `latest` and the history point
+  // before it; while insufficient, every first attempt in the pool so far.
+  // Only the per-user history (GET users/:id/literacy-test-scores) sets it.
+  counted_message_ids?: string[];
 }
 
 export interface LiteracyTestScores {
   // Grade 2: most recent 4 first attempts at level-10 R1.1/R1.2/R1.3
-  // questions; pass at score > 0.8 (all four right).
+  // questions; pass at score ≥ 0.75 (three of four right).
   nipun_grade_2: SnapshotTestScore;
   // Grade 3: most recent 4 first attempts at level-11/12 R1.1/R1.2/R1.3
-  // questions; pass at score > 0.8 (all four right).
+  // questions; pass at score ≥ 0.75 (three of four right).
   nipun_grade_3: SnapshotTestScore;
   // MPL-B: 20 level-11/12 first attempts selected by the four-filter
   // algorithm in UserService.getLiteracyTestScores; pass at score > 0.5.

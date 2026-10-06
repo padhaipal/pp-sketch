@@ -828,12 +828,14 @@ export class DashboardScoresService {
 
   // ─── Students (school level → grouped into teachers; class level) ─────
 
-  // School scope: membership is the student's LATEST test_results_student
-  // row's geo_entity_id — the compute-time school the geo vectors were
-  // built from — not referrer.geo_entity_id, which may have moved since
-  // the nightly run; a student must never be inside one school's n while
-  // listed under another. A student with any row for this school is a
-  // candidate; only those whose latest row is still here are members.
+  // School scope: membership is the referrer's CURRENT geo entity
+  // (`users.referrer_user_id` → `users.geo_entity_id`), exactly what the
+  // nightly geo roll-up joins (test-results:latest-students), so the
+  // school's n and its teacher cards agree. NOT the latest row's own
+  // geo_entity_id: that is stamped when a student is (re)scored, and a
+  // student quiet since their teacher joined the school keeps a stale one
+  // and vanished from the teacher's card (2026-10: "1 students" for a
+  // teacher with eight).
   // Class scope: membership is `users.referrer_user_id = teacher` —
   // wherever the student's latest row sits.
   // Each row also carries the student's newest row dated ≤ as_of − range
@@ -876,7 +878,9 @@ export class DashboardScoresService {
        WITH members AS (
          ${
            bySchool
-             ? `SELECT DISTINCT student_id FROM test_results_student WHERE geo_entity_id = $1`
+             ? `SELECT u.id AS student_id FROM users u
+                JOIN users r ON r.id = u.referrer_user_id
+                WHERE r.geo_entity_id = $1 AND u.role = 'student' AND u.deleted_at IS NULL`
              : `SELECT u.id AS student_id FROM users u
                 WHERE u.referrer_user_id = $1 AND u.role = 'student' AND u.deleted_at IS NULL`
          }
@@ -912,7 +916,7 @@ export class DashboardScoresService {
        JOIN users u ON u.id = l.student_id
        LEFT JOIN activity a ON a.user_id = l.student_id
        LEFT JOIN prior p ON p.student_id = l.student_id
-       WHERE ${bySchool ? 'l.geo_entity_id = $1 AND ' : ''}u.role = 'student' AND u.deleted_at IS NULL`,
+       WHERE u.role = 'student' AND u.deleted_at IS NULL`,
       [bySchool ? scope.school : scope.teacher, asOf, ...rangeParams(range)],
     );
     const asOfDate = new Date(`${asOf}T00:00:00Z`);

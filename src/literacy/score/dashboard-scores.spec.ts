@@ -220,8 +220,8 @@ describe('dashboard-scores arithmetic', () => {
   });
 
   it('testMeta: the age band and pass mark of a test metric, nothing for usage', () => {
-    expect(testMeta('nipun_g2')).toEqual({ age_band: [7, 9], pass_mark: 80 });
-    expect(testMeta('nipun_g3')).toEqual({ age_band: [8, 10], pass_mark: 80 });
+    expect(testMeta('nipun_g2')).toEqual({ age_band: [7, 9], pass_mark: 75 });
+    expect(testMeta('nipun_g3')).toEqual({ age_band: [8, 10], pass_mark: 75 });
     expect(testMeta('mpl_b')).toEqual({ age_band: [8, 10], pass_mark: 50 });
     expect(testMeta('usage')).toEqual({});
   });
@@ -357,7 +357,7 @@ interface StudentFixture {
     attempts: number;
   }>;
   last_active_at: string | null;
-  referrer_geo?: string; // deliberately NOT used by the school membership rule
+  referrer_geo?: string; // the teacher's current school = school membership (as the nightly roll-up)
   referrer_user_id?: string; // the student's teacher (class membership)
 }
 
@@ -535,12 +535,13 @@ function makeService(fixture: {
         const school = params[0] as string;
         const metric = /l\.(\w+)_score::float8/.exec(sql)![1];
         expect(['nipun_g2', 'usage']).toContain(metric);
+        // referrer's CURRENT school, whatever the latest row's geo says
+        expect(sql).toMatch(/JOIN users r ON r\.id = u\.referrer_user_id/);
+        expect(sql).not.toMatch(/l\.geo_entity_id = \$1/);
         return memberRows(
-          (fixture.students ?? []).filter((s) =>
-            s.rows.some((r) => r.geo === school),
-          ),
+          (fixture.students ?? []).filter((s) => s.referrer_geo === school),
           params,
-          (latest) => latest.geo === school,
+          () => true,
         );
       }
       case 'dashboard-scores:class': {
@@ -886,7 +887,7 @@ describe('DashboardScoresService.scores — geo levels', () => {
       metric: 'nipun_g2',
       range: 30,
       age_band: [7, 9],
-      pass_mark: 80,
+      pass_mark: 75,
       entity: expect.objectContaining({ id: 'S9' }),
       root: {
         pass_rate: null,
@@ -1117,7 +1118,8 @@ describe('DashboardScoresService.scores — school level (students)', () => {
       last_active_at: null,
     },
     // Moved: has an OLD row at S1 but the latest row is at another school →
-    // not a member here, whatever the referrer says now.
+    // IS a member here: the teacher's current school decides, not the
+    // stale geo on the latest row.
     {
       student_id: 'st-moved',
       name: 'Gone',
@@ -1154,28 +1156,34 @@ describe('DashboardScoresService.scores — school level (students)', () => {
   const fixture = () => ({
     entities: ENTITIES,
     geoRows: [geoRow('S1', AS_OF, 2, 1, [1, 0.5])],
-    students: students.map((s) => ({ ...s, referrer_user_id: 'T1' })),
+    students: students.map((s) => ({
+      ...s,
+      referrer_user_id: 'T1',
+      referrer_geo: 'S1',
+    })),
     teachers: [T1],
   });
 
-  it('school level: one teacher row per referrer of the compute-time members, aggregated from their students', async () => {
+  it('school level: one teacher row per referrer whose current school this is, aggregated from their students', async () => {
     const { svc } = makeService(fixture());
     const out = await svc.scores('S1', 'nipun_g2', 30);
     expect(out.child_type).toBe('teacher');
     const rows = out.children as ChildRow[];
     expect(rows).toHaveLength(1);
-    // st-moved's latest row is at S2 → not a member here, so 4 students.
+    // st-moved's latest row is stamped S2 (scored before the teacher moved),
+    // but the teacher is at S1 now → a member, so 5 students, 3 scored.
     expect(rows[0]).toEqual(
       expect.objectContaining({
         id: 'T1',
         type: 'teacher',
         name: 'Asha',
-        pass_rate: 50,
-        n: 2,
-        students: 4,
-        students_active: 2,
+        pass_rate: 66.7,
+        n: 3,
+        students: 5,
+        students_active: 3,
         using_lifteracy: true,
-        delta: null,
+        // st-moved's prior row (passed) is the only prior → 100 → 66.7
+        delta: -33.3,
         bin: 'mid',
         official: expect.objectContaining({
           name: 'Asha',
@@ -1533,6 +1541,7 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
     rows,
     last_active_at: '2026-09-12T00:00:00Z',
     referrer_user_id: 'T1',
+    referrer_geo: 'S1',
   });
   const T1: TeacherFixture = {
     id: 'T1',
