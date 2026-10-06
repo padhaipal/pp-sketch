@@ -276,12 +276,34 @@ export class DashboardScoresService {
     window?: TimeWindow,
     viewer: ViewerContext = ANONYMOUS,
   ): Promise<ScoresResponse> {
-    const unredacted = await this.buildScores(id, metric, range, window);
+    const unredacted = await this.buildScoresShared(id, metric, range, window);
     const visible = await this.piiAccess.visibleTo(
       viewer,
       piiSubjects(unredacted),
     );
     return redactScores(unredacted, visible);
+  }
+
+  // The dashboard fetches /scores and /spotlight for the same selection at
+  // the same moment; both need the same (unredacted) build, so an in-flight
+  // build is shared rather than run twice. Nothing is kept once it settles.
+  private readonly inflight = new Map<string, Promise<ScoresResponse>>();
+
+  private buildScoresShared(
+    id: string,
+    metric: LiteracyMetric,
+    range: DashboardRange,
+    window?: TimeWindow,
+  ): Promise<ScoresResponse> {
+    const key = `${id}|${metric}|${range}|${metric === 'usage' ? (window ?? '') : ''}`;
+    let pending = this.inflight.get(key);
+    if (!pending) {
+      pending = this.buildScores(id, metric, range, window).finally(() =>
+        this.inflight.delete(key),
+      );
+      this.inflight.set(key, pending);
+    }
+    return pending;
   }
 
   // The response as stored: names and phones in full. Internal — see scores().
@@ -705,7 +727,8 @@ export class DashboardScoresService {
     const out: GeoRef[] = [];
     let cursor: string | null = null;
     do {
-      const page = await this.geoEntityService.descendants(id, type, {
+      // One level down, always (CHILD_TYPE_OF) — the direct-children query.
+      const page = await this.geoEntityService.children(id, type, {
         cursor,
         limit: DESCENDANTS_MAX_LIMIT,
       });

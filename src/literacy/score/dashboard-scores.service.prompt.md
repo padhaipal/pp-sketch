@@ -14,7 +14,7 @@ nightly tables); never recomputes a score. Every statement carries a
    new school, or any entity before its first nightly run — a new teacher's
    first visit is exactly when the share link matters). `children` is empty
    at school level only; a country/state/district/block root still lists
-   its `descendants(id, child_type)` unscored (`using_lifteracy` false, `n`
+   its `children(id, child_type)` unscored (`using_lifteracy` false, `n`
    0, `pass_rate`/`delta` null, bin `none`, `official` as in step 4) via
    `geoChildren(…, asOf = null)`, which skips the children/prior reads — a
    root without a row has no child with one. The dashboard map draws its
@@ -28,7 +28,7 @@ nightly tables); never recomputes a score. Every statement carries a
    delta null). Module helpers `sinceSql` / `priorSql` / `priorOrder` /
    `rangeParams` build every window predicate: $2 = as_of, $3 = day count
    bound only for a numeric range.
-4. Children (non-school roots): `descendants(id, child_type)` — one hop,
+4. Children (non-school roots): `children(id, child_type)` — one hop,
    paged at 500 — then three queries over the child ids: the rows at
    `as_of`, the prior rows for delta, and the officials. Each child carries
    the GeoRef (blocks' lat/lng are the backfilled label points), pass_rate,
@@ -86,6 +86,12 @@ rows in (as_of − range, as_of] (`dashboard-scores:class-series`, also
 in member order;
 `children` = StudentRow[] (with `delta`); `most_improved` is empty (the
 client ranks students by delta itself).
+
+`scores()` and `spotlight()` share an in-flight build (`buildScoresShared`,
+keyed id|metric|range|window): the dashboard requests both at once, so the
+second request joins the first's promise instead of running every query
+again. Nothing is cached after the build settles; redaction is per viewer on
+top of the shared (unredacted) result.
 
 ## spotlight(id, metric, range)
 

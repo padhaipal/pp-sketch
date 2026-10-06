@@ -675,7 +675,7 @@ function makeService(fixture: {
   });
   const geo = {
     getById: jest.fn(async (id: string) => byId.get(id) ?? null),
-    descendants: jest.fn(
+    children: jest.fn(
       async (
         id: string,
         type: string,
@@ -779,8 +779,8 @@ describe('DashboardScoresService.scores — geo levels', () => {
     expect(out.root.delta).toBe(25);
     expect(out.series.map((p) => p.date)).toEqual(['2026-09-01', AS_OF]);
     expect(out.child_type).toBe('school');
-    expect(geo.descendants).toHaveBeenCalledTimes(1);
-    expect(geo.descendants).toHaveBeenCalledWith('B1', 'school', {
+    expect(geo.children).toHaveBeenCalledTimes(1);
+    expect(geo.children).toHaveBeenCalledWith('B1', 'school', {
       cursor: null,
       limit: 500,
     });
@@ -926,7 +926,7 @@ describe('DashboardScoresService.scores — geo levels', () => {
     expect(out.series).toEqual([]);
     expect(out.most_improved).toEqual([]);
     expect(out.child_type).toBe('block');
-    expect(geo.descendants).toHaveBeenCalledWith('D', 'block', {
+    expect(geo.children).toHaveBeenCalledWith('D', 'block', {
       cursor: null,
       limit: 500,
     });
@@ -976,6 +976,31 @@ describe('DashboardScoresService.scores — geo levels', () => {
 });
 
 describe('DashboardScoresService.spotlight', () => {
+  it('shares one build with a concurrent scores() for the same selection (the dashboard asks for both at once)', async () => {
+    const { svc, geo, query } = makeService({
+      entities: ENTITIES,
+      geoRows: [
+        geoRow('B1', AS_OF, 12, 9, Array(12).fill(0.75)),
+        geoRow('S1', AS_OF, 6, 6, Array(6).fill(1)),
+      ],
+    });
+    const [scores, spot] = await Promise.all([
+      svc.scores('B1', 'nipun_g2', 30),
+      svc.spotlight('B1', 'nipun_g2', 30),
+    ]);
+    expect(scores.child_type).toBe('school');
+    expect(spot.top?.child.id).toBe('S1');
+    expect(geo.children).toHaveBeenCalledTimes(1);
+    const latestCalls = query.mock.calls.filter((c) =>
+      String(c[0]).includes('dashboard-scores:latest'),
+    );
+    expect(latestCalls).toHaveLength(1);
+
+    // a later call builds afresh (nothing is kept once the build settles)
+    await svc.scores('B1', 'nipun_g2', 30);
+    expect(geo.children).toHaveBeenCalledTimes(2);
+  });
+
   it('top by pass_rate and most_improved by delta among n ≥ 5, each with its official; range defaults to 30 in the controller', async () => {
     const f = {
       entities: ENTITIES,

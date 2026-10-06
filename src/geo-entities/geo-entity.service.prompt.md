@@ -8,6 +8,11 @@ Raw SQL over `DataSource` (reads inline per repo convention; every write to
 - `ancestors(id)` — recursive CTE upward, capped at `MAX_ANCESTOR_DEPTH` = 6,
   root (country) first, excluding `id`. Deleted ancestors are returned: a
   teacher's school must still resolve its district.
+- `children(id, type, {cursor?, limit})` — DIRECT children of `id` of
+  `type` (`parent_id = $1 AND type = $2`), same filters and paging as
+  `descendants`. The dashboard uses this: the recursive CTE's row estimate
+  is ~10,000× off on the 1.7 M-row table, so Postgres hashed the whole table
+  (1 s warm, 11 s cold) for a block's 681 schools.
 - `descendants(id, type, {cursor?, limit})` — recursive CTE downward that
   stops expanding once it reaches `type` (a block's schools are one hop);
   `status = 'operational' AND deleted_at IS NULL`; keyset-paged by id

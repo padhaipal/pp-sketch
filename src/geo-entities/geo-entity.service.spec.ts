@@ -107,6 +107,19 @@ function fakeQuery(sql: string, params: unknown[] = []): unknown[] {
       .sort((a, b) => (a.id < b.id ? -1 : 1))
       .slice(0, limit);
   }
+  if (/WHERE g\.parent_id = \$1/.test(sql)) {
+    const [id, type, cursor, limit] = params as [
+      string,
+      string,
+      string | null,
+      number,
+    ];
+    return T.filter((x) => x.parent_id === id && x.type === type)
+      .filter((x) => x.status === 'operational' && x.deleted_at === null)
+      .filter((x) => cursor === null || x.id > cursor)
+      .sort((a, b) => (a.id < b.id ? -1 : 1))
+      .slice(0, limit);
+  }
   if (/FROM geo_entity WHERE id = \$1/.test(sql)) {
     const node = byId.get(params[0] as string);
     return node ? [node] : [];
@@ -181,6 +194,33 @@ describe('GeoEntityService.descendants', () => {
     });
     expect(second.items.map((x) => x.id)).toEqual(['sc4']);
     expect(second.next_cursor).toBeNull();
+  });
+});
+
+describe('GeoEntityService.children', () => {
+  it("a block's schools, without the recursive CTE: operational + not deleted, keyset-paged", async () => {
+    const { svc, query } = makeService();
+    const first = await svc.children('bl1', 'school', { limit: 1 });
+    expect(first.items.map((x) => x.id)).toEqual(['sc1']);
+    expect(first.next_cursor).toBe('sc1');
+    const sql = String(query.mock.calls[0][0]);
+    expect(sql).not.toMatch(/RECURSIVE/);
+    expect(sql).toMatch(/g\.parent_id = \$1/);
+    expect(sql).toMatch(/g\.type = \$2/);
+    expect(query.mock.calls[0][1]).toEqual(['bl1', 'school', null, 2]);
+
+    const second = await svc.children('bl1', 'school', {
+      cursor: first.next_cursor,
+      limit: 1,
+    });
+    expect(second.items.map((x) => x.id)).toEqual(['sc2']);
+    expect(second.next_cursor).toBeNull();
+  });
+
+  it('only the level directly below: a district has no school children', async () => {
+    const { svc } = makeService();
+    const page = await svc.children('di', 'school', { limit: 10 });
+    expect(page.items).toEqual([]);
   });
 });
 
