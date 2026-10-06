@@ -93,9 +93,43 @@ export class GeoEntityService {
     return rows;
   }
 
+  // Operational, non-deleted DIRECT children of `id` of the given type,
+  // keyset-paged by id like descendants(). Use this whenever `type` is the
+  // level right below `id` (the teacher dashboard always is): the recursive
+  // form below misestimates its row count by ~10,000× and the planner then
+  // hashes the whole geo_entity table (1.7 M rows, ~1 GB) instead of doing a
+  // few hundred index lookups — 1 s warm, 11 s from disk.
+  async children(
+    id: string,
+    type: GeoEntityType,
+    options: { cursor?: string | null; limit: number },
+  ): Promise<DescendantsPage> {
+    const { cursor = null, limit } = options;
+    const rows: GeoEntityDescendantRow[] = await this.dataSource.query(
+      `SELECT g.id, g.code, g.name, g.has_boundary, g.lat, g.lng, g.status,
+              g.management_group
+       FROM geo_entity g
+       WHERE g.parent_id = $1
+         AND g.type = $2
+         AND g.status = 'operational'
+         AND g.deleted_at IS NULL
+         AND ($3::uuid IS NULL OR g.id > $3::uuid)
+       ORDER BY g.id
+       LIMIT $4`,
+      [id, type, cursor, limit + 1],
+    );
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, limit) : rows;
+    return {
+      items,
+      next_cursor: hasMore ? items[items.length - 1].id : null,
+    };
+  }
+
   // Operational, non-deleted descendants of `id` of the given type, keyset-
   // paged by id. The recursion stops expanding once it reaches the target
-  // type, so a block's schools cost one hop.
+  // type, so a block's schools cost one hop. Slow on the 1.7 M-row table
+  // (see children()); staff onboarding only.
   async descendants(
     id: string,
     type: GeoEntityType,
