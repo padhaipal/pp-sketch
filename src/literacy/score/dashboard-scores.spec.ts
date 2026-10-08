@@ -126,7 +126,7 @@ describe('dashboard-scores arithmetic', () => {
     expect(validateWindow('7d')).toBe('7d');
     expect(validateWindow('all')).toBe('all');
     expect(() => validateWindow('week')).toThrow(
-      /window must be one of: yesterday, 7d, all/,
+      /window must be one of: yesterday, 7d, 30d, all/,
     );
     expect(() => validateWindow(7)).toThrow(/window must be one of/);
   });
@@ -445,11 +445,13 @@ function makeService(fixture: {
   };
   // The window predicate of a time-* query, read back off its SQL.
   const windowKeep = (sql: string, asOf: string) => {
-    const from = sql.includes("interval '7 days'")
-      ? dateMs(asOf) - 7 * 86_400_000
-      : /computed_for = \$2::date/.test(sql)
-        ? dateMs(asOf) - 1
-        : -Infinity;
+    const from = sql.includes("interval '30 days'")
+      ? dateMs(asOf) - 30 * 86_400_000
+      : sql.includes("interval '7 days'")
+        ? dateMs(asOf) - 7 * 86_400_000
+        : /computed_for = \$2::date/.test(sql)
+          ? dateMs(asOf) - 1
+          : -Infinity;
     return (d: string) => dateMs(d) > from && dateMs(d) <= dateMs(asOf);
   };
   const children = (id: string, type: string) =>
@@ -680,7 +682,11 @@ function makeService(fixture: {
         const ids = params[0] as string[];
         const asOf = dateMs(params[1] as string);
         const day = 86_400_000;
-        const span = sql.includes("interval '1 day'") ? 1 : 7;
+        const span = sql.includes("interval '1 day'")
+          ? 1
+          : sql.includes("interval '60 days'")
+            ? 30
+            : 7;
         const within = (d: string, lo: number, hi: number) =>
           dateMs(d) > asOf - hi * day && dateMs(d) <= asOf - lo * day;
         const total = (rows: GeoRow[]) => {
@@ -715,7 +721,11 @@ function makeService(fixture: {
         const ids = params[0] as string[];
         const asOf = dateMs(params[1] as string);
         const day = 86_400_000;
-        const span = sql.includes("interval '1 day'") ? 1 : 7;
+        const span = sql.includes("interval '1 day'")
+          ? 1
+          : sql.includes("interval '60 days'")
+            ? 30
+            : 7;
         const sumIn = (s: StudentFixture, lo: number, hi: number) =>
           s.rows
             .filter(
@@ -1542,6 +1552,19 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         ],
       },
     ]);
+  });
+
+  it('last 30 days: sums every stored day in the 30 days to as_of; delta vs the 30 before', async () => {
+    const { svc } = makeService(geoFixture());
+    const out = await svc.scores('B1', 'usage', 30, '30d');
+    expect(out.window).toBe('30d');
+    expect(out.time_delta_days).toBe(30);
+    // (20 + 40 + 10 + 100) minutes over (4 + 4 + 2 + 2) student-days, 4 stored days
+    expect(out.root).toEqual(
+      expect.objectContaining({ time_sum: 170, time_days: 4 }),
+    );
+    // nothing in the 30 days before → the whole 170 is the rise
+    expect(out.root.delta).toBe(170);
   });
 
   it('last seven days: sums the stored days as_of−6 … as_of as student-days', async () => {
