@@ -26,11 +26,12 @@ export const DEFAULT_RANGE: DashboardRange = 30;
 //   yesterday = the last complete IST day (the row dated as_of)
 //   7d        = the last seven days (rows dated as_of−6 … as_of)
 //   all       = every stored day up to as_of
-export const TIME_WINDOWS = ['yesterday', '7d', 'all'] as const;
+export const TIME_WINDOWS = ['yesterday', '7d', '30d', 'all'] as const;
 export type TimeWindow = (typeof TIME_WINDOWS)[number];
 export const TIME_WINDOW_DAYS: Record<TimeWindow, number | null> = {
   yesterday: 1,
   '7d': 7,
+  '30d': 30,
   all: null,
 };
 // Colour rule for an average of minutes per day — the same 5-minute mark the
@@ -222,7 +223,7 @@ export interface ScoresResponse {
   // Time mode: `delta` is the change in minutes against the window before —
   // 1 = yesterday vs the day before, 7 = the last seven days vs the seven
   // before (all time compares the last seven days too).
-  time_delta_days?: 1 | 7;
+  time_delta_days?: 1 | 7 | 30;
 }
 
 export interface SpotlightEntry {

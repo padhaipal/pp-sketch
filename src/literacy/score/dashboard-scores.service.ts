@@ -186,6 +186,8 @@ function windowSql(window: TimeWindow, col: string): string {
       return `${col} = $2::date`;
     case '7d':
       return `${col} <= $2::date AND ${col} > ($2::date - interval '7 days')`;
+    case '30d':
+      return `${col} <= $2::date AND ${col} > ($2::date - interval '30 days')`;
     case 'all':
       return `${col} <= $2::date`;
   }
@@ -193,10 +195,10 @@ function windowSql(window: TimeWindow, col: string): string {
 
 // Time-mode change ("most improved"): minutes in a comparison window minus
 // the window before it. Yesterday → the day before; the last seven days →
-// the seven before; all time has no "before", so it compares the last seven
-// days as well. $2 is always as_of.
+// the seven before; the last 30 days → the 30 before; all time has no
+// "before", so it compares the last seven days. $2 is always as_of.
 function deltaWindows(window: TimeWindow): {
-  days: 1 | 7;
+  days: 1 | 7 | 30;
   cur: (col: string) => string;
   prev: (col: string) => string;
 } {
@@ -205,6 +207,15 @@ function deltaWindows(window: TimeWindow): {
       days: 1,
       cur: (col) => `${col} = $2::date`,
       prev: (col) => `${col} = ($2::date - interval '1 day')`,
+    };
+  }
+  if (window === '30d') {
+    return {
+      days: 30,
+      cur: (col) =>
+        `${col} <= $2::date AND ${col} > ($2::date - interval '30 days')`,
+      prev: (col) =>
+        `${col} <= ($2::date - interval '30 days') AND ${col} > ($2::date - interval '60 days')`,
     };
   }
   return {

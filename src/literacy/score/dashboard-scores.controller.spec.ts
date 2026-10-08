@@ -75,7 +75,7 @@ describe('DashboardScoresController', () => {
       ANONYMOUS,
     );
     await expect(ctrl.getScores(ID, 'usage', '30', 'week')).rejects.toThrow(
-      /window must be one of: yesterday, 7d, all/,
+      /window must be one of: yesterday, 7d, 30d, all/,
     );
     await expect(
       ctrl.getSpotlight(ID, 'usage', '30', 'last-week'),
