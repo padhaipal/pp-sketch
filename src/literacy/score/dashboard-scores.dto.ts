@@ -39,11 +39,11 @@ export const TIME_PASS_MINUTES_PER_DAY = 5;
 export const MOST_IMPROVED_MIN_N = 5;
 export const MOST_IMPROVED_LIMIT = 5;
 export const ACTIVE_WINDOW_DAYS = 14;
-// Dashboard responses are cached for five minutes: the data changes once a
-// night and these are the heaviest queries in the app. `private`, because
-// the same URL answers differently per viewer (dashboard-scores.pii.ts) and
-// must never be served from a shared cache.
-export const PUBLIC_CACHE_CONTROL = 'private, max-age=300';
+// Dashboard responses are NOT cached by the browser (2026-10: a spotlight
+// message saved and then refreshed was served stale for five minutes under
+// the old max-age=300). `private` too: the same URL answers differently per
+// viewer (dashboard-scores.pii.ts) and must never sit in a shared cache.
+export const PUBLIC_CACHE_CONTROL = 'private, no-store';
 
 export type ChildType =
   | 'state'
@@ -93,6 +93,10 @@ export interface GeoRef {
 export interface TimeFields {
   // Minutes in the window, 1 dp. Null when there is nothing to average.
   time_total?: number | null;
+  // Total minutes over EVERY student in the window (a student's own total
+  // for a student row) — what the dashboard shows since 2026-10; time_total
+  // (per student) still drives the colour.
+  time_sum?: number | null;
   // Minutes per day, 1 dp — what the colour follows.
   time_per_day?: number | null;
   // The days the figures cover (1, up to 7, or the stored history).
@@ -116,6 +120,9 @@ export interface SeriesPoint {
   // usage: mean minutes per student that day (absent students = 0);
   // tests: mean score × 100 over the scored students; null at n = 0.
   mean: number | null;
+  // usage only: the total minutes that day over every student (the trend
+  // chart's y-axis since 2026-10); undefined for the tests.
+  total?: number | null;
 }
 
 // Class level only: one line per student for the trend chart. `value` is
@@ -306,13 +313,19 @@ export function timeFields(
   days: number,
 ): Required<TimeFields> {
   if (studentDays <= 0 || days <= 0) {
-    return { time_total: null, time_per_day: null, time_days: days };
+    return {
+      time_total: null,
+      time_per_day: null,
+      time_days: days,
+      time_sum: null,
+    };
   }
   const perDay = totalMinutes / studentDays;
   return {
     time_total: round1(perDay * days),
     time_per_day: round1(perDay),
     time_days: days,
+    time_sum: round1(totalMinutes),
   };
 }
 

@@ -137,24 +137,28 @@ describe('dashboard-scores arithmetic', () => {
       time_total: 21,
       time_per_day: 3,
       time_days: 7,
+      time_sum: 21,
     });
     // an area: 170 minutes over 12 student-days across 4 stored days
     expect(timeFields(170, 12, 4)).toEqual({
       time_total: 56.7,
       time_per_day: 14.2,
       time_days: 4,
+      time_sum: 170,
     });
     // nothing to average
     expect(timeFields(0, 0, 0)).toEqual({
       time_total: null,
       time_per_day: null,
       time_days: 0,
+      time_sum: null,
     });
     expect(timeFields(10, 0, 3).time_per_day).toBeNull();
     expect(timeFields(0, 5, 1)).toEqual({
       time_total: 0,
       time_per_day: 0,
       time_days: 1,
+      time_sum: 0,
     });
   });
 
@@ -1482,8 +1486,9 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         time_total: 5,
         time_per_day: 5,
         time_days: 1,
-        // 5 per student yesterday vs 10 the day before
-        delta: -5,
+        // 20 minutes yesterday vs 40 the day before (total minutes)
+        delta: -20,
+        time_sum: 20,
       }),
     );
     expect(out.time_delta_days).toBe(1);
@@ -1497,8 +1502,9 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         time_total: 10,
         time_per_day: 10,
         time_days: 1,
+        time_sum: 30,
         bin: 'high',
-        delta: 10,
+        delta: 30,
       }),
     );
     expect(byId.get('S2')).toEqual(
@@ -1525,8 +1531,9 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
     expect(tagsOf(query).filter((t) => t === 'time-geo')).toHaveLength(2);
     expect(tagsOf(query).filter((t) => t === 'time-geo-delta')).toHaveLength(2);
     // one faint line per child on the trend: the children's own vectors
+    // (usage lines are TOTAL minutes that day, not per student)
     expect(out.children_series).toEqual([
-      { id: 'S1', points: [{ date: AS_OF, value: 10 }] },
+      { id: 'S1', points: [{ date: AS_OF, value: 30 }] },
       {
         id: 'S2',
         points: [
@@ -1642,9 +1649,9 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
     const out = await svc.spotlight('B1', 'usage', 30, 'yesterday');
     expect(out.top?.child.id).toBe('S2');
     expect(out.top?.official?.name).toBe('Ravi');
-    // S2: 10 per student yesterday, nothing the day before → +10
+    // S2: 60 minutes yesterday, nothing the day before → +60
     expect(out.most_improved?.child.id).toBe('S2');
-    expect(out.most_improved?.child.delta).toBe(10);
+    expect(out.most_improved?.child.delta).toBe(60);
 
     const idle = makeService({
       entities: ENTITIES,
@@ -1814,7 +1821,7 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
     ]);
     // n < 5 → nobody qualifies as most improved
     expect(out.most_improved).toEqual([]);
-    // one line per teacher: the class's minutes per student each stored day
+    // one line per teacher: the class's TOTAL minutes each stored day
     expect(out.children_series).toEqual([
       {
         id: 'T1',
@@ -1822,7 +1829,7 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
           { date: '2026-09-01', value: 30 },
           { date: '2026-09-10', value: 9 },
           { date: '2026-09-12', value: 8 },
-          { date: AS_OF, value: 5.3 },
+          { date: AS_OF, value: 16 },
         ],
       },
     ]);
