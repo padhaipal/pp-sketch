@@ -166,6 +166,6 @@ describe('DashboardScoresController', () => {
         { name: 'Content-Type', value: 'text/csv; charset=utf-8' },
       ]),
     );
-    expect(PUBLIC_CACHE_CONTROL).toBe('private, max-age=300');
+    expect(PUBLIC_CACHE_CONTROL).toBe('private, no-store');
   });
 });

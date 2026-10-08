@@ -156,3 +156,14 @@ block's schools × days gets large.
   `dashboard-scores:teacher-series` (a teacher's students' rows grouped per
   date, like class-series). The dashboard draws them as the faint lines.
 - Teacher rows in Time mode order by `time_total` (was minutes per day).
+
+## 2026-10: totals, no browser cache
+
+- `TimeFields.time_sum`: total minutes over every student in the window (a
+  student's own total) — what the dashboard shows; `time_total` (per
+  student) still drives the colour.
+- Usage series carry `SeriesPoint.total` (the day's minutes over every
+  student) and usage child lines (`child-series`, `teacher-series`) are total
+  minutes per day; Time deltas (`time-geo-delta`) are in total minutes.
+- `PUBLIC_CACHE_CONTROL` = `private, no-store`: a saved spotlight message was
+  served stale for five minutes under `max-age=300`.

@@ -116,6 +116,23 @@ function seriesMean(
   return Math.round((metric === 'usage' ? mean : mean * 100) * 10) / 10;
 }
 
+// SeriesPoint.total / a usage child line: the day's minutes over every
+// student; undefined for the tests (their lines stay means).
+function seriesTotal(
+  metric: LiteracyMetric,
+  sum: number | null | undefined,
+): number | null | undefined {
+  if (metric !== 'usage') return undefined;
+  return typeof sum === 'number' ? Math.round(sum * 10) / 10 : null;
+}
+const withTotal = (
+  metric: LiteracyMetric,
+  sum: number | null | undefined,
+): { total?: number | null } => {
+  const total = seriesTotal(metric, sum);
+  return total === undefined ? {} : { total };
+};
+
 function metricColumns(metric: LiteracyMetric): string {
   return `${metric}_n::int AS n, ${metric}_pass::int AS pass, ${metric}_sum::float8 AS sum, ${metric}_sumsq::float8 AS sumsq, students_active, students_scored, students_unbanded`;
 }
@@ -618,6 +635,7 @@ export class DashboardScoresService {
         pass_rate: passRate(r.pass, r.n),
         n: r.n,
         mean: seriesMean(metric, r.sum, r.n),
+        ...withTotal(metric, r.sum),
       })),
       child_type: 'student',
       children: members.map(toStudentRow),
@@ -720,6 +738,7 @@ export class DashboardScoresService {
       pass_rate: passRate(r.pass, r.n),
       n: r.n,
       mean: seriesMean(metric, r.sum, r.n),
+      ...withTotal(metric, r.sum),
     }));
   }
 
@@ -828,12 +847,13 @@ export class DashboardScoresService {
        GROUP BY geo_entity_id`,
       [ids, asOf],
     );
+    // Total minutes over every student (what the dashboard shows), not per student.
     return new Map(
       rows.map((r) => [
         r.geo_entity_id,
         minutesDelta(
-          timeFields(r.cur_sum, r.cur_student_days, r.cur_days).time_total,
-          timeFields(r.prev_sum, r.prev_student_days, r.prev_days).time_total,
+          r.cur_days > 0 ? r.cur_sum : null,
+          r.prev_days > 0 ? r.prev_sum : null,
         ),
       ]),
     );
@@ -893,7 +913,10 @@ export class DashboardScoresService {
       rows.map((r) => ({
         id: r.geo_entity_id,
         date: isoDate(r.computed_for),
-        value: seriesMean(metric, r.sum, r.n),
+        value:
+          metric === 'usage'
+            ? (seriesTotal(metric, r.sum) ?? null)
+            : seriesMean(metric, r.sum, r.n),
       })),
     );
   }
@@ -931,7 +954,10 @@ export class DashboardScoresService {
       rows.map((r) => ({
         id: r.id,
         date: isoDate(r.computed_for),
-        value: seriesMean(metric, r.sum, r.n),
+        value:
+          metric === 'usage'
+            ? (seriesTotal(metric, r.sum) ?? null)
+            : seriesMean(metric, r.sum, r.n),
       })),
     );
   }
