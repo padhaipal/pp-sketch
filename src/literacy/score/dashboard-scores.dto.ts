@@ -129,6 +129,13 @@ export interface StudentSeries {
   student_id: string;
   points: StudentSeriesPoint[];
 }
+// Geo and school levels: one line per child (an area, or a teacher's class)
+// for the trend chart — the child's mean (score × 100, or minutes per
+// student for usage) on each stored date.
+export interface ChildSeries {
+  id: string;
+  points: StudentSeriesPoint[];
+}
 
 export type Bin = 'high' | 'mid' | 'low' | 'none';
 
@@ -204,6 +211,11 @@ export interface ScoresResponse {
   children: ChildRow[] | StudentRow[];
   most_improved: ChildRow[];
   students_series?: StudentSeries[];
+  children_series?: ChildSeries[];
+  // Time mode: `delta` is the change in minutes against the window before —
+  // 1 = yesterday vs the day before, 7 = the last seven days vs the seven
+  // before (all time compares the last seven days too).
+  time_delta_days?: 1 | 7;
 }
 
 export interface SpotlightEntry {

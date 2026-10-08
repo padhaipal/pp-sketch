@@ -16,6 +16,7 @@ import {
   binOf,
   CHILD_TYPE_OF,
   ChildRow,
+  ChildSeries,
   compareStudents,
   DashboardRange,
   delta,
@@ -173,6 +174,49 @@ function windowSql(window: TimeWindow, col: string): string {
   }
 }
 
+// Time-mode change ("most improved"): minutes in a comparison window minus
+// the window before it. Yesterday → the day before; the last seven days →
+// the seven before; all time has no "before", so it compares the last seven
+// days as well. $2 is always as_of.
+function deltaWindows(window: TimeWindow): {
+  days: 1 | 7;
+  cur: (col: string) => string;
+  prev: (col: string) => string;
+} {
+  if (window === 'yesterday') {
+    return {
+      days: 1,
+      cur: (col) => `${col} = $2::date`,
+      prev: (col) => `${col} = ($2::date - interval '1 day')`,
+    };
+  }
+  return {
+    days: 7,
+    cur: (col) =>
+      `${col} <= $2::date AND ${col} > ($2::date - interval '7 days')`,
+    prev: (col) =>
+      `${col} <= ($2::date - interval '7 days') AND ${col} > ($2::date - interval '14 days')`,
+  };
+}
+
+const round1 = (v: number) => Math.round(v * 10) / 10;
+
+// cur − prev in minutes; null only when neither window has anything.
+function minutesDelta(
+  cur: number | null | undefined,
+  prev: number | null | undefined,
+): number | null {
+  if (cur == null && prev == null) return null;
+  return round1((cur ?? 0) - (prev ?? 0));
+}
+
+function sumDeltas(members: { delta: number | null }[]): number | null {
+  const some = members.filter((m) => m.delta !== null);
+  return some.length
+    ? round1(some.reduce((a, m) => a + (m.delta ?? 0), 0))
+    : null;
+}
+
 function daysBetween(fromIso: string, toIso: string): number {
   return Math.round(
     (new Date(`${toIso}T00:00:00Z`).getTime() -
@@ -190,11 +234,26 @@ function priorPassRate(members: MemberRow[]): number | null {
   );
 }
 
-function rankImproved(children: ChildRow[]): ChildRow[] {
+// Time mode: only a rise in minutes counts as an improvement (an area at
+// the same minutes as the window before is not "most improved").
+function rankImproved(children: ChildRow[], time = false): ChildRow[] {
   return children
     .filter((c) => c.n >= MOST_IMPROVED_MIN_N && c.delta !== null)
+    .filter((c) => !time || (c.delta ?? 0) > 0)
     .sort((a, b) => (b.delta ?? 0) - (a.delta ?? 0))
     .slice(0, MOST_IMPROVED_LIMIT);
+}
+
+function groupSeries(
+  rows: Array<{ id: string; date: string; value: number | null }>,
+): ChildSeries[] {
+  const by = new Map<string, ChildSeries>();
+  for (const r of rows) {
+    const s = by.get(r.id) ?? { id: r.id, points: [] };
+    s.points.push({ date: r.date, value: r.value });
+    by.set(r.id, s);
+  }
+  return [...by.values()];
 }
 
 function emptyResponse(
@@ -341,12 +400,14 @@ export class DashboardScoresService {
       return empty;
     }
     const asOf = isoDate(latest.computed_for);
-    // Time mode has no deltas, so the prior row is never read.
-    const [prior, rootTime] = await Promise.all([
+    // Time mode: the delta is the change against the window before (no
+    // prior row is read); otherwise the prior row's pass rate.
+    const [prior, rootTime, rootTimeDelta] = await Promise.all([
       win
         ? new Map<string, number | null>()
         : this.priorRows([id], metric, asOf, range),
       win ? this.geoTime([id], asOf, win) : null,
+      win ? this.geoTimeDelta([id], asOf, win) : null,
     ]);
     const rootPass = passRate(latest.pass, latest.n);
     const root: RootStats = {
@@ -356,13 +417,18 @@ export class DashboardScoresService {
       n: latest.n,
       students_active: latest.students_active,
       students_unbanded: latest.students_unbanded,
-      delta: win ? null : delta(rootPass, prior.get(id)),
+      delta: win
+        ? (rootTimeDelta?.get(id) ?? null)
+        : delta(rootPass, prior.get(id)),
       ...(rootTime ? (rootTime.get(id) ?? timeFields(0, 0, 0)) : {}),
     };
     const series = await this.series(id, metric, asOf, range);
 
     let children: ChildRow[] | StudentRow[];
     let mostImproved: ChildRow[] = [];
+    // One faint line per child on the trend chart (the school's teachers,
+    // or the area's children).
+    let childrenSeries: ChildSeries[] | undefined;
     if (childType === 'teacher') {
       const members = await this.students(
         { school: id },
@@ -372,7 +438,13 @@ export class DashboardScoresService {
         win,
       );
       children = await this.teachers(members, win);
-      mostImproved = win ? [] : rankImproved(children);
+      mostImproved = rankImproved(children, !!win);
+      childrenSeries = await this.teacherSeries(
+        children.map((c) => c.id),
+        metric,
+        asOf,
+        range,
+      );
     } else if (childType && childType !== 'student') {
       children = await this.geoChildren(
         entity,
@@ -382,7 +454,13 @@ export class DashboardScoresService {
         range,
         win,
       );
-      mostImproved = win ? [] : rankImproved(children);
+      mostImproved = rankImproved(children, !!win);
+      childrenSeries = await this.childSeries(
+        children.map((c) => c.id),
+        metric,
+        asOf,
+        range,
+      );
     } else {
       children = [];
     }
@@ -391,7 +469,7 @@ export class DashboardScoresService {
       as_of: asOf,
       metric,
       range,
-      ...(win ? { window: win } : {}),
+      ...(win ? { window: win, time_delta_days: deltaWindows(win).days } : {}),
       ...testMeta(metric),
       entity: toRef(entity),
       root,
@@ -399,6 +477,7 @@ export class DashboardScoresService {
       child_type: childType,
       children,
       most_improved: mostImproved,
+      ...(childrenSeries ? { children_series: childrenSeries } : {}),
     };
   }
 
@@ -467,7 +546,7 @@ export class DashboardScoresService {
       n,
       students_active: members.filter((m) => m.active).length,
       students_unbanded: members.filter((m) => m.unbanded).length,
-      delta: win ? null : delta(rootPass, priorPassRate(members)),
+      delta: win ? sumDeltas(members) : delta(rootPass, priorPassRate(members)),
       ...(win ? groupTime(members) : {}),
     };
 
@@ -530,7 +609,7 @@ export class DashboardScoresService {
       as_of: asOf,
       metric,
       range,
-      ...(win ? { window: win } : {}),
+      ...(win ? { window: win, time_delta_days: deltaWindows(win).days } : {}),
       ...testMeta(metric),
       entity,
       root,
@@ -718,6 +797,145 @@ export class DashboardScoresService {
     );
   }
 
+  // Time-mode change per geo entity: minutes per student in the comparison
+  // window minus the window before (deltaWindows), from the nightly vectors.
+  private async geoTimeDelta(
+    ids: string[],
+    asOf: string,
+    window: TimeWindow,
+  ): Promise<Map<string, number | null>> {
+    if (ids.length === 0) return new Map();
+    const w = deltaWindows(window);
+    const agg = (cond: string, p: string) =>
+      `COALESCE(SUM(usage_sum) FILTER (WHERE ${cond}), 0)::float8 AS ${p}_sum,
+       COALESCE(SUM(usage_n) FILTER (WHERE ${cond}), 0)::float8 AS ${p}_student_days,
+       COUNT(*) FILTER (WHERE ${cond} AND usage_n > 0)::int AS ${p}_days`;
+    const rows: Array<{
+      geo_entity_id: string;
+      cur_sum: number;
+      cur_student_days: number;
+      cur_days: number;
+      prev_sum: number;
+      prev_student_days: number;
+      prev_days: number;
+    }> = await this.dataSource.query(
+      `/* dashboard-scores:time-geo-delta */
+       SELECT geo_entity_id,
+              ${agg(w.cur('computed_for'), 'cur')},
+              ${agg(w.prev('computed_for'), 'prev')}
+       FROM test_results_geo_entity
+       WHERE geo_entity_id = ANY($1::uuid[]) AND computed_for <= $2::date
+       GROUP BY geo_entity_id`,
+      [ids, asOf],
+    );
+    return new Map(
+      rows.map((r) => [
+        r.geo_entity_id,
+        minutesDelta(
+          timeFields(r.cur_sum, r.cur_student_days, r.cur_days).time_total,
+          timeFields(r.prev_sum, r.prev_student_days, r.prev_days).time_total,
+        ),
+      ]),
+    );
+  }
+
+  // Time-mode change per student: their minutes in the comparison window
+  // minus the window before.
+  private async studentTimeDelta(
+    ids: string[],
+    asOf: string,
+    window: TimeWindow,
+  ): Promise<Map<string, number | null>> {
+    if (ids.length === 0) return new Map();
+    const w = deltaWindows(window);
+    const rows: Array<{ student_id: string; cur: number; prev: number }> =
+      await this.dataSource.query(
+        `/* dashboard-scores:time-students-delta */
+         SELECT student_id,
+                COALESCE(SUM(usage_score) FILTER (WHERE ${w.cur('computed_for')}), 0)::float8 AS cur,
+                COALESCE(SUM(usage_score) FILTER (WHERE ${w.prev('computed_for')}), 0)::float8 AS prev
+         FROM test_results_student
+         WHERE student_id = ANY($1::uuid[]) AND computed_for <= $2::date
+         GROUP BY student_id`,
+        [ids, asOf],
+      );
+    return new Map(
+      rows.map((r) => [r.student_id, minutesDelta(r.cur, r.prev)]),
+    );
+  }
+
+  // ─── Child series (one line per child on the trend chart) ────────────
+
+  // Geo children: each child's own nightly vector over the range.
+  private async childSeries(
+    ids: string[],
+    metric: LiteracyMetric,
+    asOf: string,
+    range: DashboardRange,
+  ): Promise<ChildSeries[]> {
+    if (ids.length === 0) return [];
+    const rows: Array<{
+      geo_entity_id: string;
+      computed_for: string | Date;
+      n: number;
+      sum: number;
+    }> = await this.dataSource.query(
+      `/* dashboard-scores:child-series */
+       SELECT geo_entity_id, computed_for, ${metric}_n::int AS n, ${metric}_sum::float8 AS sum
+       FROM test_results_geo_entity
+       WHERE geo_entity_id = ANY($1::uuid[])
+         ${sinceSql(range, 'computed_for')}
+         AND computed_for <= $2::date
+       ORDER BY geo_entity_id, computed_for`,
+      [ids, asOf, ...rangeParams(range)],
+    );
+    return groupSeries(
+      rows.map((r) => ({
+        id: r.geo_entity_id,
+        date: isoDate(r.computed_for),
+        value: seriesMean(metric, r.sum, r.n),
+      })),
+    );
+  }
+
+  // School level: each teacher's class, aggregated from their students'
+  // rows per date (as the class level's own series is).
+  private async teacherSeries(
+    teacherIds: string[],
+    metric: LiteracyMetric,
+    asOf: string,
+    range: DashboardRange,
+  ): Promise<ChildSeries[]> {
+    if (teacherIds.length === 0) return [];
+    const usage = metric === 'usage';
+    const rows: Array<{
+      id: string;
+      computed_for: string | Date;
+      n: number;
+      sum: number;
+    }> = await this.dataSource.query(
+      `/* dashboard-scores:teacher-series */
+       SELECT u.referrer_user_id AS id, t.computed_for,
+              ${usage ? `COUNT(*)::int` : `COUNT(*) FILTER (WHERE t.${metric}_score IS NOT NULL)::int`} AS n,
+              ${usage ? `COALESCE(SUM(t.usage_score), 0)::float8` : `COALESCE(SUM(t.${metric}_score), 0)::float8`} AS sum
+       FROM test_results_student t
+       JOIN users u ON u.id = t.student_id
+       WHERE u.referrer_user_id = ANY($1::uuid[]) AND u.role = 'student' AND u.deleted_at IS NULL
+         ${sinceSql(range, 't.computed_for')}
+         AND t.computed_for <= $2::date
+       GROUP BY u.referrer_user_id, t.computed_for
+       ORDER BY u.referrer_user_id, t.computed_for`,
+      [teacherIds, asOf, ...rangeParams(range)],
+    );
+    return groupSeries(
+      rows.map((r) => ({
+        id: r.id,
+        date: isoDate(r.computed_for),
+        value: seriesMean(metric, r.sum, r.n),
+      })),
+    );
+  }
+
   // ─── Geo children (one hop via descendants) ───────────────────────────
 
   private async allDescendants(
@@ -764,13 +982,16 @@ export class DashboardScoresService {
     const ids = refs.map((r) => r.id);
     const noRows: GeoRowMetric[] = [];
     const noTime = new Map<string, Required<TimeFields>>();
-    const [rows, prior, officials, time] = await Promise.all([
+    const [rows, prior, officials, time, timeDelta] = await Promise.all([
       asOf ? this.childRows(ids, metric, asOf) : noRows,
       asOf && !win
         ? this.priorRows(ids, metric, asOf, range)
         : new Map<string, number | null>(),
       this.officials(ids),
       asOf && win ? this.geoTime(ids, asOf, win) : noTime,
+      asOf && win
+        ? this.geoTimeDelta(ids, asOf, win)
+        : new Map<string, number | null>(),
     ]);
     const byId = new Map(rows.map((r) => [r.geo_entity_id, r]));
     return refs.map((ref) => {
@@ -784,7 +1005,9 @@ export class DashboardScoresService {
         n: row?.n ?? 0,
         students_active: row?.students_active ?? 0,
         using_lifteracy: using,
-        delta: tf ? null : delta(pr, prior.get(ref.id)),
+        delta: tf
+          ? (timeDelta.get(ref.id) ?? null)
+          : delta(pr, prior.get(ref.id)),
         bin: tf ? timeBin(tf.time_per_day, using) : binOf(pr, using),
         official: officials.get(ref.id) ?? null,
         ...(tf ?? {}),
@@ -967,18 +1190,19 @@ export class DashboardScoresService {
       };
     });
     if (win) {
-      const time = await this.studentTime(
-        out.map((m) => m.student_id),
-        asOf,
-        win,
-      );
+      const ids = out.map((m) => m.student_id);
+      const [time, timeDelta] = await Promise.all([
+        this.studentTime(ids, asOf, win),
+        this.studentTimeDelta(ids, asOf, win),
+      ]);
       const days = TIME_WINDOW_DAYS[win] ?? 1;
       for (const m of out) {
         const tf = time.get(m.student_id) ?? timeFields(0, days, days);
         Object.assign(m, tf);
         m.score = tf.time_total;
         m.passed = (tf.time_per_day ?? 0) > TIME_PASS_MINUTES_PER_DAY;
-        m.delta = null;
+        // minutes vs the window before (deltaWindows)
+        m.delta = timeDelta.get(m.student_id) ?? null;
       }
     }
     return out.sort(compareStudents);
@@ -1029,7 +1253,7 @@ export class DashboardScoresService {
         students: studs.length,
         students_active: studs.filter((s) => s.active).length,
         using_lifteracy: true,
-        delta: tf ? null : delta(pr, priorPassRate(studs)),
+        delta: tf ? sumDeltas(studs) : delta(pr, priorPassRate(studs)),
         bin: tf ? timeBin(tf.time_per_day, true) : binOf(pr, true),
         ...(tf ?? {}),
         official: u
@@ -1037,8 +1261,8 @@ export class DashboardScoresService {
           : null,
       };
     });
-    // Time mode orders by minutes per day; otherwise by pass rate.
-    const rank = (c: ChildRow) => (win ? c.time_per_day : c.pass_rate) ?? -1;
+    // Time mode orders by total minutes; otherwise by pass rate.
+    const rank = (c: ChildRow) => (win ? c.time_total : c.pass_rate) ?? -1;
     return rows.sort(
       (a, b) => rank(b) - rank(a) || a.name.localeCompare(b.name),
     );

@@ -138,3 +138,21 @@ All-time cost: `time-geo` reads every stored day of every child on each
 request (index `(geo_entity_id, computed_for)`; responses are cached five
 minutes). Fine at pilot size; a stored running total is the follow-up when a
 block's schools × days gets large.
+
+## 2026-10: Time deltas, child series, teacher ranking
+
+- Time mode now HAS deltas (`delta` on root / children / students, and
+  `time_delta_days` on the response): minutes in the comparison window minus
+  the window before — yesterday vs the day before (1), the last seven days vs
+  the seven before (7; all time compares the last seven days too) —
+  `deltaWindows`, `dashboard-scores:time-geo-delta` (per-student totals from
+  the vectors) and `dashboard-scores:time-students-delta` (a student's own
+  minutes); a teacher's / class's delta is the students' summed. `most_improved`
+  is ranked in Time mode too, but only rises count (`rankImproved(children,
+  time)`), so spotlight's most improved exists in Time mode.
+- `children_series` (geo and school levels; the class keeps `students_series`):
+  one `{ id, points }` per child — `dashboard-scores:child-series` (the
+  child's own vector: mean score × 100, or minutes per student) and
+  `dashboard-scores:teacher-series` (a teacher's students' rows grouped per
+  date, like class-series). The dashboard draws them as the faint lines.
+- Teacher rows in Time mode order by `time_total` (was minutes per day).
