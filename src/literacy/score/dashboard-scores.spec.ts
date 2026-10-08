@@ -670,6 +670,123 @@ function makeService(fixture: {
           })
           .filter((r) => r.first_row !== undefined);
       }
+      // Time-mode deltas: the comparison window (yesterday, or the last
+      // seven days) against the window before it.
+      case 'dashboard-scores:time-geo-delta': {
+        const ids = params[0] as string[];
+        const asOf = dateMs(params[1] as string);
+        const day = 86_400_000;
+        const span = sql.includes("interval '1 day'") ? 1 : 7;
+        const within = (d: string, lo: number, hi: number) =>
+          dateMs(d) > asOf - hi * day && dateMs(d) <= asOf - lo * day;
+        const total = (rows: GeoRow[]) => {
+          const sd = rows.reduce((a, r) => a + r.n, 0);
+          const days = rows.filter((r) => r.n > 0).length;
+          return sd > 0 && days > 0
+            ? (rows.reduce((a, r) => a + r.sum, 0) / sd) * days
+            : null;
+        };
+        return ids
+          .map((id) => {
+            const rows = fixture.geoRows.filter((r) => r.geo_entity_id === id);
+            if (!rows.length) return null;
+            const agg = (lo: number, hi: number, p: string) => {
+              const rs = rows.filter((r) => within(r.computed_for, lo, hi));
+              return {
+                [`${p}_sum`]: rs.reduce((a, r) => a + r.sum, 0),
+                [`${p}_student_days`]: rs.reduce((a, r) => a + r.n, 0),
+                [`${p}_days`]: rs.filter((r) => r.n > 0).length,
+              };
+            };
+            void total;
+            return {
+              geo_entity_id: id,
+              ...agg(0, span, 'cur'),
+              ...agg(span, 2 * span, 'prev'),
+            };
+          })
+          .filter((r) => r !== null);
+      }
+      case 'dashboard-scores:time-students-delta': {
+        const ids = params[0] as string[];
+        const asOf = dateMs(params[1] as string);
+        const day = 86_400_000;
+        const span = sql.includes("interval '1 day'") ? 1 : 7;
+        const sumIn = (s: StudentFixture, lo: number, hi: number) =>
+          s.rows
+            .filter(
+              (r) =>
+                dateMs(r.created_at) > asOf - hi * day &&
+                dateMs(r.created_at) <= asOf - lo * day,
+            )
+            .reduce((a, r) => a + (r.score ?? 0), 0);
+        return (fixture.students ?? [])
+          .filter(
+            (s) =>
+              ids.includes(s.student_id) &&
+              s.rows.some((r) => dateMs(r.created_at) <= asOf),
+          )
+          .map((s) => ({
+            student_id: s.student_id,
+            cur: sumIn(s, 0, span),
+            prev: sumIn(s, span, 2 * span),
+          }));
+      }
+      case 'dashboard-scores:child-series': {
+        const ids = params[0] as string[];
+        const asOf = params[1] as string;
+        const cutoff = cutoffOf(params);
+        return fixture.geoRows
+          .filter(
+            (r) =>
+              ids.includes(r.geo_entity_id) &&
+              r.computed_for <= asOf &&
+              dateMs(r.computed_for) > cutoff,
+          )
+          .sort((a, b) =>
+            a.geo_entity_id + a.computed_for < b.geo_entity_id + b.computed_for
+              ? -1
+              : 1,
+          )
+          .map((r) => ({
+            geo_entity_id: r.geo_entity_id,
+            computed_for: r.computed_for,
+            n: r.n,
+            sum: r.sum,
+          }));
+      }
+      case 'dashboard-scores:teacher-series': {
+        const ids = params[0] as string[];
+        const asOf = params[1] as string;
+        const cutoff = cutoffOf(params);
+        const usage = /SUM\(t\.usage_score\)/.test(sql);
+        const by = new Map<
+          string,
+          { id: string; computed_for: string; n: number; sum: number }
+        >();
+        for (const st of fixture.students ?? []) {
+          if (!st.referrer_user_id || !ids.includes(st.referrer_user_id))
+            continue;
+          for (const r of st.rows) {
+            if (r.created_at > asOf || dateMs(r.created_at) <= cutoff) continue;
+            const k = `${st.referrer_user_id}|${r.created_at}`;
+            const row = by.get(k) ?? {
+              id: st.referrer_user_id,
+              computed_for: r.created_at,
+              n: 0,
+              sum: 0,
+            };
+            if (usage || r.score !== null) {
+              row.n += 1;
+              row.sum += r.score ?? 0;
+            }
+            by.set(k, row);
+          }
+        }
+        return [...by.values()].sort((a, b) =>
+          a.id + a.computed_for < b.id + b.computed_for ? -1 : 1,
+        );
+      }
       default:
         throw new Error(`unexpected SQL ${tag ?? sql.slice(0, 40)}`);
     }
@@ -1356,7 +1473,7 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
       ([sql]) => /dashboard-scores:([a-z-]+)/.exec(sql)![1],
     );
 
-  it('yesterday: minutes per student from the row dated as_of; bins from minutes per day; no deltas, no most improved', async () => {
+  it('yesterday: minutes per student from the row dated as_of; bins from minutes per day; delta = minutes vs the day before', async () => {
     const { svc, query } = makeService(geoFixture());
     const out = await svc.scores('B1', 'usage', 30, 'yesterday');
     expect(out.window).toBe('yesterday');
@@ -1365,11 +1482,14 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         time_total: 5,
         time_per_day: 5,
         time_days: 1,
-        delta: null,
+        // 5 per student yesterday vs 10 the day before
+        delta: -5,
       }),
     );
+    expect(out.time_delta_days).toBe(1);
     // the legacy yesterday figure is still there
     expect(out.root.mean).toBe(5);
+    // S1 rose by 10 but has n < 5 → nobody qualifies
     expect(out.most_improved).toEqual([]);
     const byId = new Map((out.children as ChildRow[]).map((c) => [c.id, c]));
     expect(byId.get('S1')).toEqual(
@@ -1378,7 +1498,7 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         time_per_day: 10,
         time_days: 1,
         bin: 'high',
-        delta: null,
+        delta: 10,
       }),
     );
     expect(byId.get('S2')).toEqual(
@@ -1400,9 +1520,21 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         bin: 'none',
       }),
     );
-    // Time mode never reads a prior row (there are no deltas).
+    // Time mode never reads a prior row (deltas come from the window before).
     expect(tagsOf(query)).not.toContain('prior');
     expect(tagsOf(query).filter((t) => t === 'time-geo')).toHaveLength(2);
+    expect(tagsOf(query).filter((t) => t === 'time-geo-delta')).toHaveLength(2);
+    // one faint line per child on the trend: the children's own vectors
+    expect(out.children_series).toEqual([
+      { id: 'S1', points: [{ date: AS_OF, value: 10 }] },
+      {
+        id: 'S2',
+        points: [
+          { date: '2026-09-10', value: 6 },
+          { date: AS_OF, value: 0 },
+        ],
+      },
+    ]);
   });
 
   it('last seven days: sums the stored days as_of−6 … as_of as student-days', async () => {
@@ -1486,7 +1618,7 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
     ]);
   });
 
-  it('spotlight in Time mode: top = most minutes per day among n ≥ 5 (never an area at zero); no most improved', async () => {
+  it('spotlight in Time mode: top = most minutes per day among n ≥ 5 (never an area at zero); most improved = the biggest rise in minutes', async () => {
     const f = {
       entities: ENTITIES,
       geoRows: [
@@ -1510,7 +1642,9 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
     const out = await svc.spotlight('B1', 'usage', 30, 'yesterday');
     expect(out.top?.child.id).toBe('S2');
     expect(out.top?.official?.name).toBe('Ravi');
-    expect(out.most_improved).toBeNull();
+    // S2: 10 per student yesterday, nothing the day before → +10
+    expect(out.most_improved?.child.id).toBe('S2');
+    expect(out.most_improved?.child.delta).toBe(10);
 
     const idle = makeService({
       entities: ENTITIES,
@@ -1584,21 +1718,23 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         r.delta,
       ]),
     ).toEqual([
-      // 12 + 9 over the full 7 days
-      ['st-1', 21, 3, 7, 21, false, null],
+      // 12 + 9 over the full 7 days; 21 now vs 30 the seven days before
+      ['st-1', 21, 3, 7, 21, false, -9],
       // 12 minutes over the 2 days since the first row, not 7
-      ['st-2', 12, 6, 2, 12, true, null],
-      ['st-3', 0, 0, 1, 0, false, null],
+      ['st-2', 12, 6, 2, 12, true, 12],
+      ['st-3', 0, 0, 1, 0, false, 0],
     ]);
-    // the class: 33 minutes over 10 student-days, scaled to the 7-day window
+    // the class: 33 minutes over 10 student-days, scaled to the 7-day window;
+    // delta = the students' changes summed
     expect(out.root).toEqual(
       expect.objectContaining({
         time_total: 23.1,
         time_per_day: 3.3,
         time_days: 7,
-        delta: null,
+        delta: 3,
       }),
     );
+    expect(out.time_delta_days).toBe(7);
     expect(out.most_improved).toEqual([]);
     const timeCall = (query.mock.calls as [string, unknown[]][]).find(([q]) =>
       q.includes('time-students'),
@@ -1673,9 +1809,22 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         // one of three students averages more than 5 minutes a day
         pass_rate: 33.3,
         bin: 'mid',
-        delta: null,
+        delta: 3,
       }),
     ]);
+    // n < 5 → nobody qualifies as most improved
     expect(out.most_improved).toEqual([]);
+    // one line per teacher: the class's minutes per student each stored day
+    expect(out.children_series).toEqual([
+      {
+        id: 'T1',
+        points: [
+          { date: '2026-09-01', value: 30 },
+          { date: '2026-09-10', value: 9 },
+          { date: '2026-09-12', value: 8 },
+          { date: AS_OF, value: 5.3 },
+        ],
+      },
+    ]);
   });
 });
