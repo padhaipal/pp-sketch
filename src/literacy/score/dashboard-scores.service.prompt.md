@@ -179,3 +179,19 @@ block's schools × days gets large.
 - NIPUN / MPL-B: deltas (children, students, root, most_improved) are the
   latest snapshot against the newest row ≤ as_of − 7 days
   (`TEST_DELTA_DAYS`), whatever the trend's range.
+
+## 2026-10: rankings(id, level, metric, window?) — GET geo-entities/:id/rankings
+
+Most improved / top performing (five each) among `level` entities below
+`:id` — the dashboard's level toggle above its rankings once drilled in.
+Levels: state / district / block / school (geo), teacher, student; a
+teacher's user id ranks only its students. Geo candidates are the `level`
+entities with a nightly vector on as_of whose ancestors include `:id`
+(`dashboard-scores:rank-candidates` + `GeoEntityService.ancestors` per
+candidate — no downward walk of the 1.7 M-row table). Teachers / students:
+`students({ schools })` over the candidate schools (referrer's current
+school), then `teachers()`. Values: pass rate % / score × 100 / total
+minutes; deltas as everywhere (7 days back; Time ratio). Most improved: n ≥ 5
+for groups, ratio > 1 in Time. Teachers carry their number (`sub`) and
+students their stored name with no number — NOT viewer-masked (product
+decision, 2026-10).

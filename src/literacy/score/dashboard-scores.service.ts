@@ -42,6 +42,9 @@ import {
   TimeFields,
   TimeWindow,
   usingLifteracy,
+  RankLevel,
+  RankRow,
+  RankingsResponse,
 } from './dashboard-scores.dto';
 
 // Reads for the public teacher dashboard. Only test_results_geo_entity /
@@ -282,6 +285,53 @@ function rankImproved(children: ChildRow[], time = false): ChildRow[] {
     .slice(0, MOST_IMPROVED_LIMIT);
 }
 
+// Top five by value and most improved five by delta (tests: n ≥ 5 like the
+// children lists; Time: ratio > 1).
+function rankRows(
+  rows: Array<{ row: RankRow; n: number }>,
+  time: boolean,
+): { top: RankRow[]; most_improved: RankRow[] } {
+  const top = rows
+    .filter((r) => r.row.value !== null)
+    .sort((a, b) => (b.row.value ?? 0) - (a.row.value ?? 0))
+    .slice(0, MOST_IMPROVED_LIMIT)
+    .map((r) => r.row);
+  const most_improved = rows
+    .filter((r) => r.n >= MOST_IMPROVED_MIN_N && r.row.delta !== null)
+    .filter((r) => !time || (r.row.delta ?? 0) > 1)
+    .sort((a, b) => (b.row.delta ?? 0) - (a.row.delta ?? 0))
+    .slice(0, MOST_IMPROVED_LIMIT)
+    .map((r) => r.row);
+  return { top, most_improved };
+}
+
+// Students: their own figures; the name as stored (never masked here — a
+// product decision, 2026-10), no number.
+function rankStudents(
+  members: MemberRow[],
+  metric: LiteracyMetric,
+  win?: TimeWindow,
+): { top: RankRow[]; most_improved: RankRow[] } {
+  const rows = members.map((m) => ({
+    row: {
+      id: m.student_id,
+      name: m.name ?? m.label,
+      sub: null,
+      value: win
+        ? (m.time_sum ?? null)
+        : m.score === null
+          ? null
+          : metric === 'usage'
+            ? m.score
+            : Math.round(m.score * 1000) / 10,
+      delta: m.delta,
+    },
+    // a student is one person: no minimum group size
+    n: MOST_IMPROVED_MIN_N,
+  }));
+  return rankRows(rows, !!win);
+}
+
 function groupSeries(
   rows: Array<{ id: string; date: string; value: number | null }>,
 ): ChildSeries[] {
@@ -517,6 +567,148 @@ export class DashboardScoresService {
       most_improved: mostImproved,
       ...(childrenSeries ? { children_series: childrenSeries } : {}),
     };
+  }
+
+  // ─── Rankings at a deeper level ───────────────────────────────────────
+
+  // Most improved / top performing among `level` entities under `id` (a geo
+  // entity, or a teacher's user id for their students). Same rules as the
+  // children lists: tests by pass rate / score with a 7-day delta, Time by
+  // total minutes with the window ratio (most improved: ratio > 1). Five
+  // each. Teachers carry their number; students their name, no number.
+  async rankings(
+    id: string,
+    level: RankLevel,
+    metric: LiteracyMetric,
+    window?: TimeWindow,
+  ): Promise<RankingsResponse> {
+    const win = metric === 'usage' ? window : undefined;
+    const entity = await this.geoEntityService.getById(id);
+    const empty = (asOf: string | null): RankingsResponse => ({
+      level,
+      as_of: asOf,
+      top: [],
+      most_improved: [],
+    });
+    // A teacher's class: students only.
+    if (!entity) {
+      if (level !== 'student') return empty(null);
+      const asOfRows: Array<{ computed_for: string | Date | null }> =
+        await this.dataSource.query(
+          `/* dashboard-scores:class-as-of */
+           SELECT MAX(t.computed_for) AS computed_for
+           FROM test_results_student t
+           JOIN users u ON u.id = t.student_id
+           WHERE u.referrer_user_id = $1 AND u.role = 'student' AND u.deleted_at IS NULL`,
+          [id],
+        );
+      const cf = asOfRows[0]?.computed_for ?? null;
+      if (!cf) return empty(null);
+      const asOf = isoDate(cf);
+      const members = await this.students(
+        { teacher: id },
+        metric,
+        asOf,
+        30,
+        win,
+      );
+      return { level, as_of: asOf, ...rankStudents(members, metric, win) };
+    }
+    const latest = await this.latestRow(id, metric);
+    if (!latest) return empty(null);
+    const asOf = isoDate(latest.computed_for);
+    const geoLevel: GeoEntityType =
+      level === 'teacher' || level === 'student' ? 'school' : level;
+    const ids = await this.rankCandidates(id, geoLevel, asOf);
+    if (level === 'teacher' || level === 'student') {
+      if (ids.length === 0)
+        return { level, as_of: asOf, top: [], most_improved: [] };
+      const members = await this.students(
+        { schools: ids },
+        metric,
+        asOf,
+        30,
+        win,
+      );
+      if (level === 'student')
+        return { level, as_of: asOf, ...rankStudents(members, metric, win) };
+      const teachers = await this.teachers(members, win);
+      const rows = teachers.map((c) => ({
+        row: {
+          id: c.id,
+          name: c.name,
+          sub: c.official?.phone ?? null,
+          value: win ? (c.time_sum ?? null) : c.pass_rate,
+          delta: c.delta,
+        },
+        n: c.n,
+      }));
+      return { level, as_of: asOf, ...rankRows(rows, !!win) };
+    }
+    if (ids.length === 0)
+      return { level, as_of: asOf, top: [], most_improved: [] };
+    const [rows, prior, time, timeDelta] = await Promise.all([
+      this.childRows(ids, metric, asOf),
+      win
+        ? new Map<string, number | null>()
+        : this.priorRows(ids, metric, asOf, TEST_DELTA_DAYS),
+      win
+        ? this.geoTime(ids, asOf, win)
+        : new Map<string, Required<TimeFields>>(),
+      win
+        ? this.geoTimeDelta(ids, asOf, win)
+        : new Map<string, number | null>(),
+    ]);
+    const names: Array<{ id: string; name: string }> =
+      await this.dataSource.query(
+        `/* dashboard-scores:rank-names */
+         SELECT id, name FROM geo_entity WHERE id = ANY($1::uuid[])`,
+        [ids],
+      );
+    const nameOf = new Map(names.map((r) => [r.id, r.name]));
+    const out = rows
+      .filter((r) => usingLifteracy(r))
+      .map((r) => {
+        const pr = passRate(r.pass, r.n);
+        return {
+          row: {
+            id: r.geo_entity_id,
+            name: nameOf.get(r.geo_entity_id) ?? '',
+            sub: null,
+            value: win ? (time.get(r.geo_entity_id)?.time_sum ?? null) : pr,
+            delta: win
+              ? (timeDelta.get(r.geo_entity_id) ?? null)
+              : delta(pr, prior.get(r.geo_entity_id)),
+          },
+          n: r.n,
+        };
+      });
+    return { level, as_of: asOf, ...rankRows(out, !!win) };
+  }
+
+  // `type` entities under `rootId` that have a nightly vector on as_of (only
+  // those can rank), found by walking each candidate's ancestors — a few
+  // index lookups, never a scan of the 1.7 M-row geo_entity table.
+  private async rankCandidates(
+    rootId: string,
+    type: GeoEntityType,
+    asOf: string,
+  ): Promise<string[]> {
+    const cands: Array<{ id: string }> = await this.dataSource.query(
+      `/* dashboard-scores:rank-candidates */
+       SELECT g.id
+       FROM test_results_geo_entity t
+       JOIN geo_entity g ON g.id = t.geo_entity_id
+       WHERE t.computed_for = $1::date AND g.type = $2
+         AND g.status = 'operational' AND g.deleted_at IS NULL`,
+      [asOf, type],
+    );
+    const out: string[] = [];
+    for (const c of cands) {
+      const ancestors = await this.geoEntityService.ancestors(c.id);
+      if (ancestors.some((a) => a.id === rootId)) out.push(c.id);
+    }
+    return out;
   }
 
   // ─── Class level (`:id` = a teacher's user id) ────────────────────────
@@ -1108,7 +1300,7 @@ export class DashboardScoresService {
   // (all time: the oldest row before as_of) as prior_score / prior_passed
   // for deltas.
   private async students(
-    scope: { school: string } | { teacher: string },
+    scope: { school: string } | { schools: string[] } | { teacher: string },
     metric: LiteracyMetric,
     asOf: string,
     _range: DashboardRange,
@@ -1132,7 +1324,13 @@ export class DashboardScoresService {
       prior_score: number | null;
       prior_passed: boolean | null;
     }
-    const bySchool = 'school' in scope;
+    const bySchool = 'school' in scope || 'schools' in scope;
+    const schoolIds =
+      'schools' in scope
+        ? scope.schools
+        : 'school' in scope
+          ? [scope.school]
+          : [];
     // Usage is a per-day number: only a row dated as_of (or exactly the prior
     // date) carries minutes for that day; anything else is zero.
     const usage = metric === 'usage';
@@ -1146,7 +1344,7 @@ export class DashboardScoresService {
            bySchool
              ? `SELECT u.id AS student_id FROM users u
                 JOIN users r ON r.id = u.referrer_user_id
-                WHERE r.geo_entity_id = $1 AND u.role = 'student' AND u.deleted_at IS NULL`
+                WHERE r.geo_entity_id = ANY($1::uuid[]) AND u.role = 'student' AND u.deleted_at IS NULL`
              : `SELECT u.id AS student_id FROM users u
                 WHERE u.referrer_user_id = $1 AND u.role = 'student' AND u.deleted_at IS NULL`
          }
@@ -1184,7 +1382,7 @@ export class DashboardScoresService {
        LEFT JOIN prior p ON p.student_id = l.student_id
        WHERE u.role = 'student' AND u.deleted_at IS NULL`,
       [
-        bySchool ? scope.school : scope.teacher,
+        bySchool ? schoolIds : (scope as { teacher: string }).teacher,
         asOf,
         ...rangeParams(TEST_DELTA_DAYS),
       ],

@@ -538,14 +538,18 @@ function makeService(fixture: {
           .map((id) => ({ id }));
       }
       case 'dashboard-scores:students': {
-        const school = params[0] as string;
+        // one school, or several (rankings at the teacher / student level)
+        const schools = params[0] as string[];
         const metric = /l\.(\w+)_score::float8/.exec(sql)![1];
         expect(['nipun_g2', 'usage']).toContain(metric);
         // referrer's CURRENT school, whatever the latest row's geo says
         expect(sql).toMatch(/JOIN users r ON r\.id = u\.referrer_user_id/);
         expect(sql).not.toMatch(/l\.geo_entity_id = \$1/);
         return memberRows(
-          (fixture.students ?? []).filter((s) => s.referrer_geo === school),
+          (fixture.students ?? []).filter(
+            (s) =>
+              s.referrer_geo !== undefined && schools.includes(s.referrer_geo),
+          ),
           params,
           () => true,
         );
@@ -801,12 +805,48 @@ function makeService(fixture: {
           a.id + a.computed_for < b.id + b.computed_for ? -1 : 1,
         );
       }
+      case 'dashboard-scores:rank-candidates': {
+        const [asOf, type] = params as [string, string];
+        const ids = new Set(
+          fixture.geoRows
+            .filter((r) => r.computed_for === asOf)
+            .map((r) => r.geo_entity_id),
+        );
+        return fixture.entities
+          .filter(
+            (e) =>
+              ids.has((e as { id: string }).id) &&
+              (e as { type: string }).type === type,
+          )
+          .map((e) => ({ id: (e as { id: string }).id }));
+      }
+      case 'dashboard-scores:rank-names': {
+        const ids = params[0] as string[];
+        return fixture.entities
+          .filter((e) => ids.includes((e as { id: string }).id))
+          .map((e) => ({
+            id: (e as { id: string }).id,
+            name: (e as { name: string }).name,
+          }));
+      }
       default:
         throw new Error(`unexpected SQL ${tag ?? sql.slice(0, 40)}`);
     }
   });
   const geo = {
     getById: jest.fn(async (id: string) => byId.get(id) ?? null),
+    // parents of `id`, root first (rankings walk them)
+    ancestors: jest.fn(async (id: string) => {
+      const out: Record<string, unknown>[] = [];
+      let cur = byId.get(
+        (byId.get(id) as { parent_id?: string } | undefined)?.parent_id ?? '',
+      );
+      while (cur) {
+        out.unshift(cur);
+        cur = byId.get((cur as { parent_id?: string }).parent_id ?? '');
+      }
+      return out;
+    }),
     children: jest.fn(
       async (
         id: string,
@@ -1443,6 +1483,23 @@ describe('DashboardScoresService.scores — school level (students)', () => {
     expect(out.students_series?.[0].points[0]).toMatchObject({ date: AS_OF });
   });
 
+  it("rankings: a block's TEACHERS carry their number; its STUDENTS their stored name and no number", async () => {
+    const fx = fixture();
+    fx.teachers = [{ ...T1, external_id: '919876500001' }];
+    fx.geoRows.push(geoRow('B1', AS_OF, 2, 1, [1, 0.5]));
+    const { svc } = makeService(fx);
+    const teachers = await svc.rankings('B1', 'teacher', 'nipun_g2');
+    expect(teachers.top).toEqual([
+      expect.objectContaining({ id: 'T1', name: 'Asha', sub: '919876500001' }),
+    ]);
+    const students = await svc.rankings('B1', 'student', 'nipun_g2');
+    expect(students.top.length).toBeGreaterThan(0);
+    expect(students.top.every((r) => r.sub === null)).toBe(true);
+    expect(students.top.map((r) => r.name)).toContain('Bittu Yadav');
+    // best score first, as a percentage
+    expect(students.top[0].value).toBe(100);
+  });
+
   it('class level: a teacher with no scored students yet → 200 with nulls', async () => {
     const { svc } = makeService({
       entities: ENTITIES,
@@ -1866,5 +1923,50 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         ],
       },
     ]);
+  });
+});
+
+describe('DashboardScoresService.rankings', () => {
+  const f = () => ({
+    entities: ENTITIES,
+    geoRows: [
+      geoRow('D', AS_OF, 18, 12, Array(18).fill(0.75)),
+      geoRow('B1', AS_OF, 18, 12, Array(18).fill(0.75)),
+      geoRow('S1', AS_OF, 6, 6, Array(6).fill(1)),
+      geoRow('S1', '2026-09-01', 6, 3, Array(6).fill(0.5)),
+      geoRow('S2', AS_OF, 6, 3, Array(6).fill(0.5)),
+      geoRow('S2', '2026-09-01', 6, 0, Array(6).fill(0.25)),
+      geoRow('S9', AS_OF, 6, 3, Array(6).fill(0.5)),
+    ],
+  });
+
+  it("a district's SCHOOLS (two levels down): top by pass rate, most improved vs 7 days back", async () => {
+    const { svc } = makeService(f());
+    const out = await svc.rankings('D', 'school', 'nipun_g2');
+    expect(out.level).toBe('school');
+    expect(out.as_of).toBe(AS_OF);
+    expect(out.top.map((r) => [r.id, r.value])).toEqual([
+      ['S1', 100],
+      ['S2', 50],
+      ['S9', 50],
+    ]);
+    // S1 +50, S2 +50 (vs 2026-09-01); S9 has no prior → not ranked
+    expect(out.most_improved.map((r) => [r.id, r.delta])).toEqual([
+      ['S1', 50],
+      ['S2', 50],
+    ]);
+    expect(out.top[0]).toEqual(
+      expect.objectContaining({ name: expect.any(String), sub: null }),
+    );
+  });
+
+  it('a level that is not below the entity, or an entity without data, is empty', async () => {
+    const { svc } = makeService({ entities: ENTITIES, geoRows: [] });
+    await expect(svc.rankings('D', 'school', 'nipun_g2')).resolves.toEqual({
+      level: 'school',
+      as_of: null,
+      top: [],
+      most_improved: [],
+    });
   });
 });
