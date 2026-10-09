@@ -149,6 +149,24 @@ export interface StaffUserRow {
   link: string;
 }
 
+// GET /users/staff — the onboarding console's staff table.
+export interface StaffListRow extends StaffUserRow {
+  // the geo entity's UDISE / LGD code
+  geo_code: string | null;
+  // students under them: a teacher's referred students; an official's
+  // area's students at the last nightly run (test_results_geo_entity.usage_n)
+  students: number;
+  // the parents' enrolment link — teachers (school accounts) only
+  share_link: string | null;
+}
+export interface StaffListResponse {
+  total: number;
+  offset: number;
+  limit: number;
+  rows: StaffListRow[];
+}
+export const STAFF_LIST_MAX_LIMIT = 500;
+
 export interface StaffUserDetail extends StaffUserRow {
   geo_entity: GeoEntity | null;
   ancestors: GeoEntity[];

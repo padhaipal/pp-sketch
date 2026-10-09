@@ -125,3 +125,4 @@ Digital-proxy literacy test scores:
   Question types/levels come from media_details on the option's question row
   and its parent passage row (the comprehension query in the method). Exposed
   at GET /users/:id/literacy-test-scores.
+- `listStaff(q, offset, limit)` (2026-10, GET /users/staff): every staff-role account, deactivated last, filtered by `q` over name, phone digits, role title, geo entity name and code prefix (LIKE metacharacters escaped); `students` = a teacher's (school account's) referred students, else the area's latest `test_results_geo_entity.usage_n`; `count(*) OVER ()` gives the total. The controller adds the dashboard link, `share_link` (teachers only) and pages at 100 by default, 500 max; the route is declared before `:id`.
