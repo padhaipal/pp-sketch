@@ -966,6 +966,53 @@ describe('UserController.staffCreate', () => {
   });
 });
 
+describe('UserController.listStaff', () => {
+  it('pages (default 100, max 500), attaches the dashboard link, and the share link for teachers only', async () => {
+    const listStaff = jest.fn().mockResolvedValue({
+      total: 2,
+      rows: [
+        {
+          id: 't1',
+          external_id: '919999990001',
+          name: 'T',
+          role: 'education_official',
+          geo_entity_type: 'school',
+          geo_code: '09270904601',
+          students: 8,
+          deleted_at: null,
+        },
+        {
+          id: 'b1',
+          external_id: '919999990002',
+          name: 'B',
+          role: 'education_official',
+          geo_entity_type: 'block',
+          geo_code: '092711',
+          students: 87,
+          deleted_at: null,
+        },
+      ],
+    });
+    const ctrl = makeController({ userSvc: { listStaff } });
+    const out = await ctrl.listStaff('kak', '0', undefined);
+    expect(listStaff).toHaveBeenCalledWith('kak', 0, 100);
+    expect(out.total).toBe(2);
+    expect(
+      out.rows.map((r) => [r.link, r.share_link, r.students, r.geo_code]),
+    ).toEqual([
+      [
+        'https://dashboard.padhaipal.com/d/t1',
+        'https://dashboard.padhaipal.com/r/919999990001',
+        8,
+        '09270904601',
+      ],
+      ['https://dashboard.padhaipal.com/d/b1', null, 87, '092711'],
+    ]);
+    await ctrl.listStaff(undefined, '-5', '9999');
+    expect(listStaff).toHaveBeenLastCalledWith('', 0, 500);
+  });
+});
+
 describe('UserController.lookup + getStaff', () => {
   it('lookup passes q through and attaches the dashboard link, soft-deleted rows included', async () => {
     const lookupStaff = jest.fn().mockResolvedValue([
