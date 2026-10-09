@@ -140,8 +140,7 @@ const messageIds = (attempts: FirstAttempt[]): string[] => [
 
 // history[] = the snapshot algorithm replayed over every chronological prefix
 // of the pool (insufficient-data prefixes skipped); latest = final entry.
-// counted_message_ids = the taps behind the latest and the previous history
-// points (the student modal lists just those), or, while the data is still
+// counted_message_ids = the taps behind the latest history points (the student modal lists just those), or, while the data is still
 // insufficient, every attempt in the pool so far.
 export function snapshotSeries(
   pool: FirstAttempt[],
@@ -173,7 +172,9 @@ export function snapshotSeries(
     attempts_available: pool.length,
     latest: history[history.length - 1],
     history,
-    counted_message_ids: messageIds(selected.slice(-2).flat()),
+    // the CURRENT score's answers only: exactly 4 for NIPUN, 20 for MPL-B
+    // (2026-10; the union with the previous score's showed 5 / 21)
+    counted_message_ids: messageIds(selected[selected.length - 1]),
     bin_message_ids: messageIds(pool),
   };
 }

@@ -921,8 +921,8 @@ export interface SnapshotTestScore {
   attempts_available: number;
   latest?: TestSnapshotPoint;
   history?: TestSnapshotPoint[];
-  // The taps (media_metadata ids) behind `latest` and the history point
-  // before it; while insufficient, every first attempt in the pool so far.
+  // The taps (media_metadata ids) behind `latest` (4 for NIPUN, 20 for
+  // MPL-B); while insufficient, every first attempt in the pool so far.
   // Only the per-user history (GET users/:id/literacy-test-scores) sets it.
   counted_message_ids?: string[];
   // Every tap in the test's pool (all first attempts at its questions),
