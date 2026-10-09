@@ -5,7 +5,7 @@
 // regenerated from the new code. If the algorithm is meant to change, the
 // change is a product decision and this literal is updated deliberately.
 // Updated 2026-10: NIPUN pass is ≥ 0.75 (three of four), and every test
-// carries `counted_message_ids` (empty here — the fixture rows have no tap
+// carries `counted_message_ids` and `bin_message_ids` (empty here — the fixture rows have no tap
 // ids).
 jest.mock('uuid', () => ({
   v4: jest.fn(() => 'gen-uuid'),
@@ -117,7 +117,7 @@ export function goldenFixtureRows(userId: string): GoldenRow[] {
 }
 
 const GOLDEN_JSON =
-  '{"11111111-1111-4111-8111-111111111111":{"nipun_grade_2":{"status":"ok","attempts_available":6,"latest":{"at":"2026-07-09T00:00:00.000Z","score":0.75,"passed":true},"history":[{"at":"2026-07-05T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-08T00:00:00.000Z","score":0.5,"passed":false},{"at":"2026-07-09T00:00:00.000Z","score":0.75,"passed":true}],"counted_message_ids":[]},"nipun_grade_3":{"status":"ok","attempts_available":10,"latest":{"at":"2026-07-30T00:00:00.000Z","score":0.75,"passed":true},"history":[{"at":"2026-07-18T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-19T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-22T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-24T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-26T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-28T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-30T00:00:00.000Z","score":0.75,"passed":true}],"counted_message_ids":[]},"mpl_b":{"status":"ok","attempts_available":23,"latest":{"at":"2026-08-12T00:00:00.000Z","score":0.65,"passed":true},"history":[{"at":"2026-07-30T00:00:00.000Z","score":0.65,"passed":true},{"at":"2026-07-31T00:00:00.000Z","score":0.7,"passed":true},{"at":"2026-08-01T00:00:00.000Z","score":0.65,"passed":true},{"at":"2026-08-12T00:00:00.000Z","score":0.65,"passed":true}],"counted_message_ids":[]}},"22222222-2222-4222-8222-222222222222":{"nipun_grade_2":{"status":"insufficient_data","attempts_available":1,"counted_message_ids":[]},"nipun_grade_3":{"status":"insufficient_data","attempts_available":1,"counted_message_ids":[]},"mpl_b":{"status":"insufficient_data","attempts_available":2,"counted_message_ids":[]}},"33333333-3333-4333-8333-333333333333":{"nipun_grade_2":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[]},"nipun_grade_3":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[]},"mpl_b":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[]}}}';
+  '{"11111111-1111-4111-8111-111111111111":{"nipun_grade_2":{"status":"ok","attempts_available":6,"latest":{"at":"2026-07-09T00:00:00.000Z","score":0.75,"passed":true},"history":[{"at":"2026-07-05T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-08T00:00:00.000Z","score":0.5,"passed":false},{"at":"2026-07-09T00:00:00.000Z","score":0.75,"passed":true}],"counted_message_ids":[],"bin_message_ids":[]},"nipun_grade_3":{"status":"ok","attempts_available":10,"latest":{"at":"2026-07-30T00:00:00.000Z","score":0.75,"passed":true},"history":[{"at":"2026-07-18T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-19T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-22T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-24T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-26T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-28T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-30T00:00:00.000Z","score":0.75,"passed":true}],"counted_message_ids":[],"bin_message_ids":[]},"mpl_b":{"status":"ok","attempts_available":23,"latest":{"at":"2026-08-12T00:00:00.000Z","score":0.65,"passed":true},"history":[{"at":"2026-07-30T00:00:00.000Z","score":0.65,"passed":true},{"at":"2026-07-31T00:00:00.000Z","score":0.7,"passed":true},{"at":"2026-08-01T00:00:00.000Z","score":0.65,"passed":true},{"at":"2026-08-12T00:00:00.000Z","score":0.65,"passed":true}],"counted_message_ids":[],"bin_message_ids":[]}},"22222222-2222-4222-8222-222222222222":{"nipun_grade_2":{"status":"insufficient_data","attempts_available":1,"counted_message_ids":[],"bin_message_ids":[]},"nipun_grade_3":{"status":"insufficient_data","attempts_available":1,"counted_message_ids":[],"bin_message_ids":[]},"mpl_b":{"status":"insufficient_data","attempts_available":2,"counted_message_ids":[],"bin_message_ids":[]}},"33333333-3333-4333-8333-333333333333":{"nipun_grade_2":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[],"bin_message_ids":[]},"nipun_grade_3":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[],"bin_message_ids":[]},"mpl_b":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[],"bin_message_ids":[]}}}';
 
 function queryFor(rowsByUser: (id: string) => ComprehensionRow[]) {
   return jest.fn(async (sql: string, params?: unknown[]) => {
@@ -183,6 +183,16 @@ describe('counted_message_ids', () => {
     const out = snapshotSeries(pool, nipun);
     expect(out.status).toBe('ok');
     expect(out.counted_message_ids).toEqual(['m3', 'm4', 'm5', 'm6', 'm7']);
+    // the whole bin: every first attempt in the pool
+    expect(out.bin_message_ids).toEqual([
+      'm1',
+      'm2',
+      'm3',
+      'm4',
+      'm5',
+      'm6',
+      'm7',
+    ]);
     // exactly four attempts: one history point, so just those four
     expect(snapshotSeries(pool.slice(0, 4), nipun).counted_message_ids).toEqual(
       ['m1', 'm2', 'm3', 'm4'],

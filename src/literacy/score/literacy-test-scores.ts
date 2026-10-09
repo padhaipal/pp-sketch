@@ -165,6 +165,7 @@ export function snapshotSeries(
       status: 'insufficient_data',
       attempts_available: pool.length,
       counted_message_ids: messageIds(pool),
+      bin_message_ids: messageIds(pool),
     };
   }
   return {
@@ -173,6 +174,7 @@ export function snapshotSeries(
     latest: history[history.length - 1],
     history,
     counted_message_ids: messageIds(selected.slice(-2).flat()),
+    bin_message_ids: messageIds(pool),
   };
 }
 
