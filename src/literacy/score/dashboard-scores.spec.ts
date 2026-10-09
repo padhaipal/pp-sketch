@@ -907,8 +907,9 @@ describe('DashboardScoresService.scores — geo levels', () => {
       Math.sqrt((0.5625 + 1 + 0.25 + 0.5625) / 4 - 0.5625),
       10,
     );
-    // 30-day delta: newest row ≤ 2026-08-14 is 2026-08-10 (50%) → +25.
-    expect(out.root.delta).toBe(25);
+    // Deltas are always against 7 days back (2026-10), whatever the range:
+    // newest row ≤ 2026-09-06 is 2026-09-01 (100%) → 75 − 100.
+    expect(out.root.delta).toBe(-25);
     expect(out.series.map((p) => p.date)).toEqual(['2026-09-01', AS_OF]);
     expect(out.child_type).toBe('school');
     expect(geo.children).toHaveBeenCalledTimes(1);
@@ -981,12 +982,14 @@ describe('DashboardScoresService.scores — geo levels', () => {
     const { svc, query } = makeService(f);
     const out = await svc.scores('B1', 'nipun_g2', 'all');
     expect(out.range).toBe('all');
-    // No day count is bound for all time — $2 (as_of) is the only date.
+    // No day count is bound for the all-time SERIES — $2 (as_of) is the only
+    // date; the delta's prior is always 7 days back (2026-10).
     for (const [sql, params] of query.mock.calls as [string, unknown[]][]) {
-      if (/dashboard-scores:(prior|series|students|class)/.test(sql)) {
+      if (/dashboard-scores:series/.test(sql)) {
         expect(sql).not.toContain("' days'");
         expect(params).toHaveLength(2);
       }
+      if (/dashboard-scores:prior/.test(sql)) expect(params[2]).toBe('7');
     }
     // Every B1 row, oldest first.
     expect(out.series.map((p) => p.date)).toEqual([
@@ -994,13 +997,14 @@ describe('DashboardScoresService.scores — geo levels', () => {
       '2026-09-01',
       AS_OF,
     ]);
-    // B1 prior = its oldest row (2026-08-10, 50%) → 75 − 50.
-    expect(out.root.delta).toBe(25);
+    // B1 prior = newest row ≤ 2026-09-06: 2026-09-01 (100%) → 75 − 100.
+    expect(out.root.delta).toBe(-25);
     const children = out.children as ChildRow[];
     const byId = new Map(children.map((c) => [c.id, c]));
-    // S1: oldest row 2026-06-01 (0%) → +100; S2: 2026-07-01 (100%) → −20;
-    // S9: 2026-06-01 (100%) → −50.
-    expect(byId.get('S1')!.delta).toBe(100);
+    // each child against its newest row ≤ as_of − 7 days: S1 2026-08-01
+    // (33.3%) → 100 − 33.3; S2 2026-07-01 (100%) → 80 − 100; S9 2026-06-01
+    // (100%) → 50 − 100.
+    expect(byId.get('S1')!.delta).toBe(66.7);
     expect(byId.get('S2')!.delta).toBe(-20);
     expect(byId.get('S9')!.delta).toBe(-50);
     // n ≥ 5 only (S1 has 3), best delta first.
@@ -1497,7 +1501,8 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         time_per_day: 5,
         time_days: 1,
         // 20 minutes yesterday vs 40 the day before (total minutes)
-        delta: -20,
+        // 20 minutes yesterday ÷ 40 the day before
+        delta: 0.5,
         time_sum: 20,
       }),
     );
@@ -1514,7 +1519,8 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         time_days: 1,
         time_sum: 30,
         bin: 'high',
-        delta: 30,
+        // nothing the day before → no ratio
+        delta: null,
       }),
     );
     expect(byId.get('S2')).toEqual(
@@ -1564,7 +1570,8 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
       expect.objectContaining({ time_sum: 170, time_days: 4 }),
     );
     // nothing in the 30 days before → the whole 170 is the rise
-    expect(out.root.delta).toBe(170);
+    // nothing in the 30 days before → no ratio
+    expect(out.root.delta).toBeNull();
   });
 
   it('last seven days: sums the stored days as_of−6 … as_of as student-days', async () => {
@@ -1672,9 +1679,9 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
     const out = await svc.spotlight('B1', 'usage', 30, 'yesterday');
     expect(out.top?.child.id).toBe('S2');
     expect(out.top?.official?.name).toBe('Ravi');
-    // S2: 60 minutes yesterday, nothing the day before → +60
-    expect(out.most_improved?.child.id).toBe('S2');
-    expect(out.most_improved?.child.delta).toBe(60);
+    // S2: 60 minutes yesterday but nothing the day before → no ratio, so
+    // nobody is "most improved" (one day of usage can't qualify)
+    expect(out.most_improved).toBeNull();
 
     const idle = makeService({
       entities: ENTITIES,
@@ -1749,19 +1756,21 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
       ]),
     ).toEqual([
       // 12 + 9 over the full 7 days; 21 now vs 30 the seven days before
-      ['st-1', 21, 3, 7, 21, false, -9],
+      // 21 now ÷ 30 the seven days before
+      ['st-1', 21, 3, 7, 21, false, 0.7],
       // 12 minutes over the 2 days since the first row, not 7
-      ['st-2', 12, 6, 2, 12, true, 12],
-      ['st-3', 0, 0, 1, 0, false, 0],
+      // nothing the seven days before → no ratio
+      ['st-2', 12, 6, 2, 12, true, null],
+      ['st-3', 0, 0, 1, 0, false, null],
     ]);
     // the class: 33 minutes over 10 student-days, scaled to the 7-day window;
-    // delta = the students' changes summed
+    // delta = the students' minutes summed: 33 now ÷ 30 the seven days before
     expect(out.root).toEqual(
       expect.objectContaining({
         time_total: 23.1,
         time_per_day: 3.3,
         time_days: 7,
-        delta: 3,
+        delta: 1.1,
       }),
     );
     expect(out.time_delta_days).toBe(7);
@@ -1839,7 +1848,8 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         // one of three students averages more than 5 minutes a day
         pass_rate: 33.3,
         bin: 'mid',
-        delta: 3,
+        // 33 ÷ 30
+        delta: 1.1,
       }),
     ]);
     // n < 5 → nobody qualifies as most improved

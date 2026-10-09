@@ -167,3 +167,15 @@ block's schools × days gets large.
   minutes per day; Time deltas (`time-geo-delta`) are in total minutes.
 - `PUBLIC_CACHE_CONTROL` = `private, no-store`: a saved spotlight message was
   served stale for five minutes under `max-age=300`.
+
+## 2026-10: improvement rules
+
+- Time: `delta` = minutes in the comparison window ÷ minutes in the window
+  before (2 dp; `timeRatio`), null when the window before had none — a
+  student / area with no "before" can't be most improved. Groups (class,
+  teacher, area) divide their summed minutes (`groupRatio`; areas from the
+  vectors). All time compares the last 30 days with the 30 before
+  (`time_delta_days` 30). Most improved = ratio > 1.
+- NIPUN / MPL-B: deltas (children, students, root, most_improved) are the
+  latest snapshot against the newest row ≤ as_of − 7 days
+  (`TEST_DELTA_DAYS`), whatever the trend's range.
