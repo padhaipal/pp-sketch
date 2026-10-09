@@ -820,13 +820,24 @@ function makeService(fixture: {
           )
           .map((e) => ({ id: (e as { id: string }).id }));
       }
-      case 'dashboard-scores:rank-names': {
+      case 'dashboard-scores:rank-geo': {
         const ids = params[0] as string[];
-        return fixture.entities
-          .filter((e) => ids.includes((e as { id: string }).id))
-          .map((e) => ({
-            id: (e as { id: string }).id,
-            name: (e as { name: string }).name,
+        return fixture.entities.filter((e) =>
+          ids.includes((e as { id: string }).id),
+        );
+      }
+      case 'dashboard-scores:rank-teachers': {
+        // a teacher's school = the school their students are referred through
+        const ids = params[0] as string[];
+        return (fixture.teachers ?? [])
+          .filter((t) => ids.includes(t.id))
+          .map((t) => ({
+            id: t.id,
+            name: t.name,
+            geo_entity_id:
+              (fixture.students ?? []).find(
+                (st) => st.referrer_user_id === t.id,
+              )?.referrer_geo ?? null,
           }));
       }
       default:
@@ -1492,12 +1503,19 @@ describe('DashboardScoresService.scores — school level (students)', () => {
     expect(teachers.top).toEqual([
       expect.objectContaining({ id: 'T1', name: 'Asha', sub: '919876500001' }),
     ]);
+    // a teacher opens their class: school → teacher
+    expect(teachers.top[0].path.map((r) => [r.id, r.type])).toEqual([
+      ['S1', 'school'],
+      ['T1', 'teacher'],
+    ]);
     const students = await svc.rankings('B1', 'student', 'nipun_g2');
     expect(students.top.length).toBeGreaterThan(0);
     expect(students.top.every((r) => r.sub === null)).toBe(true);
     expect(students.top.map((r) => r.name)).toContain('Bittu Yadav');
     // best score first, as a percentage
     expect(students.top[0].value).toBe(100);
+    // a student opens their teacher's class
+    expect(students.top[0].path.map((r) => r.id)).toEqual(['S1', 'T1']);
   });
 
   it('class level: a teacher with no scored students yet → 200 with nulls', async () => {
@@ -1958,6 +1976,8 @@ describe('DashboardScoresService.rankings', () => {
     expect(out.top[0]).toEqual(
       expect.objectContaining({ name: expect.any(String), sub: null }),
     );
+    // a double-click goes block → school
+    expect(out.top[0].path.map((r) => r.id)).toEqual(['B1', 'S1']);
   });
 
   it('a level that is not below the entity, or an entity without data, is empty', async () => {

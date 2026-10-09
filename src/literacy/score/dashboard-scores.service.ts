@@ -325,6 +325,7 @@ function rankStudents(
             ? m.score
             : Math.round(m.score * 1000) / 10,
       delta: m.delta,
+      path: [] as GeoRef[],
     },
     // a student is one person: no minimum group size
     n: MOST_IMPROVED_MIN_N,
@@ -619,7 +620,23 @@ export class DashboardScoresService {
     const asOf = isoDate(latest.computed_for);
     const geoLevel: GeoEntityType =
       level === 'teacher' || level === 'student' ? 'school' : level;
-    const ids = await this.rankCandidates(id, geoLevel, asOf);
+    const anc = await this.rankCandidates(id, geoLevel, asOf);
+    const ids = [...anc.keys()];
+    const geoRows: GeoEntity[] = ids.length
+      ? await this.dataSource.query(
+          `/* dashboard-scores:rank-geo */
+           SELECT * FROM geo_entity WHERE id = ANY($1::uuid[])`,
+          [ids],
+        )
+      : [];
+    const geoById = new Map(geoRows.map((g) => [g.id, g]));
+    // refs from just below `id` down to the geo entity `gid` itself
+    const geoPath = (gid: string): GeoRef[] => {
+      const chain = anc.get(gid) ?? [];
+      const at = chain.findIndex((a) => a.id === id);
+      const self = geoById.get(gid);
+      return [...chain.slice(at + 1), ...(self ? [self] : [])].map(toRef);
+    };
     if (level === 'teacher' || level === 'student') {
       if (ids.length === 0)
         return { level, as_of: asOf, top: [], most_improved: [] };
@@ -630,20 +647,72 @@ export class DashboardScoresService {
         30,
         win,
       );
-      if (level === 'student')
-        return { level, as_of: asOf, ...rankStudents(members, metric, win) };
-      const teachers = await this.teachers(members, win);
-      const rows = teachers.map((c) => ({
-        row: {
-          id: c.id,
-          name: c.name,
-          sub: c.official?.phone ?? null,
-          value: win ? (c.time_sum ?? null) : c.pass_rate,
-          delta: c.delta,
-        },
-        n: c.n,
-      }));
-      return { level, as_of: asOf, ...rankRows(rows, !!win) };
+      let ranked: { top: RankRow[]; most_improved: RankRow[] };
+      if (level === 'student') {
+        ranked = rankStudents(members, metric, win);
+      } else {
+        const teachers = await this.teachers(members, win);
+        ranked = rankRows(
+          teachers.map((c) => ({
+            row: {
+              id: c.id,
+              name: c.name,
+              sub: c.official?.phone ?? null,
+              value: win ? (c.time_sum ?? null) : c.pass_rate,
+              delta: c.delta,
+              path: [],
+            },
+            n: c.n,
+          })),
+          !!win,
+        );
+      }
+      // a double-click opens the teacher's class (a student's: their teacher's)
+      const teacherOf = new Map(
+        members.map((m) => [m.student_id, m.referrer_user_id]),
+      );
+      const teacherIdOf = (r: RankRow) =>
+        level === 'teacher' ? r.id : (teacherOf.get(r.id) ?? null);
+      const tIds = [
+        ...new Set(
+          [...ranked.top, ...ranked.most_improved]
+            .map(teacherIdOf)
+            .filter((x): x is string => !!x),
+        ),
+      ];
+      const tRows: Array<{
+        id: string;
+        name: string | null;
+        geo_entity_id: string | null;
+      }> = tIds.length
+        ? await this.dataSource.query(
+            `/* dashboard-scores:rank-teachers */
+             SELECT id, name, geo_entity_id FROM users WHERE id = ANY($1::uuid[])`,
+            [tIds],
+          )
+        : [];
+      const tById = new Map(tRows.map((r) => [r.id, r]));
+      const withPath = (r: RankRow): RankRow => {
+        const tid = teacherIdOf(r);
+        const tu = tid ? tById.get(tid) : undefined;
+        if (!tu || !tu.geo_entity_id) return r;
+        const teacherRef: GeoRef = {
+          id: tu.id,
+          type: 'teacher',
+          code: '',
+          name: tu.name ?? 'Teacher',
+          has_boundary: false,
+          lat: null,
+          lng: null,
+        };
+        return { ...r, path: [...geoPath(tu.geo_entity_id), teacherRef] };
+      };
+      return {
+        level,
+        as_of: asOf,
+        top: ranked.top.map(withPath),
+        most_improved: ranked.most_improved.map(withPath),
+      };
     }
     if (ids.length === 0)
       return { level, as_of: asOf, top: [], most_improved: [] };
@@ -659,13 +728,7 @@ export class DashboardScoresService {
         ? this.geoTimeDelta(ids, asOf, win)
         : new Map<string, number | null>(),
     ]);
-    const names: Array<{ id: string; name: string }> =
-      await this.dataSource.query(
-        `/* dashboard-scores:rank-names */
-         SELECT id, name FROM geo_entity WHERE id = ANY($1::uuid[])`,
-        [ids],
-      );
-    const nameOf = new Map(names.map((r) => [r.id, r.name]));
+    const nameOf = new Map(geoRows.map((r) => [r.id, r.name]));
     const out = rows
       .filter((r) => usingLifteracy(r))
       .map((r) => {
@@ -679,6 +742,7 @@ export class DashboardScoresService {
             delta: win
               ? (timeDelta.get(r.geo_entity_id) ?? null)
               : delta(pr, prior.get(r.geo_entity_id)),
+            path: geoPath(r.geo_entity_id),
           },
           n: r.n,
         };
@@ -693,7 +757,7 @@ export class DashboardScoresService {
     rootId: string,
     type: GeoEntityType,
     asOf: string,
-  ): Promise<string[]> {
+  ): Promise<Map<string, GeoEntity[]>> {
     const cands: Array<{ id: string }> = await this.dataSource.query(
       `/* dashboard-scores:rank-candidates */
        SELECT g.id
@@ -703,10 +767,11 @@ export class DashboardScoresService {
          AND g.status = 'operational' AND g.deleted_at IS NULL`,
       [asOf, type],
     );
-    const out: string[] = [];
+    // candidate → its ancestors (root first), for those under rootId
+    const out = new Map<string, GeoEntity[]>();
     for (const c of cands) {
       const ancestors = await this.geoEntityService.ancestors(c.id);
-      if (ancestors.some((a) => a.id === rootId)) out.push(c.id);
+      if (ancestors.some((a) => a.id === rootId)) out.set(c.id, ancestors);
     }
     return out;
   }

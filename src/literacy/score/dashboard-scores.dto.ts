@@ -259,6 +259,11 @@ export interface RankRow {
   value: number | null;
   // points vs 7 days back (tests) or minutes ratio (Time)
   delta: number | null;
+  // Where a double-click goes: the refs from just below `:id` down to the
+  // row's own view — a geo entity itself, a teacher's class, or a student's
+  // teacher's class (a teacher ref has type 'teacher', id = their user id).
+  // Empty when the row is already inside the current view.
+  path: GeoRef[];
 }
 
 export interface RankingsResponse {

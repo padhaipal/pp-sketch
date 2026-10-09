@@ -195,3 +195,7 @@ minutes; deltas as everywhere (7 days back; Time ratio). Most improved: n ≥ 5
 for groups, ratio > 1 in Time. Teachers carry their number (`sub`) and
 students their stored name with no number — NOT viewer-masked (product
 decision, 2026-10).
+Each `RankRow.path` is the refs from just below `:id` down to the row's own
+view (a geo entity; a teacher's class = school → teacher ref; a student →
+their teacher's class), so the dashboard's double-click can push them onto
+its drill stack.
