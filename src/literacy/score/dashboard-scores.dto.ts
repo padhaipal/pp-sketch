@@ -236,6 +236,55 @@ export interface SpotlightResponse {
   most_improved: SpotlightEntry | null;
 }
 
+// ─── Rankings at a deeper level (GET geo-entities/:id/rankings) ─────────
+// The "most improved / top performing" lists for any level below the
+// current entity — e.g. a block's schools, teachers or students.
+export const RANK_LEVELS = [
+  'state',
+  'district',
+  'block',
+  'school',
+  'teacher',
+  'student',
+] as const;
+export type RankLevel = (typeof RANK_LEVELS)[number];
+
+export interface RankRow {
+  id: string;
+  name: string;
+  // teacher: their phone number in full; null elsewhere (students never
+  // carry a number here)
+  sub: string | null;
+  // pass rate % / student score × 100 / total minutes (Time)
+  value: number | null;
+  // points vs 7 days back (tests) or minutes ratio (Time)
+  delta: number | null;
+  // Where a double-click goes: the refs from just below `:id` down to the
+  // row's own view — a geo entity itself, a teacher's class, or a student's
+  // teacher's class (a teacher ref has type 'teacher', id = their user id).
+  // Empty when the row is already inside the current view.
+  path: GeoRef[];
+}
+
+export interface RankingsResponse {
+  level: RankLevel;
+  as_of: string | null;
+  top: RankRow[];
+  most_improved: RankRow[];
+}
+
+export function validateRankLevel(raw: unknown): RankLevel {
+  if (
+    typeof raw !== 'string' ||
+    !(RANK_LEVELS as readonly string[]).includes(raw)
+  ) {
+    throw new BadRequestException(
+      `level must be one of: ${RANK_LEVELS.join(', ')}`,
+    );
+  }
+  return raw as RankLevel;
+}
+
 export function validateMetric(raw: unknown): LiteracyMetric {
   if (
     typeof raw !== 'string' ||

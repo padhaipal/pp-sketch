@@ -925,6 +925,9 @@ export interface SnapshotTestScore {
   // before it; while insufficient, every first attempt in the pool so far.
   // Only the per-user history (GET users/:id/literacy-test-scores) sets it.
   counted_message_ids?: string[];
+  // Every tap in the test's pool (all first attempts at its questions),
+  // chronological — the student modal lists these, marking the counted ones.
+  bin_message_ids?: string[];
 }
 
 export interface LiteracyTestScores {

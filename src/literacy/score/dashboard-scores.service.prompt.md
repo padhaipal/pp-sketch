@@ -167,3 +167,35 @@ block's schools × days gets large.
   minutes per day; Time deltas (`time-geo-delta`) are in total minutes.
 - `PUBLIC_CACHE_CONTROL` = `private, no-store`: a saved spotlight message was
   served stale for five minutes under `max-age=300`.
+
+## 2026-10: improvement rules
+
+- Time: `delta` = minutes in the comparison window ÷ minutes in the window
+  before (2 dp; `timeRatio`), null when the window before had none — a
+  student / area with no "before" can't be most improved. Groups (class,
+  teacher, area) divide their summed minutes (`groupRatio`; areas from the
+  vectors). All time compares the last 30 days with the 30 before
+  (`time_delta_days` 30). Most improved = ratio > 1.
+- NIPUN / MPL-B: deltas (children, students, root, most_improved) are the
+  latest snapshot against the newest row ≤ as_of − 7 days
+  (`TEST_DELTA_DAYS`), whatever the trend's range.
+
+## 2026-10: rankings(id, level, metric, window?) — GET geo-entities/:id/rankings
+
+Most improved / top performing (five each) among `level` entities below
+`:id` — the dashboard's level toggle above its rankings once drilled in.
+Levels: state / district / block / school (geo), teacher, student; a
+teacher's user id ranks only its students. Geo candidates are the `level`
+entities with a nightly vector on as_of whose ancestors include `:id`
+(`dashboard-scores:rank-candidates` + `GeoEntityService.ancestors` per
+candidate — no downward walk of the 1.7 M-row table). Teachers / students:
+`students({ schools })` over the candidate schools (referrer's current
+school), then `teachers()`. Values: pass rate % / score × 100 / total
+minutes; deltas as everywhere (7 days back; Time ratio). Most improved: n ≥ 5
+for groups, ratio > 1 in Time. Teachers carry their number (`sub`) and
+students their stored name with no number — NOT viewer-masked (product
+decision, 2026-10).
+Each `RankRow.path` is the refs from just below `:id` down to the row's own
+view (a geo entity; a teacher's class = school → teacher ref; a student →
+their teacher's class), so the dashboard's double-click can push them onto
+its drill stack.

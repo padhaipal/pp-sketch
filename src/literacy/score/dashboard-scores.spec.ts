@@ -538,14 +538,18 @@ function makeService(fixture: {
           .map((id) => ({ id }));
       }
       case 'dashboard-scores:students': {
-        const school = params[0] as string;
+        // one school, or several (rankings at the teacher / student level)
+        const schools = params[0] as string[];
         const metric = /l\.(\w+)_score::float8/.exec(sql)![1];
         expect(['nipun_g2', 'usage']).toContain(metric);
         // referrer's CURRENT school, whatever the latest row's geo says
         expect(sql).toMatch(/JOIN users r ON r\.id = u\.referrer_user_id/);
         expect(sql).not.toMatch(/l\.geo_entity_id = \$1/);
         return memberRows(
-          (fixture.students ?? []).filter((s) => s.referrer_geo === school),
+          (fixture.students ?? []).filter(
+            (s) =>
+              s.referrer_geo !== undefined && schools.includes(s.referrer_geo),
+          ),
           params,
           () => true,
         );
@@ -801,12 +805,59 @@ function makeService(fixture: {
           a.id + a.computed_for < b.id + b.computed_for ? -1 : 1,
         );
       }
+      case 'dashboard-scores:rank-candidates': {
+        const [asOf, type] = params as [string, string];
+        const ids = new Set(
+          fixture.geoRows
+            .filter((r) => r.computed_for === asOf)
+            .map((r) => r.geo_entity_id),
+        );
+        return fixture.entities
+          .filter(
+            (e) =>
+              ids.has((e as { id: string }).id) &&
+              (e as { type: string }).type === type,
+          )
+          .map((e) => ({ id: (e as { id: string }).id }));
+      }
+      case 'dashboard-scores:rank-geo': {
+        const ids = params[0] as string[];
+        return fixture.entities.filter((e) =>
+          ids.includes((e as { id: string }).id),
+        );
+      }
+      case 'dashboard-scores:rank-teachers': {
+        // a teacher's school = the school their students are referred through
+        const ids = params[0] as string[];
+        return (fixture.teachers ?? [])
+          .filter((t) => ids.includes(t.id))
+          .map((t) => ({
+            id: t.id,
+            name: t.name,
+            geo_entity_id:
+              (fixture.students ?? []).find(
+                (st) => st.referrer_user_id === t.id,
+              )?.referrer_geo ?? null,
+          }));
+      }
       default:
         throw new Error(`unexpected SQL ${tag ?? sql.slice(0, 40)}`);
     }
   });
   const geo = {
     getById: jest.fn(async (id: string) => byId.get(id) ?? null),
+    // parents of `id`, root first (rankings walk them)
+    ancestors: jest.fn(async (id: string) => {
+      const out: Record<string, unknown>[] = [];
+      let cur = byId.get(
+        (byId.get(id) as { parent_id?: string } | undefined)?.parent_id ?? '',
+      );
+      while (cur) {
+        out.unshift(cur);
+        cur = byId.get((cur as { parent_id?: string }).parent_id ?? '');
+      }
+      return out;
+    }),
     children: jest.fn(
       async (
         id: string,
@@ -907,8 +958,9 @@ describe('DashboardScoresService.scores — geo levels', () => {
       Math.sqrt((0.5625 + 1 + 0.25 + 0.5625) / 4 - 0.5625),
       10,
     );
-    // 30-day delta: newest row ≤ 2026-08-14 is 2026-08-10 (50%) → +25.
-    expect(out.root.delta).toBe(25);
+    // Deltas are always against 7 days back (2026-10), whatever the range:
+    // newest row ≤ 2026-09-06 is 2026-09-01 (100%) → 75 − 100.
+    expect(out.root.delta).toBe(-25);
     expect(out.series.map((p) => p.date)).toEqual(['2026-09-01', AS_OF]);
     expect(out.child_type).toBe('school');
     expect(geo.children).toHaveBeenCalledTimes(1);
@@ -981,12 +1033,14 @@ describe('DashboardScoresService.scores — geo levels', () => {
     const { svc, query } = makeService(f);
     const out = await svc.scores('B1', 'nipun_g2', 'all');
     expect(out.range).toBe('all');
-    // No day count is bound for all time — $2 (as_of) is the only date.
+    // No day count is bound for the all-time SERIES — $2 (as_of) is the only
+    // date; the delta's prior is always 7 days back (2026-10).
     for (const [sql, params] of query.mock.calls as [string, unknown[]][]) {
-      if (/dashboard-scores:(prior|series|students|class)/.test(sql)) {
+      if (/dashboard-scores:series/.test(sql)) {
         expect(sql).not.toContain("' days'");
         expect(params).toHaveLength(2);
       }
+      if (/dashboard-scores:prior/.test(sql)) expect(params[2]).toBe('7');
     }
     // Every B1 row, oldest first.
     expect(out.series.map((p) => p.date)).toEqual([
@@ -994,13 +1048,14 @@ describe('DashboardScoresService.scores — geo levels', () => {
       '2026-09-01',
       AS_OF,
     ]);
-    // B1 prior = its oldest row (2026-08-10, 50%) → 75 − 50.
-    expect(out.root.delta).toBe(25);
+    // B1 prior = newest row ≤ 2026-09-06: 2026-09-01 (100%) → 75 − 100.
+    expect(out.root.delta).toBe(-25);
     const children = out.children as ChildRow[];
     const byId = new Map(children.map((c) => [c.id, c]));
-    // S1: oldest row 2026-06-01 (0%) → +100; S2: 2026-07-01 (100%) → −20;
-    // S9: 2026-06-01 (100%) → −50.
-    expect(byId.get('S1')!.delta).toBe(100);
+    // each child against its newest row ≤ as_of − 7 days: S1 2026-08-01
+    // (33.3%) → 100 − 33.3; S2 2026-07-01 (100%) → 80 − 100; S9 2026-06-01
+    // (100%) → 50 − 100.
+    expect(byId.get('S1')!.delta).toBe(66.7);
     expect(byId.get('S2')!.delta).toBe(-20);
     expect(byId.get('S9')!.delta).toBe(-50);
     // n ≥ 5 only (S1 has 3), best delta first.
@@ -1439,6 +1494,30 @@ describe('DashboardScoresService.scores — school level (students)', () => {
     expect(out.students_series?.[0].points[0]).toMatchObject({ date: AS_OF });
   });
 
+  it("rankings: a block's TEACHERS carry their number; its STUDENTS their stored name and no number", async () => {
+    const fx = fixture();
+    fx.teachers = [{ ...T1, external_id: '919876500001' }];
+    fx.geoRows.push(geoRow('B1', AS_OF, 2, 1, [1, 0.5]));
+    const { svc } = makeService(fx);
+    const teachers = await svc.rankings('B1', 'teacher', 'nipun_g2');
+    expect(teachers.top).toEqual([
+      expect.objectContaining({ id: 'T1', name: 'Asha', sub: '919876500001' }),
+    ]);
+    // a teacher opens their class: school → teacher
+    expect(teachers.top[0].path.map((r) => [r.id, r.type])).toEqual([
+      ['S1', 'school'],
+      ['T1', 'teacher'],
+    ]);
+    const students = await svc.rankings('B1', 'student', 'nipun_g2');
+    expect(students.top.length).toBeGreaterThan(0);
+    expect(students.top.every((r) => r.sub === null)).toBe(true);
+    expect(students.top.map((r) => r.name)).toContain('Bittu Yadav');
+    // best score first, as a percentage
+    expect(students.top[0].value).toBe(100);
+    // a student opens their teacher's class
+    expect(students.top[0].path.map((r) => r.id)).toEqual(['S1', 'T1']);
+  });
+
   it('class level: a teacher with no scored students yet → 200 with nulls', async () => {
     const { svc } = makeService({
       entities: ENTITIES,
@@ -1497,7 +1576,8 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         time_per_day: 5,
         time_days: 1,
         // 20 minutes yesterday vs 40 the day before (total minutes)
-        delta: -20,
+        // 20 minutes yesterday ÷ 40 the day before
+        delta: 0.5,
         time_sum: 20,
       }),
     );
@@ -1514,7 +1594,8 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         time_days: 1,
         time_sum: 30,
         bin: 'high',
-        delta: 30,
+        // nothing the day before → no ratio
+        delta: null,
       }),
     );
     expect(byId.get('S2')).toEqual(
@@ -1564,7 +1645,8 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
       expect.objectContaining({ time_sum: 170, time_days: 4 }),
     );
     // nothing in the 30 days before → the whole 170 is the rise
-    expect(out.root.delta).toBe(170);
+    // nothing in the 30 days before → no ratio
+    expect(out.root.delta).toBeNull();
   });
 
   it('last seven days: sums the stored days as_of−6 … as_of as student-days', async () => {
@@ -1672,9 +1754,9 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
     const out = await svc.spotlight('B1', 'usage', 30, 'yesterday');
     expect(out.top?.child.id).toBe('S2');
     expect(out.top?.official?.name).toBe('Ravi');
-    // S2: 60 minutes yesterday, nothing the day before → +60
-    expect(out.most_improved?.child.id).toBe('S2');
-    expect(out.most_improved?.child.delta).toBe(60);
+    // S2: 60 minutes yesterday but nothing the day before → no ratio, so
+    // nobody is "most improved" (one day of usage can't qualify)
+    expect(out.most_improved).toBeNull();
 
     const idle = makeService({
       entities: ENTITIES,
@@ -1749,19 +1831,21 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
       ]),
     ).toEqual([
       // 12 + 9 over the full 7 days; 21 now vs 30 the seven days before
-      ['st-1', 21, 3, 7, 21, false, -9],
+      // 21 now ÷ 30 the seven days before
+      ['st-1', 21, 3, 7, 21, false, 0.7],
       // 12 minutes over the 2 days since the first row, not 7
-      ['st-2', 12, 6, 2, 12, true, 12],
-      ['st-3', 0, 0, 1, 0, false, 0],
+      // nothing the seven days before → no ratio
+      ['st-2', 12, 6, 2, 12, true, null],
+      ['st-3', 0, 0, 1, 0, false, null],
     ]);
     // the class: 33 minutes over 10 student-days, scaled to the 7-day window;
-    // delta = the students' changes summed
+    // delta = the students' minutes summed: 33 now ÷ 30 the seven days before
     expect(out.root).toEqual(
       expect.objectContaining({
         time_total: 23.1,
         time_per_day: 3.3,
         time_days: 7,
-        delta: 3,
+        delta: 1.1,
       }),
     );
     expect(out.time_delta_days).toBe(7);
@@ -1839,7 +1923,8 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         // one of three students averages more than 5 minutes a day
         pass_rate: 33.3,
         bin: 'mid',
-        delta: 3,
+        // 33 ÷ 30
+        delta: 1.1,
       }),
     ]);
     // n < 5 → nobody qualifies as most improved
@@ -1856,5 +1941,52 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         ],
       },
     ]);
+  });
+});
+
+describe('DashboardScoresService.rankings', () => {
+  const f = () => ({
+    entities: ENTITIES,
+    geoRows: [
+      geoRow('D', AS_OF, 18, 12, Array(18).fill(0.75)),
+      geoRow('B1', AS_OF, 18, 12, Array(18).fill(0.75)),
+      geoRow('S1', AS_OF, 6, 6, Array(6).fill(1)),
+      geoRow('S1', '2026-09-01', 6, 3, Array(6).fill(0.5)),
+      geoRow('S2', AS_OF, 6, 3, Array(6).fill(0.5)),
+      geoRow('S2', '2026-09-01', 6, 0, Array(6).fill(0.25)),
+      geoRow('S9', AS_OF, 6, 3, Array(6).fill(0.5)),
+    ],
+  });
+
+  it("a district's SCHOOLS (two levels down): top by pass rate, most improved vs 7 days back", async () => {
+    const { svc } = makeService(f());
+    const out = await svc.rankings('D', 'school', 'nipun_g2');
+    expect(out.level).toBe('school');
+    expect(out.as_of).toBe(AS_OF);
+    expect(out.top.map((r) => [r.id, r.value])).toEqual([
+      ['S1', 100],
+      ['S2', 50],
+      ['S9', 50],
+    ]);
+    // S1 +50, S2 +50 (vs 2026-09-01); S9 has no prior → not ranked
+    expect(out.most_improved.map((r) => [r.id, r.delta])).toEqual([
+      ['S1', 50],
+      ['S2', 50],
+    ]);
+    expect(out.top[0]).toEqual(
+      expect.objectContaining({ name: expect.any(String), sub: null }),
+    );
+    // a double-click goes block → school
+    expect(out.top[0].path.map((r) => r.id)).toEqual(['B1', 'S1']);
+  });
+
+  it('a level that is not below the entity, or an entity without data, is empty', async () => {
+    const { svc } = makeService({ entities: ENTITIES, geoRows: [] });
+    await expect(svc.rankings('D', 'school', 'nipun_g2')).resolves.toEqual({
+      level: 'school',
+      as_of: null,
+      top: [],
+      most_improved: [],
+    });
   });
 });
