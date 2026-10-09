@@ -48,3 +48,4 @@ Because NIPUN always divides by 4 and MPL-B by 20, the score space is
 discrete (5 and 21 values) — the geo histograms in test_results_geo_entity
 are exact, not bucketed.
 - `bin_message_ids` (2026-10): every tap in the test's pool (all first attempts), chronological — the student modal lists the whole bin and marks the `counted_message_ids` ones.
+- `counted_message_ids` (2026-10 revision): the CURRENT score's attempts only — 4 for NIPUN, 20 for MPL-B (the union with the previous score's gave 5 / 21).

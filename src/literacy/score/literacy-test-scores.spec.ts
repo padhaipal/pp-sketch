@@ -178,11 +178,12 @@ describe('counted_message_ids', () => {
   });
   const nipun = (p: FirstAttempt[]) => nipunSnapshot(p, NIPUN_QUESTION_COUNT);
 
-  it('NIPUN: the taps behind the latest snapshot and the one before it (the last five attempts)', () => {
+  it('NIPUN: the taps behind the latest snapshot (the last four attempts)', () => {
     const pool = [1, 2, 3, 4, 5, 6, 7].map((n) => att(n));
     const out = snapshotSeries(pool, nipun);
     expect(out.status).toBe('ok');
-    expect(out.counted_message_ids).toEqual(['m3', 'm4', 'm5', 'm6', 'm7']);
+    // the current score's four only
+    expect(out.counted_message_ids).toEqual(['m4', 'm5', 'm6', 'm7']);
     // the whole bin: every first attempt in the pool
     expect(out.bin_message_ids).toEqual([
       'm1',
