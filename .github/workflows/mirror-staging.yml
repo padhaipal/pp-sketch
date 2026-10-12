@@ -18,10 +18,19 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Kick mirror endpoint
+        # POST /admin/mirror sits behind pp-sketch's API-key guard (auth/
+        # api-key.guard.ts): the badge is staging's DASHBOARD_API_KEY, which
+        # opens every non-public route. Without it the kick is a 401.
         env:
           MIRROR_URL: ${{ secrets.STAGING_MIRROR_URL }}
+          MIRROR_API_KEY: ${{ secrets.STAGING_MIRROR_API_KEY }}
         run: |
           set -euo pipefail
+          if [ -z "$MIRROR_API_KEY" ]; then
+            echo "::error::STAGING_MIRROR_API_KEY secret is not set (staging pp-sketch DASHBOARD_API_KEY)"
+            exit 1
+          fi
           curl -fsS -X POST "$MIRROR_URL" \
             -H "Content-Type: application/json" \
+            -H "x-api-key: $MIRROR_API_KEY" \
             -w "\nHTTP %{http_code}\n"
