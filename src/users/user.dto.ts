@@ -444,10 +444,6 @@ export interface MediaRow {
   // Reading speed of a passage-read recording (words / container-parsed
   // duration); null for word/drill turns and rows without duration_ms.
   wpm: number | null;
-  // Voice-note length captured at ingest (null when unknown). Lets a viewer
-  // who may not play the recording (`user.pii` masked) still see how long
-  // the child spoke.
-  duration_ms: number | null;
   // Set on tap rows only. `answer` is then the correct option's text and
   // `answer_correct` whether the tapped option was it (null = the tap was
   // not awaited, nothing was recorded).
@@ -458,9 +454,9 @@ export interface MediaRow {
 
 export interface UserInfoRow {
   // As stored for the student's own teacher (and staff); masked to
-  // first…last for anyone else (pii-mask.ts). `pii` says which, and whether
-  // the recordings themselves may be played (GET media-meta-data/:id/audio
-  // answers 403 when masked).
+  // first…last for anyone else (pii-mask.ts). `pii` says which. It says
+  // nothing about the recordings: GET media-meta-data/:id/audio decides per
+  // viewer (PiiAccessService.canHear).
   name: string | null;
   phone: string;
   pii: PiiVisibility;
