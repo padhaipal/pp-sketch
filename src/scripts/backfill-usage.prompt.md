@@ -13,8 +13,9 @@ for all of them, so a learner attached to a teacher later (PATCH
 through a referrer with a school, as in the nightly.
 
 `backfillUsage(deps, { from, to, dryRun })` (pure over injected I/O):
-1. `backfill-usage:students` — id, birth_year/month, created_at, and the
-   referrer's CURRENT `geo_entity_id` (LEFT JOIN; null without a referrer).
+1. `backfill-usage:students` — id, birth_year/month, created_at (also the
+   age rule's onboarding day for a missing month), and the referrer's
+   CURRENT `geo_entity_id` (LEFT JOIN; null without a referrer).
    Run after teachers have been promoted and given a school, or the geo
    phase writes nothing.
 2. `backfill-usage:voice-notes` — one read for the whole range, from the

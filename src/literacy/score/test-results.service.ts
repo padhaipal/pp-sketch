@@ -160,6 +160,9 @@ export interface LatestStudentRow {
   geo_entity_id: string | null;
   birth_year: number | null;
   birth_month: number | null;
+  // users.created_at — the onboarding day the age rule estimates a missing
+  // birth month from (age-bands.ts assumedBirth).
+  created_at: Date | string | null;
   active: boolean;
   nipun_g2_score: number | null;
   nipun_g2_passed: boolean | null;
@@ -195,7 +198,12 @@ export function studentVector(
   v.usage.sumsq = minutes * minutes;
   v.usage.pass = minutes > USAGE_PASS_MINUTES ? 1 : 0;
   v.usage.hist[histIndex('usage', minutes)] = 1;
-  const age = ageOn(computedFor, row.birth_year, row.birth_month);
+  const age = ageOn(
+    computedFor,
+    row.birth_year,
+    row.birth_month,
+    row.created_at,
+  );
   if (age === null) {
     v.students_unbanded = 1;
     return v;
@@ -219,13 +227,19 @@ export interface CohortRow {
   geo_entity_id: string;
   birth_year: number | null;
   birth_month: number | null;
+  created_at: Date | string | null;
 }
 
 // A student's cohort contribution on `computedFor`: 1 per NIPUN band whose
 // age range holds them (the bands overlap, so both is possible).
 export function cohortVector(row: CohortRow, computedFor: Date): GeoVector {
   const v = emptyVector();
-  const age = ageOn(computedFor, row.birth_year, row.birth_month);
+  const age = ageOn(
+    computedFor,
+    row.birth_year,
+    row.birth_month,
+    row.created_at,
+  );
   if (inBand('nipun_g2', age)) v.nipun_g2_cohort = 1;
   if (inBand('nipun_g3', age)) v.nipun_g3_cohort = 1;
   return v;
@@ -557,7 +571,7 @@ export class TestResultsService {
     const rows: LatestStudentRow[] = await this.dataSource.query(
       `/* test-results:latest-students */
        SELECT DISTINCT ON (t.student_id)
-              t.student_id, r.geo_entity_id, u.birth_year, u.birth_month,
+              t.student_id, r.geo_entity_id, u.birth_year, u.birth_month, u.created_at,
               t.nipun_g2_score::float8 AS nipun_g2_score, t.nipun_g2_passed,
               t.nipun_g3_score::float8 AS nipun_g3_score, t.nipun_g3_passed,
               t.mpl_b_score::float8 AS mpl_b_score, t.mpl_b_passed,
@@ -604,7 +618,7 @@ export class TestResultsService {
     // latest-students (referrer's CURRENT geo entity), minus the results row.
     const cohort: CohortRow[] = await this.dataSource.query(
       `/* test-results:cohort */
-       SELECT r.geo_entity_id, u.birth_year, u.birth_month
+       SELECT r.geo_entity_id, u.birth_year, u.birth_month, u.created_at
        FROM users u
        JOIN users r ON r.id = u.referrer_user_id
        WHERE u.role = 'student' AND u.deleted_at IS NULL

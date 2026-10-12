@@ -85,10 +85,12 @@ deploy keep cohort 0, verdict NULL, counts 0.
 - Cohort (`test-results:cohort` → `cohortVector`): EVERY non-deleted
   student with a birth year whose referrer has a geo entity — scored or
   not — adds 1 to `nipun_g2_cohort` / `nipun_g3_cohort` for each band whose
-  age range (age-bands.ts, on computed_for) holds them. Same membership
-  join as latest-students minus the results row, so a school with twelve
-  enrolled but three active children has a cohort of twelve. Additive up
-  the tree like the metric vectors.
+  age range (age-bands.ts, on computed_for; a missing birth month is
+  estimated from `users.created_at`, which both reads select) holds them.
+  Same membership join as latest-students minus the results row, so a
+  school with twelve enrolled but three active children has a cohort of
+  twelve. The bands are disjoint single years (g2 = 7, g3 = 8), so a child
+  is in at most one cohort. Additive up the tree like the metric vectors.
 - `bandVerdict(cohort, pass)`: true when `pass ≥ NIPUN_SCHOOL_MIN_PASSERS`
   (9) AND `pass ≥ NIPUN_SCHOOL_PASS_SHARE` (0.75, inclusive) × cohort —
   no minimum cohort for a pass (9 of 9 passes); otherwise false from
