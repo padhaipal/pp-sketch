@@ -1800,3 +1800,40 @@ describe('UserService.getPublicProfileRow', () => {
     ).rejects.toThrow(/new_avatar_seed/);
   });
 });
+
+describe('UserService.listStaff', () => {
+  it('searches name / role title / geo name / code prefix / phone digits, escapes LIKE metacharacters, and splits off the total', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValue([{ id: 'u1', name: 'A', students: 3, total: 41 }]);
+    const svc = new UserService(
+      {} as never,
+      { query } as never,
+      { get: jest.fn(), set: jest.fn(), del: jest.fn() } as never,
+      {} as never,
+      {} as never,
+    );
+    const out = await svc.listStaff(' 50%_x ', 100, 100);
+    expect(out).toEqual({
+      total: 41,
+      rows: [{ id: 'u1', name: 'A', students: 3 }],
+    });
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('users:staff-list');
+    expect(sql).toMatch(/g\.code LIKE \$2/);
+    expect(sql).toMatch(/u\.role_title ILIKE/);
+    expect(sql).toMatch(/g\.name ILIKE/);
+    expect(params).toEqual([
+      ['education_official', 'staff'],
+      '50\\%\\_x',
+      '50',
+      100,
+      100,
+    ]);
+    query.mockResolvedValueOnce([]);
+    await expect(svc.listStaff('', 0, 100)).resolves.toEqual({
+      total: 0,
+      rows: [],
+    });
+  });
+});

@@ -6,8 +6,10 @@ import { ANONYMOUS, Viewer, type ViewerContext } from '../../auth/viewer';
 import {
   PUBLIC_CACHE_CONTROL,
   ScoresResponse,
+  RankingsResponse,
   SpotlightResponse,
   toCsv,
+  validateRankLevel,
   validateMetric,
   validateRange,
   validateWindow,
@@ -64,6 +66,25 @@ export class DashboardScoresController {
       `attachment; filename="lifteracy-${result.entity.type}-${result.entity.code}-${result.metric}-${result.window ? `time-${result.window}` : result.range === 'all' ? 'all-time' : `${result.range}d`}.csv"`,
     );
     return toCsv(result.children as unknown as Array<Record<string, unknown>>);
+  }
+
+  // Most improved / top performing at any level below `:id` (the dashboard's
+  // level toggle above the rankings). Teachers come with their number,
+  // students with their name only (2026-10, product decision).
+  @Get(':id/rankings')
+  @Header('Cache-Control', PUBLIC_CACHE_CONTROL)
+  async getRankings(
+    @Param('id') id: string,
+    @Query('level') level?: string,
+    @Query('metric') metric?: string,
+    @Query('window') window?: string,
+  ): Promise<RankingsResponse> {
+    return this.scores.rankings(
+      validateGeoEntityId(id),
+      validateRankLevel(level),
+      validateMetric(metric),
+      validateWindow(window),
+    );
   }
 
   @Get(':id/spotlight')

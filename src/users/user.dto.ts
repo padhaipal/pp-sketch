@@ -149,6 +149,24 @@ export interface StaffUserRow {
   link: string;
 }
 
+// GET /users/staff — the onboarding console's staff table.
+export interface StaffListRow extends StaffUserRow {
+  // the geo entity's UDISE / LGD code
+  geo_code: string | null;
+  // students under them: a teacher's referred students; an official's
+  // area's students at the last nightly run (test_results_geo_entity.usage_n)
+  students: number;
+  // the parents' enrolment link — teachers (school accounts) only
+  share_link: string | null;
+}
+export interface StaffListResponse {
+  total: number;
+  offset: number;
+  limit: number;
+  rows: StaffListRow[];
+}
+export const STAFF_LIST_MAX_LIMIT = 500;
+
 export interface StaffUserDetail extends StaffUserRow {
   geo_entity: GeoEntity | null;
   ancestors: GeoEntity[];
@@ -921,10 +939,13 @@ export interface SnapshotTestScore {
   attempts_available: number;
   latest?: TestSnapshotPoint;
   history?: TestSnapshotPoint[];
-  // The taps (media_metadata ids) behind `latest` and the history point
-  // before it; while insufficient, every first attempt in the pool so far.
+  // The taps (media_metadata ids) behind `latest` (4 for NIPUN, 20 for
+  // MPL-B); while insufficient, every first attempt in the pool so far.
   // Only the per-user history (GET users/:id/literacy-test-scores) sets it.
   counted_message_ids?: string[];
+  // Every tap in the test's pool (all first attempts at its questions),
+  // chronological — the student modal lists these, marking the counted ones.
+  bin_message_ids?: string[];
 }
 
 export interface LiteracyTestScores {

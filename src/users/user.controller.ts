@@ -55,6 +55,8 @@ import {
   ProfilePatchDto,
   PublicProfile,
   validateProfilePatch,
+  StaffListResponse,
+  STAFF_LIST_MAX_LIMIT,
 } from './user.dto';
 import { UserActivityService } from './user-activity.service';
 import { UserService, StaffLookupRow } from './user.service';
@@ -962,6 +964,38 @@ export class UserController {
       ancestors,
       share_link: referralUrl(row.external_id),
       explainer_url: await this.resolveExplainerUrl(),
+    };
+  }
+
+  // The onboarding console's staff table (admin/dev-gated by the proxy).
+  // Declared before ':id' so 'staff' is not taken for an id.
+  @Get('staff')
+  async listStaff(
+    @Query('q') q?: string,
+    @Query('offset') offsetRaw?: string,
+    @Query('limit') limitRaw?: string,
+  ): Promise<StaffListResponse> {
+    const offset = Math.max(0, parseInt(offsetRaw ?? '0', 10) || 0);
+    const limit = Math.min(
+      STAFF_LIST_MAX_LIMIT,
+      Math.max(1, parseInt(limitRaw ?? '100', 10) || 100),
+    );
+    const { total, rows } = await this.userService.listStaff(
+      q ?? '',
+      offset,
+      limit,
+    );
+    return {
+      total,
+      offset,
+      limit,
+      rows: rows.map((r) => ({
+        ...withLink(r),
+        geo_code: r.geo_code,
+        students: r.students,
+        share_link:
+          r.geo_entity_type === 'school' ? referralUrl(r.external_id) : null,
+      })),
     };
   }
 

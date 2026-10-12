@@ -26,11 +26,12 @@ export const DEFAULT_RANGE: DashboardRange = 30;
 //   yesterday = the last complete IST day (the row dated as_of)
 //   7d        = the last seven days (rows dated as_of−6 … as_of)
 //   all       = every stored day up to as_of
-export const TIME_WINDOWS = ['yesterday', '7d', 'all'] as const;
+export const TIME_WINDOWS = ['yesterday', '7d', '30d', 'all'] as const;
 export type TimeWindow = (typeof TIME_WINDOWS)[number];
 export const TIME_WINDOW_DAYS: Record<TimeWindow, number | null> = {
   yesterday: 1,
   '7d': 7,
+  '30d': 30,
   all: null,
 };
 // Colour rule for an average of minutes per day — the same 5-minute mark the
@@ -39,11 +40,11 @@ export const TIME_PASS_MINUTES_PER_DAY = 5;
 export const MOST_IMPROVED_MIN_N = 5;
 export const MOST_IMPROVED_LIMIT = 5;
 export const ACTIVE_WINDOW_DAYS = 14;
-// Dashboard responses are cached for five minutes: the data changes once a
-// night and these are the heaviest queries in the app. `private`, because
-// the same URL answers differently per viewer (dashboard-scores.pii.ts) and
-// must never be served from a shared cache.
-export const PUBLIC_CACHE_CONTROL = 'private, max-age=300';
+// Dashboard responses are NOT cached by the browser (2026-10: a spotlight
+// message saved and then refreshed was served stale for five minutes under
+// the old max-age=300). `private` too: the same URL answers differently per
+// viewer (dashboard-scores.pii.ts) and must never sit in a shared cache.
+export const PUBLIC_CACHE_CONTROL = 'private, no-store';
 
 export type ChildType =
   | 'state'
@@ -93,6 +94,10 @@ export interface GeoRef {
 export interface TimeFields {
   // Minutes in the window, 1 dp. Null when there is nothing to average.
   time_total?: number | null;
+  // Total minutes over EVERY student in the window (a student's own total
+  // for a student row) — what the dashboard shows since 2026-10; time_total
+  // (per student) still drives the colour.
+  time_sum?: number | null;
   // Minutes per day, 1 dp — what the colour follows.
   time_per_day?: number | null;
   // The days the figures cover (1, up to 7, or the stored history).
@@ -116,6 +121,9 @@ export interface SeriesPoint {
   // usage: mean minutes per student that day (absent students = 0);
   // tests: mean score × 100 over the scored students; null at n = 0.
   mean: number | null;
+  // usage only: the total minutes that day over every student (the trend
+  // chart's y-axis since 2026-10); undefined for the tests.
+  total?: number | null;
 }
 
 // Class level only: one line per student for the trend chart. `value` is
@@ -215,7 +223,7 @@ export interface ScoresResponse {
   // Time mode: `delta` is the change in minutes against the window before —
   // 1 = yesterday vs the day before, 7 = the last seven days vs the seven
   // before (all time compares the last seven days too).
-  time_delta_days?: 1 | 7;
+  time_delta_days?: 1 | 7 | 30;
 }
 
 export interface SpotlightEntry {
@@ -226,6 +234,55 @@ export interface SpotlightEntry {
 export interface SpotlightResponse {
   top: SpotlightEntry | null;
   most_improved: SpotlightEntry | null;
+}
+
+// ─── Rankings at a deeper level (GET geo-entities/:id/rankings) ─────────
+// The "most improved / top performing" lists for any level below the
+// current entity — e.g. a block's schools, teachers or students.
+export const RANK_LEVELS = [
+  'state',
+  'district',
+  'block',
+  'school',
+  'teacher',
+  'student',
+] as const;
+export type RankLevel = (typeof RANK_LEVELS)[number];
+
+export interface RankRow {
+  id: string;
+  name: string;
+  // teacher: their phone number in full; null elsewhere (students never
+  // carry a number here)
+  sub: string | null;
+  // pass rate % / student score × 100 / total minutes (Time)
+  value: number | null;
+  // points vs 7 days back (tests) or minutes ratio (Time)
+  delta: number | null;
+  // Where a double-click goes: the refs from just below `:id` down to the
+  // row's own view — a geo entity itself, a teacher's class, or a student's
+  // teacher's class (a teacher ref has type 'teacher', id = their user id).
+  // Empty when the row is already inside the current view.
+  path: GeoRef[];
+}
+
+export interface RankingsResponse {
+  level: RankLevel;
+  as_of: string | null;
+  top: RankRow[];
+  most_improved: RankRow[];
+}
+
+export function validateRankLevel(raw: unknown): RankLevel {
+  if (
+    typeof raw !== 'string' ||
+    !(RANK_LEVELS as readonly string[]).includes(raw)
+  ) {
+    throw new BadRequestException(
+      `level must be one of: ${RANK_LEVELS.join(', ')}`,
+    );
+  }
+  return raw as RankLevel;
 }
 
 export function validateMetric(raw: unknown): LiteracyMetric {
@@ -306,13 +363,19 @@ export function timeFields(
   days: number,
 ): Required<TimeFields> {
   if (studentDays <= 0 || days <= 0) {
-    return { time_total: null, time_per_day: null, time_days: days };
+    return {
+      time_total: null,
+      time_per_day: null,
+      time_days: days,
+      time_sum: null,
+    };
   }
   const perDay = totalMinutes / studentDays;
   return {
     time_total: round1(perDay * days),
     time_per_day: round1(perDay),
     time_days: days,
+    time_sum: round1(totalMinutes),
   };
 }
 

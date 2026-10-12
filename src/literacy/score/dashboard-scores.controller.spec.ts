@@ -75,7 +75,7 @@ describe('DashboardScoresController', () => {
       ANONYMOUS,
     );
     await expect(ctrl.getScores(ID, 'usage', '30', 'week')).rejects.toThrow(
-      /window must be one of: yesterday, 7d, all/,
+      /window must be one of: yesterday, 7d, 30d, all/,
     );
     await expect(
       ctrl.getSpotlight(ID, 'usage', '30', 'last-week'),
@@ -166,6 +166,6 @@ describe('DashboardScoresController', () => {
         { name: 'Content-Type', value: 'text/csv; charset=utf-8' },
       ]),
     );
-    expect(PUBLIC_CACHE_CONTROL).toBe('private, max-age=300');
+    expect(PUBLIC_CACHE_CONTROL).toBe('private, no-store');
   });
 });

@@ -533,6 +533,57 @@ export class UserService {
     );
   }
 
+  // GET /users/staff: every staff-role account (deactivated last), filtered
+  // by `q` over name, number (digits), role title, geo entity name and code;
+  // paged. `students`: a teacher's referred students, an official's area's
+  // students at the last nightly run.
+  async listStaff(
+    q: string,
+    offset: number,
+    limit: number,
+  ): Promise<{
+    total: number;
+    rows: Array<StaffLookupRow & { geo_code: string | null; students: number }>;
+  }> {
+    const trimmed = q.trim();
+    const pattern = trimmed.replace(/[\\%_]/g, (c) => `\\${c}`);
+    const digits = trimmed.replace(/\D/g, '');
+    const rows: Array<
+      StaffLookupRow & {
+        geo_code: string | null;
+        students: number;
+        total: number;
+      }
+    > = await this.dataSource.query(
+      `/* users:staff-list */
+       SELECT u.id, u.external_id, u.name, u.role, u.role_title, u.staff_notes,
+              u.geo_entity_id, g.name AS geo_entity_name, g.type AS geo_entity_type,
+              g.code AS geo_code, u.deleted_at,
+              CASE WHEN g.type = 'school'
+                THEN (SELECT count(*) FROM users c
+                      WHERE c.referrer_user_id = u.id AND c.role = 'student' AND c.deleted_at IS NULL)
+                ELSE COALESCE((SELECT t.usage_n FROM test_results_geo_entity t
+                               WHERE t.geo_entity_id = u.geo_entity_id
+                               ORDER BY t.computed_for DESC LIMIT 1), 0)
+              END::int AS students,
+              count(*) OVER ()::int AS total
+       FROM users u
+       LEFT JOIN geo_entity g ON g.id = u.geo_entity_id
+       WHERE u.role = ANY($1::text[])
+         AND ($2 = ''
+              OR u.name ILIKE '%' || $2 || '%' ESCAPE '\\'
+              OR u.role_title ILIKE '%' || $2 || '%' ESCAPE '\\'
+              OR g.name ILIKE '%' || $2 || '%' ESCAPE '\\'
+              OR g.code LIKE $2 || '%' ESCAPE '\\'
+              OR ($3 <> '' AND u.external_id LIKE '%' || $3 || '%'))
+       ORDER BY u.deleted_at IS NOT NULL, u.name NULLS LAST, u.created_at DESC
+       OFFSET $4 LIMIT $5`,
+      [[...STAFF_ROLES], pattern, digits, offset, limit],
+    );
+    const total = rows[0]?.total ?? 0;
+    return { total, rows: rows.map(({ total: _t, ...r }) => r) };
+  }
+
   // GET /users/:id: one staff-role account (soft-deleted included) with its
   // geo entity's name/type; null for any other role or unknown id.
   async getStaff(id: string): Promise<StaffLookupRow | null> {
