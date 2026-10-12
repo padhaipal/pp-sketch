@@ -1468,7 +1468,7 @@ export class DashboardScoresService {
     const out: MemberRow[] = rows.map((r) => {
       // Deliberate read of users.birth_year/birth_month: in_band is not
       // stored per student either.
-      const age = ageOn(asOfDate, r.birth_year, r.birth_month);
+      const age = ageOn(asOfDate, r.birth_year, r.birth_month, r.created_at);
       const lastActive = r.last_active_at ? new Date(r.last_active_at) : null;
       // Usage: absence is zero minutes; deltas are in minutes, not points.
       const score = usage ? (r.score ?? 0) : r.score;

@@ -7,14 +7,21 @@ import type { DataSource } from 'typeorm';
 import { createQueue } from '../../interfaces/redis/queues';
 import {
   addVector,
+  bandVerdict,
+  cohortVector,
   emptyVector,
   HIST_LENGTH,
   METRICS,
+  NIPUN_SCHOOL_MIN_COHORT,
+  NIPUN_SCHOOL_MIN_PASSERS,
+  schoolVerdict,
   STALE_RUN_HOURS,
   STUDENT_BATCH_SIZE,
   studentVector,
   TestResultsService,
   TestRunInProgressError,
+  VERDICT_COLUMNS,
+  verdictVector,
   type GeoVector,
   type LatestStudentRow,
 } from './test-results.service';
@@ -30,6 +37,7 @@ interface Student {
   referrer_geo: string | null; // referrer.geo_entity_id (null: no staff referrer)
   role?: string;
   deleted?: boolean;
+  created_at?: Date; // onboarding day (age-bands.ts estimates a missing month from it)
 }
 interface ResultRow {
   student_id: string;
@@ -44,6 +52,12 @@ interface GeoRow {
   students_active: number;
   students_scored: number;
   students_unbanded: number;
+  nipun_g2_cohort: number;
+  nipun_g3_cohort: number;
+  nipun_school_passed: boolean | null;
+  nipun_schools_pass: number;
+  nipun_schools_fail: number;
+  nipun_schools_insufficient: number;
   metrics: Record<
     string,
     { n: number; sum: string; sumsq: string; pass: number; hist: number[] }
@@ -61,11 +75,15 @@ interface Run {
 }
 
 // Tree: district D → blocks B1, B2; B1 → schools S1, S2; B2 → S3.
+// A referrer may sit on a block directly (B2 as a leaf).
 const ANCESTORS: Record<string, string[]> = {
   S1: ['D', 'B1'],
   S2: ['D', 'B1'],
   S3: ['D', 'B2'],
+  B2: ['D'],
 };
+const GEO_TYPE = (id: string) =>
+  id.startsWith('S') ? 'school' : id.startsWith('B') ? 'block' : 'district';
 
 class FakeDb {
   students: Student[] = [];
@@ -218,6 +236,7 @@ class FakeDb {
                 geo_entity_id: s.referrer_geo,
                 birth_year: s.birth_year,
                 birth_month: s.birth_month,
+                created_at: s.created_at ?? null,
                 nipun_g2_score: g2s,
                 nipun_g2_passed: g2p,
                 nipun_g3_score: g3s,
@@ -235,8 +254,31 @@ class FakeDb {
             ];
           });
         }
+        case 'test-results:cohort': {
+          return this.students
+            .filter(
+              (s) =>
+                (s.role ?? 'student') === 'student' &&
+                !s.deleted &&
+                s.birth_year !== null &&
+                s.referrer_geo !== null,
+            )
+            .map((s) => ({
+              geo_entity_id: s.referrer_geo,
+              birth_year: s.birth_year,
+              birth_month: s.birth_month,
+              created_at: s.created_at ?? null,
+            }));
+        }
+        case 'test-results:leaf-types': {
+          return (params[0] as string[]).map((id) => ({
+            id,
+            type: GEO_TYPE(id),
+          }));
+        }
         case 'test-results:upsert-geo': {
-          const per = 5 + METRICS.length * 5;
+          const head = 5 + VERDICT_COLUMNS.length;
+          const per = head + METRICS.length * 5;
           for (let i = 0; i < params.length; i += per) {
             const p = params.slice(i, i + per);
             const row: GeoRow = {
@@ -245,10 +287,16 @@ class FakeDb {
               students_active: p[2] as number,
               students_scored: p[3] as number,
               students_unbanded: p[4] as number,
+              nipun_g2_cohort: p[5] as number,
+              nipun_g3_cohort: p[6] as number,
+              nipun_school_passed: p[7] as boolean | null,
+              nipun_schools_pass: p[8] as number,
+              nipun_schools_fail: p[9] as number,
+              nipun_schools_insufficient: p[10] as number,
               metrics: {},
             };
             METRICS.forEach((m, k) => {
-              const b = 5 + k * 5;
+              const b = head + k * 5;
               row.metrics[m] = {
                 n: p[b] as number,
                 sum: p[b + 1] as string,
@@ -332,15 +380,15 @@ const COMPUTED_FOR = '2026-09-13';
 const COMPUTED_FOR_DATE = new Date(`${COMPUTED_FOR}T00:00:00Z`);
 
 function seed(db: FakeDb) {
-  // birth 2018-07 → age 8 on 2026-09-13: in g2 [7,9), g3 [8,10), mpl_b [8,10).
+  // birth 2019-07 → age 7 on 2026-09-13: in g2 [7,8) only.
   db.students = [
-    { id: 'A', birth_year: 2018, birth_month: 7, referrer_geo: 'S1' }, // g2 0.75 — a pass at the ≥ 0.75 NIPUN mark
-    { id: 'B', birth_year: 2018, birth_month: 7, referrer_geo: 'S1' }, // g2 0.25 fail
-    { id: 'C', birth_year: 2018, birth_month: 7, referrer_geo: 'S2' }, // insufficient → scored=0
+    { id: 'A', birth_year: 2019, birth_month: 7, referrer_geo: 'S1' }, // g2 0.75 — a pass at the ≥ 0.75 NIPUN mark
+    { id: 'B', birth_year: 2019, birth_month: 7, referrer_geo: 'S1' }, // g2 0.25 fail
+    { id: 'C', birth_year: 2019, birth_month: 7, referrer_geo: 'S2' }, // insufficient → scored=0
     { id: 'E', birth_year: 2010, birth_month: 1, referrer_geo: 'S2' }, // age 16: out of every band
     { id: 'F', birth_year: null, birth_month: null, referrer_geo: 'S3' }, // unbanded
-    { id: 'G', birth_year: 2018, birth_month: 7, referrer_geo: 'S3' }, // g2 1.0 pass
-    { id: 'H', birth_year: 2018, birth_month: 7, referrer_geo: null }, // no staff referrer → no geo
+    { id: 'G', birth_year: 2019, birth_month: 7, referrer_geo: 'S3' }, // g2 1.0 pass
+    { id: 'H', birth_year: 2019, birth_month: 7, referrer_geo: null }, // no staff referrer → no geo
     {
       id: 'T',
       birth_year: null,
@@ -350,7 +398,7 @@ function seed(db: FakeDb) {
     },
     {
       id: 'X',
-      birth_year: 2018,
+      birth_year: 2019,
       birth_month: 7,
       referrer_geo: 'S1',
       deleted: true,
@@ -495,7 +543,7 @@ describe('TestResultsService.run — candidates and skip criterion', () => {
     seed(db);
     db.students = Array.from({ length: STUDENT_BATCH_SIZE + 1 }, (_, i) => ({
       id: `s${String(i).padStart(4, '0')}`,
-      birth_year: 2018,
+      birth_year: 2019,
       birth_month: 7,
       referrer_geo: 'S1',
     }));
@@ -538,6 +586,7 @@ describe('TestResultsService.run — geo aggregation and roll-up', () => {
         geo_entity_id: s.referrer_geo,
         birth_year: s.birth_year,
         birth_month: s.birth_month,
+        created_at: s.created_at ?? null,
         active: (db.lessons.get(id) ?? []).some(
           (l) => l.getTime() >= COMPUTED_FOR_DATE.getTime() - 14 * 86_400_000,
         ),
@@ -553,7 +602,25 @@ describe('TestResultsService.run — geo aggregation and roll-up', () => {
             : null,
       };
       addVector(v, studentVector(row, COMPUTED_FOR_DATE));
+      addVector(
+        v,
+        cohortVector(
+          {
+            geo_entity_id: s.referrer_geo!,
+            birth_year: s.birth_year,
+            birth_month: s.birth_month,
+            created_at: s.created_at ?? null,
+          },
+          COMPUTED_FOR_DATE,
+        ),
+      );
     }
+    return v;
+  }
+  // A school's verdict from its direct vector; an ancestor's counts are the
+  // one-hot sum of the schools named.
+  function withVerdicts(v: GeoVector, schools: GeoVector[]): GeoVector {
+    for (const s of schools) addVector(v, verdictVector(schoolVerdict(s)));
     return v;
   }
   function stored(db: FakeDb, geoId: string): GeoVector {
@@ -564,6 +631,12 @@ describe('TestResultsService.run — geo aggregation and roll-up', () => {
     v.students_active = g.students_active;
     v.students_scored = g.students_scored;
     v.students_unbanded = g.students_unbanded;
+    v.nipun_g2_cohort = g.nipun_g2_cohort;
+    v.nipun_g3_cohort = g.nipun_g3_cohort;
+    v.nipun_school_passed = g.nipun_school_passed;
+    v.nipun_schools_pass = g.nipun_schools_pass;
+    v.nipun_schools_fail = g.nipun_schools_fail;
+    v.nipun_schools_insufficient = g.nipun_schools_insufficient;
     for (const m of METRICS) {
       v[m] = {
         n: g.metrics[m].n,
@@ -600,18 +673,33 @@ describe('TestResultsService.run — geo aggregation and roll-up', () => {
     // Ancestors are read once per school, never per student.
     expect(geo.ancestors).toHaveBeenCalledTimes(3);
 
-    expect(stored(db, 'S1')).toEqual(round(direct(db, ['A', 'B'])));
-    expect(stored(db, 'S2')).toEqual(round(direct(db, ['C', 'E'])));
-    expect(stored(db, 'S3')).toEqual(round(direct(db, ['F', 'G'])));
-    expect(stored(db, 'B1')).toEqual(round(direct(db, ['A', 'B', 'C', 'E'])));
-    expect(stored(db, 'B2')).toEqual(round(direct(db, ['F', 'G'])));
-    expect(stored(db, 'D')).toEqual(
-      round(direct(db, ['A', 'B', 'C', 'E', 'F', 'G'])),
-    );
-    // …and a block is exactly the sum of its schools.
+    const s1 = direct(db, ['A', 'B']);
+    const s2 = direct(db, ['C', 'E']);
+    const s3 = direct(db, ['F', 'G']);
+    const school = (v: GeoVector) => {
+      const own = withVerdicts({ ...v }, [v]);
+      own.nipun_school_passed = schoolVerdict(v);
+      return own;
+    };
+    expect(stored(db, 'S1')).toEqual(round(school(s1)));
+    expect(stored(db, 'S2')).toEqual(round(school(s2)));
+    expect(stored(db, 'S3')).toEqual(round(school(s3)));
     expect(stored(db, 'B1')).toEqual(
-      addVector(stored(db, 'S1'), stored(db, 'S2')),
+      round(withVerdicts(direct(db, ['A', 'B', 'C', 'E']), [s1, s2])),
     );
+    expect(stored(db, 'B2')).toEqual(
+      round(withVerdicts(direct(db, ['F', 'G']), [s3])),
+    );
+    expect(stored(db, 'D')).toEqual(
+      round(
+        withVerdicts(direct(db, ['A', 'B', 'C', 'E', 'F', 'G']), [s1, s2, s3]),
+      ),
+    );
+    // …and a block is exactly the sum of its schools (the verdict itself is
+    // a school-only field, never summed).
+    const b1 = addVector(stored(db, 'S1'), stored(db, 'S2'));
+    b1.nipun_school_passed = null;
+    expect(stored(db, 'B1')).toEqual(b1);
   });
 
   it('the fixture exercises every rule: pass/fail hist bins, insufficient, out-of-band, unbanded, inactive, no-geo', async () => {
@@ -658,6 +746,274 @@ describe('TestResultsService.run — geo aggregation and roll-up', () => {
     // H has a score but no staff referrer → in no geo row.
     const d = stored(db, 'D');
     expect(d.students_scored).toBe(5);
+  });
+});
+
+describe('NIPUN school verdict — pure rules', () => {
+  const MIN = NIPUN_SCHOOL_MIN_PASSERS;
+  const COHORT = NIPUN_SCHOOL_MIN_COHORT;
+
+  it('bandVerdict: ≥ 9 passers AND ≥ 75 % (inclusive) passes; otherwise fail from 12 students, else null', () => {
+    expect(bandVerdict(12, 9)).toBe(true); // exactly 75 %
+    expect(bandVerdict(9, 9)).toBe(true); // a pass needs no minimum cohort
+    expect(bandVerdict(10, 9)).toBe(true);
+    expect(bandVerdict(20, 15)).toBe(true);
+    expect(bandVerdict(12, 8)).toBe(false); // 8 < 9 passers
+    expect(bandVerdict(13, 9)).toBe(false); // 9/13 < 75 %
+    expect(bandVerdict(20, 14)).toBe(false);
+    expect(bandVerdict(COHORT, 0)).toBe(false);
+    expect(bandVerdict(COHORT - 1, 8)).toBeNull(); // 11 students, not passing
+    expect(bandVerdict(0, 0)).toBeNull();
+    expect(bandVerdict(MIN - 1, MIN - 1)).toBeNull(); // 8/8: too few passers
+  });
+
+  function school(
+    g2: [cohort: number, pass: number],
+    g3: [cohort: number, pass: number],
+  ): GeoVector {
+    const v = emptyVector();
+    v.nipun_g2_cohort = g2[0];
+    v.nipun_g2.pass = g2[1];
+    v.nipun_g3_cohort = g3[0];
+    v.nipun_g3.pass = g3[1];
+    return v;
+  }
+
+  it('schoolVerdict: both bands pass → true; either band undecidable → null; otherwise false', () => {
+    expect(schoolVerdict(school([12, 9], [12, 9]))).toBe(true);
+    expect(schoolVerdict(school([9, 9], [10, 9]))).toBe(true); // small cohorts can pass
+    expect(schoolVerdict(school([12, 9], [12, 8]))).toBe(false); // g2 passes, g3 fails
+    expect(schoolVerdict(school([12, 8], [12, 8]))).toBe(false);
+    expect(schoolVerdict(school([12, 9], [11, 8]))).toBeNull(); // g3 undecidable
+    expect(schoolVerdict(school([12, 8], [6, 0]))).toBeNull(); // g2 fails but g3 undecidable
+    expect(schoolVerdict(school([5, 0], [5, 0]))).toBeNull();
+    expect(schoolVerdict(school([0, 0], [0, 0]))).toBeNull();
+  });
+
+  it('verdictVector is one-hot over pass / fail / insufficient', () => {
+    expect(verdictVector(true)).toMatchObject({
+      nipun_schools_pass: 1,
+      nipun_schools_fail: 0,
+      nipun_schools_insufficient: 0,
+    });
+    expect(verdictVector(false)).toMatchObject({
+      nipun_schools_pass: 0,
+      nipun_schools_fail: 1,
+      nipun_schools_insufficient: 0,
+    });
+    expect(verdictVector(null)).toMatchObject({
+      nipun_schools_pass: 0,
+      nipun_schools_fail: 0,
+      nipun_schools_insufficient: 1,
+    });
+  });
+
+  it('cohortVector counts a student in the one band whose age range holds them, scored or not', () => {
+    const on = new Date('2026-09-13T00:00:00Z');
+    const student = (
+      birth_year: number | null,
+      birth_month: number | null,
+      created_at: Date | null = null,
+    ) => ({ geo_entity_id: 'S1', birth_year, birth_month, created_at });
+    // age 7: g2 only
+    expect(cohortVector(student(2019, 7), on)).toMatchObject({
+      nipun_g2_cohort: 1,
+      nipun_g3_cohort: 0,
+    });
+    // age 8: g3 only
+    expect(cohortVector(student(2018, 7), on)).toMatchObject({
+      nipun_g2_cohort: 0,
+      nipun_g3_cohort: 1,
+    });
+    // age 9: no NIPUN test; age 10 is MPL-B only
+    expect(cohortVector(student(2017, 7), on)).toMatchObject({
+      nipun_g2_cohort: 0,
+      nipun_g3_cohort: 0,
+    });
+    expect(cohortVector(student(2016, 7), on)).toMatchObject({
+      nipun_g2_cohort: 0,
+      nipun_g3_cohort: 0,
+    });
+    // unbanded: nothing
+    expect(cohortVector(student(null, null), on)).toMatchObject({
+      nipun_g2_cohort: 0,
+      nipun_g3_cohort: 0,
+    });
+    // No birth month: estimated from onboarding. Said "7" in March 2026
+    // (birth_year 2019) → born September 2018 → 8 on 2026-09-13 → g3.
+    expect(
+      cohortVector(student(2019, null, new Date('2026-03-15T03:30:00Z')), on),
+    ).toMatchObject({ nipun_g2_cohort: 0, nipun_g3_cohort: 1 });
+    // Said "7" in August 2026 → born February 2019 → still 7 → g2.
+    expect(
+      cohortVector(student(2019, null, new Date('2026-08-15T03:30:00Z')), on),
+    ).toMatchObject({ nipun_g2_cohort: 1, nipun_g3_cohort: 0 });
+  });
+});
+
+describe('TestResultsService.run — NIPUN school verdict roll-up', () => {
+  const geoRow = (db: FakeDb, id: string) =>
+    db.geo.find(
+      (g) => g.geo_entity_id === id && g.computed_for === COMPUTED_FOR,
+    )!;
+
+  // `seven` students aged 7 (g2 band) and `eight` aged 8 (g3 band) in `geo`;
+  // the first `g2Pass` seven-year-olds score 4/4 on g2. Nobody has g3
+  // answers, so g3 is 0 of `eight` → g3 fails whenever decidable.
+  function seedSchool(
+    db: FakeDb,
+    geo: string,
+    seven: number,
+    eight: number,
+    g2Pass: number,
+    prefix = 'P',
+  ) {
+    const recent = new Date('2026-09-10T00:00:00Z');
+    for (let i = 0; i < seven + eight; i++) {
+      const id = `${prefix}${i}`;
+      db.students.push({
+        id,
+        birth_year: i < seven ? 2019 : 2018,
+        birth_month: 7,
+        referrer_geo: geo,
+      });
+      if (i < g2Pass) {
+        db.lessons.set(id, [recent]);
+        db.answers.set(id, g2Answers(id, 4));
+      }
+    }
+  }
+
+  it('the cohort counts every in-band student, scored or not; 12 + 12 with no passers fails', async () => {
+    const db = new FakeDb();
+    seedSchool(db, 'S1', 12, 12, 0); // nobody ever scored → no results rows at all
+    const { svc } = makeService(db);
+    await svc.run({ full: false, now: NOW });
+    const s1 = geoRow(db, 'S1');
+    expect(s1.students_scored).toBe(0);
+    expect(s1.metrics.nipun_g2.n).toBe(0);
+    expect(s1).toMatchObject({
+      nipun_g2_cohort: 12,
+      nipun_g3_cohort: 12,
+      nipun_school_passed: false,
+      nipun_schools_pass: 0,
+      nipun_schools_fail: 1,
+      nipun_schools_insufficient: 0,
+    });
+    // Rolled up to the block and district as a failing school.
+    expect(geoRow(db, 'B1')).toMatchObject({
+      nipun_g2_cohort: 12,
+      nipun_g3_cohort: 12,
+      nipun_school_passed: null,
+      nipun_schools_fail: 1,
+    });
+    expect(geoRow(db, 'D')).toMatchObject({
+      nipun_schools_fail: 1,
+      nipun_school_passed: null,
+    });
+  });
+
+  it('a school with fewer than 12 in both bands and no pass is undecidable; counted as insufficient above', async () => {
+    const db = new FakeDb();
+    seedSchool(db, 'S1', 11, 11, 8);
+    const { svc } = makeService(db);
+    await svc.run({ full: false, now: NOW });
+    expect(geoRow(db, 'S1')).toMatchObject({
+      nipun_g2_cohort: 11,
+      nipun_g3_cohort: 11,
+      nipun_school_passed: null,
+      nipun_schools_insufficient: 1,
+    });
+    expect(geoRow(db, 'D')).toMatchObject({ nipun_schools_insufficient: 1 });
+  });
+
+  it('12 seven-year-olds failing g2 with only 6 eight-year-olds is still undecidable (g3 null wins over g2 false)', async () => {
+    const db = new FakeDb();
+    seedSchool(db, 'S1', 12, 6, 0);
+    await makeService(db).svc.run({ full: false, now: NOW });
+    expect(geoRow(db, 'S1')).toMatchObject({
+      nipun_g2_cohort: 12,
+      nipun_g3_cohort: 6,
+      nipun_school_passed: null,
+      nipun_schools_insufficient: 1,
+    });
+  });
+
+  it('nine of nine passing g2 passes the band; g3 then decides: 0 of 9 is undecidable, 0 of 12 is a fail', async () => {
+    const small = new FakeDb();
+    seedSchool(small, 'S1', 9, 9, 9);
+    await makeService(small).svc.run({ full: false, now: NOW });
+    expect(geoRow(small, 'S1')).toMatchObject({
+      nipun_g2_cohort: 9,
+      nipun_g3_cohort: 9,
+      nipun_school_passed: null, // g2 true, g3 null
+      nipun_schools_insufficient: 1,
+    });
+    expect(geoRow(small, 'S1').metrics.nipun_g2.pass).toBe(9);
+
+    const big = new FakeDb();
+    seedSchool(big, 'S1', 9, 12, 9);
+    await makeService(big).svc.run({ full: false, now: NOW });
+    expect(geoRow(big, 'S1')).toMatchObject({
+      nipun_school_passed: false, // g2 true, g3 false
+      nipun_schools_fail: 1,
+    });
+  });
+
+  it('a district counts its schools one-hot: pass, fail and insufficient schools sum up the tree', async () => {
+    const db = new FakeDb();
+    seedSchool(db, 'S1', 12, 12, 0, 'P'); // fail
+    seedSchool(db, 'S2', 5, 5, 0, 'Q'); // insufficient
+    seedSchool(db, 'S3', 12, 12, 0, 'R'); // fail
+    const { svc } = makeService(db);
+    await svc.run({ full: false, now: NOW });
+    expect(geoRow(db, 'B1')).toMatchObject({
+      nipun_schools_pass: 0,
+      nipun_schools_fail: 1,
+      nipun_schools_insufficient: 1,
+    });
+    expect(geoRow(db, 'B2')).toMatchObject({
+      nipun_schools_fail: 1,
+      nipun_schools_insufficient: 0,
+    });
+    expect(geoRow(db, 'D')).toMatchObject({
+      nipun_schools_pass: 0,
+      nipun_schools_fail: 2,
+      nipun_schools_insufficient: 1,
+    });
+  });
+
+  it('students referred straight onto a block count in its cohort but the block gets no school verdict', async () => {
+    const db = new FakeDb();
+    seedSchool(db, 'B2', 12, 12, 0);
+    const { svc } = makeService(db);
+    await svc.run({ full: false, now: NOW });
+    expect(geoRow(db, 'B2')).toMatchObject({
+      nipun_g2_cohort: 12,
+      nipun_school_passed: null,
+      nipun_schools_pass: 0,
+      nipun_schools_fail: 0,
+      nipun_schools_insufficient: 0,
+    });
+    expect(geoRow(db, 'D')).toMatchObject({ nipun_schools_fail: 0 });
+    expect(db.geo.some((g) => g.geo_entity_id === 'S3')).toBe(false);
+  });
+
+  it('the nightly upsert updates the verdict columns on conflict', async () => {
+    const db = new FakeDb();
+    seedSchool(db, 'S1', 12, 12, 0);
+    const { svc } = makeService(db);
+    await svc.run({ full: false, now: NOW });
+    const upsert = db.query.mock.calls.find(([sql]) =>
+      String(sql).includes('test-results:upsert-geo'),
+    )!;
+    const sql = String(upsert[0]);
+    expect(sql).toMatch(
+      /students_unbanded, nipun_g2_cohort, nipun_g3_cohort, nipun_school_passed, nipun_schools_pass, nipun_schools_fail, nipun_schools_insufficient, nipun_g2_n/,
+    );
+    for (const c of VERDICT_COLUMNS) {
+      expect(sql).toContain(`${c} = EXCLUDED.${c}`);
+    }
   });
 });
 

@@ -65,7 +65,9 @@ nightly tables); never recomputes a score. Every statement carries a
      every StudentRow; also feeds the teacher / class deltas.
    - `active` / `last_active_at`: one grouped `MAX(created_at)` over
      `literacy_lesson_states` per member (active = within 14 days of as_of).
-   - `in_band`: `users.birth_year/birth_month` through age-bands.ts on as_of.
+   - `in_band`: `users.birth_year/birth_month/created_at` through
+     age-bands.ts on as_of (a missing month is estimated from the
+     onboarding day).
    - `label`: first name, else "Student N" with N a stable ordinal by
      `created_at` among current members (shifts if a student leaves or is
      re-referred — accepted for the pilot). Ordered scored desc → unscored

@@ -196,6 +196,7 @@ export async function backfillUsage(
           geo_entity_id: s.geo_entity_id,
           birth_year: s.birth_year,
           birth_month: s.birth_month,
+          created_at: s.created_at,
           active,
           nipun_g2_score: null,
           nipun_g2_passed: null,

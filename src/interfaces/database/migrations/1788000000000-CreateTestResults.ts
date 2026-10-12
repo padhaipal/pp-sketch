@@ -13,6 +13,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 // percentile and any pass threshold without reading student rows. The
 // histograms are exact, not bucketed: nipunSnapshot always divides by 4 and
 // mplBSnapshot by 20, so the score space is discrete (5 and 21 values).
+// 1792000000000-AddNipunSchoolVerdict adds the school-level NIPUN verdict
+// (cohort sizes, nipun_school_passed, one-hot school counts).
 //
 // test_runs — one row per job run for observability and the overlap guard.
 const NIPUN_ZEROS = "'{0,0,0,0,0}'";

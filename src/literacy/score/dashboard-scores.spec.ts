@@ -224,9 +224,9 @@ describe('dashboard-scores arithmetic', () => {
   });
 
   it('testMeta: the age band and pass mark of a test metric, nothing for usage', () => {
-    expect(testMeta('nipun_g2')).toEqual({ age_band: [7, 9], pass_mark: 75 });
-    expect(testMeta('nipun_g3')).toEqual({ age_band: [8, 10], pass_mark: 75 });
-    expect(testMeta('mpl_b')).toEqual({ age_band: [8, 10], pass_mark: 50 });
+    expect(testMeta('nipun_g2')).toEqual({ age_band: [7, 8], pass_mark: 75 });
+    expect(testMeta('nipun_g3')).toEqual({ age_band: [8, 9], pass_mark: 75 });
+    expect(testMeta('mpl_b')).toEqual({ age_band: [10, 11], pass_mark: 50 });
     expect(testMeta('usage')).toEqual({});
   });
 
@@ -1072,7 +1072,7 @@ describe('DashboardScoresService.scores — geo levels', () => {
       as_of: null,
       metric: 'nipun_g2',
       range: 30,
-      age_band: [7, 9],
+      age_band: [7, 8],
       pass_mark: 75,
       entity: expect.objectContaining({ id: 'S9' }),
       root: {
@@ -1237,7 +1237,7 @@ describe('DashboardScoresService.scores — school level (students)', () => {
       student_id: 'st-b',
       name: 'Bittu Yadav',
       created_at: '2026-02-01',
-      birth_year: 2018,
+      birth_year: 2019,
       birth_month: 7,
       rows: [
         {
@@ -1254,7 +1254,7 @@ describe('DashboardScoresService.scores — school level (students)', () => {
       student_id: 'st-a',
       name: null,
       created_at: '2026-01-01',
-      birth_year: 2018,
+      birth_year: 2019,
       birth_month: 7,
       rows: [
         {
@@ -1310,7 +1310,7 @@ describe('DashboardScoresService.scores — school level (students)', () => {
       student_id: 'st-moved',
       name: 'Gone',
       created_at: '2026-01-15',
-      birth_year: 2018,
+      birth_year: 2019,
       birth_month: 7,
       rows: [
         {
@@ -1462,7 +1462,7 @@ describe('DashboardScoresService.scores — school level (students)', () => {
     // st-moved has a prior row (2026-08-01, score 1) ≤ as_of − 30 → delta 0
     expect(rows[1].delta).toBe(0);
     expect(rows[2].active).toBe(true);
-    // st-c is 10 on 2026-09-13 → outside nipun_g2 [7, 9).
+    // st-c is 10 on 2026-09-13 → outside nipun_g2 [7, 8).
     expect(rows[3].in_band).toBe(false);
     expect(rows[4]).toEqual(
       expect.objectContaining({
@@ -1782,7 +1782,7 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
     student_id: id,
     name: id,
     created_at: '2026-01-01',
-    birth_year: 2018,
+    birth_year: 2019,
     birth_month: 7,
     rows,
     last_active_at: '2026-09-12T00:00:00Z',

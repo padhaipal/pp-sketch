@@ -55,11 +55,29 @@ export function histIndex(metric: LiteracyMetric, score: number): number {
 }
 export const STUDENT_BATCH_SIZE = 200;
 export const GEO_BATCH_SIZE = 500;
+// test_results_geo_entity columns of the school verdict, in bind order.
+export const VERDICT_COLUMNS = [
+  'nipun_g2_cohort',
+  'nipun_g3_cohort',
+  'nipun_school_passed',
+  'nipun_schools_pass',
+  'nipun_schools_fail',
+  'nipun_schools_insufficient',
+] as const;
 export const ACTIVE_WINDOW_DAYS = 14;
 // A 'running' test_runs row older than this is a crashed run, not a live
 // one, and must not block tonight.
 export const STALE_RUN_HOURS = 6;
 export const MANUAL_JOB_ID = 'test-results-manual';
+// School-level NIPUN verdict (schoolVerdict): a band passes when at least
+// NIPUN_SCHOOL_MIN_PASSERS of its cohort pass AND they are at least
+// NIPUN_SCHOOL_PASS_SHARE of the cohort (inclusive); a band that doesn't
+// pass is a fail only with at least NIPUN_SCHOOL_MIN_COHORT students,
+// otherwise undecidable. The cohort is EVERY student of the school inside
+// the band's age range, scored or not.
+export const NIPUN_SCHOOL_MIN_PASSERS = 9;
+export const NIPUN_SCHOOL_PASS_SHARE = 0.75;
+export const NIPUN_SCHOOL_MIN_COHORT = 12;
 
 // ─── Vectors (pure; rolled up additively) ────────────────────────────────────
 
@@ -75,6 +93,15 @@ export interface GeoVector {
   students_active: number;
   students_scored: number;
   students_unbanded: number;
+  // Students inside the band's age range, scored or not (additive).
+  nipun_g2_cohort: number;
+  nipun_g3_cohort: number;
+  // School rows only; null on ancestors and when undecidable. Never summed.
+  nipun_school_passed: boolean | null;
+  // Schools below (or this school, one-hot) by verdict (additive).
+  nipun_schools_pass: number;
+  nipun_schools_fail: number;
+  nipun_schools_insufficient: number;
   nipun_g2: MetricVector;
   nipun_g3: MetricVector;
   mpl_b: MetricVector;
@@ -93,6 +120,12 @@ export function emptyVector(): GeoVector {
     students_active: 0,
     students_scored: 0,
     students_unbanded: 0,
+    nipun_g2_cohort: 0,
+    nipun_g3_cohort: 0,
+    nipun_school_passed: null,
+    nipun_schools_pass: 0,
+    nipun_schools_fail: 0,
+    nipun_schools_insufficient: 0,
     nipun_g2: metric('nipun_g2'),
     nipun_g3: metric('nipun_g3'),
     mpl_b: metric('mpl_b'),
@@ -104,6 +137,11 @@ export function addVector(into: GeoVector, from: GeoVector): GeoVector {
   into.students_active += from.students_active;
   into.students_scored += from.students_scored;
   into.students_unbanded += from.students_unbanded;
+  into.nipun_g2_cohort += from.nipun_g2_cohort;
+  into.nipun_g3_cohort += from.nipun_g3_cohort;
+  into.nipun_schools_pass += from.nipun_schools_pass;
+  into.nipun_schools_fail += from.nipun_schools_fail;
+  into.nipun_schools_insufficient += from.nipun_schools_insufficient;
   for (const m of METRICS) {
     into[m].n += from[m].n;
     into[m].sum += from[m].sum;
@@ -122,6 +160,9 @@ export interface LatestStudentRow {
   geo_entity_id: string | null;
   birth_year: number | null;
   birth_month: number | null;
+  // users.created_at — the onboarding day the age rule estimates a missing
+  // birth month from (age-bands.ts assumedBirth).
+  created_at: Date | string | null;
   active: boolean;
   nipun_g2_score: number | null;
   nipun_g2_passed: boolean | null;
@@ -157,7 +198,12 @@ export function studentVector(
   v.usage.sumsq = minutes * minutes;
   v.usage.pass = minutes > USAGE_PASS_MINUTES ? 1 : 0;
   v.usage.hist[histIndex('usage', minutes)] = 1;
-  const age = ageOn(computedFor, row.birth_year, row.birth_month);
+  const age = ageOn(
+    computedFor,
+    row.birth_year,
+    row.birth_month,
+    row.created_at,
+  );
   if (age === null) {
     v.students_unbanded = 1;
     return v;
@@ -171,6 +217,61 @@ export function studentVector(
     v[m].pass = passed ? 1 : 0;
     v[m].hist[histIndex(m, score)] = 1;
   }
+  return v;
+}
+
+// One student of a school as the cohort step reads it: every non-deleted
+// student with a birth year whose referrer has a geo entity, whether or not
+// they have ever been scored.
+export interface CohortRow {
+  geo_entity_id: string;
+  birth_year: number | null;
+  birth_month: number | null;
+  created_at: Date | string | null;
+}
+
+// A student's cohort contribution on `computedFor`: 1 per NIPUN band whose
+// age range holds them (the bands overlap, so both is possible).
+export function cohortVector(row: CohortRow, computedFor: Date): GeoVector {
+  const v = emptyVector();
+  const age = ageOn(
+    computedFor,
+    row.birth_year,
+    row.birth_month,
+    row.created_at,
+  );
+  if (inBand('nipun_g2', age)) v.nipun_g2_cohort = 1;
+  if (inBand('nipun_g3', age)) v.nipun_g3_cohort = 1;
+  return v;
+}
+
+// One band: true = passes, false = fails, null = too few students to say.
+export function bandVerdict(cohort: number, pass: number): boolean | null {
+  if (
+    pass >= NIPUN_SCHOOL_MIN_PASSERS &&
+    pass >= NIPUN_SCHOOL_PASS_SHARE * cohort
+  ) {
+    return true;
+  }
+  return cohort >= NIPUN_SCHOOL_MIN_COHORT ? false : null;
+}
+
+// A school passes NIPUN when both bands pass; is undecidable when either
+// band is; fails otherwise. Reads the school's own finished vector.
+export function schoolVerdict(v: GeoVector): boolean | null {
+  const g2 = bandVerdict(v.nipun_g2_cohort, v.nipun_g2.pass);
+  const g3 = bandVerdict(v.nipun_g3_cohort, v.nipun_g3.pass);
+  if (g2 === true && g3 === true) return true;
+  if (g2 === null || g3 === null) return null;
+  return false;
+}
+
+// The one-hot school count a verdict adds to the school and its ancestors.
+export function verdictVector(passed: boolean | null): GeoVector {
+  const v = emptyVector();
+  if (passed === true) v.nipun_schools_pass = 1;
+  else if (passed === false) v.nipun_schools_fail = 1;
+  else v.nipun_schools_insufficient = 1;
   return v;
 }
 
@@ -470,7 +571,7 @@ export class TestResultsService {
     const rows: LatestStudentRow[] = await this.dataSource.query(
       `/* test-results:latest-students */
        SELECT DISTINCT ON (t.student_id)
-              t.student_id, r.geo_entity_id, u.birth_year, u.birth_month,
+              t.student_id, r.geo_entity_id, u.birth_year, u.birth_month, u.created_at,
               t.nipun_g2_score::float8 AS nipun_g2_score, t.nipun_g2_passed,
               t.nipun_g3_score::float8 AS nipun_g3_score, t.nipun_g3_passed,
               t.mpl_b_score::float8 AS mpl_b_score, t.mpl_b_passed,
@@ -486,22 +587,69 @@ export class TestResultsService {
     );
 
     const vectors = new Map<string, GeoVector>();
+    // Leaf (the referrer's geo entity) → [leaf, ...ancestors]; one ancestors()
+    // read per leaf, never per student.
     const ancestorCache = new Map<string, string[]>();
-    for (const row of rows) {
-      if (!row.geo_entity_id) continue;
-      const contribution = studentVector(row, computedForDate);
-      let path = ancestorCache.get(row.geo_entity_id);
+    const pathFor = async (leafId: string): Promise<string[]> => {
+      let path = ancestorCache.get(leafId);
       if (!path) {
-        const ancestors = await this.geoEntityService.ancestors(
-          row.geo_entity_id,
-        );
-        path = [row.geo_entity_id, ...ancestors.map((a) => a.id)];
-        ancestorCache.set(row.geo_entity_id, path);
+        const ancestors = await this.geoEntityService.ancestors(leafId);
+        path = [leafId, ...ancestors.map((a) => a.id)];
+        ancestorCache.set(leafId, path);
       }
+      return path;
+    };
+    const addAlong = (path: string[], contribution: GeoVector) => {
       for (const id of path) {
         const v = vectors.get(id) ?? emptyVector();
         vectors.set(id, addVector(v, contribution));
       }
+    };
+    for (const row of rows) {
+      if (!row.geo_entity_id) continue;
+      addAlong(
+        await pathFor(row.geo_entity_id),
+        studentVector(row, computedForDate),
+      );
+    }
+
+    // Cohort: every student of the school in a NIPUN band's age range,
+    // scored or not — the verdict's denominator. Same membership join as
+    // latest-students (referrer's CURRENT geo entity), minus the results row.
+    const cohort: CohortRow[] = await this.dataSource.query(
+      `/* test-results:cohort */
+       SELECT r.geo_entity_id, u.birth_year, u.birth_month, u.created_at
+       FROM users u
+       JOIN users r ON r.id = u.referrer_user_id
+       WHERE u.role = 'student' AND u.deleted_at IS NULL
+         AND u.birth_year IS NOT NULL AND r.geo_entity_id IS NOT NULL`,
+    );
+    for (const row of cohort) {
+      addAlong(
+        await pathFor(row.geo_entity_id),
+        cohortVector(row, computedForDate),
+      );
+    }
+
+    // Verdict: only for leaves that are schools (a referrer attached to a
+    // block puts their students straight on the block, which is no school).
+    // Each school's verdict is read off its finished vector, then counted
+    // one-hot on the school and every ancestor.
+    const leafIds = [...ancestorCache.keys()];
+    const leafTypes: Array<{ id: string; type: string }> = leafIds.length
+      ? await this.dataSource.query(
+          `/* test-results:leaf-types */
+           SELECT id, type FROM geo_entity WHERE id = ANY($1::uuid[])`,
+          [leafIds],
+        )
+      : [];
+    for (const { id, type } of leafTypes) {
+      if (type !== 'school') continue;
+      const school = vectors.get(id);
+      if (!school) continue;
+      const passed = schoolVerdict(school);
+      school.nipun_school_passed = passed;
+      addAlong(await pathFor(id), verdictVector(passed));
     }
 
     const entries = [...vectors.entries()];
@@ -585,14 +733,20 @@ export class TestResultsService {
       return `$${++p}`;
     };
     for (const [geoId, v] of entries) {
-      // Bind in column order: key columns, counts, then each metric's
-      // n/sum/sumsq/pass/hist.
+      // Bind in column order: key columns, counts, NIPUN school verdict
+      // columns, then each metric's n/sum/sumsq/pass/hist.
       const head = [
         push(geoId),
         `${push(computedFor)}::date`,
         push(v.students_active),
         push(v.students_scored),
         push(v.students_unbanded),
+        push(v.nipun_g2_cohort),
+        push(v.nipun_g3_cohort),
+        push(v.nipun_school_passed),
+        push(v.nipun_schools_pass),
+        push(v.nipun_schools_fail),
+        push(v.nipun_schools_insufficient),
       ];
       const metricCols = METRICS.map(
         (m) =>
@@ -613,6 +767,7 @@ export class TestResultsService {
           'students_active',
           'students_scored',
           'students_unbanded',
+          ...VERDICT_COLUMNS,
           ...metricColumnNames,
         ];
     const setClause = updatable.map((c) => `${c} = EXCLUDED.${c}`).join(', ');
@@ -627,7 +782,7 @@ export class TestResultsService {
     await this.dataSource.query(
       `/* test-results:${backfill ? 'backfill-geo' : 'upsert-geo'} */
        INSERT INTO test_results_geo_entity
-         (geo_entity_id, computed_for, students_active, students_scored, students_unbanded, ${metricColumnNames.join(', ')}${createdAtCol})
+         (geo_entity_id, computed_for, students_active, students_scored, students_unbanded, ${VERDICT_COLUMNS.join(', ')}, ${metricColumnNames.join(', ')}${createdAtCol})
        VALUES ${rowsSql}
        ON CONFLICT (geo_entity_id, computed_for) DO UPDATE SET ${setClause}${createdAtSet}`,
       params,
