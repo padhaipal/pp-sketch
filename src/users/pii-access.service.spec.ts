@@ -55,6 +55,37 @@ describe('PiiAccessService.visibleTo', () => {
   });
 });
 
+describe('PiiAccessService.canHear', () => {
+  const B1 = '44444444-4444-4444-8444-444444444444';
+
+  it('staff: always, without a query; anonymous, a null or non-uuid subject: never', async () => {
+    const { svc, query } = make([{ '?column?': 1 }]);
+    expect(await svc.canHear(STAFF, S1)).toBe(true);
+    expect(await svc.canHear(ANONYMOUS, S1)).toBe(false);
+    expect(await svc.canHear({ kind: 'user', id: B1 }, null)).toBe(false);
+    expect(await svc.canHear({ kind: 'user', id: B1 }, '919876543210')).toBe(
+      false,
+    );
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('a link holder: one query walking up from the referring teacher’s geo entity; a row = audible', async () => {
+    const { svc, query } = make([{ '?column?': 1 }]);
+    expect(await svc.canHear({ kind: 'user', id: B1 }, S1)).toBe(true);
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('pii-access:audible');
+    // the referring teacher themselves, or any STRICT ancestor of their geo entity
+    expect(sql).toMatch(/v\.id = s\.referrer_user_id/);
+    expect(sql).toMatch(
+      /v\.geo_entity_id IN \(SELECT id FROM up WHERE depth > 0\)/,
+    );
+    expect(params).toEqual([B1, S1, 6]);
+    query.mockResolvedValue([]);
+    expect(await svc.canHear({ kind: 'user', id: B1 }, S2)).toBe(false);
+  });
+});
+
 describe('PiiAccessService.canSee', () => {
   it('staff: always; null subject: never; otherwise whether the subject is in the visible set', async () => {
     const { svc, query } = make([{ id: S1 }]);

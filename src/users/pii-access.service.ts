@@ -2,10 +2,16 @@ import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { isUuid, type ViewerContext } from '../auth/viewer';
 
-// Who may see whose personal data (name, phone, voice recordings) in full.
+// country > state > district > block > school > teacher: the recursion above
+// a school never needs more hops than this.
+const MAX_HIERARCHY_DEPTH = 6;
+
+// Who may see whose personal data (name, phone) in full, and who may play
+// whose voice recordings.
 //
-// The rule is one hop up the hierarchy: a user's personal data is visible
-// only to the account DIRECTLY above them, never two or more levels up.
+// Names and phones (visibleTo / canSee): one hop up the hierarchy — a user's
+// personal data is visible only to the account DIRECTLY above them, never two
+// or more levels up.
 //   country > state > district > block > school > teacher > student
 //   • a student's parent is the teacher who referred them
 //     (users.referrer_user_id), and that teacher must be assigned to a
@@ -16,6 +22,11 @@ import { isUuid, type ViewerContext } from '../auth/viewer';
 //     the district official sees the block official's, and so on.
 // Staff sessions (dev/admin) see everything; an anonymous viewer nothing.
 // Everything else is masked (pii-mask.ts).
+//
+// Voice recordings (canHear): the whole chain above the student — their
+// referring teacher and every account whose geo entity is an ancestor of
+// that teacher's (the block, district, state and country officials over
+// the school). Anyone else gets 403 from GET media-meta-data/:id/audio.
 @Injectable()
 export class PiiAccessService {
   constructor(private readonly dataSource: DataSource) {}
@@ -54,5 +65,42 @@ export class PiiAccessService {
     if (viewer.kind === 'staff') return true;
     if (!userId) return false;
     return (await this.visibleTo(viewer, [userId])).has(userId);
+  }
+
+  // Whether the viewer may play `userId`'s voice recordings: their referring
+  // teacher, or an account whose geo entity sits STRICTLY above the
+  // teacher's in the hierarchy (a colleague at the same school does not).
+  async canHear(
+    viewer: ViewerContext,
+    userId: string | null,
+  ): Promise<boolean> {
+    if (viewer.kind === 'staff') return true;
+    if (viewer.kind === 'anonymous' || !userId || !isUuid(userId)) return false;
+    const rows: unknown[] = await this.dataSource.query(
+      `/* pii-access:audible */
+       WITH RECURSIVE up AS (
+         -- the referring teacher's own geo entity (depth 0), then each parent
+         SELECT t.geo_entity_id AS id, 0 AS depth
+         FROM users s
+         JOIN users t ON t.id = s.referrer_user_id
+         WHERE s.id = $2 AND s.deleted_at IS NULL
+         UNION ALL
+         SELECT g.parent_id, up.depth + 1
+         FROM geo_entity g
+         JOIN up ON g.id = up.id
+         WHERE g.parent_id IS NOT NULL AND up.depth < $3
+       )
+       SELECT 1
+       FROM users v
+       JOIN users s ON s.id = $2 AND s.deleted_at IS NULL
+       WHERE v.id = $1 AND v.deleted_at IS NULL
+         AND (
+           v.id = s.referrer_user_id
+           OR v.geo_entity_id IN (SELECT id FROM up WHERE depth > 0)
+         )
+       LIMIT 1`,
+      [viewer.id, userId, MAX_HIERARCHY_DEPTH],
+    );
+    return rows.length > 0;
   }
 }

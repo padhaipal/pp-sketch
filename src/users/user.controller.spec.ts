@@ -2596,7 +2596,7 @@ describe('UserController — PII by viewer', () => {
     return { ctrl, piiAccess };
   }
 
-  it('media: the viewer directly above the student sees name + phone as stored, pii full, with each note’s duration', async () => {
+  it('media: the viewer directly above the student sees name + phone as stored, pii full', async () => {
     const { ctrl, piiAccess } = make(true);
     const out = await ctrl.userMedia(STUDENT_ID, undefined, undefined, TEACHER);
     expect(piiAccess.canSee).toHaveBeenCalledWith(TEACHER, STUDENT_ID);
@@ -2605,16 +2605,15 @@ describe('UserController — PII by viewer', () => {
       phone: '919999990001',
       pii: 'full',
     });
-    expect(out.media.map((m) => m.duration_ms)).toEqual([12_000, null]);
   });
 
   it('media: anyone else gets name and phone masked and pii masked; the rows themselves are unchanged', async () => {
     const { ctrl } = make(false);
     const out = await ctrl.userMedia(STUDENT_ID);
     expect(out.user).toEqual({ name: 'R...i', phone: '9...1', pii: 'masked' });
-    expect(out.media.map((m) => [m.id, m.has_audio, m.duration_ms])).toEqual([
-      ['m1', true, 12_000],
-      ['m2', false, null],
+    expect(out.media.map((m) => [m.id, m.has_audio])).toEqual([
+      ['m1', true],
+      ['m2', false],
     ]);
   });
 

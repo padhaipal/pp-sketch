@@ -501,8 +501,9 @@ export class UserController {
   // permission was recorded, and nothing that still has an onboarding row.
   //
   // Personal data follows the viewer (auth/viewer.ts, PiiAccessService):
-  // the student's own teacher sees name and phone as stored and may play
-  // the recordings; everyone else gets them masked and `pii: 'masked'`.
+  // the student's own teacher sees name and phone as stored; everyone else
+  // gets them masked and `pii: 'masked'`. Whether a recording may be played
+  // is decided per request by GET media-meta-data/:id/audio (canHear).
   // Transcripts are censored for every viewer (transcript-censor.ts).
   @Get(':id/media')
   async userMedia(
@@ -794,7 +795,6 @@ export class UserController {
           final_state: lesson?.final_state ?? null,
           level: lesson?.level ?? null,
           wpm,
-          duration_ms: durationMs,
           tap: tap
             ? {
                 question: tapDetail?.question ?? null,

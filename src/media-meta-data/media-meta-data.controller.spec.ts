@@ -82,7 +82,7 @@ function makeController(opts: {
   coverageSvc?: Partial<MediaMetadataCoverageService>;
   bucket?: Partial<MediaBucketService>;
   repo?: RepoMock;
-  // Default: nobody's recording is visible (the anonymous rule); the audio
+  // Default: nobody may hear a recording (the anonymous rule); the audio
   // tests override it.
   piiAccess?: Partial<PiiAccessService>;
 }): { ctrl: MediaMetaDataController; repo: RepoMock } {
@@ -94,7 +94,7 @@ function makeController(opts: {
       (opts.bucket ?? {}) as MediaBucketService,
       repo as unknown as Repository<MediaMetaDataEntity>,
       (opts.piiAccess ?? {
-        canSee: jest.fn().mockResolvedValue(false),
+        canHear: jest.fn().mockResolvedValue(false),
       }) as unknown as PiiAccessService,
     ),
     repo,
@@ -461,7 +461,7 @@ describe('MediaMetaDataController.getAudio', () => {
     expect(res.send).toHaveBeenCalledWith(Buffer.from('abc'));
   });
 
-  it("a student's recording: 403 unless the viewer is directly above them (PiiAccessService); staff always", async () => {
+  it("a student's recording: 403 unless the viewer may hear it (PiiAccessService.canHear — teacher or an official above); staff always", async () => {
     const repo = makeRepo();
     repo.findOneBy.mockResolvedValue({
       id: 'mm-1',
@@ -472,25 +472,25 @@ describe('MediaMetaDataController.getAudio', () => {
       buffer: Buffer.from('abc'),
       content_type: 'audio/ogg',
     });
-    const canSee = jest.fn(
+    const canHear = jest.fn(
       async (viewer: { kind: string }) => viewer.kind === 'staff',
     );
     const { ctrl } = makeController({
       repo,
       bucket: { getBuffer } as unknown as MediaBucketService,
-      piiAccess: { canSee },
+      piiAccess: { canHear },
     });
     const teacher = { kind: 'user' as const, id: 'teacher-1' };
 
     await expect(ctrl.getAudio('mm-1', makeRes(), teacher)).rejects.toThrow(
       ForbiddenException,
     );
-    expect(canSee).toHaveBeenCalledWith(teacher, 'student-1');
+    expect(canHear).toHaveBeenCalledWith(teacher, 'student-1');
     // default viewer = anonymous
     await expect(ctrl.getAudio('mm-1', makeRes())).rejects.toThrow(
       ForbiddenException,
     );
-    expect(canSee).toHaveBeenLastCalledWith(ANONYMOUS, 'student-1');
+    expect(canHear).toHaveBeenLastCalledWith(ANONYMOUS, 'student-1');
     expect(getBuffer).not.toHaveBeenCalled();
 
     const res = makeRes();
@@ -505,7 +505,7 @@ describe('MediaMetaDataController.getAudio', () => {
       s3_key: 's3-1',
       user_id: null,
     });
-    const canSee = jest.fn();
+    const canHear = jest.fn();
     const { ctrl } = makeController({
       repo,
       bucket: {
@@ -514,11 +514,11 @@ describe('MediaMetaDataController.getAudio', () => {
           content_type: 'audio/ogg',
         }),
       } as unknown as MediaBucketService,
-      piiAccess: { canSee },
+      piiAccess: { canHear },
     });
     const res = makeRes();
     await ctrl.getAudio('mm-1', res);
-    expect(canSee).not.toHaveBeenCalled();
+    expect(canHear).not.toHaveBeenCalled();
     expect(res.send).toHaveBeenCalledWith(Buffer.from('x'));
   });
 });
