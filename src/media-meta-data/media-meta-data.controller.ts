@@ -264,10 +264,11 @@ export class MediaMetaDataController {
     return { id, sendable: body.sendable };
   }
 
-  // A student's recording plays only for the viewer directly above them
-  // (their own teacher) and for staff — PiiAccessService; anyone else gets
-  // 403 and the dashboard offers a sample clip instead. Generated media
-  // (no user_id) is not personal and plays for every authenticated caller.
+  // A student's recording plays for their referring teacher, for every
+  // official above that teacher in the hierarchy (block, district, state,
+  // country) and for staff — PiiAccessService.canHear; anyone else gets 403.
+  // Generated media (no user_id) is not personal and plays for every
+  // authenticated caller.
   @Get(':id/audio')
   async getAudio(
     @Param('id') id: string,
@@ -280,10 +281,10 @@ export class MediaMetaDataController {
     }
     if (
       media.user_id &&
-      !(await this.piiAccess.canSee(viewer, media.user_id))
+      !(await this.piiAccess.canHear(viewer, media.user_id))
     ) {
       throw new ForbiddenException(
-        'This recording is only available to the referring teacher',
+        "This recording is only available to the student's teacher and the officials above them",
       );
     }
     const { buffer, content_type } = await this.mediaBucket.getBuffer(
