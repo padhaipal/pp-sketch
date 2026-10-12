@@ -69,8 +69,48 @@ percentile and any pass threshold without reading student rows.
    Rows are written only for entities on an ancestor path of a school that
    has students. Upsert on `(geo_entity_id, computed_for)` in batches of
    `GEO_BATCH_SIZE`.
-8. Finish the `test_runs` row (`ok` + counts). Any exception → `failed`,
+8. School verdict: cohort read, then per school leaf `schoolVerdict` on its
+   finished vector, one-hot counts added to the school and its ancestors
+   (section below).
+9. Finish the `test_runs` row (`ok` + counts). Any exception → `failed`,
    `error` set, rethrown.
+
+## NIPUN school verdict (migration 1792000000000-AddNipunSchoolVerdict)
+
+A school-level pass/fail, distinct from the per-student `nipun_g*_pass`
+counts. Computed in `aggregateGeo` after the student vectors, from each
+school's own finished vector; nothing is backfilled — rows before the
+deploy keep cohort 0, verdict NULL, counts 0.
+
+- Cohort (`test-results:cohort` → `cohortVector`): EVERY non-deleted
+  student with a birth year whose referrer has a geo entity — scored or
+  not — adds 1 to `nipun_g2_cohort` / `nipun_g3_cohort` for each band whose
+  age range (age-bands.ts, on computed_for) holds them. Same membership
+  join as latest-students minus the results row, so a school with twelve
+  enrolled but three active children has a cohort of twelve. Additive up
+  the tree like the metric vectors.
+- `bandVerdict(cohort, pass)`: true when `pass ≥ NIPUN_SCHOOL_MIN_PASSERS`
+  (9) AND `pass ≥ NIPUN_SCHOOL_PASS_SHARE` (0.75, inclusive) × cohort —
+  no minimum cohort for a pass (9 of 9 passes); otherwise false from
+  `NIPUN_SCHOOL_MIN_COHORT` (12) students, null below. `pass` is the
+  band's `nipun_g*_pass` (scored, in-band, passed).
+- `schoolVerdict(v)`: both bands true → true; either band null → null
+  (g2 failing with g3 undecidable is still null); otherwise false.
+- Only for leaves whose `geo_entity.type = 'school'`
+  (`test-results:leaf-types`, one read per run over the referrers' geo
+  ids): students referred straight onto a block count in its cohort and
+  vectors, but a block gets no verdict and counts itself in nothing.
+- Stored on the school row as `nipun_school_passed` (true/false/NULL; NULL
+  on every non-school row) and one-hot in `nipun_schools_pass` / `_fail` /
+  `_insufficient`, which `verdictVector` adds to the school AND every
+  ancestor — so a district's three counts are how many of its schools
+  pass / fail / can't be decided. `addVector` sums the cohorts and the three
+  counts, never the boolean.
+- Schools with no student at all (no results row, no cohort member) have no
+  row and are counted nowhere — not even as insufficient.
+- `upsertGeoRows` binds `VERDICT_COLUMNS` between the three student counts
+  and the metric vectors; the nightly path updates them on conflict, the
+  usage backfill path (`usageOnly`) leaves them alone.
 
 ## upsertStudentUsage / upsertGeoUsage — backfill writers
 

@@ -104,6 +104,26 @@ export class TestResultGeoEntityEntity {
   @Column({ type: 'integer' })
   students_unbanded: number;
 
+  // Every student of the school inside the band's age range, scored or not
+  // (nipun_g*_n counts the scored ones). Denominator of the school verdict.
+  @Column({ type: 'integer', default: 0 })
+  nipun_g2_cohort: number;
+  @Column({ type: 'integer', default: 0 })
+  nipun_g3_cohort: number;
+
+  // School rows only: the school's NIPUN verdict (schoolVerdict in
+  // test-results.service.ts); NULL = undecidable, and on non-school rows.
+  @Column({ type: 'boolean', nullable: true })
+  nipun_school_passed: boolean | null;
+  // Schools under this entity by verdict; a school row is one-hot, so these
+  // roll up additively like the metric vectors.
+  @Column({ type: 'integer', default: 0 })
+  nipun_schools_pass: number;
+  @Column({ type: 'integer', default: 0 })
+  nipun_schools_fail: number;
+  @Column({ type: 'integer', default: 0 })
+  nipun_schools_insufficient: number;
+
   @Column({ type: 'integer', default: 0 })
   nipun_g2_n: number;
   @Column({ type: 'numeric', precision: 10, scale: 3, default: 0 })
