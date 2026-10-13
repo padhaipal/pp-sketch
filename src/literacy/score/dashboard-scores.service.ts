@@ -7,20 +7,31 @@ import type {
 } from '../../geo-entities/geo-entity.dto';
 import { DESCENDANTS_MAX_LIMIT } from '../../geo-entities/geo-entity.dto';
 import { ageOn, inBand, LiteracyMetric } from './age-bands';
-import { USAGE_PASS_MINUTES } from './test-results.service';
+import {
+  bandVerdict,
+  NIPUN_SCHOOL_MIN_PASSERS,
+  NIPUN_SCHOOL_PASS_SHARE,
+  USAGE_PASS_MINUTES,
+} from './test-results.service';
 import { PiiAccessService } from '../../users/pii-access.service';
 import { ANONYMOUS, type ViewerContext } from '../../auth/viewer';
 import { piiSubjects, redactScores } from './dashboard-scores.pii';
 import {
   ACTIVE_WINDOW_DAYS,
+  BandVerdict,
   binOf,
   CHILD_TYPE_OF,
   ChildRow,
   ChildSeries,
   compareStudents,
+  DashboardMetric,
   DashboardRange,
   delta,
   GeoRef,
+  NIPUN_BANDS,
+  NipunBand,
+  VERDICT_METRIC,
+  VerdictStats,
   meanOf,
   MOST_IMPROVED_LIMIT,
   MOST_IMPROVED_MIN_N,
@@ -64,6 +75,86 @@ interface GeoRowMetric {
   students_active: number;
   students_scored: number;
   students_unbanded: number;
+}
+
+// A test_results_geo_entity row under the verdict metric (migrations 1792
+// AddNipunSchoolVerdict + 1793 AddNipunG1).
+interface GeoRowVerdict {
+  geo_entity_id: string;
+  computed_for: string;
+  nipun_school_passed: boolean | null;
+  nipun_schools_pass: number;
+  nipun_schools_fail: number;
+  nipun_schools_insufficient: number;
+  nipun_g1_cohort: number;
+  nipun_g2_cohort: number;
+  nipun_g3_cohort: number;
+  nipun_g1_pass: number;
+  nipun_g2_pass: number;
+  nipun_g3_pass: number;
+  students_active: number;
+  students_scored: number;
+  students_unbanded: number;
+}
+
+const VERDICT_COLUMNS_SQL = `geo_entity_id, computed_for, nipun_school_passed,
+  nipun_schools_pass::int AS nipun_schools_pass, nipun_schools_fail::int AS nipun_schools_fail,
+  nipun_schools_insufficient::int AS nipun_schools_insufficient,
+  nipun_g1_cohort::int AS nipun_g1_cohort, nipun_g2_cohort::int AS nipun_g2_cohort, nipun_g3_cohort::int AS nipun_g3_cohort,
+  nipun_g1_pass::int AS nipun_g1_pass, nipun_g2_pass::int AS nipun_g2_pass, nipun_g3_pass::int AS nipun_g3_pass,
+  students_active, students_scored, students_unbanded`;
+
+// Share of DECIDED schools (pass + fail) that pass, in %; null when none is
+// decided — schools without enough data are neither (2026-10 decision).
+function verdictShare(row: GeoRowVerdict): number | null {
+  return passRate(
+    row.nipun_schools_pass,
+    row.nipun_schools_pass + row.nipun_schools_fail,
+  );
+}
+const decidedSchools = (row: GeoRowVerdict): number =>
+  row.nipun_schools_pass + row.nipun_schools_fail;
+
+function bandStats(row: GeoRowVerdict, band: NipunBand): BandVerdict {
+  const cohort = row[`${band}_cohort`];
+  const passers = row[`${band}_pass`];
+  return {
+    cohort,
+    passers,
+    needed: Math.max(
+      NIPUN_SCHOOL_MIN_PASSERS,
+      Math.ceil(NIPUN_SCHOOL_PASS_SHARE * cohort),
+    ),
+    verdict: bandVerdict(cohort, passers),
+  };
+}
+
+function verdictStats(row: GeoRowVerdict, school: boolean): VerdictStats {
+  return {
+    school_passed: school ? row.nipun_school_passed : null,
+    schools_pass: row.nipun_schools_pass,
+    schools_fail: row.nipun_schools_fail,
+    schools_insufficient: row.nipun_schools_insufficient,
+    ...(school
+      ? {
+          bands: Object.fromEntries(
+            NIPUN_BANDS.map((b) => [b, bandStats(row, b)]),
+          ) as Record<NipunBand, BandVerdict>,
+        }
+      : {}),
+  };
+}
+
+// A school's colour is its verdict; an area's its share of passing schools
+// (the usual 80 / 50 marks). Undecided schools are grey like unused ones.
+function verdictBin(row: GeoRowVerdict | undefined, school: boolean) {
+  if (!row) return 'none' as const;
+  if (school) {
+    if (row.nipun_school_passed === true) return 'high' as const;
+    if (row.nipun_school_passed === false) return 'low' as const;
+    return 'none' as const;
+  }
+  return binOf(verdictShare(row), decidedSchools(row) > 0);
 }
 
 function toRef(e: GeoEntity): GeoRef {
@@ -348,7 +439,7 @@ function groupSeries(
 function emptyResponse(
   entity: GeoRef,
   childType: ScoresResponse['child_type'],
-  metric: LiteracyMetric,
+  metric: DashboardMetric,
   range: DashboardRange,
   window?: TimeWindow,
 ): ScoresResponse {
@@ -419,7 +510,7 @@ export class DashboardScoresService {
   // caller that forgets the viewer gets the fully-masked (anonymous) view.
   async scores(
     id: string,
-    metric: LiteracyMetric,
+    metric: DashboardMetric,
     range: DashboardRange,
     window?: TimeWindow,
     viewer: ViewerContext = ANONYMOUS,
@@ -439,16 +530,18 @@ export class DashboardScoresService {
 
   private buildScoresShared(
     id: string,
-    metric: LiteracyMetric,
+    metric: DashboardMetric,
     range: DashboardRange,
     window?: TimeWindow,
   ): Promise<ScoresResponse> {
     const key = `${id}|${metric}|${range}|${metric === 'usage' ? (window ?? '') : ''}`;
     let pending = this.inflight.get(key);
     if (!pending) {
-      pending = this.buildScores(id, metric, range, window).finally(() =>
-        this.inflight.delete(key),
-      );
+      pending = (
+        metric === VERDICT_METRIC
+          ? this.verdictScores(id, range)
+          : this.buildScores(id, metric, range, window)
+      ).finally(() => this.inflight.delete(key));
       this.inflight.set(key, pending);
     }
     return pending;
@@ -580,17 +673,19 @@ export class DashboardScoresService {
   async rankings(
     id: string,
     level: RankLevel,
-    metric: LiteracyMetric,
+    metric: DashboardMetric,
     window?: TimeWindow,
   ): Promise<RankingsResponse> {
-    const win = metric === 'usage' ? window : undefined;
-    const entity = await this.geoEntityService.getById(id);
     const empty = (asOf: string | null): RankingsResponse => ({
       level,
       as_of: asOf,
       top: [],
       most_improved: [],
     });
+    // The verdict has no ranking (the dashboard hides the section).
+    if (metric === VERDICT_METRIC) return empty(null);
+    const win = metric === 'usage' ? window : undefined;
+    const entity = await this.geoEntityService.getById(id);
     // A teacher's class: students only.
     if (!entity) {
       if (level !== 'student') return empty(null);
@@ -928,11 +1023,13 @@ export class DashboardScoresService {
 
   async spotlight(
     id: string,
-    metric: LiteracyMetric,
+    metric: DashboardMetric,
     range: DashboardRange,
     window?: TimeWindow,
     viewer: ViewerContext = ANONYMOUS,
   ): Promise<SpotlightResponse> {
+    // No spotlight under the verdict (the dashboard hides the section).
+    if (metric === VERDICT_METRIC) return { top: null, most_improved: null };
     const result = await this.scores(id, metric, range, window, viewer);
     if (result.child_type === 'student' || result.child_type === null) {
       return { top: null, most_improved: null };
@@ -956,6 +1053,176 @@ export class DashboardScoresService {
         ? { child: improved, official: improved.official }
         : null,
     };
+  }
+
+  // ─── NIPUN verdict metric (school level and above) ────────────────────
+
+  // `metric=nipun`: the school verdict of #141 as the dashboard sees it.
+  // Root: the entity's verdict figures (a school: its own verdict + the
+  // three bands; an area: how many schools pass / fail / can't be decided,
+  // pass_rate = share of DECIDED schools passing). Children: one row per
+  // child area or school with the same figures (a school's pass_rate is
+  // 100 / 0 / null, its n 1 when decided). Series: the share over time. No
+  // teachers / students under a school (the verdict is school level), no
+  // child series, no window. A teacher's class id is not a geo entity →
+  // 404.
+  private async verdictScores(
+    id: string,
+    range: DashboardRange,
+  ): Promise<ScoresResponse> {
+    const entity = await this.geoEntityService.getById(id);
+    if (!entity) throw new NotFoundException('Geo entity not found');
+    const childType = CHILD_TYPE_OF[entity.type];
+    const areaChildren =
+      childType && childType !== 'teacher' && childType !== 'student'
+        ? childType
+        : null;
+    const latest = await this.verdictLatestRow(id);
+    if (!latest) {
+      const empty = emptyResponse(
+        toRef(entity),
+        childType,
+        VERDICT_METRIC,
+        range,
+      );
+      if (areaChildren) {
+        empty.children = await this.verdictChildren(entity, areaChildren, null);
+      }
+      return empty;
+    }
+    const asOf = isoDate(latest.computed_for);
+    const school = entity.type === 'school';
+    const prior = await this.verdictPriorRows([id], asOf, TEST_DELTA_DAYS);
+    const share = verdictShare(latest);
+    const root: RootStats = {
+      pass_rate: share,
+      mean: null,
+      sd: null,
+      n: decidedSchools(latest),
+      students_active: latest.students_active,
+      students_unbanded: latest.students_unbanded,
+      delta: delta(share, prior.get(id)),
+      verdict: verdictStats(latest, school),
+    };
+    const series = await this.verdictSeries(id, asOf, range);
+    const children = areaChildren
+      ? await this.verdictChildren(entity, areaChildren, asOf)
+      : [];
+    return {
+      as_of: asOf,
+      metric: VERDICT_METRIC,
+      range,
+      entity: toRef(entity),
+      root,
+      series,
+      child_type: childType,
+      children,
+      most_improved: rankImproved(children),
+    };
+  }
+
+  private async verdictLatestRow(id: string): Promise<GeoRowVerdict | null> {
+    const rows: GeoRowVerdict[] = await this.dataSource.query(
+      `/* dashboard-scores:verdict-latest */
+       SELECT ${VERDICT_COLUMNS_SQL}
+       FROM test_results_geo_entity
+       WHERE geo_entity_id = $1
+       ORDER BY computed_for DESC
+       LIMIT 1`,
+      [id],
+    );
+    return rows[0] ?? null;
+  }
+
+  // Newest row dated ≤ as_of − range days per entity → its share.
+  private async verdictPriorRows(
+    ids: string[],
+    asOf: string,
+    range: number | 'all',
+  ): Promise<Map<string, number | null>> {
+    if (ids.length === 0) return new Map();
+    const rows: GeoRowVerdict[] = await this.dataSource.query(
+      `/* dashboard-scores:verdict-prior */
+       SELECT DISTINCT ON (geo_entity_id) ${VERDICT_COLUMNS_SQL}
+       FROM test_results_geo_entity
+       WHERE geo_entity_id = ANY($1::uuid[])
+         AND ${priorSql(range, 'computed_for')}
+       ORDER BY geo_entity_id, computed_for ${priorOrder(range)}`,
+      [ids, asOf, ...rangeParams(range)],
+    );
+    return new Map(rows.map((r) => [r.geo_entity_id, verdictShare(r)]));
+  }
+
+  private async verdictSeries(
+    id: string,
+    asOf: string,
+    range: DashboardRange,
+  ): Promise<SeriesPoint[]> {
+    const rows: GeoRowVerdict[] = await this.dataSource.query(
+      `/* dashboard-scores:verdict-series */
+       SELECT ${VERDICT_COLUMNS_SQL}
+       FROM test_results_geo_entity
+       WHERE geo_entity_id = $1
+         ${sinceSql(range, 'computed_for')}
+         AND computed_for <= $2::date
+       ORDER BY computed_for`,
+      [id, asOf, ...rangeParams(range)],
+    );
+    return rows.map((r) => ({
+      date: isoDate(r.computed_for),
+      pass_rate: verdictShare(r),
+      n: decidedSchools(r),
+      mean: null,
+    }));
+  }
+
+  private async verdictChildRows(
+    ids: string[],
+    asOf: string,
+  ): Promise<GeoRowVerdict[]> {
+    const rows: GeoRowVerdict[] = await this.dataSource.query(
+      `/* dashboard-scores:verdict-children */
+       SELECT ${VERDICT_COLUMNS_SQL}
+       FROM test_results_geo_entity
+       WHERE geo_entity_id = ANY($1::uuid[]) AND computed_for = $2::date`,
+      [ids, asOf],
+    );
+    return rows;
+  }
+
+  private async verdictChildren(
+    entity: GeoEntity,
+    childType: Exclude<GeoEntityType, 'cluster' | 'country'>,
+    asOf: string | null,
+  ): Promise<ChildRow[]> {
+    const refs = await this.allDescendants(entity.id, childType);
+    if (refs.length === 0) return [];
+    const ids = refs.map((r) => r.id);
+    const school = childType === 'school';
+    const noRows: GeoRowVerdict[] = [];
+    const [rows, prior, officials] = await Promise.all([
+      asOf ? this.verdictChildRows(ids, asOf) : noRows,
+      asOf
+        ? this.verdictPriorRows(ids, asOf, TEST_DELTA_DAYS)
+        : new Map<string, number | null>(),
+      this.officials(ids),
+    ]);
+    const byId = new Map(rows.map((r) => [r.geo_entity_id, r]));
+    return refs.map((ref) => {
+      const row = byId.get(ref.id);
+      const pr = row ? verdictShare(row) : null;
+      return {
+        ...ref,
+        pass_rate: pr,
+        n: row ? decidedSchools(row) : 0,
+        students_active: row?.students_active ?? 0,
+        using_lifteracy: usingLifteracy(row),
+        delta: delta(pr, prior.get(ref.id)),
+        bin: verdictBin(row, school),
+        official: officials.get(ref.id) ?? null,
+        ...(row ? { verdict: verdictStats(row, school) } : {}),
+      };
+    });
   }
 
   // ─── Roots ────────────────────────────────────────────────────────────

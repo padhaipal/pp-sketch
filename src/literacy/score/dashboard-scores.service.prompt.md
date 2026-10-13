@@ -73,6 +73,42 @@ nightly tables); never recomputes a score. Every statement carries a
      re-referred — accepted for the pilot). Ordered scored desc → unscored
      by last_active_at → neither.
 
+## 2026-10: NIPUN verdict metric — `scores(id, 'nipun', range)`
+
+`metric=nipun` (dto `VERDICT_METRIC`, type `DashboardMetric` =
+`LiteracyMetric | 'nipun'`) is the school verdict of migration 1792 (+ the
+g1 band of 1793) as a dashboard metric: `verdictScores` runs instead of
+`buildScores` (same in-flight sharing and PII redaction). Reads only the
+`verdict-latest` / `verdict-prior` / `verdict-series` /
+`verdict-children` queries over `test_results_geo_entity`'s verdict,
+cohort and `nipun_g*_pass` columns.
+
+- Root: `pass_rate` = share of DECIDED schools (pass + fail) under the
+  entity that pass, null when none is decided — schools without enough
+  data are neither (decision 2026-10); `n` = decided schools; mean/sd
+  null; `delta` against the share a week earlier; `root.verdict` =
+  `{ school_passed, schools_pass, schools_fail, schools_insufficient }`,
+  plus `bands` (g1/g2/g3 `{ cohort, passers, needed, verdict }`, `needed` =
+  max(9, ⌈75 % × cohort⌉), verdict via test-results.service `bandVerdict`)
+  on a school root. `school_passed` is null above school level.
+- Series: the share and decided count per stored day in range.
+- Children: one row per child area or school (same shape as the test
+  metrics + `verdict`; a school's `pass_rate` is 100 / 0 / null and its
+  `n` 1 when decided). Bin: a school by its verdict (pass high, fail low,
+  undecided none — grey like an unused school); an area by its share at
+  the usual 80 / 50 marks, none when no school is decided. A school root
+  lists no teachers or students (the verdict is school level): `children`
+  empty, `child_type` still `teacher`. No `window`, no child or student
+  series, no `age_band` / `pass_mark`.
+- Empty root (no row yet): nulls, and above school level the children are
+  still listed unscored (as for the test metrics).
+- A teacher's class id → 404 (no class verdict). `rankings` returns empty
+  lists and `spotlight` nulls under the verdict — the dashboard hides both
+  sections.
+- CSV: the controller flattens `verdict` into `school_passed`,
+  `schools_pass`, `schools_fail`, `schools_insufficient` columns
+  (`flattenVerdictRows`); bands are left out.
+
 ## Class level — `scores(<teacher user id>)`
 
 `classScores`: `dashboard-scores:teacher` (users row, 404 if none) →

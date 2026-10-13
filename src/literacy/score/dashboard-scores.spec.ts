@@ -74,7 +74,8 @@ describe('dashboard-scores arithmetic', () => {
   it('validators', () => {
     expect(validateMetric('mpl_b')).toBe('mpl_b');
     expect(validateMetric('nipun_g1')).toBe('nipun_g1');
-    expect(() => validateMetric('nipun')).toThrow(/metric must be one of/);
+    expect(validateMetric('nipun')).toBe('nipun');
+    expect(() => validateMetric('nipun_g9')).toThrow(/metric must be one of/);
     expect(validateRange(undefined)).toBe(30);
     expect(validateRange('all')).toBe('all');
     expect(() => validateRange('90')).toThrow(/range must be one of/);
@@ -323,7 +324,53 @@ type GeoRow = {
   students_active: number;
   students_scored: number;
   students_unbanded: number;
+  // Verdict metric columns (the verdict-* queries read these).
+  nipun_school_passed?: boolean | null;
+  nipun_schools_pass?: number;
+  nipun_schools_fail?: number;
+  nipun_schools_insufficient?: number;
+  nipun_g1_cohort?: number;
+  nipun_g2_cohort?: number;
+  nipun_g3_cohort?: number;
+  nipun_g1_pass?: number;
+  nipun_g2_pass?: number;
+  nipun_g3_pass?: number;
 };
+
+// A geo row as the verdict metric reads it: an area's school counts, or a
+// school's own verdict with its three bands as [cohort, passers].
+function verdictRow(
+  id: string,
+  date: string,
+  v: {
+    passed?: boolean | null;
+    pass: number;
+    fail: number;
+    insufficient: number;
+    bands?: [[number, number], [number, number], [number, number]];
+  },
+  extra: Partial<GeoRow> = {},
+): GeoRow {
+  const [g1, g2, g3] = v.bands ?? [
+    [0, 0],
+    [0, 0],
+    [0, 0],
+  ];
+  return {
+    ...geoRow(id, date, 0, 0, []),
+    nipun_school_passed: v.passed ?? null,
+    nipun_schools_pass: v.pass,
+    nipun_schools_fail: v.fail,
+    nipun_schools_insufficient: v.insufficient,
+    nipun_g1_cohort: g1[0],
+    nipun_g1_pass: g1[1],
+    nipun_g2_cohort: g2[0],
+    nipun_g2_pass: g2[1],
+    nipun_g3_cohort: g3[0],
+    nipun_g3_pass: g3[1],
+    ...extra,
+  };
+}
 
 function geoRow(
   id: string,
@@ -465,13 +512,15 @@ function makeService(fixture: {
   const query = jest.fn(async (sql: string, params: unknown[] = []) => {
     const tag = /\/\* ([a-z-]+:[a-z-]+) \*\//.exec(sql)?.[1];
     switch (tag) {
-      case 'dashboard-scores:latest': {
+      case 'dashboard-scores:latest':
+      case 'dashboard-scores:verdict-latest': {
         return fixture.geoRows
           .filter((r) => r.geo_entity_id === params[0])
           .sort((a, b) => (a.computed_for < b.computed_for ? 1 : -1))
           .slice(0, 1);
       }
-      case 'dashboard-scores:prior': {
+      case 'dashboard-scores:prior':
+      case 'dashboard-scores:verdict-prior': {
         const ids = params[0] as string[];
         const cutoff = cutoffOf(params);
         const out: GeoRow[] = [];
@@ -494,7 +543,8 @@ function makeService(fixture: {
         }
         return out;
       }
-      case 'dashboard-scores:series': {
+      case 'dashboard-scores:series':
+      case 'dashboard-scores:verdict-series': {
         const cutoff = cutoffOf(params);
         return fixture.geoRows
           .filter((r) => r.geo_entity_id === params[0])
@@ -507,7 +557,8 @@ function makeService(fixture: {
           })
           .sort((a, b) => (a.computed_for < b.computed_for ? -1 : 1));
       }
-      case 'dashboard-scores:children': {
+      case 'dashboard-scores:children':
+      case 'dashboard-scores:verdict-children': {
         const ids = params[0] as string[];
         return fixture.geoRows.filter(
           (r) => ids.includes(r.geo_entity_id) && r.computed_for === params[1],
@@ -1990,5 +2041,225 @@ describe('DashboardScoresService.rankings', () => {
       top: [],
       most_improved: [],
     });
+  });
+});
+
+describe('DashboardScoresService.scores — NIPUN verdict metric (metric=nipun)', () => {
+  const WEEK_AGO = '2026-09-06';
+  // D → B1 → S1 (passes), S2 (fails), S9 (no row); B2 (no row).
+  const fixture = () => ({
+    entities: ENTITIES,
+    geoRows: [
+      verdictRow('D', AS_OF, { pass: 1, fail: 1, insufficient: 0 }),
+      verdictRow('D', WEEK_AGO, { pass: 0, fail: 2, insufficient: 0 }),
+      verdictRow('B1', AS_OF, { pass: 1, fail: 1, insufficient: 0 }),
+      verdictRow('B1', WEEK_AGO, { pass: 0, fail: 1, insufficient: 1 }),
+      verdictRow(
+        'S1',
+        AS_OF,
+        {
+          passed: true,
+          pass: 1,
+          fail: 0,
+          insufficient: 0,
+          bands: [
+            [10, 9],
+            [12, 9],
+            [9, 9],
+          ],
+        },
+        { students_active: 20, students_scored: 27 },
+      ),
+      verdictRow('S1', WEEK_AGO, {
+        passed: null,
+        pass: 0,
+        fail: 0,
+        insufficient: 1,
+      }),
+      verdictRow(
+        'S2',
+        AS_OF,
+        {
+          passed: false,
+          pass: 0,
+          fail: 1,
+          insufficient: 0,
+          bands: [
+            [12, 2],
+            [12, 9],
+            [13, 9],
+          ],
+        },
+        { students_scored: 20 },
+      ),
+    ],
+    officials: [
+      {
+        geo_entity_id: 'S1',
+        name: 'Asha',
+        role_title: 'Teacher',
+        avatar_seed: 'asha',
+        spotlight_message: null,
+        created_at: '2026-06-01',
+      },
+    ],
+  });
+
+  it('district: share of DECIDED schools passing, the three counts, delta vs a week ago, blocks as children', async () => {
+    const { svc } = makeService(fixture());
+    const out = await svc.scores('D', 'nipun', 30);
+    expect(out.metric).toBe('nipun');
+    expect(out.as_of).toBe(AS_OF);
+    expect(out.age_band).toBeUndefined();
+    expect(out.pass_mark).toBeUndefined();
+    expect(out.root).toEqual({
+      pass_rate: 50,
+      mean: null,
+      sd: null,
+      n: 2,
+      students_active: 0,
+      students_unbanded: 0,
+      delta: 50, // 0 % a week ago
+      verdict: {
+        school_passed: null,
+        schools_pass: 1,
+        schools_fail: 1,
+        schools_insufficient: 0,
+      },
+    });
+    expect(out.series.map((p) => [p.date, p.pass_rate, p.n])).toEqual([
+      [WEEK_AGO, 0, 2],
+      [AS_OF, 50, 2],
+    ]);
+    expect(out.child_type).toBe('block');
+    const kids = out.children as ChildRow[];
+    expect(kids.map((c) => [c.id, c.pass_rate, c.n, c.bin, c.delta])).toEqual([
+      ['B1', 50, 2, 'mid', 50],
+      ['B2', null, 0, 'none', null],
+    ]);
+    expect(kids[0].verdict).toEqual({
+      school_passed: null,
+      schools_pass: 1,
+      schools_fail: 1,
+      schools_insufficient: 0,
+    });
+    expect(kids[1].verdict).toBeUndefined();
+    expect(out.most_improved).toEqual([]); // n 2 < MOST_IMPROVED_MIN_N
+  });
+
+  it('block: schools as children — a passing school is high / 100, a failing one low / 0, one without a row grey', async () => {
+    const { svc } = makeService(fixture());
+    const out = await svc.scores('B1', 'nipun', 30);
+    const kids = out.children as ChildRow[];
+    expect(
+      kids.map((c) => [c.id, c.pass_rate, c.n, c.bin, c.using_lifteracy]),
+    ).toEqual([
+      ['S1', 100, 1, 'high', true],
+      ['S2', 0, 1, 'low', true],
+      ['S9', null, 0, 'none', false],
+    ]);
+    expect(kids[0].official?.name).toBe('Asha');
+    expect(kids[0].verdict?.school_passed).toBe(true);
+    expect(kids[0].verdict?.bands?.nipun_g2).toEqual({
+      cohort: 12,
+      passers: 9,
+      needed: 9,
+      verdict: true,
+    });
+    expect(kids[1].verdict?.bands).toEqual({
+      nipun_g1: { cohort: 12, passers: 2, needed: 9, verdict: false },
+      nipun_g2: { cohort: 12, passers: 9, needed: 9, verdict: true },
+      nipun_g3: { cohort: 13, passers: 9, needed: 10, verdict: false }, // 9/13 < 75 %
+    });
+  });
+
+  it('school: its own verdict with the three bands; no teachers or students listed', async () => {
+    const { svc, query } = makeService(fixture());
+    const out = await svc.scores('S1', 'nipun', 30);
+    expect(out.root.verdict).toEqual({
+      school_passed: true,
+      schools_pass: 1,
+      schools_fail: 0,
+      schools_insufficient: 0,
+      bands: {
+        nipun_g1: { cohort: 10, passers: 9, needed: 9, verdict: true },
+        nipun_g2: { cohort: 12, passers: 9, needed: 9, verdict: true },
+        nipun_g3: { cohort: 9, passers: 9, needed: 9, verdict: true },
+      },
+    });
+    expect(out.root.pass_rate).toBe(100);
+    expect(out.root.delta).toBeNull(); // undecided a week ago → no share
+    expect(out.child_type).toBe('teacher');
+    expect(out.children).toEqual([]);
+    expect(out.students_series).toBeUndefined();
+    expect(out.children_series).toBeUndefined();
+    const tags = query.mock.calls.map(
+      ([sql]) => /dashboard-scores:([a-z-]+)/.exec(sql)![1],
+    );
+    expect(tags).toEqual(['verdict-latest', 'verdict-prior', 'verdict-series']);
+  });
+
+  it('a school with no decided schools under it and an undecidable verdict is grey with a null share', async () => {
+    const { svc } = makeService({
+      entities: ENTITIES,
+      geoRows: [
+        verdictRow('B1', AS_OF, { pass: 0, fail: 0, insufficient: 1 }),
+        verdictRow('S1', AS_OF, {
+          passed: null,
+          pass: 0,
+          fail: 0,
+          insufficient: 1,
+          bands: [
+            [5, 0],
+            [5, 0],
+            [5, 0],
+          ],
+        }),
+      ],
+    });
+    const out = await svc.scores('B1', 'nipun', 30);
+    expect(out.root.pass_rate).toBeNull();
+    expect(out.root.n).toBe(0);
+    const s1 = (out.children as ChildRow[])[0];
+    expect(s1).toMatchObject({ id: 'S1', pass_rate: null, bin: 'none' });
+    expect(s1.verdict?.bands?.nipun_g1.verdict).toBeNull();
+  });
+
+  it('empty root: 200 with nulls; above school level the children are still listed', async () => {
+    const { svc } = makeService({ entities: ENTITIES, geoRows: [] });
+    const district = await svc.scores('D', 'nipun', 'all');
+    expect(district.as_of).toBeNull();
+    expect(district.root.verdict).toBeUndefined();
+    expect((district.children as ChildRow[]).map((c) => [c.id, c.bin])).toEqual(
+      [
+        ['B1', 'none'],
+        ['B2', 'none'],
+      ],
+    );
+    const school = await svc.scores('S9', 'nipun', 30);
+    expect(school.children).toEqual([]);
+    expect(school.child_type).toBe('teacher');
+  });
+
+  it("a teacher's class id is not a geo entity → 404; rankings and spotlight are empty under the verdict", async () => {
+    const { svc } = makeService(fixture());
+    await expect(svc.scores('T1', 'nipun', 30)).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(await svc.rankings('D', 'block', 'nipun')).toEqual({
+      level: 'block',
+      as_of: null,
+      top: [],
+      most_improved: [],
+    });
+    expect(await svc.spotlight('D', 'nipun', 30)).toEqual({
+      top: null,
+      most_improved: null,
+    });
+  });
+
+  it('validateMetric accepts nipun; testMeta gives it no band or mark', () => {
+    expect(validateMetric('nipun')).toBe('nipun');
+    expect(testMeta('nipun')).toEqual({});
   });
 });

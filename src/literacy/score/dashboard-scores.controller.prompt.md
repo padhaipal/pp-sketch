@@ -15,6 +15,12 @@ nationally. Mitigations: student labels carry no phone digits, the page is
 noindex, responses are cached. Follow-up: a per-user HMAC token in the link
 scoping reads to the holder's subtree.
 
+## 2026-10: `metric=nipun` — the school verdict
+
+Accepted by all four GETs (`validateMetric` → `DashboardMetric`). The CSV
+flattens each child's `verdict` into columns (`flattenVerdictRows`).
+Rankings / spotlight come back empty under it.
+
 ## 2026-09: `window` — "Time" mode for the usage metric
 
 All three GETs take an optional `window` = `yesterday` | `7d` | `all`

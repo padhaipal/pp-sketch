@@ -77,6 +77,15 @@ usage. Spread into every `ScoresResponse` (root, class, empty) so the
 dashboard's headline ("{n}% of 7–8 year old students pass the …") and its
 trend pass-mark line come from the code that decides them, never a copy.
 
+## 2026-10: NIPUN verdict metric (`metric=nipun`)
+
+`VERDICT_METRIC = 'nipun'`, `DashboardMetric = LiteracyMetric | 'nipun'`
+(`DASHBOARD_METRICS` lists it last; `validateMetric` returns the union;
+`ScoresResponse.metric` is the union). `VerdictStats` / `BandVerdict` are
+the optional `verdict` on `RootStats` and `ChildRow`; `testMeta('nipun')`
+is `{}`. `flattenVerdictRows` makes the CSV rows. Semantics in
+dashboard-scores.service.prompt.md.
+
 ## 2026-10: `StudentRow.phone`
 
 Every class-level student row carries `phone` = `users.external_id` (the
