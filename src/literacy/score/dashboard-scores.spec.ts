@@ -73,6 +73,7 @@ describe('dashboard-scores arithmetic', () => {
 
   it('validators', () => {
     expect(validateMetric('mpl_b')).toBe('mpl_b');
+    expect(validateMetric('nipun_g1')).toBe('nipun_g1');
     expect(() => validateMetric('nipun')).toThrow(/metric must be one of/);
     expect(validateRange(undefined)).toBe(30);
     expect(validateRange('all')).toBe('all');
@@ -225,6 +226,7 @@ describe('dashboard-scores arithmetic', () => {
 
   it('testMeta: the age band and pass mark of a test metric, nothing for usage', () => {
     expect(testMeta('nipun_g2')).toEqual({ age_band: [7, 8], pass_mark: 75 });
+    expect(testMeta('nipun_g1')).toEqual({ age_band: [6, 7], pass_mark: 75 });
     expect(testMeta('nipun_g3')).toEqual({ age_band: [8, 9], pass_mark: 75 });
     expect(testMeta('mpl_b')).toEqual({ age_band: [10, 11], pass_mark: 50 });
     expect(testMeta('usage')).toEqual({});

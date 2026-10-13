@@ -1120,9 +1120,12 @@ describe('UserService.getLiteracyTestScores', () => {
     expect(scores.nipun_grade_3.status).toBe('insufficient_data');
     expect(scores.mpl_b.status).toBe('insufficient_data');
     expect(scores.mpl_b.attempts_available).toBe(0);
-    // The three-key response contract: nipun_grade_1 must never come back.
+    expect(scores.nipun_grade_1.status).toBe('insufficient_data');
+    // The four-key response contract (nipun_grade_1 is back since 2026-10,
+    // scored over level-8 lessons).
     expect(Object.keys(scores).sort()).toEqual([
       'mpl_b',
+      'nipun_grade_1',
       'nipun_grade_2',
       'nipun_grade_3',
     ]);

@@ -21,6 +21,7 @@ import {
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 export const TEST_METRICS: readonly TestMetric[] = [
+  'nipun_g1',
   'nipun_g2',
   'nipun_g3',
   'mpl_b',
@@ -37,12 +38,14 @@ export const IST_OFFSET_MS = 5.5 * 3_600_000;
 // Score space is discrete: score × denominator is the histogram index (usage:
 // whole minutes, capped at the last bucket).
 export const HIST_DENOMINATOR: Record<LiteracyMetric, number> = {
+  nipun_g1: NIPUN_QUESTION_COUNT,
   nipun_g2: NIPUN_QUESTION_COUNT,
   nipun_g3: NIPUN_QUESTION_COUNT,
   mpl_b: MPL_B_QUESTION_COUNT,
   usage: 1,
 };
 export const HIST_LENGTH: Record<LiteracyMetric, number> = {
+  nipun_g1: NIPUN_QUESTION_COUNT + 1,
   nipun_g2: NIPUN_QUESTION_COUNT + 1,
   nipun_g3: NIPUN_QUESTION_COUNT + 1,
   mpl_b: MPL_B_QUESTION_COUNT + 1,
@@ -57,6 +60,7 @@ export const STUDENT_BATCH_SIZE = 200;
 export const GEO_BATCH_SIZE = 500;
 // test_results_geo_entity columns of the school verdict, in bind order.
 export const VERDICT_COLUMNS = [
+  'nipun_g1_cohort',
   'nipun_g2_cohort',
   'nipun_g3_cohort',
   'nipun_school_passed',
@@ -94,6 +98,7 @@ export interface GeoVector {
   students_scored: number;
   students_unbanded: number;
   // Students inside the band's age range, scored or not (additive).
+  nipun_g1_cohort: number;
   nipun_g2_cohort: number;
   nipun_g3_cohort: number;
   // School rows only; null on ancestors and when undecidable. Never summed.
@@ -102,6 +107,7 @@ export interface GeoVector {
   nipun_schools_pass: number;
   nipun_schools_fail: number;
   nipun_schools_insufficient: number;
+  nipun_g1: MetricVector;
   nipun_g2: MetricVector;
   nipun_g3: MetricVector;
   mpl_b: MetricVector;
@@ -120,12 +126,14 @@ export function emptyVector(): GeoVector {
     students_active: 0,
     students_scored: 0,
     students_unbanded: 0,
+    nipun_g1_cohort: 0,
     nipun_g2_cohort: 0,
     nipun_g3_cohort: 0,
     nipun_school_passed: null,
     nipun_schools_pass: 0,
     nipun_schools_fail: 0,
     nipun_schools_insufficient: 0,
+    nipun_g1: metric('nipun_g1'),
     nipun_g2: metric('nipun_g2'),
     nipun_g3: metric('nipun_g3'),
     mpl_b: metric('mpl_b'),
@@ -137,6 +145,7 @@ export function addVector(into: GeoVector, from: GeoVector): GeoVector {
   into.students_active += from.students_active;
   into.students_scored += from.students_scored;
   into.students_unbanded += from.students_unbanded;
+  into.nipun_g1_cohort += from.nipun_g1_cohort;
   into.nipun_g2_cohort += from.nipun_g2_cohort;
   into.nipun_g3_cohort += from.nipun_g3_cohort;
   into.nipun_schools_pass += from.nipun_schools_pass;
@@ -164,6 +173,8 @@ export interface LatestStudentRow {
   // birth month from (age-bands.ts assumedBirth).
   created_at: Date | string | null;
   active: boolean;
+  nipun_g1_score: number | null;
+  nipun_g1_passed: boolean | null;
   nipun_g2_score: number | null;
   nipun_g2_passed: boolean | null;
   nipun_g3_score: number | null;
@@ -175,35 +186,48 @@ export interface LatestStudentRow {
   usage_score: number | null;
 }
 
-// A grade-3 pass implies grade 2 at 100%: a 7-year-old who sped past the
-// level-10 pool (g2 null, or scored and failed) and then passed g3 is a g2
-// passer for their school. Roll-up only — the student's own
-// test_results_student row is untouched. A failed or missing g3 implies
-// nothing; mpl_b implies nothing (10-year-olds sit no NIPUN band).
-export function impliedNipunG2(
+// A pass at a higher NIPUN grade implies the lower grades at 100%: a child
+// who sped past a grade's pool (score null, or scored and failed) and then
+// passed a higher grade is a passer of the lower grade for their school —
+// g3 ⇒ g2 ⇒ g1. Roll-up only — the student's own test_results_student row
+// is untouched. A failed or missing higher grade implies nothing; mpl_b
+// implies nothing (10-year-olds sit no NIPUN band).
+export type ScorePair = [score: number | null, passed: boolean | null];
+export function impliedNipun(
   row: Pick<
     LatestStudentRow,
-    'nipun_g2_score' | 'nipun_g2_passed' | 'nipun_g3_passed'
+    | 'nipun_g1_score'
+    | 'nipun_g1_passed'
+    | 'nipun_g2_score'
+    | 'nipun_g2_passed'
+    | 'nipun_g3_passed'
   >,
-): [number | null, boolean | null] {
-  if (row.nipun_g3_passed === true && row.nipun_g2_passed !== true) {
-    return [1, true];
-  }
-  return [row.nipun_g2_score, row.nipun_g2_passed];
+): { nipun_g1: ScorePair; nipun_g2: ScorePair } {
+  const g2: ScorePair =
+    row.nipun_g3_passed === true && row.nipun_g2_passed !== true
+      ? [1, true]
+      : [row.nipun_g2_score, row.nipun_g2_passed];
+  const g1: ScorePair =
+    g2[1] === true && row.nipun_g1_passed !== true
+      ? [1, true]
+      : [row.nipun_g1_score, row.nipun_g1_passed];
+  return { nipun_g1: g1, nipun_g2: g2 };
 }
 
 // A student's contribution to their school's vector on `computedFor`:
 // active/scored flags, unbanded when birth_year is null, and per metric —
 // only when the student has a score AND is inside that metric's age band —
-// n/sum/sumsq/pass/hist. nipun_g2 is read through impliedNipunG2.
+// n/sum/sumsq/pass/hist. nipun_g1/g2 are read through impliedNipun.
 export function studentVector(
   row: LatestStudentRow,
   computedFor: Date,
 ): GeoVector {
   const v = emptyVector();
   v.students_active = row.active ? 1 : 0;
-  const scores: Record<TestMetric, [number | null, boolean | null]> = {
-    nipun_g2: impliedNipunG2(row),
+  const implied = impliedNipun(row);
+  const scores: Record<TestMetric, ScorePair> = {
+    nipun_g1: implied.nipun_g1,
+    nipun_g2: implied.nipun_g2,
     nipun_g3: [row.nipun_g3_score, row.nipun_g3_passed],
     mpl_b: [row.mpl_b_score, row.mpl_b_passed],
   };
@@ -247,8 +271,8 @@ export interface CohortRow {
   created_at: Date | string | null;
 }
 
-// A student's cohort contribution on `computedFor`: 1 per NIPUN band whose
-// age range holds them (the bands overlap, so both is possible).
+// A student's cohort contribution on `computedFor`: 1 for the NIPUN band
+// whose age range holds them (the bands are disjoint — at most one).
 export function cohortVector(row: CohortRow, computedFor: Date): GeoVector {
   const v = emptyVector();
   const age = ageOn(
@@ -257,6 +281,7 @@ export function cohortVector(row: CohortRow, computedFor: Date): GeoVector {
     row.birth_month,
     row.created_at,
   );
+  if (inBand('nipun_g1', age)) v.nipun_g1_cohort = 1;
   if (inBand('nipun_g2', age)) v.nipun_g2_cohort = 1;
   if (inBand('nipun_g3', age)) v.nipun_g3_cohort = 1;
   return v;
@@ -273,13 +298,17 @@ export function bandVerdict(cohort: number, pass: number): boolean | null {
   return cohort >= NIPUN_SCHOOL_MIN_COHORT ? false : null;
 }
 
-// A school passes NIPUN when both bands pass; is undecidable when either
-// band is; fails otherwise. Reads the school's own finished vector.
+// A school passes NIPUN when all three bands (g1, g2, g3) pass; is
+// undecidable when any band is; fails otherwise. Reads the school's own
+// finished vector.
 export function schoolVerdict(v: GeoVector): boolean | null {
-  const g2 = bandVerdict(v.nipun_g2_cohort, v.nipun_g2.pass);
-  const g3 = bandVerdict(v.nipun_g3_cohort, v.nipun_g3.pass);
-  if (g2 === true && g3 === true) return true;
-  if (g2 === null || g3 === null) return null;
+  const bands = [
+    bandVerdict(v.nipun_g1_cohort, v.nipun_g1.pass),
+    bandVerdict(v.nipun_g2_cohort, v.nipun_g2.pass),
+    bandVerdict(v.nipun_g3_cohort, v.nipun_g3.pass),
+  ];
+  if (bands.every((b) => b === true)) return true;
+  if (bands.some((b) => b === null)) return null;
   return false;
 }
 
@@ -500,6 +529,7 @@ export class TestResultsService {
     };
     for (const c of batch) {
       const s: LatestLiteracyTestScores = scores.get(c.id) ?? {
+        nipun_g1: { score: null, passed: null, attempts: 0 },
         nipun_g2: { score: null, passed: null, attempts: 0 },
         nipun_g3: { score: null, passed: null, attempts: 0 },
         mpl_b: { score: null, passed: null, attempts: 0 },
@@ -507,6 +537,7 @@ export class TestResultsService {
       const u = usage.get(c.id) ?? { minutes: null, notes: 0 };
       values.push(
         `(${push(c.id)}, ${push(c.geo_entity_id)}, ${push(computedFor)}::date, ` +
+          `${push(s.nipun_g1.score)}, ${push(s.nipun_g1.passed)}, ${push(s.nipun_g1.attempts)}, ` +
           `${push(s.nipun_g2.score)}, ${push(s.nipun_g2.passed)}, ${push(s.nipun_g2.attempts)}, ` +
           `${push(s.nipun_g3.score)}, ${push(s.nipun_g3.passed)}, ${push(s.nipun_g3.attempts)}, ` +
           `${push(s.mpl_b.score)}, ${push(s.mpl_b.passed)}, ${push(s.mpl_b.attempts)}, ` +
@@ -518,6 +549,7 @@ export class TestResultsService {
       `/* test-results:upsert-students */
        INSERT INTO test_results_student
          (student_id, geo_entity_id, computed_for,
+          nipun_g1_score, nipun_g1_passed, nipun_g1_attempts,
           nipun_g2_score, nipun_g2_passed, nipun_g2_attempts,
           nipun_g3_score, nipun_g3_passed, nipun_g3_attempts,
           mpl_b_score, mpl_b_passed, mpl_b_attempts,
@@ -525,6 +557,7 @@ export class TestResultsService {
        VALUES ${values.join(',\n')}
        ON CONFLICT (student_id, computed_for) DO UPDATE SET
          geo_entity_id = EXCLUDED.geo_entity_id,
+         nipun_g1_score = EXCLUDED.nipun_g1_score, nipun_g1_passed = EXCLUDED.nipun_g1_passed, nipun_g1_attempts = EXCLUDED.nipun_g1_attempts,
          nipun_g2_score = EXCLUDED.nipun_g2_score, nipun_g2_passed = EXCLUDED.nipun_g2_passed, nipun_g2_attempts = EXCLUDED.nipun_g2_attempts,
          nipun_g3_score = EXCLUDED.nipun_g3_score, nipun_g3_passed = EXCLUDED.nipun_g3_passed, nipun_g3_attempts = EXCLUDED.nipun_g3_attempts,
          mpl_b_score = EXCLUDED.mpl_b_score, mpl_b_passed = EXCLUDED.mpl_b_passed, mpl_b_attempts = EXCLUDED.mpl_b_attempts,
@@ -589,6 +622,7 @@ export class TestResultsService {
       `/* test-results:latest-students */
        SELECT DISTINCT ON (t.student_id)
               t.student_id, r.geo_entity_id, u.birth_year, u.birth_month, u.created_at,
+              t.nipun_g1_score::float8 AS nipun_g1_score, t.nipun_g1_passed,
               t.nipun_g2_score::float8 AS nipun_g2_score, t.nipun_g2_passed,
               t.nipun_g3_score::float8 AS nipun_g3_score, t.nipun_g3_passed,
               t.mpl_b_score::float8 AS mpl_b_score, t.mpl_b_passed,
@@ -758,6 +792,7 @@ export class TestResultsService {
         push(v.students_active),
         push(v.students_scored),
         push(v.students_unbanded),
+        push(v.nipun_g1_cohort),
         push(v.nipun_g2_cohort),
         push(v.nipun_g3_cohort),
         push(v.nipun_school_passed),

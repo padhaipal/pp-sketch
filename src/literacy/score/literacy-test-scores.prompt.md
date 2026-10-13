@@ -1,6 +1,6 @@
 # literacy-test-scores.ts — shared literacy test-score algorithm
 
-The digital-proxy literacy tests (NIPUN grade 2, NIPUN grade 3, MPL-B),
+The digital-proxy literacy tests (NIPUN grades 1/2/3, MPL-B),
 extracted from UserService.getLiteracyTestScores in 2026-09 so the nightly
 test-results job (test-results.service.ts) can score many students with one
 query. `literacy-test-scores.spec.ts` holds a golden JSON captured from the
@@ -19,12 +19,35 @@ once and returns a Map with an entry for EVERY requested id (empty list when
 a user has no answers); a row without `user_id` is attributed to the single
 requested user (legacy single-user fixtures), otherwise dropped.
 
+## NIPUN grade 1 — level-8 lesson reads (2026-10)
+
+Grade 1 is not a comprehension test: level-8 passages (<10 words) end the
+lesson on the read (literacy-lesson.machine.ts `SENTENCE_COMPLETE_LEVEL`).
+`LEVEL8_LESSONS_SQL` (`literacy-test-scores:level-eight-lessons`) selects every
+finished (`snapshot->>'status' = 'done'`) passage lesson whose done row's
+stid contains `-sentence-complete-` — `…-sentence-complete-correct-first`
+(first read right → `first_try`), `…-correct-retry` or
+`sentence-sentence-complete-maxErrors` (fail) — with the passage's level
+(`snapshot.context.level`, falling back to `media_details.level`). Lessons
+from before 2026-08-26 (#69) ended on a comprehension tap and are not
+selected: nothing before the change counts, by decision. No `rolled_back`
+filter on the passage join, like the comprehension query.
+`fetchLevel8Lessons` → `lessonsToAttempts` turns each lesson into a
+`FirstAttempt` (the lesson row id as `question_id`, the completing voice
+note as `message_id`, `question_type` null) so the pool/snapshot/series
+machinery and the student modal's id lists work unchanged. `metricPools`,
+`scoresFromAttempts` and `latestScoresFromAttempts` take the lessons as a
+second argument (default empty); both `compute*` entry points run the two
+queries. Pool: level 8 only; snapshot = `nipunSnapshot(pool, 4)`; the
+response key is `nipun_grade_1`.
+
 ## Rules
 
 - Only a student's FIRST attempt per question counts (`dedupeFirstAttempts`,
   chronological). Level-13 questions never qualify.
-- Pools (`metricPools`): nipun_g2 = level 10 × R1.1/R1.2/R1.3; nipun_g3 =
-  level 11/12 × R1.x; mpl_b = level 11/12, any type.
+- Pools (`metricPools`): nipun_g1 = level-8 lesson reads (above); nipun_g2
+  = level 10 × R1.1/R1.2/R1.3; nipun_g3 = level 11/12 × R1.x; mpl_b =
+  level 11/12, any type.
 - `nipunSnapshot(pool, 4)`: the 4 most recent → correct/4.
 - `mplBSnapshot(pool)`: four filters most-recent-first — <20 → null; one per
   distinct type until 4 types (<4 → null); batch quotas R1.x ×5, R2.x ×5,

@@ -6,7 +6,9 @@
 // change is a product decision and this literal is updated deliberately.
 // Updated 2026-10: NIPUN pass is ≥ 0.75 (three of four), and every test
 // carries `counted_message_ids` and `bin_message_ids` (empty here — the fixture rows have no tap
-// ids).
+// ids). Updated again 2026-10 for NIPUN grade 1: a `nipun_grade_1` block
+// (insufficient, 0 attempts — the fixture has no level-8 lessons) was
+// inserted first in every user's object; nothing else changed.
 jest.mock('uuid', () => ({
   v4: jest.fn(() => 'gen-uuid'),
   validate: (s: unknown): boolean =>
@@ -21,7 +23,11 @@ import {
   computeLiteracyTestScores,
   dedupeFirstAttempts,
   fetchFirstAttempts,
+  fetchLevel8Lessons,
+  lessonsToAttempts,
+  LEVEL8_LESSONS_SQL,
   metricPools,
+  scoresFromAttempts,
   mplBSnapshot,
   nipunSnapshot,
   NIPUN_QUESTION_COUNT,
@@ -29,6 +35,7 @@ import {
   snapshotSeries,
   type ComprehensionRow,
   type FirstAttempt,
+  type Level8LessonRow,
 } from './literacy-test-scores';
 
 // Deterministic comprehension-answer fixtures (the comprehension query's row
@@ -117,7 +124,7 @@ export function goldenFixtureRows(userId: string): GoldenRow[] {
 }
 
 const GOLDEN_JSON =
-  '{"11111111-1111-4111-8111-111111111111":{"nipun_grade_2":{"status":"ok","attempts_available":6,"latest":{"at":"2026-07-09T00:00:00.000Z","score":0.75,"passed":true},"history":[{"at":"2026-07-05T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-08T00:00:00.000Z","score":0.5,"passed":false},{"at":"2026-07-09T00:00:00.000Z","score":0.75,"passed":true}],"counted_message_ids":[],"bin_message_ids":[]},"nipun_grade_3":{"status":"ok","attempts_available":10,"latest":{"at":"2026-07-30T00:00:00.000Z","score":0.75,"passed":true},"history":[{"at":"2026-07-18T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-19T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-22T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-24T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-26T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-28T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-30T00:00:00.000Z","score":0.75,"passed":true}],"counted_message_ids":[],"bin_message_ids":[]},"mpl_b":{"status":"ok","attempts_available":23,"latest":{"at":"2026-08-12T00:00:00.000Z","score":0.65,"passed":true},"history":[{"at":"2026-07-30T00:00:00.000Z","score":0.65,"passed":true},{"at":"2026-07-31T00:00:00.000Z","score":0.7,"passed":true},{"at":"2026-08-01T00:00:00.000Z","score":0.65,"passed":true},{"at":"2026-08-12T00:00:00.000Z","score":0.65,"passed":true}],"counted_message_ids":[],"bin_message_ids":[]}},"22222222-2222-4222-8222-222222222222":{"nipun_grade_2":{"status":"insufficient_data","attempts_available":1,"counted_message_ids":[],"bin_message_ids":[]},"nipun_grade_3":{"status":"insufficient_data","attempts_available":1,"counted_message_ids":[],"bin_message_ids":[]},"mpl_b":{"status":"insufficient_data","attempts_available":2,"counted_message_ids":[],"bin_message_ids":[]}},"33333333-3333-4333-8333-333333333333":{"nipun_grade_2":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[],"bin_message_ids":[]},"nipun_grade_3":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[],"bin_message_ids":[]},"mpl_b":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[],"bin_message_ids":[]}}}';
+  '{"11111111-1111-4111-8111-111111111111":{"nipun_grade_1":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[],"bin_message_ids":[]},"nipun_grade_2":{"status":"ok","attempts_available":6,"latest":{"at":"2026-07-09T00:00:00.000Z","score":0.75,"passed":true},"history":[{"at":"2026-07-05T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-08T00:00:00.000Z","score":0.5,"passed":false},{"at":"2026-07-09T00:00:00.000Z","score":0.75,"passed":true}],"counted_message_ids":[],"bin_message_ids":[]},"nipun_grade_3":{"status":"ok","attempts_available":10,"latest":{"at":"2026-07-30T00:00:00.000Z","score":0.75,"passed":true},"history":[{"at":"2026-07-18T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-19T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-22T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-24T00:00:00.000Z","score":1,"passed":true},{"at":"2026-07-26T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-28T00:00:00.000Z","score":0.75,"passed":true},{"at":"2026-07-30T00:00:00.000Z","score":0.75,"passed":true}],"counted_message_ids":[],"bin_message_ids":[]},"mpl_b":{"status":"ok","attempts_available":23,"latest":{"at":"2026-08-12T00:00:00.000Z","score":0.65,"passed":true},"history":[{"at":"2026-07-30T00:00:00.000Z","score":0.65,"passed":true},{"at":"2026-07-31T00:00:00.000Z","score":0.7,"passed":true},{"at":"2026-08-01T00:00:00.000Z","score":0.65,"passed":true},{"at":"2026-08-12T00:00:00.000Z","score":0.65,"passed":true}],"counted_message_ids":[],"bin_message_ids":[]}},"22222222-2222-4222-8222-222222222222":{"nipun_grade_1":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[],"bin_message_ids":[]},"nipun_grade_2":{"status":"insufficient_data","attempts_available":1,"counted_message_ids":[],"bin_message_ids":[]},"nipun_grade_3":{"status":"insufficient_data","attempts_available":1,"counted_message_ids":[],"bin_message_ids":[]},"mpl_b":{"status":"insufficient_data","attempts_available":2,"counted_message_ids":[],"bin_message_ids":[]}},"33333333-3333-4333-8333-333333333333":{"nipun_grade_1":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[],"bin_message_ids":[]},"nipun_grade_2":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[],"bin_message_ids":[]},"nipun_grade_3":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[],"bin_message_ids":[]},"mpl_b":{"status":"insufficient_data","attempts_available":0,"counted_message_ids":[],"bin_message_ids":[]}}}';
 
 function queryFor(rowsByUser: (id: string) => ComprehensionRow[]) {
   return jest.fn(async (sql: string, params?: unknown[]) => {
@@ -152,14 +159,16 @@ describe('literacy test scores — golden output', () => {
     expect(JSON.stringify(out)).toBe(GOLDEN_JSON);
   });
 
-  it('computeLiteracyTestScores over all three users in one query matches the golden per user', async () => {
+  it('computeLiteracyTestScores over all three users in two queries (answers, level-8 lessons) matches the golden per user', async () => {
     const query = queryFor(goldenFixtureRows);
     const scores = await computeLiteracyTestScores(query, GOLDEN_USERS);
-    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(2);
     expect(String(query.mock.calls[0][0])).toMatch(
       /s\.user_id = ANY\(\$1::uuid\[\]\)/,
     );
     expect(query.mock.calls[0][1]).toEqual([GOLDEN_USERS]);
+    expect(query.mock.calls[1][0]).toBe(LEVEL8_LESSONS_SQL);
+    expect(query.mock.calls[1][1]).toEqual([GOLDEN_USERS]);
     const expected = JSON.parse(GOLDEN_JSON) as Record<string, unknown>;
     for (const id of GOLDEN_USERS) {
       expect(JSON.stringify(scores.get(id))).toBe(JSON.stringify(expected[id]));
@@ -296,6 +305,11 @@ describe('snapshotLatest', () => {
     for (const id of GOLDEN_USERS) {
       const g = golden[id];
       expect(latest.get(id)).toEqual({
+        nipun_g1: {
+          score: g.nipun_grade_1.latest?.score ?? null,
+          passed: g.nipun_grade_1.latest?.passed ?? null,
+          attempts: g.nipun_grade_1.attempts_available,
+        },
         nipun_g2: {
           score: g.nipun_grade_2.latest?.score ?? null,
           passed: g.nipun_grade_2.latest?.passed ?? null,
@@ -348,5 +362,149 @@ describe('fetchFirstAttempts', () => {
     ]);
     expect(both.get(GOLDEN_USERS[0])).toEqual([]);
     expect(both.get(GOLDEN_USERS[1])).toEqual([]);
+  });
+});
+
+describe('NIPUN grade 1 — level-8 lesson reads', () => {
+  const lesson = (
+    n: number,
+    first_try: boolean,
+    level: number | null = 8,
+  ): Level8LessonRow => ({
+    user_id: 'u1',
+    created_at: new Date(Date.UTC(2026, 8, n)),
+    lesson_id: `l${n}`,
+    message_id: `m${n}`,
+    first_try,
+    level,
+  });
+
+  it('the query selects finished level-8 lessons that ended on the read, first_try from the done stid, without a rolled_back filter', () => {
+    expect(LEVEL8_LESSONS_SQL).toContain("s.snapshot->>'status' = 'done'");
+    expect(LEVEL8_LESSONS_SQL).toContain("LIKE '%-sentence-complete-%'");
+    expect(LEVEL8_LESSONS_SQL).toContain(
+      "LIKE '%-sentence-complete-correct-first') AS first_try",
+    );
+    expect(LEVEL8_LESSONS_SQL).toContain('s.passage_id IS NOT NULL');
+    expect(LEVEL8_LESSONS_SQL).not.toContain('rolled_back');
+    expect(LEVEL8_LESSONS_SQL).not.toContain('comprehension');
+  });
+
+  it('lessonsToAttempts: the lesson row is the question, the completing voice note the tap', () => {
+    expect(lessonsToAttempts([lesson(1, true), lesson(2, false)])).toEqual([
+      {
+        at: new Date(Date.UTC(2026, 8, 1)),
+        correct: true,
+        question_id: 'l1',
+        message_id: 'm1',
+        level: 8,
+        question_type: null,
+      },
+      {
+        at: new Date(Date.UTC(2026, 8, 2)),
+        correct: false,
+        question_id: 'l2',
+        message_id: 'm2',
+        level: 8,
+        question_type: null,
+      },
+    ]);
+  });
+
+  it('pools: lessons feed nipun_g1 only (level 8); comprehension attempts never do', () => {
+    const lessons = lessonsToAttempts([
+      lesson(1, true),
+      lesson(2, true, 9),
+      lesson(3, true, null),
+    ]);
+    const pools = metricPools([], lessons);
+    expect(pools.nipun_g1.map((a) => a.question_id)).toEqual(['l1']);
+    expect(pools.nipun_g2).toEqual([]);
+    const attempt: FirstAttempt = {
+      at: new Date(Date.UTC(2026, 8, 1)),
+      correct: true,
+      question_id: 'q',
+      message_id: null,
+      level: 8,
+      question_type: 'R1.1',
+    };
+    expect(metricPools([attempt]).nipun_g1).toEqual([]);
+  });
+
+  it('scores the last four lessons: three first-try reads pass, two fail, three lessons are insufficient; history replays every prefix', () => {
+    const four = lessonsToAttempts([
+      lesson(1, false),
+      lesson(2, true),
+      lesson(3, true),
+      lesson(4, true),
+      lesson(5, false),
+    ]);
+    const out = scoresFromAttempts([], four).nipun_grade_1;
+    expect(out.status).toBe('ok');
+    expect(out.attempts_available).toBe(5);
+    expect(out.history).toEqual([
+      { at: new Date(Date.UTC(2026, 8, 4)), score: 0.75, passed: true },
+      { at: new Date(Date.UTC(2026, 8, 5)), score: 0.75, passed: true },
+    ]);
+    expect(out.counted_message_ids).toEqual(['m2', 'm3', 'm4', 'm5']);
+    expect(out.bin_message_ids).toEqual(['m1', 'm2', 'm3', 'm4', 'm5']);
+
+    const two = scoresFromAttempts(
+      [],
+      lessonsToAttempts([
+        lesson(1, true),
+        lesson(2, true),
+        lesson(3, false),
+        lesson(4, false),
+      ]),
+    ).nipun_grade_1;
+    expect(two.latest).toMatchObject({ score: 0.5, passed: false });
+
+    const three = scoresFromAttempts(
+      [],
+      lessonsToAttempts([lesson(1, true), lesson(2, true), lesson(3, true)]),
+    ).nipun_grade_1;
+    expect(three.status).toBe('insufficient_data');
+    expect(three.attempts_available).toBe(3);
+    // Without lessons the key is still there, empty.
+    expect(scoresFromAttempts([]).nipun_grade_1).toMatchObject({
+      status: 'insufficient_data',
+      attempts_available: 0,
+    });
+  });
+
+  it('fetchLevel8Lessons: one query over every id, an entry per id, rows grouped by user', async () => {
+    const rows: Level8LessonRow[] = [
+      lesson(1, true),
+      { ...lesson(2, false), user_id: 'u2' },
+    ];
+    const query = jest.fn(async () => rows);
+    const out = await fetchLevel8Lessons(query, ['u1', 'u2', 'u3']);
+    expect(query).toHaveBeenCalledWith(LEVEL8_LESSONS_SQL, [
+      ['u1', 'u2', 'u3'],
+    ]);
+    expect(out.get('u1')?.map((a) => a.question_id)).toEqual(['l1']);
+    expect(out.get('u2')?.map((a) => a.question_id)).toEqual(['l2']);
+    expect(out.get('u3')).toEqual([]);
+    expect((await fetchLevel8Lessons(query, [])).size).toBe(0);
+  });
+
+  it('the nightly latest point carries nipun_g1 too', async () => {
+    const query = jest.fn(async (sql: string) =>
+      sql === LEVEL8_LESSONS_SQL
+        ? [lesson(1, true), lesson(2, true), lesson(3, true), lesson(4, false)]
+        : [],
+    );
+    const latest = await computeLatestLiteracyTestScores(query, ['u1']);
+    expect(latest.get('u1')?.nipun_g1).toEqual({
+      score: 0.75,
+      passed: true,
+      attempts: 4,
+    });
+    expect(latest.get('u1')?.nipun_g2).toEqual({
+      score: null,
+      passed: null,
+      attempts: 0,
+    });
   });
 });

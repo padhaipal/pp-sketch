@@ -9,6 +9,7 @@ import type { PiiVisibility } from '../../users/pii-mask';
 
 export const DASHBOARD_METRICS: readonly LiteracyMetric[] = [
   'usage',
+  'nipun_g1',
   'nipun_g2',
   'nipun_g3',
   'mpl_b',

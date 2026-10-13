@@ -39,6 +39,15 @@ export class TestResultStudentEntity {
   @Column({ type: 'date' })
   computed_for: string;
 
+  // Grade 1 (migration 1793000000000-AddNipunG1): first-try reads over the
+  // last four level-8 lessons; attempts = finished level-8 lessons.
+  @Column({ type: 'numeric', precision: 4, scale: 3, nullable: true })
+  nipun_g1_score: string | null;
+  @Column({ type: 'boolean', nullable: true })
+  nipun_g1_passed: boolean | null;
+  @Column({ type: 'integer', default: 0 })
+  nipun_g1_attempts: number;
+
   @Column({ type: 'numeric', precision: 4, scale: 3, nullable: true })
   nipun_g2_score: string | null;
   @Column({ type: 'boolean', nullable: true })
@@ -107,6 +116,8 @@ export class TestResultGeoEntityEntity {
   // Every student of the school inside the band's age range, scored or not
   // (nipun_g*_n counts the scored ones). Denominator of the school verdict.
   @Column({ type: 'integer', default: 0 })
+  nipun_g1_cohort: number;
+  @Column({ type: 'integer', default: 0 })
   nipun_g2_cohort: number;
   @Column({ type: 'integer', default: 0 })
   nipun_g3_cohort: number;
@@ -123,6 +134,17 @@ export class TestResultGeoEntityEntity {
   nipun_schools_fail: number;
   @Column({ type: 'integer', default: 0 })
   nipun_schools_insufficient: number;
+
+  @Column({ type: 'integer', default: 0 })
+  nipun_g1_n: number;
+  @Column({ type: 'numeric', precision: 10, scale: 3, default: 0 })
+  nipun_g1_sum: string;
+  @Column({ type: 'numeric', precision: 12, scale: 4, default: 0 })
+  nipun_g1_sumsq: string;
+  @Column({ type: 'integer', default: 0 })
+  nipun_g1_pass: number;
+  @Column({ type: 'integer', array: true, default: () => "'{0,0,0,0,0}'" })
+  nipun_g1_hist: number[];
 
   @Column({ type: 'integer', default: 0 })
   nipun_g2_n: number;
