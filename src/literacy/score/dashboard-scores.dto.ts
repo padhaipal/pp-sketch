@@ -7,12 +7,21 @@ import {
 import type { GeoEntityType } from '../../geo-entities/geo-entity.dto';
 import type { PiiVisibility } from '../../users/pii-mask';
 
-export const DASHBOARD_METRICS: readonly LiteracyMetric[] = [
+// The NIPUN school verdict (test-results.service.ts schoolVerdict) as a
+// dashboard metric of its own (2026-10): school level and above only —
+// pass / fail / not enough data per school, counts of schools above.
+export const VERDICT_METRIC = 'nipun' as const;
+export type DashboardMetric = LiteracyMetric | typeof VERDICT_METRIC;
+export const NIPUN_BANDS = ['nipun_g1', 'nipun_g2', 'nipun_g3'] as const;
+export type NipunBand = (typeof NIPUN_BANDS)[number];
+
+export const DASHBOARD_METRICS: readonly DashboardMetric[] = [
   'usage',
   'nipun_g1',
   'nipun_g2',
   'nipun_g3',
   'mpl_b',
+  VERDICT_METRIC,
 ];
 // 30 = the last 30 days; 'all' = all time (no lower bound on the series;
 // deltas compare against the OLDEST row instead of a row ≤ as_of − range).
@@ -105,6 +114,28 @@ export interface TimeFields {
   time_days?: number;
 }
 
+// One NIPUN age band of a school under the verdict metric: the cohort (every
+// child of that age), how many pass the band's test, how many would be
+// needed (max(9, 75 % of the cohort)) and the band's own verdict.
+export interface BandVerdict {
+  cohort: number;
+  passers: number;
+  needed: number;
+  verdict: boolean | null;
+}
+
+// Verdict-metric figures on a root or child row. `school_passed` is the
+// school's own verdict (null above school level, and when undecidable);
+// the three counts are schools under the entity (a school counts itself,
+// one-hot). `bands` only on school rows.
+export interface VerdictStats {
+  school_passed: boolean | null;
+  schools_pass: number;
+  schools_fail: number;
+  schools_insufficient: number;
+  bands?: Record<NipunBand, BandVerdict>;
+}
+
 export interface RootStats extends TimeFields {
   pass_rate: number | null;
   mean: number | null;
@@ -113,6 +144,8 @@ export interface RootStats extends TimeFields {
   students_active: number | null;
   students_unbanded: number | null;
   delta: number | null;
+  // Verdict metric only.
+  verdict?: VerdictStats;
 }
 
 export interface SeriesPoint {
@@ -171,6 +204,8 @@ export interface ChildRow extends GeoRef, TimeFields {
   official: Official | null;
   // Teacher rows only: how many students the teacher referred.
   students?: number;
+  // Verdict metric only.
+  verdict?: VerdictStats;
 }
 
 export interface StudentRow extends TimeFields {
@@ -202,7 +237,7 @@ export interface StudentRow extends TimeFields {
 
 export interface ScoresResponse {
   as_of: string | null;
-  metric: LiteracyMetric;
+  metric: DashboardMetric;
   range: DashboardRange;
   // Echoed when the request carried one (usage only).
   window?: TimeWindow;
@@ -286,7 +321,7 @@ export function validateRankLevel(raw: unknown): RankLevel {
   return raw as RankLevel;
 }
 
-export function validateMetric(raw: unknown): LiteracyMetric {
+export function validateMetric(raw: unknown): DashboardMetric {
   if (
     typeof raw !== 'string' ||
     !(DASHBOARD_METRICS as readonly string[]).includes(raw)
@@ -295,7 +330,7 @@ export function validateMetric(raw: unknown): LiteracyMetric {
       `metric must be one of: ${DASHBOARD_METRICS.join(', ')}`,
     );
   }
-  return raw as LiteracyMetric;
+  return raw as DashboardMetric;
 }
 
 export function validateRange(raw: unknown): DashboardRange {
@@ -310,11 +345,12 @@ export function validateRange(raw: unknown): DashboardRange {
   return n as DashboardRange;
 }
 
-// The age band and pass mark of a test metric; nothing for usage.
+// The age band and pass mark of a test metric; nothing for usage or the
+// verdict.
 export function testMeta(
-  metric: LiteracyMetric,
+  metric: DashboardMetric,
 ): Pick<ScoresResponse, 'age_band' | 'pass_mark'> {
-  if (metric === 'usage') return {};
+  if (metric === 'usage' || metric === VERDICT_METRIC) return {};
   return {
     age_band: [...METRIC_AGE_BANDS[metric]],
     pass_mark: Math.round(
@@ -498,6 +534,21 @@ export function compareStudents(a: StudentRow, b: StudentRow): number {
   const tb = b.last_active_at ? Date.parse(b.last_active_at) : -Infinity;
   if (ta !== tb) return tb - ta;
   return a.label < b.label ? -1 : a.label > b.label ? 1 : 0;
+}
+
+// Verdict-metric children as flat CSV rows: the nested `verdict` becomes
+// columns (bands are a school-row detail and are left out).
+export function flattenVerdictRows(
+  rows: ChildRow[],
+): Array<Record<string, unknown>> {
+  return rows.map(({ verdict, official, ...rest }) => ({
+    ...rest,
+    official,
+    school_passed: verdict?.school_passed ?? null,
+    schools_pass: verdict?.schools_pass ?? 0,
+    schools_fail: verdict?.schools_fail ?? 0,
+    schools_insufficient: verdict?.schools_insufficient ?? 0,
+  }));
 }
 
 export function toCsv(rows: Array<Record<string, unknown>>): string {

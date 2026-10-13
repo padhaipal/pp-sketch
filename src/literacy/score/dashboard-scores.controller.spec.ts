@@ -105,6 +105,45 @@ describe('DashboardScoresController', () => {
     );
   });
 
+  it('CSV under the verdict metric: the nested verdict is flattened into columns', async () => {
+    const { ctrl, scores } = make();
+    scores.mockResolvedValue({
+      metric: 'nipun',
+      range: 30,
+      entity: { type: 'block', code: '010101' },
+      children: [
+        {
+          id: 'a',
+          name: 'S1',
+          pass_rate: 100,
+          official: null,
+          verdict: {
+            school_passed: true,
+            schools_pass: 1,
+            schools_fail: 0,
+            schools_insufficient: 0,
+            bands: {
+              nipun_g1: { cohort: 1, passers: 1, needed: 9, verdict: null },
+            },
+          },
+        },
+        { id: 'b', name: 'S9', pass_rate: null, official: null },
+      ],
+    });
+    const res = { setHeader: jest.fn() };
+    const csv = await ctrl.getScoresCsv(ID, res as never, 'nipun', '30');
+    expect(scores).toHaveBeenCalledWith(ID, 'nipun', 30, undefined, ANONYMOUS);
+    expect(csv).toBe(
+      'id,name,pass_rate,official,school_passed,schools_pass,schools_fail,schools_insufficient\n' +
+        'a,S1,100,,true,1,0,0\n' +
+        'b,S9,,,,0,0,0',
+    );
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'attachment; filename="lifteracy-block-010101-nipun-30d.csv"',
+    );
+  });
+
   it('CSV in Time mode: the window is forwarded and named in the filename', async () => {
     const { ctrl, scores } = make();
     scores.mockResolvedValue({

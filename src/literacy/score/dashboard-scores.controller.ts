@@ -8,7 +8,10 @@ import {
   ScoresResponse,
   RankingsResponse,
   SpotlightResponse,
+  ChildRow,
+  flattenVerdictRows,
   toCsv,
+  VERDICT_METRIC,
   validateRankLevel,
   validateMetric,
   validateRange,
@@ -65,7 +68,11 @@ export class DashboardScoresController {
       'Content-Disposition',
       `attachment; filename="lifteracy-${result.entity.type}-${result.entity.code}-${result.metric}-${result.window ? `time-${result.window}` : result.range === 'all' ? 'all-time' : `${result.range}d`}.csv"`,
     );
-    return toCsv(result.children as unknown as Array<Record<string, unknown>>);
+    return toCsv(
+      result.metric === VERDICT_METRIC
+        ? flattenVerdictRows(result.children as ChildRow[])
+        : (result.children as unknown as Array<Record<string, unknown>>),
+    );
   }
 
   // Most improved / top performing at any level below `:id` (the dashboard's
