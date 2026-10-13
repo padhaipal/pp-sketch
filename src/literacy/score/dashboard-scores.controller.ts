@@ -2,6 +2,10 @@ import { Controller, Get, Header, Param, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { validateGeoEntityId } from '../../geo-entities/geo-entity.dto';
 import { DashboardScoresService } from './dashboard-scores.service';
+import {
+  ShareMessageService,
+  type ShareMessageResponse,
+} from './share-message.service';
 import { ANONYMOUS, Viewer, type ViewerContext } from '../../auth/viewer';
 import {
   PUBLIC_CACHE_CONTROL,
@@ -25,7 +29,22 @@ import {
 // once a night and these are the heaviest queries in the app.
 @Controller('geo-entities')
 export class DashboardScoresController {
-  constructor(private readonly scores: DashboardScoresService) {}
+  constructor(
+    private readonly scores: DashboardScoresService,
+    private readonly shareMessage: ShareMessageService,
+  ) {}
+
+  // The viewer's own unit only (a teacher's class, an official's geo
+  // entity): a fresh Hindi WhatsApp message written by an LLM from the
+  // unit's numbers (share-message.service.ts). Never cached, never stored.
+  @Get(':id/share-message')
+  @Header('Cache-Control', PUBLIC_CACHE_CONTROL)
+  async getShareMessage(
+    @Param('id') id: string,
+    @Viewer() viewer: ViewerContext = ANONYMOUS,
+  ): Promise<ShareMessageResponse> {
+    return this.shareMessage.generate(validateGeoEntityId(id), viewer);
+  }
 
   @Get(':id/scores')
   @Header('Cache-Control', PUBLIC_CACHE_CONTROL)
