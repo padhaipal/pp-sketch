@@ -71,14 +71,35 @@ export function shareMessageLlm(): { provider: LlmProvider; model: string } {
 // The message is for the viewer's OWN unit only: an official on their own
 // geo entity (a BEO on their block, a BSA on their district) → the teachers'
 // group; a teacher on their own class → the parents' group.
+// Who the official's group is, by the level they run: a BEO writes to the
+// block's teachers, a BSA to the district's BEOs, a DGSE to the state's
+// BSAs, the national head to the state heads. The model gets this in words.
+export const AREA_AUDIENCE: Record<GeoEntity['type'], string> = {
+  school: 'the teachers of this school',
+  cluster: 'the teachers of this cluster',
+  block: 'the teachers of this block (sent by their BEO)',
+  district:
+    'the block education officers (BEOs) and teachers of this district (sent by their BSA)',
+  state:
+    'the district education officers (BSAs) of this state (sent by the state education head)',
+  country:
+    'the state education heads (DGSEs) of India (sent by the national education head)',
+};
+
 export type ShareSubject =
-  | { kind: 'area'; entity: GeoEntity; audience: 'teachers' }
+  | {
+      kind: 'area';
+      entity: GeoEntity;
+      audience: 'teachers' | 'officials';
+      audienceDescription: string;
+    }
   | {
       kind: 'class';
       teacherId: string;
       schoolName: string | null;
       shareLink: string;
       audience: 'parents';
+      audienceDescription: string;
     };
 
 interface ViewerRow {
@@ -113,7 +134,9 @@ export class Placeholders {
 }
 
 export interface ShareFacts {
-  audience: 'teachers' | 'parents';
+  audience: 'teachers' | 'officials' | 'parents';
+  // the group in words, e.g. "the BSAs of this state"
+  audience_description: string;
   language: 'hi';
   as_of: string | null;
   unit: Record<string, unknown>;
@@ -251,7 +274,7 @@ function verdictFacts(
 
 export const SHARE_MESSAGE_SYSTEM_PROMPT = `You write ONE short WhatsApp message in Hindi for a Lifteracy group, from the facts you are given. Lifteracy teaches children to read Hindi over WhatsApp; the dashboard numbers describe their practice and reading-test proxies.
 
-Audience: "teachers" = the teachers of one block / district, sent by their education official. "parents" = the parents of one class, sent by the teacher.
+Audience: "parents" = the parents of one class, sent by the teacher. "teachers" = the teachers of one block, sent by their BEO. "officials" = the officials one level down from the sender (a BSA writing to the BEOs of their district, a state head to the BSAs, the national head to the state heads) — then the "children" in the facts are those officials' areas, and the people in `teachers` are the teachers who stand out across the whole area. audience_description says exactly who the group is; address them accordingly.
 
 How to choose what to say:
 - Pick ONE or TWO angles only. Never list everything. Each call must read differently from the last: use variety_seed to pick a different angle, opening and structure every time.
@@ -398,7 +421,12 @@ export class ShareMessageService {
           );
         }
       }
-      return { kind: 'area', entity, audience: 'teachers' };
+      return {
+        kind: 'area',
+        entity,
+        audience: entity.type === 'block' || entity.type === 'school' || entity.type === 'cluster' ? 'teachers' : 'officials',
+        audienceDescription: AREA_AUDIENCE[entity.type],
+      };
     }
     const teacher = await this.viewerRow(id);
     if (
@@ -417,6 +445,7 @@ export class ShareMessageService {
       schoolName: teacher.geo_name,
       shareLink: referralUrl(teacher.external_id),
       audience: 'parents',
+      audienceDescription: 'the parents of the children in this class (sent by their teacher)',
     };
   }
 
@@ -478,6 +507,7 @@ export class ShareMessageService {
     const any = week ?? yesterday ?? g2 ?? g3 ?? mplB ?? g1;
     const facts: ShareFacts = {
       audience: subject.audience,
+      audience_description: subject.audienceDescription,
       language: 'hi',
       as_of: any?.as_of ?? null,
       unit: area
