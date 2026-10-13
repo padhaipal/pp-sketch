@@ -67,7 +67,7 @@ function scoresFor(
   metric: string,
   window?: string,
 ): ScoresResponse {
-  const area = id === 'b1';
+  const area = id !== 'u-t';
   const base = {
     as_of: '2026-10-12',
     metric,
@@ -273,10 +273,12 @@ function scoresFor(
 function make(
   opts: {
     users?: Record<string, unknown>;
+    geo?: Record<string, unknown>;
     llmText?: string;
     incr?: number | null;
   } = {},
 ) {
+  const geos: Record<string, unknown> = opts.geo ?? { b1: BLOCK };
   const users: Record<string, unknown> = opts.users ?? {
     'u-beo': BEO,
     'u-t': TEACHER,
@@ -303,7 +305,7 @@ function make(
       scoresFor(id, metric, window),
   );
   const geo = {
-    getById: jest.fn(async (id: string) => (id === 'b1' ? BLOCK : null)),
+    getById: jest.fn(async (id: string) => geos[id] ?? null),
   };
   const incr = jest.fn(async () => (opts.incr === undefined ? 1 : opts.incr));
   const complete = jest.fn(async () => ({
@@ -422,6 +424,9 @@ describe('ShareMessageService — what the model sees and what comes back', () =
     >;
     const prompt = req.messages[1].content;
     expect(facts.audience).toBe('teachers');
+    expect(facts.audience_description).toBe(
+      'the teachers of this block (sent by their BEO)',
+    );
     expect(facts.language).toBe('hi');
     expect(prompt).not.toContain('Asha');
     expect(prompt).not.toContain('919000000');
@@ -487,6 +492,46 @@ describe('ShareMessageService — what the model sees and what comes back', () =
     expect(out.message).toBe(
       'शाबाश Rani Devi! Student 2 और  भी।\nhttps://dash.example/r/919000000002',
     );
+  });
+
+  it("every level above a block works the same way: a BSA's district, a DGSE's state and the national head's country address the officials below them", async () => {
+    for (const [type, id, uid, audience] of [
+      [
+        'district',
+        'd1',
+        'u-bsa',
+        'the block education officers (BEOs) and teachers of this district (sent by their BSA)',
+      ],
+      [
+        'state',
+        'st1',
+        'u-dgse',
+        'the district education officers (BSAs) of this state (sent by the state education head)',
+      ],
+      [
+        'country',
+        'in',
+        'u-national',
+        'the state education heads (DGSEs) of India (sent by the national education head)',
+      ],
+    ] as const) {
+      const { svc, complete } = make({
+        users: {
+          [uid]: { ...BEO, id: uid, geo_entity_id: id, geo_type: type },
+        },
+        geo: { [id]: { ...BLOCK, id, type, name: type.toUpperCase() } },
+      });
+      const out = await svc.generate(id, { kind: 'user', id: uid });
+      expect(out.message).toBeTruthy();
+      const facts = JSON.parse(
+        (complete.mock.calls[0][0] as { messages: Array<{ content: string }> })
+          .messages[1].content,
+      ) as Record<string, unknown>;
+      expect(facts.audience).toBe('officials');
+      expect(facts.audience_description).toBe(audience);
+      expect((facts.unit as { type: string }).type).toBe(type);
+      expect(facts.share_link).toBeUndefined();
+    }
   });
 
   it('a failing read drops its section, not the message', async () => {

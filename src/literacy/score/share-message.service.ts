@@ -274,7 +274,7 @@ function verdictFacts(
 
 export const SHARE_MESSAGE_SYSTEM_PROMPT = `You write ONE short WhatsApp message in Hindi for a Lifteracy group, from the facts you are given. Lifteracy teaches children to read Hindi over WhatsApp; the dashboard numbers describe their practice and reading-test proxies.
 
-Audience: "parents" = the parents of one class, sent by the teacher. "teachers" = the teachers of one block, sent by their BEO. "officials" = the officials one level down from the sender (a BSA writing to the BEOs of their district, a state head to the BSAs, the national head to the state heads) — then the "children" in the facts are those officials' areas, and the people in `teachers` are the teachers who stand out across the whole area. audience_description says exactly who the group is; address them accordingly.
+Audience: "parents" = the parents of one class, sent by the teacher. "teachers" = the teachers of one block, sent by their BEO. "officials" = the officials one level down from the sender (a BSA writing to the BEOs of their district, a state head to the BSAs, the national head to the state heads) — then the "children" in the facts are those officials' areas, and the people in "teachers" are the teachers who stand out across the whole area. audience_description says exactly who the group is; address them accordingly.
 
 How to choose what to say:
 - Pick ONE or TWO angles only. Never list everything. Each call must read differently from the last: use variety_seed to pick a different angle, opening and structure every time.
@@ -424,7 +424,12 @@ export class ShareMessageService {
       return {
         kind: 'area',
         entity,
-        audience: entity.type === 'block' || entity.type === 'school' || entity.type === 'cluster' ? 'teachers' : 'officials',
+        audience:
+          entity.type === 'block' ||
+          entity.type === 'school' ||
+          entity.type === 'cluster'
+            ? 'teachers'
+            : 'officials',
         audienceDescription: AREA_AUDIENCE[entity.type],
       };
     }
@@ -445,7 +450,8 @@ export class ShareMessageService {
       schoolName: teacher.geo_name,
       shareLink: referralUrl(teacher.external_id),
       audience: 'parents',
-      audienceDescription: 'the parents of the children in this class (sent by their teacher)',
+      audienceDescription:
+        'the parents of the children in this class (sent by their teacher)',
     };
   }
 
