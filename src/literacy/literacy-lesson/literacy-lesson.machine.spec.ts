@@ -22,6 +22,7 @@ jest.mock('./evaluate-answer.utils', () => ({
   detectInsertion: (...args: unknown[]) => mockDetectInsertion(...args),
 }));
 jest.mock('./sentence-assessment', () => ({
+  MIN_READ_WPM: 40,
   assessSentence: (...args: unknown[]) => mockAssessSentence(...args),
   selectDrillWord: (...args: unknown[]) => mockSelectDrillWord(...args),
 }));
@@ -55,7 +56,8 @@ jest.mock('./identify-character-status.utils', () => ({
 }));
 
 import { createActor } from 'xstate';
-import { machine } from './literacy-lesson.machine';
+import { machine, READ_SPEED_GATE_FROM_LEVEL } from './literacy-lesson.machine';
+import { MIN_READ_WPM } from './sentence-assessment';
 
 type Snapshot = ReturnType<
   ReturnType<typeof createActor<typeof machine>>['getSnapshot']
@@ -68,6 +70,7 @@ interface ActorHandle {
           type: 'ANSWER';
           studentAnswer: string;
           studentTranscripts?: string[];
+          durationMs?: number | null;
         }
       | {
           type: 'COMPREHENSION_ANSWER';
@@ -1433,6 +1436,8 @@ describe('machine — sentence state', () => {
     expect(mockAssessSentence).toHaveBeenCalledWith({
       words: SENTENCE,
       transcripts: ['नल', 'घर'],
+      durationMs: null,
+      minWpm: null, // no level on this snapshot → no speed gate
     });
     a.stop();
   });
@@ -1444,7 +1449,74 @@ describe('machine — sentence state', () => {
     expect(mockAssessSentence).toHaveBeenCalledWith({
       words: SENTENCE,
       transcripts: ['नल घर'],
+      durationMs: null,
+      minWpm: null,
     });
+    a.stop();
+  });
+
+  it('reading-speed gate: level 9+ hands assessSentence the note length and the 40 wpm floor; level 8 hands no floor', () => {
+    mockAssessSentence.mockReturnValue(sentenceAssessment(true));
+    const nine = makeActor({
+      word: '',
+      userMessageId: 'mm-1',
+      sentence: SENTENCE,
+      passageId: PASSAGE_ID,
+      level: 9,
+    });
+    nine.send({ type: 'ANSWER', studentAnswer: 'नल घर', durationMs: 4_000 });
+    expect(mockAssessSentence).toHaveBeenCalledWith({
+      words: SENTENCE,
+      transcripts: ['नल घर'],
+      durationMs: 4_000,
+      minWpm: MIN_READ_WPM,
+    });
+    nine.stop();
+    mockAssessSentence.mockClear();
+    const eight = makeLevel8SentenceActor();
+    eight.send({ type: 'ANSWER', studentAnswer: 'नल घर', durationMs: 4_000 });
+    expect(mockAssessSentence).toHaveBeenCalledWith({
+      words: SENTENCE,
+      transcripts: ['नल घर'],
+      durationMs: 4_000,
+      minWpm: null,
+    });
+    expect(READ_SPEED_GATE_FROM_LEVEL).toBe(9);
+    eight.stop();
+  });
+
+  it('a slow but accurate level-9 read takes the wrong-read path: no drill word → re-read, a second slow read → maxErrors, never a first-try pass', () => {
+    const allCorrect = [
+      { target: 'नल', heard: 'नल', status: 'correct' },
+      { target: 'घर', heard: 'घर', status: 'correct' },
+    ];
+    mockAssessSentence.mockReturnValue({
+      ...sentenceAssessment(false, allCorrect),
+      errorCount: 0,
+      accuracy: 1,
+      wpm: 31.2,
+      tooSlow: true,
+    });
+    mockSelectDrillWord.mockReturnValue(null);
+    const a = makeActor({
+      word: '',
+      userMessageId: 'mm-1',
+      sentence: SENTENCE,
+      passageId: PASSAGE_ID,
+      level: 9,
+    });
+    a.send({ type: 'ANSWER', studentAnswer: 'नल घर', durationMs: 20_000 });
+    expect(a.snap().value).toBe('sentence');
+    expect(a.snap().context.sentenceErrors).toBe(1);
+    expect(a.snap().context.answerCorrect).toBe(false);
+    expect(a.snap().context.stateTransitionId).toBe(
+      'sentence-sentence-wrong-retry',
+    );
+    a.send({ type: 'ANSWER', studentAnswer: 'नल घर', durationMs: 20_000 });
+    expect(a.snap().value).toBe('complete');
+    expect(a.snap().context.stateTransitionId).toBe(
+      'sentence-sentence-complete-maxErrors',
+    );
     a.stop();
   });
 
@@ -1472,6 +1544,8 @@ describe('machine — sentence state', () => {
     expect(mockAssessSentence).toHaveBeenCalledWith({
       words: SENTENCE,
       transcripts: ['नल'],
+      durationMs: null,
+      minWpm: null,
     });
     expect(mockSelectDrillWord).toHaveBeenCalledWith(failedWords);
     a.stop();

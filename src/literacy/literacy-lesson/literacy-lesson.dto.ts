@@ -29,6 +29,10 @@ export interface ProcessAnswerOptions {
   // comprehension answer. Staleness rules are bypassed for it — a flow tap
   // may legitimately arrive minutes after the flow was sent.
   comprehension_answer_id?: string;
+  // Length of the voice note in ms (media_details.duration_ms, parsed at
+  // ingest) — the reading-speed gate on passage reads (sentence-assessment
+  // MIN_READ_WPM). Omit / null when unknown: no gate.
+  audio_duration_ms?: number | null;
 }
 
 export interface ProcessAnswerResult {
@@ -117,10 +121,23 @@ export function validateProcessAnswerOptions(
     }
   }
 
+  if (o.audio_duration_ms !== undefined && o.audio_duration_ms !== null) {
+    if (
+      typeof o.audio_duration_ms !== 'number' ||
+      !Number.isFinite(o.audio_duration_ms) ||
+      o.audio_duration_ms < 0
+    ) {
+      throw new BadRequestException(
+        'processAnswer() options.audio_duration_ms must be a non-negative number',
+      );
+    }
+  }
+
   return {
     user: o.user as User,
     transcripts: o.transcripts as MediaMetaData[] | undefined,
     user_message_id: o.user_message_id,
     comprehension_answer_id: o.comprehension_answer_id,
+    audio_duration_ms: o.audio_duration_ms,
   };
 }

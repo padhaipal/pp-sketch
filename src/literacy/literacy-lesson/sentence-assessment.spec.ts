@@ -5,6 +5,10 @@ import {
   assessSentence,
   readErrorBudget,
   selectDrillWord,
+  FLAWED_WORD_RATIO_MAX,
+  flawedWordBudgetOk,
+  MIN_READ_WPM,
+  readingWpm,
 } from './sentence-assessment';
 
 // A pool of distinct, teachable, mutually-distant words to build long
@@ -172,8 +176,10 @@ describe('assessSentence', () => {
     expect(result.words[1].status).toBe('transposed');
     // A transposition is a decoding error — one per PAIR, not per word.
     expect(result.errorCount).toBe(1);
-    // Budget for 4 words is max(1, ceil(0.4)) = 1, so a single swap still passes.
-    expect(result.passed).toBe(true);
+    // Budget for 4 words is max(1, ceil(0.4)) = 1, so the error budget holds —
+    // but both swapped words are flawed: 2 of 4 is over the 30 % cap (2026-10).
+    expect(result.flawedWordCount).toBe(2);
+    expect(result.passed).toBe(false);
   });
 
   it('counts two transposed pairs as two errors', () => {
@@ -204,14 +210,23 @@ describe('assessSentence', () => {
     expect(result.words[0].aksharaDistance).toBe(0);
   });
 
-  it('close reads (akshara distance 1) are not errors', () => {
+  it('close reads (akshara distance 1) are not errors, but they are flawed words', () => {
     const result = assessSentence({
       words: ['कमल', 'सुंदर', 'है'],
       transcripts: ['कमला सुंदर है'],
     });
     expect(result.words[0].status).toBe('close');
     expect(result.errorCount).toBe(0);
-    expect(result.passed).toBe(true);
+    // 1 of 3 words flawed = 33 %: over the 30 % cap (2026-10)
+    expect(result.flawedWordCount).toBe(1);
+    expect(result.passed).toBe(false);
+    // 1 of 4 = 25 % passes
+    const four = assessSentence({
+      words: ['कमल', 'सुंदर', 'है', 'आज'],
+      transcripts: ['कमला सुंदर है आज'],
+    });
+    expect(four.flawedWordCount).toBe(1);
+    expect(four.passed).toBe(true);
   });
 
   it('fuses per word across engines: any engine hearing a word correctly wins', () => {
@@ -305,5 +320,133 @@ describe('selectDrillWord', () => {
     for (let i = 0; i < 40; i++) {
       expect(['घर', 'नल']).toContain(selectDrillWord(assessment.words));
     }
+  });
+});
+
+describe('reading-speed gate (MIN_READ_WPM)', () => {
+  const words = [
+    'घर',
+    'में',
+    'नल',
+    'है',
+    'और',
+    'पानी',
+    'साफ़',
+    'है',
+    'आज',
+    'भी',
+  ];
+  const read = { words, transcripts: [words.join(' ')] };
+
+  it('readingWpm: words over the note length, one decimal; null without a usable duration', () => {
+    expect(readingWpm(10, 15_000)).toBe(40);
+    expect(readingWpm(10, 16_000)).toBe(37.5);
+    expect(readingWpm(10, 0)).toBeNull();
+    expect(readingWpm(10, null)).toBeNull();
+    expect(readingWpm(10, undefined)).toBeNull();
+    expect(readingWpm(0, 15_000)).toBeNull();
+  });
+
+  it('an accurate read slower than the floor fails; at the floor it passes', () => {
+    const slow = assessSentence({
+      ...read,
+      durationMs: 16_000,
+      minWpm: MIN_READ_WPM,
+    });
+    expect(slow.wpm).toBe(37.5);
+    expect(slow.tooSlow).toBe(true);
+    expect(slow.passed).toBe(false);
+    expect(slow.errorCount).toBe(0);
+    expect(slow.words.every((w) => w.status === 'correct')).toBe(true);
+    const atFloor = assessSentence({
+      ...read,
+      durationMs: 15_000,
+      minWpm: MIN_READ_WPM,
+    });
+    expect(atFloor.wpm).toBe(40);
+    expect(atFloor.tooSlow).toBe(false);
+    expect(atFloor.passed).toBe(true);
+  });
+
+  it('no gate without a floor (level 8) or without a duration', () => {
+    expect(assessSentence({ ...read, durationMs: 60_000 }).passed).toBe(true);
+    expect(
+      assessSentence({ ...read, durationMs: 60_000, minWpm: null }).passed,
+    ).toBe(true);
+    const noDuration = assessSentence({ ...read, minWpm: MIN_READ_WPM });
+    expect(noDuration.wpm).toBeNull();
+    expect(noDuration.tooSlow).toBe(false);
+    expect(noDuration.passed).toBe(true);
+  });
+
+  it('a fast but inaccurate read still fails on accuracy', () => {
+    const out = assessSentence({
+      words,
+      transcripts: ['घर'],
+      durationMs: 5_000,
+      minWpm: MIN_READ_WPM,
+    });
+    expect(out.tooSlow).toBe(false);
+    expect(out.passed).toBe(false);
+  });
+
+  it('MIN_READ_WPM is 40', () => {
+    expect(MIN_READ_WPM).toBe(40);
+  });
+});
+
+describe('flawed-word cap (FLAWED_WORD_RATIO_MAX)', () => {
+  // ten words; swap the last akshara of the chosen words so each is one akshara off ('close')
+  const words = [
+    'घर',
+    'में',
+    'नल',
+    'है',
+    'और',
+    'पानी',
+    'साफ़',
+    'है',
+    'आज',
+    'भी',
+  ];
+  const closeOf = (w: string) => w.slice(0, -1) + 'ट';
+  const readWith = (closeIdx: number[]) =>
+    assessSentence({
+      words,
+      transcripts: [
+        words.map((w, i) => (closeIdx.includes(i) ? closeOf(w) : w)).join(' '),
+      ],
+    });
+
+  it('the budget is inclusive: 3 of 10 pass, 4 of 10 fail; 2 of 7 pass, 3 of 7 fail', () => {
+    expect(FLAWED_WORD_RATIO_MAX).toBe(0.3);
+    expect(flawedWordBudgetOk(3, 10)).toBe(true);
+    expect(flawedWordBudgetOk(4, 10)).toBe(false);
+    expect(flawedWordBudgetOk(2, 7)).toBe(true);
+    expect(flawedWordBudgetOk(3, 7)).toBe(false);
+    expect(flawedWordBudgetOk(0, 1)).toBe(true);
+    expect(flawedWordBudgetOk(1, 1)).toBe(false);
+  });
+
+  it("'close' words count toward the cap though not toward the error budget: three near-misses pass, four fail", () => {
+    const three = readWith([0, 2, 8]);
+    expect(three.words.filter((w) => w.status === 'close')).toHaveLength(3);
+    expect(three.errorCount).toBe(0);
+    expect(three.flawedWordCount).toBe(3);
+    expect(three.passed).toBe(true);
+    const four = readWith([0, 2, 4, 8]);
+    expect(four.errorCount).toBe(0);
+    expect(four.flawedWordCount).toBe(4);
+    expect(four.passed).toBe(false);
+  });
+
+  it('a badly wrong word counts toward both caps: one omission plus three near-misses is within the 10 % error budget but over 30 % flawed', () => {
+    const transcript = words
+      .map((w, i) => ([0, 2, 4].includes(i) ? closeOf(w) : i === 8 ? '' : w))
+      .join(' ');
+    const out = assessSentence({ words, transcripts: [transcript] });
+    expect(out.errorCount).toBe(1);
+    expect(out.flawedWordCount).toBe(4);
+    expect(out.passed).toBe(false);
   });
 });

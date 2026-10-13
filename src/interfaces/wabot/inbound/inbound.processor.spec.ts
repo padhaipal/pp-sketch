@@ -1096,6 +1096,8 @@ describe('processWabotInboundJob — exact downstream call args (audio reply)', 
       user: { id: 'user-1', external_id: '+910000000001' },
       transcripts: [{ text: 'ओम' }],
       user_message_id: 'audio-entity-1',
+      // this fixture's audio entity carries no duration_ms → no speed gate
+      audio_duration_ms: null,
     });
   });
 
@@ -2401,6 +2403,24 @@ describe('processWabotInboundJob — reading-speed stids', () => {
         delete process.env.WHATSAPP_COMPREHENSION_FLOW_ID;
       else process.env.WHATSAPP_COMPREHENSION_FLOW_ID = prevFlowId;
     }
+  });
+
+  it('hands the voice note length to processAnswer as audio_duration_ms (the reading-speed gate); null when the entity has none', async () => {
+    const withDuration = readingMocks({ wordCount: 10, durationMs: 15_000 });
+    await runJob(createAudioJob(), withDuration);
+    expect(
+      withDuration.literacyLessonService.processAnswer.mock.calls[0][0],
+    ).toEqual(
+      expect.objectContaining({
+        user_message_id: 'audio-entity-1',
+        audio_duration_ms: 15_000,
+      }),
+    );
+    const without = readingMocks({ wordCount: 10 });
+    await runJob(createAudioJob(), without);
+    expect(
+      without.literacyLessonService.processAnswer.mock.calls[0][0],
+    ).toEqual(expect.objectContaining({ audio_duration_ms: null }));
   });
 
   it('emits no stid when duration_ms is missing on the audio entity', async () => {

@@ -75,10 +75,19 @@ export type SentenceWordStatus =
   | 'transposed';
 
 export interface SentenceAssessment {
+  // errors within budget AND flawed words within FLAWED_WORD_RATIO_MAX AND
+  // (when gated) fast enough
   passed: boolean;
   wordCount: number;
   errorCount: number; // substitutions + omissions + one per transposed pair; insertions excluded
+  // words read with anything wrong (close, substituted, omitted, transposed)
+  flawedWordCount: number;
   accuracy: number;
+  // words per minute over the whole voice note (pauses included); null
+  // without a usable duration.
+  wpm: number | null;
+  // the read failed the speed gate (accuracy may still have been fine)
+  tooSlow: boolean;
   words: Array<{
     target: string;
     heard: string | null;
@@ -88,7 +97,41 @@ export interface SentenceAssessment {
   }>;
 }
 
-export type SentenceArgs = { words: string[]; transcripts: string[] };
+// Reading-speed gate (2026-10): a passage read slower than MIN_READ_WPM is
+// a failed read — it takes the wrong-read path (drill / re-read, then
+// maxErrors) like an inaccurate one, and so never counts as a first-try
+// pass for sentence-band progression. Level 8 has no gate (the machine
+// passes `minWpm: null` there); null / missing duration skips it.
+export const MIN_READ_WPM = 40;
+
+// Flawed-word cap (2026-10): at most this share of the words may have ANY
+// error — a 'close' word (one akshara off) counts here though not toward
+// the error budget; a substituted / omitted / transposed word counts toward
+// both. Inclusive: 3 of 10 pass, 4 of 10 fail; 2 of 7 pass (2.1 allowed).
+export const FLAWED_WORD_RATIO_MAX = 0.3;
+export function flawedWordBudgetOk(flawed: number, wordCount: number): boolean {
+  // integer arithmetic: flawed ≤ 0.3 × wordCount without float noise
+  return flawed * 10 <= FLAWED_WORD_RATIO_MAX * 10 * wordCount;
+}
+
+export type SentenceArgs = {
+  words: string[];
+  transcripts: string[];
+  // length of the voice note (media_details.duration_ms); null = unknown
+  durationMs?: number | null;
+  // words-per-minute floor to enforce; null = no speed gate
+  minWpm?: number | null;
+};
+
+export function readingWpm(
+  wordCount: number,
+  durationMs: number | null | undefined,
+): number | null {
+  if (wordCount <= 0 || typeof durationMs !== 'number' || !(durationMs > 0)) {
+    return null;
+  }
+  return Math.round((wordCount / (durationMs / 60_000)) * 10) / 10;
+}
 
 type WordResult = SentenceAssessment['words'][number];
 
@@ -335,6 +378,8 @@ export function readErrorBudget(wordCount: number): number {
 export function assessSentence({
   words,
   transcripts,
+  durationMs = null,
+  minWpm = null,
 }: SentenceArgs): SentenceAssessment {
   if (words.length === 0) {
     console.error('assessSentence: words is empty');
@@ -342,7 +387,10 @@ export function assessSentence({
       passed: false,
       wordCount: 0,
       errorCount: 0,
+      flawedWordCount: 0,
       accuracy: 0,
+      wpm: null,
+      tooSlow: false,
       words: [],
     };
   }
@@ -389,11 +437,20 @@ export function assessSentence({
 
   const errorCount = substitutionAndOmissionCount + transpositionErrors;
   const wordCount = words.length;
+  const wpm = readingWpm(wordCount, durationMs);
+  const tooSlow = minWpm != null && wpm != null && wpm < minWpm;
+  const flawedWordCount = fused.filter((w) => w.status !== 'correct').length;
   return {
-    passed: errorCount <= readErrorBudget(wordCount),
+    passed:
+      errorCount <= readErrorBudget(wordCount) &&
+      flawedWordBudgetOk(flawedWordCount, wordCount) &&
+      !tooSlow,
     wordCount,
     errorCount,
+    flawedWordCount,
     accuracy: (wordCount - errorCount) / wordCount,
+    wpm,
+    tooSlow,
     words: fused,
   };
 }

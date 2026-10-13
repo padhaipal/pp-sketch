@@ -521,11 +521,18 @@ export async function processWabotInboundJob(
           await literacyLessonService.cleanupPartialState(userMessageId);
         }
 
+        // The voice note's length (container-parsed at ingest): the
+        // reading-speed gate inside processAnswer and the wpm stid below.
+        const durationMs = (
+          audioEntity.media_details as { duration_ms?: number } | null
+        )?.duration_ms;
+
         // 8. Process answer
         const result1 = await literacyLessonService.processAnswer({
           user,
           transcripts,
           user_message_id: userMessageId,
+          audio_duration_ms: typeof durationMs === 'number' ? durationMs : null,
         });
         stateTransitionIds = [...result1.stateTransitionIds];
         sentenceText = result1.sentenceText;
@@ -548,9 +555,6 @@ export async function processWabotInboundJob(
         // construction (wordCount >= 1, durationMs > 0), so no negative
         // branch exists; 0 doubles as the corrupt-duration signal (absurdly
         // long container clock), 200plus as the corrupt-short one.
-        const durationMs = (
-          audioEntity.media_details as { duration_ms?: number } | null
-        )?.duration_ms;
         if (
           result1.completedReading &&
           typeof durationMs === 'number' &&
