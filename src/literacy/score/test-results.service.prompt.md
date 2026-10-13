@@ -61,7 +61,9 @@ percentile and any pass threshold without reading student rows.
    score; unbanded (null birth_year) → `students_unbanded`, no metric
    contribution; per metric, a scored student inside that metric's age band
    (age-bands.ts) contributes n=1, sum, sumsq, pass, hist[`histIndex`];
-   usage contributes for every student (see above).
+   usage contributes for every student (see above). nipun_g2 is read
+   through `impliedNipunG2`: a g3 pass with g2 null or failed counts as
+   g2 = 1.0 passed (see below).
 7. Roll-up: for each school with ≥1 student, `GeoEntityService.ancestors`
    once (cached per school), and the student's vector is added to the school
    and every ancestor — so an ancestor's vector is exactly the sum of its
@@ -110,6 +112,15 @@ deploy keep cohort 0, verdict NULL, counts 0.
   counts, never the boolean.
 - Schools with no student at all (no results row, no cohort member) have no
   row and are counted nowhere — not even as insufficient.
+- Grade 3 implies grade 2 (`impliedNipunG2`, 2026-10): a child who passed
+  g3 but has no g2 score (sped past the level-10 pool before four R1.x
+  first attempts) or a failed g2 is taken as g2 = 1.0 / passed in
+  `studentVector`, so a 7-year-old g3 passer is a g2 passer for their
+  school's n/sum/pass/hist and verdict. An earned g2 pass keeps its real
+  score. A failed or missing g3 implies nothing; mpl_b implies nothing.
+  Roll-up only: `test_results_student`, the dashboard student lists and
+  GET /users/:id/literacy-test-scores still show the raw g2 (insufficient
+  or failed) — a school's g2 passers can exceed its listed g2 passes.
 - `upsertGeoRows` binds `VERDICT_COLUMNS` between the three student counts
   and the metric vectors; the nightly path updates them on conflict, the
   usage backfill path (`usageOnly`) leaves them alone.
