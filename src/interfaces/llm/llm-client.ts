@@ -72,7 +72,10 @@ function awaitSendSlot(provider: string): Promise<void> {
 }
 
 interface ChatCompletionsResponse {
-  choices?: Array<{ message?: { content?: string | null } }>;
+  choices?: Array<{
+    message?: { content?: string | null; refusal?: string | null };
+    finish_reason?: string | null;
+  }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
 }
 
@@ -177,10 +180,23 @@ async function singleCall(
   }
 
   const json = (await response.json()) as ChatCompletionsResponse;
-  const text = json.choices?.[0]?.message?.content;
+  const choice = json.choices?.[0];
+  const text = choice?.message?.content;
   if (typeof text !== 'string' || text.length === 0) {
+    // Say WHY it is empty: a `length` finish with every completion token
+    // spent means hidden reasoning (or a Devanagari answer) outgrew
+    // max_tokens; a refusal names itself; anything else lists what the
+    // message did carry.
+    const why = [
+      `finish_reason=${choice?.finish_reason ?? 'unknown'}`,
+      `completion_tokens=${json.usage?.completion_tokens ?? 'unknown'}`,
+      choice?.message?.refusal ? `refusal=${choice.message.refusal}` : '',
+      `message_keys=${Object.keys(choice?.message ?? {}).join('|') || 'none'}`,
+    ]
+      .filter(Boolean)
+      .join(' ');
     throw new LlmError(
-      `${config.provider} returned an empty completion`,
+      `${config.provider} returned an empty completion (${why})`,
       false,
     );
   }

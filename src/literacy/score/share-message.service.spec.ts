@@ -452,7 +452,7 @@ describe('ShareMessageService — what the model sees and what comes back', () =
     expect(typeof facts.variety_seed).toBe('number');
     expect(complete.mock.calls[0][1]).toEqual({
       maxAttempts: 1,
-      timeoutMs: 12_000,
+      timeoutMs: 15_000,
     });
     // the teacher's name is put back, an invented placeholder and the phone number are dropped, no link for teachers
     expect(out.message).toBe('शाबाश Asha Kumari!  और  भी।');

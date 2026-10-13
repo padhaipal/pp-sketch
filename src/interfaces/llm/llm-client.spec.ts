@@ -168,6 +168,27 @@ describe('callChatCompletions', () => {
     expect(body.temperature).toBeCloseTo(1.6); // 0.8 × 2
   });
 
+  it('an empty completion says why: finish reason, tokens spent, refusal, what the message carried', async () => {
+    const fetchMock = jest.fn().mockResolvedValue(
+      fakeResponse({
+        status: 200,
+        json: {
+          choices: [
+            {
+              message: { content: '', reasoning_content: 'hidden' },
+              finish_reason: 'length',
+            },
+          ],
+          usage: { prompt_tokens: 900, completion_tokens: 700 },
+        },
+      }),
+    );
+    global.fetch = fetchMock;
+    await expect(callChatCompletions(config, request, fast)).rejects.toThrow(
+      'returned an empty completion (finish_reason=length completion_tokens=700 message_keys=content|reasoning_content)',
+    );
+  });
+
   it('leaves temperature out entirely for a model the provider config says refuses it', async () => {
     const fetchMock = jest.fn().mockResolvedValue(okResponse());
     global.fetch = fetchMock;
