@@ -67,3 +67,9 @@ export function validateProcessAnswerOptions(options: unknown): ProcessAnswerOpt
     user_message_id: o.user_message_id as string,
   };
 }
+
+## 2026-10: `ProcessAnswerOptions.audio_duration_ms`
+
+Optional, null when unknown; a finite non-negative number otherwise
+(BadRequest if not). The voice note's length for the reading-speed gate
+(literacy-lesson.machine.prompt.md).

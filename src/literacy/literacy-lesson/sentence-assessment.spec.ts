@@ -5,6 +5,8 @@ import {
   assessSentence,
   readErrorBudget,
   selectDrillWord,
+  MIN_READ_WPM,
+  readingWpm,
 } from './sentence-assessment';
 
 // A pool of distinct, teachable, mutually-distant words to build long
@@ -305,5 +307,77 @@ describe('selectDrillWord', () => {
     for (let i = 0; i < 40; i++) {
       expect(['घर', 'नल']).toContain(selectDrillWord(assessment.words));
     }
+  });
+});
+
+describe('reading-speed gate (MIN_READ_WPM)', () => {
+  const words = [
+    'घर',
+    'में',
+    'नल',
+    'है',
+    'और',
+    'पानी',
+    'साफ़',
+    'है',
+    'आज',
+    'भी',
+  ];
+  const read = { words, transcripts: [words.join(' ')] };
+
+  it('readingWpm: words over the note length, one decimal; null without a usable duration', () => {
+    expect(readingWpm(10, 15_000)).toBe(40);
+    expect(readingWpm(10, 16_000)).toBe(37.5);
+    expect(readingWpm(10, 0)).toBeNull();
+    expect(readingWpm(10, null)).toBeNull();
+    expect(readingWpm(10, undefined)).toBeNull();
+    expect(readingWpm(0, 15_000)).toBeNull();
+  });
+
+  it('an accurate read slower than the floor fails; at the floor it passes', () => {
+    const slow = assessSentence({
+      ...read,
+      durationMs: 16_000,
+      minWpm: MIN_READ_WPM,
+    });
+    expect(slow.wpm).toBe(37.5);
+    expect(slow.tooSlow).toBe(true);
+    expect(slow.passed).toBe(false);
+    expect(slow.errorCount).toBe(0);
+    expect(slow.words.every((w) => w.status === 'correct')).toBe(true);
+    const atFloor = assessSentence({
+      ...read,
+      durationMs: 15_000,
+      minWpm: MIN_READ_WPM,
+    });
+    expect(atFloor.wpm).toBe(40);
+    expect(atFloor.tooSlow).toBe(false);
+    expect(atFloor.passed).toBe(true);
+  });
+
+  it('no gate without a floor (level 8) or without a duration', () => {
+    expect(assessSentence({ ...read, durationMs: 60_000 }).passed).toBe(true);
+    expect(
+      assessSentence({ ...read, durationMs: 60_000, minWpm: null }).passed,
+    ).toBe(true);
+    const noDuration = assessSentence({ ...read, minWpm: MIN_READ_WPM });
+    expect(noDuration.wpm).toBeNull();
+    expect(noDuration.tooSlow).toBe(false);
+    expect(noDuration.passed).toBe(true);
+  });
+
+  it('a fast but inaccurate read still fails on accuracy', () => {
+    const out = assessSentence({
+      words,
+      transcripts: ['घर'],
+      durationMs: 5_000,
+      minWpm: MIN_READ_WPM,
+    });
+    expect(out.tooSlow).toBe(false);
+    expect(out.passed).toBe(false);
+  });
+
+  it('MIN_READ_WPM is 40', () => {
+    expect(MIN_READ_WPM).toBe(40);
   });
 });

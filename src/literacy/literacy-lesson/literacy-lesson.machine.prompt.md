@@ -49,3 +49,18 @@ appends the outcome stid to what it returns (literacy-lesson.service.prompt.md).
   (`…-sentence-comprehension-correct-retry`, records nothing, re-sends the
   flow — still with the passage inside).
 - Levels 8–10 are untouched (`readInFlow` false → `sentence`).
+
+## 2026-10: reading-speed gate (40 wpm from level 9)
+
+`AnswerEvent.durationMs` = the voice note's length (media_details
+.duration_ms, threaded processor → processAnswer `audio_duration_ms` →
+the event). `sentenceArgs(context, event)` hands every sentence guard the
+words, the per-engine transcripts, that duration and `minWpm` =
+`MIN_READ_WPM` (40) when `context.level >= READ_SPEED_GATE_FROM_LEVEL` (9),
+else null — level 8 and level-less snapshots have no gate. `assessSentence`
+then fails a read slower than the floor (`tooSlow`), so it falls through to
+the same wrong-read branches as an inaccurate read: no teachable word (every
+word was right) → `sentence-sentence-wrong-retry`, a second slow read →
+`sentence-sentence-complete-maxErrors`. Never a `…-correct-first` stid, so
+sentence-band progression cannot promote on it (and two failed lessons
+decrement, by decision). A missing / zero duration skips the gate.

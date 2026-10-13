@@ -304,6 +304,8 @@ export class LiteracyLessonService {
             type: 'ANSWER',
             studentAnswer: combinedTranscript,
             studentTranscripts: transcriptTexts,
+            // the voice note's length, for the reading-speed gate
+            durationMs: validated.audio_duration_ms ?? null,
           });
 
           snapshot = actor.getSnapshot();

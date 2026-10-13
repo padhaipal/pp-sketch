@@ -257,3 +257,11 @@ null.
   first-try pass when the tapped option was correct and as failed-out when it
   was wrong, so both-correct → +1 (cap 12) and both-wrong → −1 (12 → 11 → 10
   puts the student back on read-aloud lessons).
+
+## 2026-10: reading-speed gate
+
+`processAnswer` forwards `audio_duration_ms` to the machine as the ANSWER
+event's `durationMs`; the inbound processor reads it off the audio entity
+before the call (the same value it already used for the wpm stid). The
+gate itself is `MIN_READ_WPM` in sentence-assessment.ts, applied from
+level 9 (literacy-lesson.machine.ts `READ_SPEED_GATE_FROM_LEVEL`).

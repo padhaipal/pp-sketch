@@ -296,9 +296,49 @@ describe('LiteracyLessonService.processAnswer — continue (rehydrate)', () => {
       // the per-engine texts travel separately for sentence evaluation.
       studentAnswer: 'कम ~ कमल',
       studentTranscripts: ['कम', 'कमल'],
+      // no audio_duration_ms given → no reading-speed gate
+      durationMs: null,
     });
     expect(out.isComplete).toBe(true);
     expect(out.stateTransitionIds).toEqual(['कमल-word-complete-correct-first']);
+  });
+
+  it('passes audio_duration_ms to the machine as the ANSWER event durationMs (the reading-speed gate); rejects a bad value', async () => {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue({
+      created_at: new Date(),
+      snapshot: { status: 'active', context: { word: 'कमल' } },
+    });
+    mockActorGetSnapshot.mockReturnValue(
+      happySnapshot({
+        context: {
+          word: 'कमल',
+          pendingCorrect: [],
+          pendingIncorrect: [],
+          stateTransitionId: 'कमल-word-complete-correct-first',
+        },
+        status: 'done',
+      }),
+    );
+    const dsQuery = jest.fn().mockResolvedValue([{ id: 'lls-1' }]);
+    const { svc } = makeService({ repo, dsQuery });
+    await svc.processAnswer({
+      user,
+      user_message_id: 'mm-1',
+      transcripts: [{ id: 't-1', text: 'कमल' }] as never,
+      audio_duration_ms: 12_345,
+    });
+    expect(mockActorSend).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'ANSWER', durationMs: 12_345 }),
+    );
+    await expect(
+      svc.processAnswer({
+        user,
+        user_message_id: 'mm-1',
+        transcripts: [{ id: 't-1', text: 'कमल' }] as never,
+        audio_duration_ms: -1,
+      }),
+    ).rejects.toThrow(BadRequestException);
   });
 
   it('throws BadRequest when continuing with no transcripts', async () => {

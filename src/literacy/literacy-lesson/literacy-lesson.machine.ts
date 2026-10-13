@@ -7,7 +7,11 @@ import {
   detectIncorrectMiddleMatra,
   detectInsertion,
 } from './evaluate-answer.utils';
-import { assessSentence, selectDrillWord } from './sentence-assessment';
+import {
+  assessSentence,
+  MIN_READ_WPM,
+  selectDrillWord,
+} from './sentence-assessment';
 import { identifyCharacterStatus } from './identify-character-status.utils';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -94,6 +98,9 @@ type AnswerEvent = {
   // concatenation of two engines' outputs (the seam can fake an in-order
   // match), so sentence guards evaluate each transcript individually.
   studentTranscripts?: string[];
+  // Length of the voice note in ms (media_details.duration_ms), for the
+  // reading-speed gate on passage reads; null / absent = no gate.
+  durationMs?: number | null;
 };
 
 // The child tapped an option in the comprehension WhatsApp Flow and hit
@@ -114,6 +121,27 @@ function transcriptsOf(event: AnswerEvent): string[] {
   return event.studentTranscripts && event.studentTranscripts.length > 0
     ? event.studentTranscripts
     : [event.studentAnswer];
+}
+
+// Reading-speed gate: from level 9 up a passage read slower than
+// MIN_READ_WPM is a failed read (2026-10). Level 8 (the shortest passages)
+// and snapshots without a level have no gate.
+export const READ_SPEED_GATE_FROM_LEVEL = SENTENCE_COMPLETE_LEVEL + 1;
+function minWpmFor(level: number | null | undefined): number | null {
+  return level != null && level >= READ_SPEED_GATE_FROM_LEVEL
+    ? MIN_READ_WPM
+    : null;
+}
+
+// What every sentence guard hands to assessSentence: the words, each
+// engine's transcript, and the speed gate when the level carries one.
+function sentenceArgs(context: Context, event: AnswerEvent) {
+  return {
+    words: context.sentence ?? [],
+    transcripts: transcriptsOf(event),
+    durationMs: event.durationMs ?? null,
+    minWpm: minWpmFor(context.level),
+  };
 }
 
 const NO_IMAGE_LETTERS = new Set(['ञ', 'ण']);
@@ -259,10 +287,7 @@ export const machine = setup({
           {
             guard: and([
               ({ context, event }) =>
-                assessSentence({
-                  words: context.sentence ?? [],
-                  transcripts: transcriptsOf(event),
-                }).passed,
+                assessSentence(sentenceArgs(context, event)).passed,
               ({ context }) => context.sentenceErrors === 0,
               ({ context }) => context.level === SENTENCE_COMPLETE_LEVEL,
             ]),
@@ -283,10 +308,7 @@ export const machine = setup({
           {
             guard: and([
               ({ context, event }) =>
-                assessSentence({
-                  words: context.sentence ?? [],
-                  transcripts: transcriptsOf(event),
-                }).passed,
+                assessSentence(sentenceArgs(context, event)).passed,
               ({ context }) => context.level === SENTENCE_COMPLETE_LEVEL,
             ]),
             target: 'complete',
@@ -311,10 +333,7 @@ export const machine = setup({
           {
             guard: and([
               ({ context, event }) =>
-                assessSentence({
-                  words: context.sentence ?? [],
-                  transcripts: transcriptsOf(event),
-                }).passed,
+                assessSentence(sentenceArgs(context, event)).passed,
               ({ context }) => context.sentenceErrors === 0,
             ]),
             target: 'comprehension',
@@ -335,10 +354,7 @@ export const machine = setup({
           // mark every letter of every word correct, then comprehension.
           {
             guard: ({ context, event }) =>
-              assessSentence({
-                words: context.sentence ?? [],
-                transcripts: transcriptsOf(event),
-              }).passed,
+              assessSentence(sentenceArgs(context, event)).passed,
             target: 'comprehension',
             actions: [
               { type: 'clearPendingScores' },
@@ -373,10 +389,7 @@ export const machine = setup({
           {
             guard: ({ context, event }) =>
               selectDrillWord(
-                assessSentence({
-                  words: context.sentence ?? [],
-                  transcripts: transcriptsOf(event),
-                }).words,
+                assessSentence(sentenceArgs(context, event)).words,
               ) !== null,
             target: 'word',
             actions: [
@@ -386,10 +399,7 @@ export const machine = setup({
               assign({
                 word: ({ context, event }) =>
                   selectDrillWord(
-                    assessSentence({
-                      words: context.sentence ?? [],
-                      transcripts: transcriptsOf(event),
-                    }).words,
+                    assessSentence(sentenceArgs(context, event)).words,
                   ) ?? context.word,
               }),
               assign({
