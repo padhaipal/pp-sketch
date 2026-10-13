@@ -1,7 +1,8 @@
 # age-bands.ts — metric age bands for geo aggregation
 
 `METRIC_AGE_BANDS` — `[min, max)` whole years per metric, confirmed with
-Tom 2026-10: nipun_g2 [7, 8), nipun_g3 [8, 9), mpl_b [10, 11). A test's
+Tom 2026-10: nipun_g1 [6, 7), nipun_g2 [7, 8), nipun_g3 [8, 9), mpl_b
+[10, 11). A test's
 window runs from the child's min-th birthday to the day before their
 max-th. The bands are disjoint — a child sits at most one test — and
 nine-year-olds sit none (by decision).
@@ -28,7 +29,7 @@ null `birth_year` → null. Callers pass `users.created_at` as `createdAt`:
 backfill and the dashboard's per-student `in_band`.
 
 `inBand(metric, age)` — always true for `usage` (no band; `LiteracyMetric`
-= the three `TestMetric`s + `usage`). A student outside a metric's band is
+= the four `TestMetric`s + `usage`). A student outside a metric's band is
 excluded from that metric's `n` only; a null-`birth_year` student is
 unbanded — excluded from every `n`, counted in `students_unbanded`.
 

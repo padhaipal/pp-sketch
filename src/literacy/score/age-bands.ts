@@ -4,15 +4,22 @@
 // student with no birth_year at all is "unbanded": excluded from every
 // metric's n and counted in students_unbanded.
 
-// The three literacy-test proxies plus `usage` — the leading indicator:
+// The four literacy-test proxies plus `usage` — the leading indicator:
 // active minutes per day (test-results.service.ts), no age band.
-export type LiteracyMetric = 'nipun_g2' | 'nipun_g3' | 'mpl_b' | 'usage';
+export type LiteracyMetric =
+  | 'nipun_g1'
+  | 'nipun_g2'
+  | 'nipun_g3'
+  | 'mpl_b'
+  | 'usage';
 export type TestMetric = Exclude<LiteracyMetric, 'usage'>;
 
 // [min, max) in whole years on the computed_for date — confirmed with Tom
 // 2026-10: a test's window runs from the child's min-th birthday to the day
 // before their max-th. The bands are disjoint; nine-year-olds sit no test.
+// nipun_g1 (2026-10) is the year below g2.
 export const METRIC_AGE_BANDS: Record<TestMetric, [number, number]> = {
+  nipun_g1: [6, 7],
   nipun_g2: [7, 8],
   nipun_g3: [8, 9],
   mpl_b: [10, 11],

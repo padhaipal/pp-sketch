@@ -73,10 +73,14 @@ describe('assumedBirth — a missing birth month is estimated from onboarding', 
 describe('inBand', () => {
   it('uses the disjoint single-year bands [min, max) per metric and rejects null ages', () => {
     expect(METRIC_AGE_BANDS).toEqual({
+      nipun_g1: [6, 7],
       nipun_g2: [7, 8],
       nipun_g3: [8, 9],
       mpl_b: [10, 11],
     });
+    expect(inBand('nipun_g1', 5)).toBe(false);
+    expect(inBand('nipun_g1', 6)).toBe(true);
+    expect(inBand('nipun_g1', 7)).toBe(false);
     expect(inBand('nipun_g2', 6)).toBe(false);
     expect(inBand('nipun_g2', 7)).toBe(true);
     expect(inBand('nipun_g2', 8)).toBe(false);

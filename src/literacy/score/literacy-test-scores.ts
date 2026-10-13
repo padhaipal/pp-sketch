@@ -1,10 +1,12 @@
 /**
- * Digital-proxy literacy test scores (NIPUN grades 2/3 + MPL-B) — the
- * comprehension query, first-attempt dedup, the three pool filters and the
- * snapshot algorithms, shared by UserService.getLiteracyTestScores (per-user
- * history) and the nightly test-results job (latest point per metric for
- * many students at once). Extracted from user.service.ts in 2026-09; the
- * per-user output is byte-identical (literacy-test-scores.spec.ts golden).
+ * Digital-proxy literacy test scores (NIPUN grades 1/2/3 + MPL-B) — the
+ * comprehension query, first-attempt dedup, the level-8 lesson query, the
+ * pool filters and the snapshot algorithms, shared by
+ * UserService.getLiteracyTestScores (per-user history) and the nightly
+ * test-results job (latest point per metric for many students at once).
+ * Extracted from user.service.ts in 2026-09; the per-user output is
+ * byte-identical (literacy-test-scores.spec.ts golden). Grade 1 (2026-10)
+ * is scored over level-8 lesson reads, not comprehension taps.
  */
 import type {
   LiteracyTestScores,
@@ -41,6 +43,10 @@ export const MPL_B_PASS_THRESHOLD = 0.5;
 export const NIPUN_QUESTION_COUNT = 4;
 // NIPUN reading proxies use the retrieve subconstructs only.
 export const NIPUN_R1_TYPES = ['R1.1', 'R1.2', 'R1.3'];
+// Grade 1: level-8 passages (<10 words) read aloud; a lesson is one
+// "question", passed when the first read was correct (no comprehension tap
+// at level 8 — literacy-lesson.machine.ts SENTENCE_COMPLETE_LEVEL).
+export const NIPUN_G1_LEVELS = [8];
 export const NIPUN_G2_LEVELS = [10];
 export const NIPUN_G3_LEVELS = [11, 12];
 
@@ -232,6 +238,55 @@ export const COMPREHENSION_ANSWERS_SQL = `
       LIKE '%-comprehension-complete'
   ORDER BY s.created_at ASC`;
 
+// One finished level-8 lesson (NIPUN grade 1). Since 2026-08-26 (#69) a
+// level-8 lesson ends on the read itself: its done row's stid ends
+// `-sentence-complete-correct-first` (first read correct), `-correct-retry`
+// (second read correct) or is `sentence-sentence-complete-maxErrors`. Older
+// level-8 lessons ended on a comprehension tap and are not selected — by
+// decision (2026-10) nothing before the change counts.
+export interface Level8LessonRow {
+  user_id: string;
+  created_at: Date;
+  lesson_id: string;
+  message_id?: string | null;
+  first_try: boolean;
+  // The passage's level (the machine's context.level; media_details.level
+  // on rows persisted before the snapshot carried it).
+  level: number | null;
+}
+
+// Deliberately NO rolled_back filter on the passage join, as above: a
+// soft-deleted passage must not erase an earned read.
+export const LEVEL8_LESSONS_SQL = `
+  /* literacy-test-scores:level-eight-lessons */
+  SELECT s.user_id, s.created_at, s.id AS lesson_id, s.user_message_id AS message_id,
+         ((s.snapshot->'context'->>'stateTransitionId')
+           LIKE '%-sentence-complete-correct-first') AS first_try,
+         COALESCE((s.snapshot->'context'->>'level')::int,
+                  (p.media_details->>'level')::int) AS level
+  FROM literacy_lesson_states s
+  LEFT JOIN media_metadata p ON p.id = s.passage_id
+  WHERE s.user_id = ANY($1::uuid[])
+    AND s.passage_id IS NOT NULL
+    AND s.snapshot->>'status' = 'done'
+    AND (s.snapshot->'context'->>'stateTransitionId')
+      LIKE '%-sentence-complete-%'
+  ORDER BY s.created_at ASC`;
+
+// A lesson as a pool entry: the lesson row stands in for the question, the
+// completing voice note for the tap, so the snapshot/series machinery and
+// the student modal's message-id lists work unchanged.
+export function lessonsToAttempts(rows: Level8LessonRow[]): FirstAttempt[] {
+  return rows.map((row) => ({
+    at: row.created_at,
+    correct: row.first_try === true,
+    question_id: row.lesson_id,
+    message_id: row.message_id ?? null,
+    level: row.level,
+    question_type: null,
+  }));
+}
+
 // Dedup to first attempts, in chronological order.
 export function dedupeFirstAttempts(rows: ComprehensionRow[]): FirstAttempt[] {
   const seenQuestions = new Set<string>();
@@ -252,13 +307,23 @@ export function dedupeFirstAttempts(rows: ComprehensionRow[]): FirstAttempt[] {
 }
 
 export interface MetricPools {
+  nipun_g1: FirstAttempt[];
   nipun_g2: FirstAttempt[];
   nipun_g3: FirstAttempt[];
   mpl_b: FirstAttempt[];
 }
 
-export function metricPools(attempts: FirstAttempt[]): MetricPools {
+// `attempts` = comprehension first attempts (g2/g3/MPL-B); `lessons` =
+// level-8 lesson reads (g1, lessonsToAttempts) — separate inputs, never
+// mixed.
+export function metricPools(
+  attempts: FirstAttempt[],
+  lessons: FirstAttempt[] = [],
+): MetricPools {
   return {
+    nipun_g1: lessons.filter(
+      (a) => a.level !== null && NIPUN_G1_LEVELS.includes(a.level),
+    ),
     nipun_g2: attempts.filter(
       (a) =>
         a.level !== null &&
@@ -305,12 +370,39 @@ export async function fetchFirstAttempts(
   return out;
 }
 
+// Level-8 lesson reads for every user in `userIds` (an entry per id, empty
+// when the user has none), already in pool shape.
+export async function fetchLevel8Lessons(
+  query: QueryFn,
+  userIds: string[],
+): Promise<Map<string, FirstAttempt[]>> {
+  const byUser = new Map<string, Level8LessonRow[]>(
+    userIds.map((id) => [id, []]),
+  );
+  if (userIds.length === 0) return new Map();
+  const rows = (await query(LEVEL8_LESSONS_SQL, [
+    userIds,
+  ])) as Level8LessonRow[];
+  for (const row of rows) {
+    const key = row.user_id ?? (userIds.length === 1 ? userIds[0] : undefined);
+    if (key === undefined) continue;
+    byUser.get(key)?.push(row);
+  }
+  const out = new Map<string, FirstAttempt[]>();
+  for (const [id, list] of byUser) out.set(id, lessonsToAttempts(list));
+  return out;
+}
+
 // Per-user history — what GET /users/:id/literacy-test-scores returns.
 export function scoresFromAttempts(
   attempts: FirstAttempt[],
+  lessons: FirstAttempt[] = [],
 ): LiteracyTestScores {
-  const pools = metricPools(attempts);
+  const pools = metricPools(attempts, lessons);
   return {
+    nipun_grade_1: snapshotSeries(pools.nipun_g1, (prefix) =>
+      nipunSnapshot(prefix, NIPUN_QUESTION_COUNT),
+    ),
     nipun_grade_2: snapshotSeries(pools.nipun_g2, (prefix) =>
       nipunSnapshot(prefix, NIPUN_QUESTION_COUNT),
     ),
@@ -326,8 +418,10 @@ export async function computeLiteracyTestScores(
   userIds: string[],
 ): Promise<Map<string, LiteracyTestScores>> {
   const attempts = await fetchFirstAttempts(query, userIds);
+  const lessons = await fetchLevel8Lessons(query, userIds);
   const out = new Map<string, LiteracyTestScores>();
-  for (const [id, list] of attempts) out.set(id, scoresFromAttempts(list));
+  for (const [id, list] of attempts)
+    out.set(id, scoresFromAttempts(list, lessons.get(id) ?? []));
   return out;
 }
 
@@ -340,6 +434,7 @@ export interface LatestMetricScore {
 }
 
 export interface LatestLiteracyTestScores {
+  nipun_g1: LatestMetricScore;
   nipun_g2: LatestMetricScore;
   nipun_g3: LatestMetricScore;
   mpl_b: LatestMetricScore;
@@ -355,9 +450,15 @@ function latestOf(result: SnapshotTestScore): LatestMetricScore {
 
 export function latestScoresFromAttempts(
   attempts: FirstAttempt[],
+  lessons: FirstAttempt[] = [],
 ): LatestLiteracyTestScores {
-  const pools = metricPools(attempts);
+  const pools = metricPools(attempts, lessons);
   return {
+    nipun_g1: latestOf(
+      snapshotLatest(pools.nipun_g1, (p) =>
+        nipunSnapshot(p, NIPUN_QUESTION_COUNT),
+      ),
+    ),
     nipun_g2: latestOf(
       snapshotLatest(pools.nipun_g2, (p) =>
         nipunSnapshot(p, NIPUN_QUESTION_COUNT),
@@ -377,8 +478,9 @@ export async function computeLatestLiteracyTestScores(
   userIds: string[],
 ): Promise<Map<string, LatestLiteracyTestScores>> {
   const attempts = await fetchFirstAttempts(query, userIds);
+  const lessons = await fetchLevel8Lessons(query, userIds);
   const out = new Map<string, LatestLiteracyTestScores>();
   for (const [id, list] of attempts)
-    out.set(id, latestScoresFromAttempts(list));
+    out.set(id, latestScoresFromAttempts(list, lessons.get(id) ?? []));
   return out;
 }

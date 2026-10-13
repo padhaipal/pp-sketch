@@ -105,7 +105,8 @@ NOTE (2026-08): the comprehension first-attempts query's three
 media_metadata joins (option o → question q → passage p) deliberately carry
 NO rolled_back filter — a retroactively quality-culled passage must not
 erase a student's already-earned comprehension history (NIPUN grades 2/3,
-MPL-B).
+MPL-B). NIPUN grade 1 (back since 2026-10, `nipun_grade_1`) is scored over
+level-8 lesson reads by a second query — literacy-test-scores.prompt.md.
 
 Digital-proxy literacy test scores:
 

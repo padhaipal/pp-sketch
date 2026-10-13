@@ -6,6 +6,19 @@ write to those tables is here). Run by the `test-results` BullMQ queue
 (test-results.processor.ts) at 18:45 UTC = 00:15 IST, or manually via
 `POST /admin/test-results/run?full=` (test-results.controller.ts).
 
+## NIPUN grade 1 (migration 1793000000000-AddNipunG1, 2026-10)
+
+`TEST_METRICS = ['nipun_g1', 'nipun_g2', 'nipun_g3', 'mpl_b']`. Grade 1 is
+the year below g2 (age band [6, 7)) and is scored by
+literacy-test-scores.ts over the child's last four finished level-8
+lessons (first-try read = correct; score passes/4, pass ≥ 0.75) — a second
+query per batch (`literacy-test-scores:level-eight-lessons`) beside the
+comprehension one. Same column shapes as g2/g3 (`nipun_g1_score/_passed/
+_attempts` per student; `nipun_g1_n/_sum/_sumsq/_pass/_hist[5]` and
+`nipun_g1_cohort` per area). No backfill: rows before the deploy keep
+NULL scores and zero vectors; a student's g1 appears on their next
+rescore.
+
 ## Why sums, not averages
 
 `test_results_geo_entity` stores, per metric, `n`, `sum`, `sumsq`, `pass`
@@ -61,9 +74,9 @@ percentile and any pass threshold without reading student rows.
    score; unbanded (null birth_year) → `students_unbanded`, no metric
    contribution; per metric, a scored student inside that metric's age band
    (age-bands.ts) contributes n=1, sum, sumsq, pass, hist[`histIndex`];
-   usage contributes for every student (see above). nipun_g2 is read
-   through `impliedNipunG2`: a g3 pass with g2 null or failed counts as
-   g2 = 1.0 passed (see below).
+   usage contributes for every student (see above). nipun_g1/nipun_g2 are
+   read through `impliedNipun`: a pass at a higher grade with the lower
+   grade null or failed counts as 1.0 passed (see below).
 7. Roll-up: for each school with ≥1 student, `GeoEntityService.ancestors`
    once (cached per school), and the student's vector is added to the school
    and every ancestor — so an ancestor's vector is exactly the sum of its
@@ -91,14 +104,16 @@ deploy keep cohort 0, verdict NULL, counts 0.
   estimated from `users.created_at`, which both reads select) holds them.
   Same membership join as latest-students minus the results row, so a
   school with twelve enrolled but three active children has a cohort of
-  twelve. The bands are disjoint single years (g2 = 7, g3 = 8), so a child
-  is in at most one cohort. Additive up the tree like the metric vectors.
+  twelve. The bands are disjoint single years (g1 = 6, g2 = 7, g3 = 8),
+  so a child is in at most one cohort. Additive up the tree like the
+  metric vectors.
 - `bandVerdict(cohort, pass)`: true when `pass ≥ NIPUN_SCHOOL_MIN_PASSERS`
   (9) AND `pass ≥ NIPUN_SCHOOL_PASS_SHARE` (0.75, inclusive) × cohort —
   no minimum cohort for a pass (9 of 9 passes); otherwise false from
   `NIPUN_SCHOOL_MIN_COHORT` (12) students, null below. `pass` is the
   band's `nipun_g*_pass` (scored, in-band, passed).
-- `schoolVerdict(v)`: both bands true → true; either band null → null
+- `schoolVerdict(v)`: all three bands (g1, g2, g3 — g1 since migration
+  1793000000000-AddNipunG1, 2026-10) true → true; any band null → null
   (g2 failing with g3 undecidable is still null); otherwise false.
 - Only for leaves whose `geo_entity.type = 'school'`
   (`test-results:leaf-types`, one read per run over the referrers' geo
@@ -112,15 +127,18 @@ deploy keep cohort 0, verdict NULL, counts 0.
   counts, never the boolean.
 - Schools with no student at all (no results row, no cohort member) have no
   row and are counted nowhere — not even as insufficient.
-- Grade 3 implies grade 2 (`impliedNipunG2`, 2026-10): a child who passed
-  g3 but has no g2 score (sped past the level-10 pool before four R1.x
-  first attempts) or a failed g2 is taken as g2 = 1.0 / passed in
-  `studentVector`, so a 7-year-old g3 passer is a g2 passer for their
-  school's n/sum/pass/hist and verdict. An earned g2 pass keeps its real
-  score. A failed or missing g3 implies nothing; mpl_b implies nothing.
-  Roll-up only: `test_results_student`, the dashboard student lists and
-  GET /users/:id/literacy-test-scores still show the raw g2 (insufficient
-  or failed) — a school's g2 passers can exceed its listed g2 passes.
+- A higher grade implies the lower ones (`impliedNipun`, 2026-10): g3 ⇒
+  g2 ⇒ g1. A child who passed g3 but has no g2 score (sped past the
+  level-10 pool before four R1.x first attempts) or a failed g2 is taken
+  as g2 = 1.0 / passed in `studentVector`; likewise a g2 pass (earned or
+  implied) makes a null or failed g1 1.0 / passed. So a 7-year-old g3
+  passer is a g2 passer, and a 6-year-old g2 passer a g1 passer, for
+  their school's n/sum/pass/hist and verdict. An earned pass keeps its
+  real score. A failed or missing higher grade implies nothing; mpl_b
+  implies nothing. Roll-up only: `test_results_student`, the dashboard
+  student lists and GET /users/:id/literacy-test-scores still show the
+  raw lower grade (insufficient or failed) — a school's passers can
+  exceed its listed passes.
 - `upsertGeoRows` binds `VERDICT_COLUMNS` between the three student counts
   and the metric vectors; the nightly path updates them on conflict, the
   usage backfill path (`usageOnly`) leaves them alone.

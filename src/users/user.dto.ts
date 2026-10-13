@@ -945,6 +945,11 @@ export interface SnapshotTestScore {
 }
 
 export interface LiteracyTestScores {
+  // Grade 1 (2026-10): most recent 4 finished level-8 lessons, each
+  // "correct" when the passage was read right on the first try; pass at
+  // score ≥ 0.75 (three of four). Only lessons that end on the read (since
+  // 2026-08-26) count.
+  nipun_grade_1: SnapshotTestScore;
   // Grade 2: most recent 4 first attempts at level-10 R1.1/R1.2/R1.3
   // questions; pass at score ≥ 0.75 (three of four right).
   nipun_grade_2: SnapshotTestScore;
