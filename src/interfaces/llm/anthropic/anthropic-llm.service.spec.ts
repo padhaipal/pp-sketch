@@ -4,7 +4,10 @@ jest.mock('../llm-client', () => ({
 }));
 
 import { callChatCompletions, runCompletionBatch } from '../llm-client';
-import { AnthropicLlmService } from './anthropic-llm.service';
+import {
+  AnthropicLlmService,
+  anthropicRejectsTemperature,
+} from './anthropic-llm.service';
 
 describe('AnthropicLlmService', () => {
   const service = new AnthropicLlmService();
@@ -33,5 +36,29 @@ describe('AnthropicLlmService', () => {
     expect(runCompletionBatch).toHaveBeenCalledWith(service.config, [request], {
       concurrency: 2,
     });
+  });
+});
+
+describe('anthropicRejectsTemperature', () => {
+  it('Claude 5-family ids omit temperature; 4.x ids keep it', () => {
+    for (const m of [
+      'claude-haiku-5-5',
+      'claude-fable-5',
+      'claude-sonnet-5',
+      'claude-opus-5-5',
+      'claude-fable-5.1',
+    ]) {
+      expect(anthropicRejectsTemperature(m)).toBe(true);
+    }
+    for (const m of [
+      'claude-haiku-4-5-20251001',
+      'claude-opus-4-8',
+      'claude-3-5-sonnet-20241022',
+    ]) {
+      expect(anthropicRejectsTemperature(m)).toBe(false);
+    }
+    expect(
+      new AnthropicLlmService().config.omitTemperature?.('claude-haiku-5-5'),
+    ).toBe(true);
   });
 });

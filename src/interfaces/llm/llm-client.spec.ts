@@ -168,6 +168,20 @@ describe('callChatCompletions', () => {
     expect(body.temperature).toBeCloseTo(1.6); // 0.8 × 2
   });
 
+  it('leaves temperature out entirely for a model the provider config says refuses it', async () => {
+    const fetchMock = jest.fn().mockResolvedValue(okResponse());
+    global.fetch = fetchMock;
+    await callChatCompletions(
+      { ...config, omitTemperature: (m) => m === 'no-temp' },
+      { ...request, model: 'no-temp', temperatureRatio: 0.8 },
+      fast,
+    );
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('temperature');
+    expect(body.model).toBe('no-temp');
+  });
+
   it('ALWAYS sends a temperature: the mid point of the provider range by default', async () => {
     const fetchMock = jest.fn().mockResolvedValue(okResponse());
     global.fetch = fetchMock;

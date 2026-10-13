@@ -86,3 +86,11 @@ into `MediaMetaDataService` one-by-one, like the STT engines.
 `LLM_PROVIDER_TO_MEDIA_SOURCE` in `llm.dto.ts`. Identity except
 `sarvam → 'sarvam-llm'` ('sarvam' is taken by the STT engine; existing rows
 are never migrated).
+
+## 2026-10: `omitTemperature`
+
+`LlmProviderConfig.omitTemperature?(model)` — true leaves the `temperature`
+field out of the request. Anthropic's Claude 5-family ids answer 400
+"`temperature` is deprecated for this model" (seen on claude-haiku-5-5,
+2026-10-13); `anthropicRejectsTemperature` (anthropic-llm.service.ts)
+matches `claude-<name>-5…`. The 4.x ids keep the scaled temperature.

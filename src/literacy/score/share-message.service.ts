@@ -5,13 +5,16 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { STAFF, type ViewerContext } from '../../auth/viewer';
 import { CacheService } from '../../interfaces/redis/cache';
 import {
+  LlmError,
   LlmProvider,
   LlmRequest,
+  LlmResult,
   VALID_LLM_PROVIDERS,
 } from '../../interfaces/llm/llm.dto';
 import { AnthropicLlmService } from '../../interfaces/llm/anthropic/anthropic-llm.service';
@@ -365,15 +368,31 @@ export class ShareMessageService {
     const names = new Placeholders();
     const facts = await this.facts(subject, names);
     const { provider, model } = shareMessageLlm();
-    const result = await this.llmFor(provider).complete(
-      {
-        model,
-        messages: buildMessages(facts),
-        max_tokens: SHARE_MESSAGE_MAX_TOKENS,
-        temperatureRatio: SHARE_MESSAGE_TEMPERATURE_RATIO,
-      },
-      { maxAttempts: 1, timeoutMs: SHARE_MESSAGE_TIMEOUT_MS },
-    );
+    let result: LlmResult;
+    try {
+      result = await this.llmFor(provider).complete(
+        {
+          model,
+          messages: buildMessages(facts),
+          max_tokens: SHARE_MESSAGE_MAX_TOKENS,
+          temperatureRatio: SHARE_MESSAGE_TEMPERATURE_RATIO,
+        },
+        { maxAttempts: 1, timeoutMs: SHARE_MESSAGE_TIMEOUT_MS },
+      );
+    } catch (err) {
+      // The provider's own words reach the console ("credit balance is too
+      // low", "`temperature` is deprecated…") as a 503, not a bare 500 —
+      // and the log line carries them too (only the trace did, 2026-10-13).
+      if (err instanceof LlmError) {
+        this.logger.error(
+          `share-message ${subject.kind} id=${id} ${provider}/${model} failed: ${err.message}`,
+        );
+        throw new ServiceUnavailableException(
+          `The message could not be written (${err.message.slice(0, 300)})`,
+        );
+      }
+      throw err;
+    }
     const message = finishMessage(
       result.text,
       names.entries,

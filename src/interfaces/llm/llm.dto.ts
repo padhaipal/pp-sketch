@@ -120,6 +120,12 @@ export interface LlmProviderConfig {
   extraBody?:
     | Record<string, unknown>
     | ((model: string) => Record<string, unknown>);
+  /**
+   * Models that refuse a `temperature` field (Anthropic's Claude 5 family
+   * answers 400 "`temperature` is deprecated for this model"): true → the
+   * field is left out of the request entirely.
+   */
+  omitTemperature?: (model: string) => boolean;
 }
 
 /** One slot of a completeBatch() result, index-aligned with the input. */
