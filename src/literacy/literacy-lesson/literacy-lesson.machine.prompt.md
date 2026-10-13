@@ -64,3 +64,11 @@ word was right) → `sentence-sentence-wrong-retry`, a second slow read →
 `sentence-sentence-complete-maxErrors`. Never a `…-correct-first` stid, so
 sentence-band progression cannot promote on it (and two failed lessons
 decrement, by decision). A missing / zero duration skips the gate.
+
+## 2026-10: flawed-word cap
+
+`assessSentence` also fails a read when more than `FLAWED_WORD_RATIO_MAX`
+(30 %, inclusive) of the words were read with anything wrong: a 'close'
+word (one akshara off) counts toward this cap only; a substituted /
+omitted / transposed word toward both this cap and the 10 % error budget
+(`flawedWordCount` on the assessment). Same wrong-read branches as before.
