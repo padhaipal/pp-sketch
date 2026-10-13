@@ -1,36 +1,26 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { referralUrl } from '../../interfaces/dashboard/dashboard-url';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import sharp from 'sharp';
 import { UserService } from '../../users/user.service';
 import { UserActivityService } from '../../users/user-activity.service';
-import { ScoreService } from '../../literacy/score/score.service';
-import type { LetterBinsResult } from '../../literacy/score/score.dto';
 import { MediaMetaDataEntity } from '../../media-meta-data/media-meta-data.entity';
 import type { MediaMetaData } from '../../media-meta-data/media-meta-data.dto';
+import { addDays, istMidnightUtc } from './report-card.utils';
 import {
-  addDays,
-  istDateIso,
-  istMidnightUtc,
-  istWeekday,
-} from './report-card.utils';
-import { DailyBar, ReportCardData } from './report-card.dto';
-import {
-  buildLandscapeReportCardSvg,
-  buildReportCardSvg,
-} from './report-card.svg';
-
-// `variant` picks the SVG layout — defaults to 'landscape' (the
-// production morning-update card). 'portrait' is the alternative narrower
-// layout (kept in the codebase but no longer the production default).
-export type ReportCardVariant = 'portrait' | 'landscape';
+  levelBand,
+  minutesOf,
+  pickPraise,
+  ReportCardData,
+  timeBand,
+} from './report-card.dto';
+import { buildReportCardSvg } from './report-card.svg';
 
 interface BuildOptions {
   // Override for testing — defaults to "now". The cron at 7 AM IST runs with
-  // now ≈ 01:30 UTC (= 07:00 IST), so istMidnightUtc(now) is today's IST midnight.
+  // now ≈ 01:30 UTC (= 07:00 IST), so istMidnightUtc(now) is today's IST
+  // midnight and the card is about the IST day before it.
   now?: Date;
-  variant?: ReportCardVariant;
 }
 
 @Injectable()
@@ -38,88 +28,115 @@ export class ReportCardService {
   constructor(
     private readonly userService: UserService,
     private readonly userActivityService: UserActivityService,
-    private readonly scoreService: ScoreService,
+    private readonly dataSource: DataSource,
     @InjectRepository(MediaMetaDataEntity)
     private readonly mediaRepo: Repository<MediaMetaDataEntity>,
   ) {}
 
-  // Pure: gather DB data → build a PNG buffer. Used by both the dashboard
+  // Pure: gather DB data → build a PNG buffer. Used by both the swagger
   // preview controller and the morning-update worker.
   async generatePng(
     userIdOrExternal: string,
     options: BuildOptions = {},
   ): Promise<{ buffer: Buffer; data: ReportCardData }> {
     const data = await this.buildData(userIdOrExternal, options);
-    const variant: ReportCardVariant = options.variant ?? 'landscape';
-    const svg =
-      variant === 'portrait'
-        ? await buildReportCardSvg(data)
-        : await buildLandscapeReportCardSvg(data);
+    const svg = buildReportCardSvg(data);
     const buffer = await sharp(Buffer.from(svg, 'utf8')).png().toBuffer();
     return { buffer, data };
   }
 
-  // Build the raw data without rendering. Exposed so tests can verify the
-  // edge-case logic without depending on librsvg/font availability.
+  // Yesterday's (IST) figures. Exposed so tests can verify the data logic
+  // without librsvg / font availability.
   async buildData(
     userIdOrExternal: string,
     options: BuildOptions = {},
   ): Promise<ReportCardData> {
     const user = await this.resolveUser(userIdOrExternal);
-
     const now = options.now ?? new Date();
-    const todayMid = istMidnightUtc(now); // 00:00 IST today
+    const todayMid = istMidnightUtc(now); // 00:00 IST today = end of yesterday
     const yesterdayMid = addDays(todayMid, -1); // 00:00 IST yesterday
-    const weekAgoMid = addDays(todayMid, -7); // 00:00 IST 7 days ago
 
-    // Letter bins as of end-of-yesterday (= today IST midnight) — "not this morning".
-    const binsEndOfYesterday = (await this.scoreService.getLetterBins(user.id, {
-      asOf: todayMid,
-    })) as LetterBinsResult;
-    // Baseline: bins as of start-of-yesterday — used to compute today's deltas.
-    const binsStartOfYesterday = (await this.scoreService.getLetterBins(
-      user.id,
-      { asOf: yesterdayMid },
-    )) as LetterBinsResult;
-
-    const learntEndOfYesterday = binsEndOfYesterday.bins.learnt;
-    const previous = new Set(binsStartOfYesterday.bins.learnt);
-    const yesterdayDelta = learntEndOfYesterday.filter((g) => !previous.has(g));
-    const currentlyLearning = binsEndOfYesterday.bins.regressed;
-    const alreadyKnown = binsEndOfYesterday.bins.improved;
-
-    // Activity time per IST day for the last 7 IST days, ending yesterday.
-    // Day i (0..6) covers [weekAgoMid + i*24h, weekAgoMid + (i+1)*24h).
-    const windows = Array.from({ length: 7 }, (_, i) => {
-      const start = addDays(weekAgoMid, i);
-      const end = addDays(start, 1);
-      return { start: start.toISOString(), end: end.toISOString() };
-    });
-
-    const activity = await this.userActivityService.getActivityTime({
-      users: [user.id],
-      windows,
-    });
-
-    const userActivity = activity.results[0];
-    const daily: DailyBar[] = windows.map((_w, i) => {
-      const start = addDays(weekAgoMid, i);
-      return {
-        date_iso: istDateIso(start),
-        day_index: istWeekday(start),
-        active_ms: userActivity?.windows[i]?.active_ms ?? 0,
-      };
-    });
-
+    const [activity, levels, letters] = await Promise.all([
+      this.userActivityService.getActivityTime({
+        users: [user.id],
+        windows: [
+          { start: yesterdayMid.toISOString(), end: todayMid.toISOString() },
+        ],
+      }),
+      this.levelsAround(user.id, yesterdayMid, todayMid),
+      this.topLetters(user.id, yesterdayMid, todayMid),
+    ]);
+    const activeMs = activity.results[0]?.windows[0]?.active_ms ?? 0;
+    const levelDelta =
+      levels.level_end !== null && levels.level_start !== null
+        ? levels.level_end - levels.level_start
+        : 0;
+    const tBand = timeBand(activeMs);
+    const dayNumber = Math.floor(yesterdayMid.getTime() / 86_400_000);
     return {
       user_external_id: user.external_id,
-      referral_url: referralUrl(user.external_id),
-      letters_learnt: learntEndOfYesterday,
-      letters_learnt_yesterday: yesterdayDelta,
-      letters_currently_learning: currentlyLearning,
-      letters_already_known: alreadyKnown,
-      daily_bars: daily,
+      active_ms: activeMs,
+      minutes: minutesOf(activeMs),
+      time_band: tBand,
+      level_delta: levelDelta,
+      level_band: levelBand(levelDelta),
+      top_letters: letters,
+      praise: pickPraise(tBand, user.id, dayNumber),
     };
+  }
+
+  // The student's lesson level (the cap the last lesson was selected at,
+  // literacy_lesson_states.level) as of the end of yesterday and of the day
+  // before — the newest non-null value before each cut-off. Null until the
+  // first lesson with a level.
+  private async levelsAround(
+    userId: string,
+    yesterdayMid: Date,
+    todayMid: Date,
+  ): Promise<{ level_end: number | null; level_start: number | null }> {
+    const rows: Array<{
+      level_end: number | string | null;
+      level_start: number | string | null;
+    }> = await this.dataSource.query(
+      `/* report-card:levels */
+       SELECT
+         (SELECT level FROM literacy_lesson_states
+           WHERE user_id = $1 AND level IS NOT NULL AND created_at < $2
+           ORDER BY created_at DESC LIMIT 1) AS level_end,
+         (SELECT level FROM literacy_lesson_states
+           WHERE user_id = $1 AND level IS NOT NULL AND created_at < $3
+           ORDER BY created_at DESC LIMIT 1) AS level_start`,
+      [userId, todayMid, yesterdayMid],
+    );
+    const num = (v: number | string | null | undefined): number | null =>
+      v === null || v === undefined ? null : Number(v);
+    return {
+      level_end: num(rows[0]?.level_end),
+      level_start: num(rows[0]?.level_start),
+    };
+  }
+
+  // The three letters scored most often yesterday — scores written by the
+  // child's own (not rolled-back) messages; the onboarding seed scores have
+  // no message and never count.
+  private async topLetters(
+    userId: string,
+    yesterdayMid: Date,
+    todayMid: Date,
+  ): Promise<string[]> {
+    const rows: Array<{ grapheme: string }> = await this.dataSource.query(
+      `/* report-card:letters */
+       SELECT l.grapheme, count(*)::int AS n
+       FROM scores s
+       JOIN letters l ON l.id = s.letter_id
+       JOIN media_metadata m ON m.id = s.user_message_id AND m.rolled_back = false
+       WHERE s.user_id = $1 AND s.created_at >= $2 AND s.created_at < $3
+       GROUP BY l.grapheme
+       ORDER BY n DESC, l.grapheme
+       LIMIT 3`,
+      [userId, yesterdayMid, todayMid],
+    );
+    return rows.map((r) => r.grapheme);
   }
 
   // Look up an existing morning-update report card image for `userId` created

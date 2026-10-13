@@ -1,69 +1,55 @@
 // pp-sketch/src/notifier/report-card/report-card.service.prompt.md
 
-Generates the morning-update report card. Pure data-fetch + SHARP/SVG render
-pipeline so it can be exercised both by the BullMQ send worker AND the
-swagger-UI preview controller.
+Generates the morning-update report card (v2, 2026-10): one card about
+YESTERDAY, Hindi only. Pure data-fetch + sharp/SVG render pipeline shared by
+the BullMQ send worker and the swagger preview controller
+(`GET /report-card/:userIdOrPhone`).
 
 ## Inputs
 
-`generatePng(userIdOrExternal, options?)` — userIdOrExternal may be the user
-UUID or external_id (E.164 phone w/o +). `options.now` lets tests pin "today".
+`generatePng(userIdOrExternal, options?)` — a user UUID or external_id
+(E.164 phone without +). `options.now` pins "today" in tests; the 7 AM IST
+cron runs at ≈ 01:30 UTC, so `istMidnightUtc(now)` is today's IST midnight
+and the card covers the IST day before it.
 
-## Data assembled (`buildData`)
+## Data (`buildData` → `ReportCardData`)
 
-* User (resolve via `UserService.find`).
-* Letter bins as of `today_IST_midnight` — call
-  `ScoreService.getLetterBins(userId, { asOf: todayMid })`. The `bins.learnt`
-  set is `letters_learnt` on the card. "Not this morning" → cut-off is
-  *today's* IST midnight, so anything earned during today's IST date is
-  excluded.
-* Bins as of `yesterday_IST_midnight` — same call with `asOf: yesterdayMid`.
-  The delta `bins.learnt(today) − bins.learnt(yesterday)` is
-  `letters_learnt_yesterday`, which the renderer highlights.
-* 7-day activity windows. Build `windows[i] = { start: weekAgoMid + i*24h,
-  end: + 24h }`. Call `UserActivityService.getActivityTime` once with all
-  seven windows. Map to `DailyBar { date_iso, day_index, active_ms }` where
-  `day_index` is the JS weekday (0=Sun..6=Sat) of the IST date.
+Three reads in parallel, all for yesterday's IST window
+[yesterdayMid, todayMid):
+* `UserActivityService.getActivityTime` with that one window → `active_ms`,
+  `minutes` (`minutesOf`: whole minutes, a little practice never shows 0)
+  and `time_band` (`timeBand`: ≥ 5 min good, any practice ok, none poor —
+  the same 5-minute mark as the dashboard).
+* `report-card:levels` — the newest non-null `literacy_lesson_states.level`
+  before todayMid and before yesterdayMid → `level_delta` (0 when either is
+  unknown, e.g. the first lesson ever) and `level_band` (`levelBand`: up
+  good, unchanged ok, down poor).
+* `report-card:letters` — `scores` rows yesterday joined to `letters`
+  (grapheme) and to the message that produced them (`rolled_back = false`;
+  seed scores have no message and never count), top three by count →
+  `top_letters`.
+* `praise` — `pickPraise(time_band, userId, dayNumber)`: one of twenty
+  Hindi lines per band (`PRAISE_LINES`), stable for a child within a day,
+  varying across days and children.
 
-The 7 IST days are oldest-first (so the rightmost bar is yesterday).
+## Render (`buildReportCardSvg`, report-card.svg.ts)
 
-## Render pipeline
+Portrait 1080 × 1350, SVG primitives only, Noto Sans Devanagari:
+* Header in the TIME band's colour (`BAND_COLOR_HEX`): "कल" (no date), a
+  large face (smile / flat / frown = good / ok / poor) and the praise line.
+  A parent who reads nothing still gets it.
+* Two tiles, each with a coloured left rail, an icon (clock; up / flat /
+  down triangle), a big number + unit (मिनट / स्तर) and its own small face,
+  each in its OWN band's colour — a good day on one and a poor day on the
+  other still read.
+* Up to three navy chips with the letters practised most. No logo, QR or
+  referral link (removed 2026-10).
 
-`buildReportCardSvg(data)` (in `report-card.svg.ts`) builds a 1080×1350 SVG:
-* Title: `तुम्हारा रिपोर्ट कार्ड!` (top-left).
-* Logo (top-right): inner content of `src/assets/branding/padhaipal-logo.svg`,
-  loaded once and cached.
-* Letter grid: 8-column grid of all letters learnt; highlighted letters are
-  drawn on a `BRAND_BLUE_HEX` (#1D9EDF) circle with white fill. If
-  `letters_learnt` is empty, an em-dash placeholder renders.
-* Activity chart: 7 bars; height ∝ active_ms scaled so 5 min is always
-  visible. Bars < 5 min are red (#E0454C), ≥ 5 min are brand blue.
-  Unmarked dotted line at the 5-minute height (stroke-dasharray). Hindi
-  weekday labels under each bar (`HINDI_WEEKDAY_SHORT`). Zero-activity bars
-  render a thin grey baseline tick so the day still reads as "present".
-* QR + CTA: brand-blue Hindi text `पढ़ाईपाल अभी आज़माएं!` next to a QR code
-  encoding the referral URL (pp-dashboard `/r/<phone>`) per the spec.
-  Generated each call (not cached) via the `qrcode` lib.
-
-`generatePng()` runs `sharp(Buffer.from(svg)).png().toBuffer()`. Hindi
-rendering relies on a Devanagari font being available system-wide (e.g.
-Noto Sans Devanagari) — same constraint as any other librsvg-based SVG→raster
-pipeline.
+`generatePng()` runs `sharp(svg).png()`; Hindi needs a Devanagari font on
+the host (fonts-noto-core in the Dockerfile).
 
 ## findExistingForUser(userId, since)
 
-Used by the morning-update send worker to detect a previously-rendered
-report card for today. Filters `media_metadata` to:
-  - `source = 'morning-update'`
-  - `media_type = 'image'`
-  - `user_id = $1`
-  - `rolled_back = false`
-  - `created_at >= since`
-Returns the most recent matching row or null.
-
-## Asset path
-
-`src/assets/branding/padhaipal-logo.svg` is the canonical location.
-`nest-cli.json` copies the entire `src/assets/**` tree into `dist/assets/`,
-so `path.resolve(__dirname, '../../assets/branding/padhaipal-logo.svg')`
-works in both dev (ts-node from src/) and prod (compiled to dist/).
+The send worker's "already rendered today" check: `media_metadata` with
+`source = 'morning-update'`, `media_type = 'image'`, `rolled_back = false`,
+`created_at >= since`, newest first.

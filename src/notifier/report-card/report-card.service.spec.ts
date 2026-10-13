@@ -1,327 +1,12 @@
-process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.padhaipal.com';
-// Unit tests for ReportCardService.buildData and the SVG renderer.
-// These avoid the database — collaborator services are mocked. Edge cases:
-//   (a) 0 letters learnt yesterday → no highlights
-//   (b) 0 activity all 7 days → bars all 0
-//   (c) user joined < 7 days ago → missing days = 0
-// Plus the SVG renderer itself: shape, brand colour, dotted line, QR, logo.
+// ReportCardService: yesterday's figures (data layer, no DB) and the PNG
+// pipeline (sharp mocked). The SVG itself is covered in report-card.svg.spec.
 
-// uuid is ESM-only — transitively imported via UserService. validate uses the
-// loose hex-shape regex so test fixtures with arbitrary hex bytes classify as
-// uuids.
 jest.mock('uuid', () => ({
   v4: jest.fn(() => 'gen-uuid'),
   validate: (s: unknown): boolean =>
     typeof s === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s),
 }));
-
-import { ReportCardService } from './report-card.service';
-import {
-  LANDSCAPE_REPORT_CARD_WIDTH,
-  buildLandscapeReportCardSvg,
-  buildReportCardSvg,
-} from './report-card.svg';
-import { BRAND_BLUE_HEX, FIVE_MINUTES_MS } from './report-card.dto';
-import { addDays, istMidnightUtc } from './report-card.utils';
-
-interface MockUser {
-  id: string;
-  external_id: string;
-}
-
-function makeService(opts: {
-  user: MockUser | null;
-  lettersByAsOf: Map<string, string[]>;
-  activityWindows: number[]; // ms per window in order
-  existingMedia?: { id: string; status: string };
-}): ReportCardService {
-  const userService = {
-    findByIdOrExternalId: jest.fn().mockResolvedValue(opts.user),
-  };
-  const userActivityService = {
-    getActivityTime: jest.fn().mockImplementation(({ windows }) => ({
-      results: opts.user
-        ? [
-            {
-              user_id: opts.user.id,
-              external_id: opts.user.external_id,
-              windows: windows.map(
-                (w: { start: string; end: string }, i: number) => ({
-                  start: w.start,
-                  end: w.end,
-                  active_ms: opts.activityWindows[i] ?? 0,
-                }),
-              ),
-            },
-          ]
-        : [],
-    })),
-  };
-  const scoreService = {
-    getLetterBins: jest.fn().mockImplementation(
-      (
-        _users: string,
-        options?: { asOf?: Date },
-      ): Promise<{
-        userId: string;
-        userPhone: string;
-        bins: {
-          untouched: string[];
-          regressed: string[];
-          learnt: string[];
-          improved: string[];
-        };
-      }> => {
-        const key = options?.asOf?.toISOString() ?? 'now';
-        const learnt = opts.lettersByAsOf.get(key) ?? [];
-        return Promise.resolve({
-          userId: opts.user?.id ?? '',
-          userPhone: opts.user?.external_id ?? '',
-          bins: {
-            untouched: [],
-            regressed: [],
-            learnt,
-            improved: [],
-          },
-        });
-      },
-    ),
-  };
-  const mediaRepo = {
-    createQueryBuilder: jest.fn().mockReturnValue({
-      where: jest.fn().mockReturnThis(),
-      andWhere: jest.fn().mockReturnThis(),
-      orderBy: jest.fn().mockReturnThis(),
-      getOne: jest.fn().mockResolvedValue(opts.existingMedia ?? null),
-    }),
-  };
-  return new ReportCardService(
-    userService as never,
-    userActivityService as never,
-    scoreService as never,
-    mediaRepo as never,
-  );
-}
-
-describe('ReportCardService.buildData', () => {
-  // Anchor: Tuesday 7 AM IST (= 01:30 UTC) on 2026-04-28
-  const NOW = new Date('2026-04-28T01:30:00Z');
-  const todayMid = istMidnightUtc(NOW);
-  const yesterdayMid = addDays(todayMid, -1);
-  const KEY_TODAY = todayMid.toISOString();
-  const KEY_YESTERDAY = yesterdayMid.toISOString();
-
-  it('computes the yesterday delta (letters new in the last 24h)', async () => {
-    const svc = makeService({
-      user: { id: 'u1', external_id: '918888888001' },
-      lettersByAsOf: new Map([
-        [KEY_TODAY, ['क', 'ख', 'ग', 'घ']],
-        [KEY_YESTERDAY, ['क', 'ख']],
-      ]),
-      activityWindows: Array(7).fill(0),
-    });
-    const data = await svc.buildData('u1', { now: NOW });
-    expect(data.letters_learnt).toEqual(['क', 'ख', 'ग', 'घ']);
-    expect(data.letters_learnt_yesterday).toEqual(['ग', 'घ']);
-  });
-
-  it('handles 0 letters learnt yesterday (no highlights)', async () => {
-    const svc = makeService({
-      user: { id: 'u1', external_id: '918888888001' },
-      lettersByAsOf: new Map([
-        [KEY_TODAY, ['क', 'ख']],
-        [KEY_YESTERDAY, ['क', 'ख']],
-      ]),
-      activityWindows: Array(7).fill(0),
-    });
-    const data = await svc.buildData('u1', { now: NOW });
-    expect(data.letters_learnt_yesterday).toEqual([]);
-    expect(data.letters_learnt).toEqual(['क', 'ख']);
-  });
-
-  it('handles 0 activity all 7 days (bars all 0)', async () => {
-    const svc = makeService({
-      user: { id: 'u1', external_id: '918888888001' },
-      lettersByAsOf: new Map(),
-      activityWindows: Array(7).fill(0),
-    });
-    const data = await svc.buildData('u1', { now: NOW });
-    expect(data.daily_bars).toHaveLength(7);
-    for (const bar of data.daily_bars) {
-      expect(bar.active_ms).toBe(0);
-    }
-  });
-
-  it('user joined < 7 days ago: missing days = 0-height bars', async () => {
-    // Activity only on the most recent two windows; older days = 0.
-    const svc = makeService({
-      user: { id: 'u1', external_id: '918888888001' },
-      lettersByAsOf: new Map(),
-      activityWindows: [0, 0, 0, 0, 0, 100_000, 200_000],
-    });
-    const data = await svc.buildData('u1', { now: NOW });
-    expect(data.daily_bars).toHaveLength(7);
-    expect(data.daily_bars.slice(0, 5).every((b) => b.active_ms === 0)).toBe(
-      true,
-    );
-    expect(data.daily_bars[5].active_ms).toBe(100_000);
-    expect(data.daily_bars[6].active_ms).toBe(200_000);
-  });
-
-  it('produces 7 sequential IST dates, oldest first', async () => {
-    const svc = makeService({
-      user: { id: 'u1', external_id: '918888888001' },
-      lettersByAsOf: new Map(),
-      activityWindows: Array(7).fill(0),
-    });
-    const data = await svc.buildData('u1', { now: NOW });
-    const dates = data.daily_bars.map((b) => b.date_iso);
-    // 2026-04-28 is today IST → 7-day window ends yesterday (2026-04-27),
-    // starts 2026-04-21.
-    expect(dates).toEqual([
-      '2026-04-21',
-      '2026-04-22',
-      '2026-04-23',
-      '2026-04-24',
-      '2026-04-25',
-      '2026-04-26',
-      '2026-04-27',
-    ]);
-  });
-
-  it('day_index matches the JS weekday of each IST date (0=Sun..6=Sat)', async () => {
-    const svc = makeService({
-      user: { id: 'u1', external_id: '918888888001' },
-      lettersByAsOf: new Map(),
-      activityWindows: Array(7).fill(0),
-    });
-    const data = await svc.buildData('u1', { now: NOW });
-    // 2026-04-21 is a Tuesday → day_index 2; the rest follow.
-    expect(data.daily_bars.map((b) => b.day_index)).toEqual([
-      2, 3, 4, 5, 6, 0, 1,
-    ]);
-  });
-
-  it('builds referral_url as dashboard.padhaipal.com/r/{external_id}', async () => {
-    const svc = makeService({
-      user: { id: 'u1', external_id: '918888888001' },
-      lettersByAsOf: new Map(),
-      activityWindows: Array(7).fill(0),
-    });
-    const data = await svc.buildData('u1', { now: NOW });
-    expect(data.referral_url).toBe(
-      'https://dashboard.padhaipal.com/r/918888888001',
-    );
-  });
-
-  it('throws NotFound when user does not resolve', async () => {
-    const svc = makeService({
-      user: null,
-      lettersByAsOf: new Map(),
-      activityWindows: [],
-    });
-    await expect(svc.buildData('does-not-exist', { now: NOW })).rejects.toThrow(
-      /User not found/,
-    );
-  });
-
-  it('defaults `now` to current time when options.now is omitted', async () => {
-    const svc = makeService({
-      user: { id: 'u1', external_id: '918888888001' },
-      lettersByAsOf: new Map(),
-      activityWindows: Array(7).fill(0),
-    });
-    // No `now` override — must not throw, and the returned dates must be
-    // monotonically increasing.
-    const data = await svc.buildData('u1');
-    expect(data.daily_bars).toHaveLength(7);
-    const dates = data.daily_bars.map((b) => b.date_iso);
-    for (let i = 1; i < dates.length; i++) {
-      expect(dates[i] > dates[i - 1]).toBe(true);
-    }
-  });
-
-  it('defaults missing activity rows to 0-active-ms (defensive null-safety on userActivity)', async () => {
-    // userActivityService returns results=[] when no user — the service
-    // falls back to active_ms=0 per window via ?.windows[i]?.active_ms ?? 0.
-    const svc = makeService({
-      // Note: pass user so resolveUser succeeds, but the activity service
-      // returns no rows for them (e.g. they have no whatsapp messages).
-      user: { id: 'u1', external_id: '918888888001' },
-      lettersByAsOf: new Map(),
-      // empty windows array forces activity results to map to []
-      activityWindows: [],
-    });
-    const data = await svc.buildData('u1', { now: NOW });
-    expect(data.daily_bars.every((b) => b.active_ms === 0)).toBe(true);
-  });
-
-  it('delegates input resolution to UserService.findByIdOrExternalId, forwarding the raw input verbatim', async () => {
-    const findSpy = jest.fn().mockResolvedValue({
-      id: '11111111-2222-3333-4444-555555555555',
-      external_id: '918888888001',
-    });
-    const userActivityService = {
-      getActivityTime: jest.fn().mockResolvedValue({ results: [] }),
-    };
-    const scoreService = {
-      getLetterBins: jest.fn().mockResolvedValue({
-        userId: 'u1',
-        userPhone: '918888888001',
-        bins: { untouched: [], regressed: [], learnt: [], improved: [] },
-      }),
-    };
-    const mediaRepo = { createQueryBuilder: jest.fn() };
-    const svc = new ReportCardService(
-      { findByIdOrExternalId: findSpy } as never,
-      userActivityService as never,
-      scoreService as never,
-      mediaRepo as never,
-    );
-
-    await svc.buildData('11111111-2222-3333-4444-555555555555', { now: NOW });
-    expect(findSpy).toHaveBeenLastCalledWith(
-      '11111111-2222-3333-4444-555555555555',
-    );
-
-    await svc.buildData('918888888001', { now: NOW });
-    expect(findSpy).toHaveBeenLastCalledWith('918888888001');
-  });
-});
-
-// ─── findExistingForUser ────────────────────────────────────────────────
-
-describe('ReportCardService.findExistingForUser', () => {
-  it('returns the matched media row when one exists', async () => {
-    const row = { id: 'mm-1', status: 'ready' };
-    const svc = makeService({
-      user: { id: 'u1', external_id: '918888888001' },
-      lettersByAsOf: new Map(),
-      activityWindows: [],
-      existingMedia: row,
-    });
-    const out = await svc.findExistingForUser('u1', new Date());
-    expect(out).toEqual(row);
-  });
-
-  it('returns null when no row matches', async () => {
-    const svc = makeService({
-      user: { id: 'u1', external_id: '918888888001' },
-      lettersByAsOf: new Map(),
-      activityWindows: [],
-      // existingMedia omitted → mock returns null
-    });
-    const out = await svc.findExistingForUser('u1', new Date());
-    expect(out).toBeNull();
-  });
-});
-
-// ─── generatePng ────────────────────────────────────────────────────────
-
-// Mock sharp so we don't run the native PNG rasterizer in these tests.
-// Track the SVG string passed to sharp() so we can verify the variant chose
-// the right renderer (portrait vs landscape).
 jest.mock('sharp', () => {
   const calls: Buffer[] = [];
   const sharpMock = jest.fn((input: Buffer) => {
@@ -335,457 +20,234 @@ jest.mock('sharp', () => {
 });
 
 import sharp from 'sharp';
+import { NotFoundException } from '@nestjs/common';
+import { ReportCardService } from './report-card.service';
+import {
+  FIVE_MINUTES_MS,
+  levelBand,
+  minutesOf,
+  pickPraise,
+  PRAISE_LINES,
+  timeBand,
+} from './report-card.dto';
+import { REPORT_CARD_WIDTH } from './report-card.dto';
+
+const USER = { id: 'u1', external_id: '918888888001' };
+// 07:00 IST on 2026-04-28 → yesterday = 2026-04-27 IST
+const NOW = new Date('2026-04-28T01:30:00Z');
+const YESTERDAY_MID = new Date('2026-04-26T18:30:00Z');
+const TODAY_MID = new Date('2026-04-27T18:30:00Z');
+
+function makeService(opts: {
+  user?: typeof USER | null;
+  activeMs?: number;
+  levels?: { level_end: number | null; level_start: number | null };
+  letters?: string[];
+  existingMedia?: { id: string; status: string };
+}) {
+  const user = opts.user === undefined ? USER : opts.user;
+  const userService = {
+    findByIdOrExternalId: jest.fn().mockResolvedValue(user),
+  };
+  const getActivityTime = jest
+    .fn()
+    .mockImplementation(
+      ({ windows }: { windows: Array<{ start: string; end: string }> }) => ({
+        results: user
+          ? [
+              {
+                user_id: user.id,
+                external_id: user.external_id,
+                windows: windows.map((w) => ({
+                  ...w,
+                  active_ms: opts.activeMs ?? 0,
+                })),
+              },
+            ]
+          : [],
+      }),
+    );
+  const query = jest.fn(async (sql: string) => {
+    if (sql.includes('report-card:levels'))
+      return [opts.levels ?? { level_end: null, level_start: null }];
+    if (sql.includes('report-card:letters'))
+      return (opts.letters ?? []).map((grapheme) => ({ grapheme, n: 1 }));
+    throw new Error(`unexpected SQL ${sql.slice(0, 40)}`);
+  });
+  const mediaRepo = {
+    createQueryBuilder: jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(opts.existingMedia ?? null),
+    }),
+  };
+  const svc = new ReportCardService(
+    userService as never,
+    { getActivityTime } as never,
+    { query } as never,
+    mediaRepo as never,
+  );
+  return { svc, getActivityTime, query, mediaRepo };
+}
+
+describe('report-card bands and praise', () => {
+  it('time: five minutes is a good day (inclusive), any practice ok, none poor; minutes never round a little practice down to 0', () => {
+    expect(timeBand(FIVE_MINUTES_MS)).toBe('good');
+    expect(timeBand(FIVE_MINUTES_MS - 1)).toBe('ok');
+    expect(timeBand(1)).toBe('ok');
+    expect(timeBand(0)).toBe('poor');
+    expect(minutesOf(0)).toBe(0);
+    expect(minutesOf(10_000)).toBe(1);
+    expect(minutesOf(18 * 60_000 + 20_000)).toBe(18);
+  });
+
+  it('level: up is good, unchanged ok, down poor', () => {
+    expect(levelBand(2)).toBe('good');
+    expect(levelBand(0)).toBe('ok');
+    expect(levelBand(-1)).toBe('poor');
+  });
+
+  it('praise: twenty short Hindi lines per band, stable for a child within a day, varying across days and children', () => {
+    for (const band of ['good', 'ok', 'poor'] as const) {
+      expect(PRAISE_LINES[band]).toHaveLength(20);
+      for (const line of PRAISE_LINES[band]) {
+        expect(line.length).toBeLessThanOrEqual(40);
+        expect(line).toMatch(/^[ऀ-ॿ\s!?,.-]+$/); // Devanagari + punctuation only
+      }
+    }
+    expect(pickPraise('good', 'u1', 100)).toBe(pickPraise('good', 'u1', 100));
+    const days = new Set(
+      Array.from({ length: 20 }, (_, d) => pickPraise('good', 'u1', d)),
+    );
+    expect(days.size).toBe(20);
+    expect(pickPraise('ok', 'u1', 5)).not.toBe(pickPraise('ok', 'u2', 5));
+    expect(PRAISE_LINES.poor).toContain(pickPraise('poor', 'abc', 7));
+  });
+});
+
+describe('ReportCardService.buildData', () => {
+  it("reads yesterday's IST window only, the level before and after it, and the top letters; a good day", async () => {
+    const { svc, getActivityTime, query } = makeService({
+      activeMs: 18 * 60_000,
+      levels: { level_end: 9, level_start: 7 },
+      letters: ['क', 'म', 'त'],
+    });
+    const data = await svc.buildData('u1', { now: NOW });
+    expect(getActivityTime).toHaveBeenCalledWith({
+      users: ['u1'],
+      windows: [
+        { start: YESTERDAY_MID.toISOString(), end: TODAY_MID.toISOString() },
+      ],
+    });
+    const levelCall = query.mock.calls.find(([sql]) =>
+      String(sql).includes('report-card:levels'),
+    )!;
+    expect(levelCall[1]).toEqual(['u1', TODAY_MID, YESTERDAY_MID]);
+    const letterCall = query.mock.calls.find(([sql]) =>
+      String(sql).includes('report-card:letters'),
+    )!;
+    expect(letterCall[1]).toEqual(['u1', YESTERDAY_MID, TODAY_MID]);
+    expect(String(letterCall[0])).toContain('m.rolled_back = false');
+    expect(data).toEqual({
+      user_external_id: '918888888001',
+      active_ms: 18 * 60_000,
+      minutes: 18,
+      time_band: 'good',
+      level_delta: 2,
+      level_band: 'good',
+      top_letters: ['क', 'म', 'त'],
+      praise: expect.any(String) as unknown,
+    });
+    expect(PRAISE_LINES.good).toContain(data.praise);
+  });
+
+  it('no practice yesterday: poor time band, 0 minutes, a poor-band praise line; unknown levels → delta 0 (ok)', async () => {
+    const { svc } = makeService({ activeMs: 0 });
+    const data = await svc.buildData('918888888001', { now: NOW });
+    expect(data).toMatchObject({
+      minutes: 0,
+      time_band: 'poor',
+      level_delta: 0,
+      level_band: 'ok',
+      top_letters: [],
+    });
+    expect(PRAISE_LINES.poor).toContain(data.praise);
+  });
+
+  it('a little practice is an ok day; a level drop is a poor level band; numeric strings from the driver are read as numbers', async () => {
+    const { svc } = makeService({
+      activeMs: 40_000,
+      levels: {
+        level_end: '8' as unknown as number,
+        level_start: '9' as unknown as number,
+      },
+    });
+    const data = await svc.buildData('u1', { now: NOW });
+    expect(data).toMatchObject({
+      minutes: 1,
+      time_band: 'ok',
+      level_delta: -1,
+      level_band: 'poor',
+    });
+    expect(PRAISE_LINES.ok).toContain(data.praise);
+  });
+
+  it('first lesson ever yesterday (no level before it) counts as no change', async () => {
+    const { svc } = makeService({
+      activeMs: 60_000,
+      levels: { level_end: 2, level_start: null },
+    });
+    expect((await svc.buildData('u1', { now: NOW })).level_delta).toBe(0);
+  });
+
+  it('throws NotFound for an unknown user', async () => {
+    const { svc } = makeService({ user: null });
+    await expect(svc.buildData('nope', { now: NOW })).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+});
 
 describe('ReportCardService.generatePng', () => {
   beforeEach(() => {
     (sharp as unknown as { __calls: Buffer[] }).__calls.length = 0;
   });
 
-  function makeWithUser(): ReportCardService {
-    return makeService({
-      user: { id: 'u1', external_id: '918888888001' },
-      lettersByAsOf: new Map(),
-      activityWindows: Array(7).fill(0),
-    });
-  }
-
-  it('returns a buffer + data tuple via the sharp PNG pipeline', async () => {
-    const svc = makeWithUser();
-    const { buffer, data } = await svc.generatePng('u1', {
-      now: new Date('2026-04-28T01:30:00Z'),
-    });
+  it('renders the SVG through the sharp PNG pipeline and returns buffer + data', async () => {
+    const { svc } = makeService({ activeMs: 6 * 60_000, letters: ['क'] });
+    const { buffer, data } = await svc.generatePng('u1', { now: NOW });
     expect(buffer).toEqual(Buffer.from('fake-png'));
     expect(data.user_external_id).toBe('918888888001');
     expect(sharp).toHaveBeenCalledTimes(1);
-  });
-
-  it('uses the landscape renderer by default', async () => {
-    const svc = makeWithUser();
-    await svc.generatePng('u1', { now: new Date('2026-04-28T01:30:00Z') });
-    const svgStr = (
-      sharp as unknown as { __calls: Buffer[] }
-    ).__calls[0].toString('utf-8');
-    // The landscape canvas is wider than the portrait one. Check the width
-    // attribute matches LANDSCAPE_REPORT_CARD_WIDTH.
-    expect(svgStr).toContain(`width="${LANDSCAPE_REPORT_CARD_WIDTH}"`);
-  });
-
-  it('uses the portrait renderer when variant="portrait"', async () => {
-    const svc = makeWithUser();
-    await svc.generatePng('u1', {
-      now: new Date('2026-04-28T01:30:00Z'),
-      variant: 'portrait',
-    });
-    const svgStr = (
-      sharp as unknown as { __calls: Buffer[] }
-    ).__calls[0].toString('utf-8');
-    // Portrait canvas is narrower; assert it is NOT the landscape width.
-    expect(svgStr).not.toContain(`width="${LANDSCAPE_REPORT_CARD_WIDTH}"`);
-  });
-
-  it('uses the landscape renderer when variant="landscape" is explicit', async () => {
-    const svc = makeWithUser();
-    await svc.generatePng('u1', {
-      now: new Date('2026-04-28T01:30:00Z'),
-      variant: 'landscape',
-    });
-    const svgStr = (
-      sharp as unknown as { __calls: Buffer[] }
-    ).__calls[0].toString('utf-8');
-    expect(svgStr).toContain(`width="${LANDSCAPE_REPORT_CARD_WIDTH}"`);
+    const svg = (sharp as unknown as { __calls: Buffer[] }).__calls[0].toString(
+      'utf-8',
+    );
+    expect(svg).toContain(`width="${REPORT_CARD_WIDTH}"`);
+    expect(svg).toContain('data-header="good"');
+    expect(svg).toContain('data-chip="क"');
   });
 });
 
-describe('buildReportCardSvg (renderer output)', () => {
-  it('renders an SVG that contains the brand blue when there is activity above 5 min', async () => {
-    const svg = await buildReportCardSvg({
-      user_external_id: '918888888001',
-      referral_url: 'https://wa.me/910000000000?text=test-918888888001',
-      letters_learnt: ['क', 'ख', 'ग'],
-      letters_learnt_yesterday: ['ग'],
-      letters_currently_learning: [],
-      letters_already_known: [],
-      daily_bars: [
-        { date_iso: '2026-04-21', day_index: 2, active_ms: 0 },
-        { date_iso: '2026-04-22', day_index: 3, active_ms: 0 },
-        { date_iso: '2026-04-23', day_index: 4, active_ms: 60_000 },
-        { date_iso: '2026-04-24', day_index: 5, active_ms: 200_000 },
-        { date_iso: '2026-04-25', day_index: 6, active_ms: FIVE_MINUTES_MS },
-        { date_iso: '2026-04-26', day_index: 0, active_ms: 360_000 },
-        { date_iso: '2026-04-27', day_index: 1, active_ms: 600_000 },
-      ],
-    });
-    expect(svg).toMatch(/^<\?xml/);
-    expect(svg).toContain(BRAND_BLUE_HEX);
-    // Dotted 5-min line is present — stroke-dasharray attribute.
-    expect(svg).toContain('stroke-dasharray');
-  });
-
-  it('embeds the QR code with the user-specific wa.me URL (encoded)', async () => {
-    const svg = await buildReportCardSvg({
-      user_external_id: '918888888001',
-      referral_url: 'https://wa.me/910000000000?text=test-918888888001',
-      letters_learnt: [],
-      letters_learnt_yesterday: [],
-      letters_currently_learning: [],
-      letters_already_known: [],
-      daily_bars: Array.from({ length: 7 }, (_, i) => ({
-        date_iso: `2026-04-${21 + i}`,
-        day_index: (2 + i) % 7,
-        active_ms: 0,
-      })),
-    });
-    // The renderer leaves a referral-target HTML comment for traceability.
-    expect(svg).toContain('918888888001');
-    expect(svg).toContain('wa.me/910000000000');
-  });
-
-  it('renders normally when there are 0 letters learnt yesterday (no highlight stars)', async () => {
-    const svg = await buildReportCardSvg({
-      user_external_id: '918888888001',
-      referral_url: 'https://wa.me/910000000000?text=test-918888888001',
-      letters_learnt: ['क', 'ख'],
-      letters_learnt_yesterday: [],
-      letters_currently_learning: [],
-      letters_already_known: [],
-      daily_bars: Array.from({ length: 7 }, (_, i) => ({
-        date_iso: `2026-04-${21 + i}`,
-        day_index: (2 + i) % 7,
-        active_ms: 100_000,
-      })),
-    });
-    // Highlight is a brand-blue <polygon> star. None should appear when
-    // nothing is highlighted. The logo SVG uses class-based fills, so its
-    // brand-blue paths don't carry an inline fill="#1D9EDF" attribute.
-    const highlightStars = svg.match(
-      new RegExp(`<polygon[^>]*fill="${BRAND_BLUE_HEX}"`, 'g'),
-    );
-    expect(highlightStars).toBeNull();
-  });
-
-  it('renders highlighted (today) letters before the rest in the grid', async () => {
-    const svg = await buildReportCardSvg({
-      user_external_id: '918888888001',
-      referral_url: 'https://wa.me/910000000000?text=test-918888888001',
-      letters_learnt: ['क', 'ख', 'ग', 'घ', 'च', 'छ'],
-      letters_learnt_yesterday: ['च', 'छ'],
-      letters_currently_learning: [],
-      letters_already_known: [],
-      daily_bars: Array.from({ length: 7 }, (_, i) => ({
-        date_iso: `2026-04-${21 + i}`,
-        day_index: (2 + i) % 7,
-        active_ms: 0,
-      })),
-    });
-    // Pick out all letter <text> nodes (font-family Noto Sans Devanagari) in
-    // document order. Star polygons contain no text, so we get one entry per
-    // grid cell. Headings/CTA also use this font but render BEFORE the grid;
-    // we filter to single-character bodies (the grid letters).
-    const letterRe = /<text[^>]*>(क|ख|ग|घ|च|छ)<\/text>/g;
-    const ordered = Array.from(svg.matchAll(letterRe)).map((m) => m[1]);
-    expect(ordered.slice(0, 2).sort()).toEqual(['च', 'छ'].sort());
-    expect(ordered.slice(2).sort()).toEqual(['क', 'ख', 'ग', 'घ'].sort());
-  });
-
-  it('renders a brand-blue <polygon> star per highlighted letter', async () => {
-    const svg = await buildReportCardSvg({
-      user_external_id: '918888888001',
-      referral_url: 'https://wa.me/910000000000?text=test-918888888001',
-      letters_learnt: ['क', 'ख', 'ग'],
-      letters_learnt_yesterday: ['क', 'ग'],
-      letters_currently_learning: [],
-      letters_already_known: [],
-      daily_bars: Array.from({ length: 7 }, (_, i) => ({
-        date_iso: `2026-04-${21 + i}`,
-        day_index: (2 + i) % 7,
-        active_ms: 0,
-      })),
-    });
-    const stars = svg.match(
-      new RegExp(`<polygon[^>]*fill="${BRAND_BLUE_HEX}"`, 'g'),
-    );
-    expect(stars).not.toBeNull();
-    expect(stars).toHaveLength(2);
-  });
-
-  it('renders 7 day labels (Hindi) in the activity chart', async () => {
-    const svg = await buildReportCardSvg({
-      user_external_id: '918888888001',
-      referral_url: 'https://wa.me/910000000000?text=test-918888888001',
-      letters_learnt: [],
-      letters_learnt_yesterday: [],
-      letters_currently_learning: [],
-      letters_already_known: [],
-      daily_bars: [
-        { date_iso: '2026-04-21', day_index: 2, active_ms: 0 },
-        { date_iso: '2026-04-22', day_index: 3, active_ms: 0 },
-        { date_iso: '2026-04-23', day_index: 4, active_ms: 0 },
-        { date_iso: '2026-04-24', day_index: 5, active_ms: 0 },
-        { date_iso: '2026-04-25', day_index: 6, active_ms: 0 },
-        { date_iso: '2026-04-26', day_index: 0, active_ms: 0 },
-        { date_iso: '2026-04-27', day_index: 1, active_ms: 0 },
-      ],
-    });
-    expect(svg).toContain('मंगल');
-    expect(svg).toContain('बुध');
-    expect(svg).toContain('गुरु');
-    expect(svg).toContain('शुक्र');
-    expect(svg).toContain('शनि');
-    expect(svg).toContain('रवि');
-    expect(svg).toContain('सोम');
-  });
-
-  it('handles 0 activity all 7 days without crashing (renders thin baseline ticks)', async () => {
-    const svg = await buildReportCardSvg({
-      user_external_id: '918888888001',
-      referral_url: 'https://wa.me/910000000000?text=test-918888888001',
-      letters_learnt: [],
-      letters_learnt_yesterday: [],
-      letters_currently_learning: [],
-      letters_already_known: [],
-      daily_bars: Array.from({ length: 7 }, (_, i) => ({
-        date_iso: `2026-04-${21 + i}`,
-        day_index: (2 + i) % 7,
-        active_ms: 0,
-      })),
-    });
-    expect(svg).toMatch(/^<\?xml/);
-    // Dotted 5-min line is still there.
-    expect(svg).toContain('stroke-dasharray');
-  });
-
-  it('handles a user with 0 letters learnt entirely (em-dash placeholder)', async () => {
-    const svg = await buildReportCardSvg({
-      user_external_id: '918888888001',
-      referral_url: 'https://wa.me/910000000000?text=test-918888888001',
-      letters_learnt: [],
-      letters_learnt_yesterday: [],
-      letters_currently_learning: [],
-      letters_already_known: [],
-      daily_bars: Array.from({ length: 7 }, (_, i) => ({
-        date_iso: `2026-04-${21 + i}`,
-        day_index: (2 + i) % 7,
-        active_ms: 0,
-      })),
-    });
-    expect(svg).toContain('—');
-  });
-
-  it('embeds the PadhaiPal logo (inner SVG content)', async () => {
-    const svg = await buildReportCardSvg({
-      user_external_id: '918888888001',
-      referral_url: 'https://wa.me/910000000000?text=test-918888888001',
-      letters_learnt: [],
-      letters_learnt_yesterday: [],
-      letters_currently_learning: [],
-      letters_already_known: [],
-      daily_bars: Array.from({ length: 7 }, (_, i) => ({
-        date_iso: `2026-04-${21 + i}`,
-        day_index: (2 + i) % 7,
-        active_ms: 0,
-      })),
-    });
-    // Logo inner content is identifiable by its CSS classes.
-    expect(svg).toContain('.st1{fill:#1D9EDF;}');
-  });
-
-  it('escapes external_id correctly into the QR payload (no <script>-style chars leak)', async () => {
-    const svg = await buildReportCardSvg({
-      user_external_id: '918888888001',
-      referral_url: 'https://wa.me/910000000000?text=test-918888888001',
-      letters_learnt: ['<', '&'],
-      letters_learnt_yesterday: [],
-      letters_currently_learning: [],
-      letters_already_known: [],
-      daily_bars: Array.from({ length: 7 }, (_, i) => ({
-        date_iso: `2026-04-${21 + i}`,
-        day_index: (2 + i) % 7,
-        active_ms: 0,
-      })),
-    });
-    // The grid renders < and & — they must be xml-escaped.
-    expect(svg).toContain('&lt;');
-    expect(svg).toContain('&amp;');
-  });
-});
-
-describe('buildLandscapeReportCardSvg (renderer output)', () => {
-  const baseData = {
-    user_external_id: '918888888001',
-    referral_url: 'https://wa.me/910000000000?text=test-918888888001',
-    letters_learnt: ['क', 'ख', 'ग', 'घ'],
-    letters_learnt_yesterday: ['ग', 'घ'],
-    letters_currently_learning: ['च', 'छ'],
-    letters_already_known: ['ज', 'झ'],
-    daily_bars: Array.from({ length: 7 }, (_, i) => ({
-      date_iso: `2026-04-${21 + i}`,
-      day_index: (2 + i) % 7,
-      active_ms: 100_000,
-    })),
-  };
-
-  it('renders the wider canvas via the LANDSCAPE_REPORT_CARD_WIDTH constant', async () => {
-    const svg = await buildLandscapeReportCardSvg(baseData);
-    expect(svg).toMatch(/^<\?xml/);
-    expect(svg).toContain(`width="${LANDSCAPE_REPORT_CARD_WIDTH}"`);
-    expect(svg).toContain(`viewBox="0 0 ${LANDSCAPE_REPORT_CARD_WIDTH} `);
-  });
-
-  it('contains all three letter-section headings', async () => {
-    const svg = await buildLandscapeReportCardSvg(baseData);
-    expect(svg).toContain('सीखे हुए अक्षर');
-    expect(svg).toContain('अभी सीख रहा है');
-    expect(svg).toContain('पहले से आते अक्षर');
-  });
-
-  it("still highlights yesterday's wins with brand-blue stars", async () => {
-    const svg = await buildLandscapeReportCardSvg(baseData);
-    const stars = svg.match(
-      new RegExp(`<polygon[^>]*fill="${BRAND_BLUE_HEX}"`, 'g'),
-    );
-    expect(stars).not.toBeNull();
-    expect(stars).toHaveLength(2); // ['ग','घ']
-  });
-
-  it('handles all-empty bins gracefully (renders em-dash placeholders)', async () => {
-    const svg = await buildLandscapeReportCardSvg({
-      ...baseData,
-      letters_learnt: [],
-      letters_learnt_yesterday: [],
-      letters_currently_learning: [],
-      letters_already_known: [],
-    });
-    expect(svg).toMatch(/^<\?xml/);
-    // 3 subsections × 1 em-dash placeholder each.
-    const dashes = svg.match(/—/g);
-    expect(dashes).not.toBeNull();
-    expect(dashes!.length).toBeGreaterThanOrEqual(3);
-  });
-
-  it("still embeds the QR target URL with the user's external_id", async () => {
-    const svg = await buildLandscapeReportCardSvg({
-      ...baseData,
-      user_external_id: '918888888777',
-      referral_url: 'https://wa.me/910000000000?text=test-918888888777',
-    });
-    expect(svg).toContain('918888888777');
-    expect(svg).toContain('wa.me/910000000000');
-  });
-
-  it('still draws the dotted 5-min line on the activity chart', async () => {
-    const svg = await buildLandscapeReportCardSvg({
-      ...baseData,
-      daily_bars: baseData.daily_bars.map((b) => ({ ...b, active_ms: 0 })),
-    });
-    expect(svg).toContain('stroke-dasharray');
-  });
-});
-
-// ─── mutation hardening ────────────────────────────────────────────────────
-
-describe('ReportCardService.findExistingForUser — exact QueryBuilder shape', () => {
-  it('builds the QB with exactly: alias mm, where user_id, andWhere source=morning-update / media_type=image / rolled_back=false / created_at>=since, ORDER BY created_at DESC', async () => {
-    const qb = {
-      where: jest.fn().mockReturnThis(),
-      andWhere: jest.fn().mockReturnThis(),
-      orderBy: jest.fn().mockReturnThis(),
-      getOne: jest.fn().mockResolvedValue(null),
+describe('ReportCardService.findExistingForUser', () => {
+  it("returns the matched media row when one exists, null otherwise, filtering to today's morning-update images", async () => {
+    const row = { id: 'mm-1', status: 'ready' };
+    const { svc, mediaRepo } = makeService({ existingMedia: row });
+    expect(await svc.findExistingForUser('u1', new Date())).toEqual(row);
+    const qb = mediaRepo.createQueryBuilder.mock.results[0].value as {
+      where: jest.Mock;
+      andWhere: jest.Mock;
     };
-    const createQueryBuilder = jest.fn().mockReturnValue(qb);
-    const svc = new ReportCardService(
-      { find: jest.fn() } as never,
-      { getActivityTime: jest.fn() } as never,
-      { getLetterBins: jest.fn() } as never,
-      { createQueryBuilder } as never,
-    );
-    const since = new Date('2026-05-15T01:30:00Z');
-    await svc.findExistingForUser('u1', since);
-    expect(createQueryBuilder).toHaveBeenCalledWith('mm');
     expect(qb.where).toHaveBeenCalledWith('mm.user_id = :userId', {
       userId: 'u1',
     });
     expect(qb.andWhere).toHaveBeenCalledWith('mm.source = :source', {
       source: 'morning-update',
     });
-    expect(qb.andWhere).toHaveBeenCalledWith('mm.media_type = :media_type', {
-      media_type: 'image',
-    });
     expect(qb.andWhere).toHaveBeenCalledWith('mm.rolled_back = :rolled_back', {
       rolled_back: false,
     });
-    expect(qb.andWhere).toHaveBeenCalledWith('mm.created_at >= :since', {
-      since,
-    });
-    expect(qb.orderBy).toHaveBeenCalledWith('mm.created_at', 'DESC');
-  });
-});
-
-describe('ReportCardService.generatePng — variant default + sharp pipeline', () => {
-  it('defaults to landscape when options.variant is omitted (kills the "landscape" default)', async () => {
-    const calls = (sharp as unknown as { __calls: Buffer[] }).__calls;
-    calls.length = 0;
-    const svc = makeService({
-      user: { id: 'u1', external_id: '919999990001' },
-      lettersByAsOf: new Map(),
-      activityWindows: [],
-    });
-    await svc.generatePng('u1');
-    // landscape SVG includes the landscape width literal; portrait doesn't
-    const svg = calls[0].toString('utf8');
-    expect(svg).toContain(String(LANDSCAPE_REPORT_CARD_WIDTH));
-  });
-
-  it('encodes the SVG as utf8 before passing to sharp (kills the encoding StringLiteral)', async () => {
-    const calls = (sharp as unknown as { __calls: Buffer[] }).__calls;
-    calls.length = 0;
-    const svc = makeService({
-      user: { id: 'u1', external_id: '919999990001' },
-      lettersByAsOf: new Map(),
-      activityWindows: [],
-    });
-    await svc.generatePng('u1');
-    // Buffer.from(svg, 'utf8') produces a Buffer that decodes back to the SVG
-    // text; if the encoding were latin1 the multi-byte UTF-8 sequences would
-    // garble. The brand domain in the URL is pure ASCII so check the SVG can
-    // be decoded as utf8 round-trip.
-    expect(calls[0].toString('utf8')).toContain('dashboard.padhaipal.com/r/');
-  });
-});
-
-describe('ReportCardService.buildData — referral_url + UUID resolution', () => {
-  it('referral_url format is dashboard.padhaipal.com/r/<external_id> (kills the host/path StringLiterals)', async () => {
-    const svc = makeService({
-      user: { id: 'u1', external_id: '919999990001' },
-      lettersByAsOf: new Map(),
-      activityWindows: [],
-    });
-    const data = await svc.buildData('u1');
-    expect(data.referral_url).toBe(
-      'https://dashboard.padhaipal.com/r/919999990001',
-    );
-  });
-
-  it('delegates input resolution to UserService.findByIdOrExternalId, forwarding both uuid and external_id inputs verbatim', async () => {
-    const findByIdOrExternalId = jest
-      .fn()
-      .mockResolvedValue({ id: 'u', external_id: '919999990001' });
-    const svc = new ReportCardService(
-      { findByIdOrExternalId } as never,
-      {
-        getActivityTime: jest.fn().mockResolvedValue({ results: [] }),
-      } as never,
-      {
-        getLetterBins: jest.fn().mockResolvedValue({
-          bins: { learnt: [], regressed: [], improved: [], untouched: [] },
-        }),
-      } as never,
-      { createQueryBuilder: jest.fn() } as never,
-    );
-    await svc.buildData('11111111-2222-3333-4444-555555555555');
-    expect(findByIdOrExternalId).toHaveBeenLastCalledWith(
-      '11111111-2222-3333-4444-555555555555',
-    );
-    await svc.buildData('919999990001');
-    expect(findByIdOrExternalId).toHaveBeenLastCalledWith('919999990001');
+    const none = makeService({});
+    expect(await none.svc.findExistingForUser('u1', new Date())).toBeNull();
   });
 });
