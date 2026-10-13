@@ -1,3 +1,19 @@
+// The LLM clients import the OpenTelemetry SDK through ../../otel/otel, whose
+// exporters keep a lone Jest process alive; stub the tracer as the processor
+// specs do.
+jest.mock('../../otel/otel', () => ({
+  tracer: {
+    startActiveSpan: (_name: string, fn: (span: unknown) => unknown) =>
+      fn({
+        setAttribute: () => undefined,
+        setStatus: () => undefined,
+        recordException: () => undefined,
+        end: () => undefined,
+      }),
+  },
+  injectCarrier: () => ({}),
+}));
+
 import {
   ForbiddenException,
   HttpException,
