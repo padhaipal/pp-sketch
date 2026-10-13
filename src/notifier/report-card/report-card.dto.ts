@@ -43,9 +43,9 @@ export function minutesOf(activeMs: number): number {
   return Math.max(1, Math.round(activeMs / 60_000));
 }
 
-// One line of praise under the face, by the day's (time) band. Short,
-// parent-facing, about yesterday ("कल") or what to do today ("आज"): the
-// card goes out the morning after.
+// One line of praise under the face, by the day's (time) band — the list
+// as approved 2026-10-13. Short, parent-facing, about yesterday ("कल") or
+// what to do today ("आज"): the card goes out the morning after.
 export const PRAISE_LINES: Record<Band, readonly string[]> = {
   good: [
     'कल बहुत बढ़िया काम!',
@@ -53,7 +53,6 @@ export const PRAISE_LINES: Record<Band, readonly string[]> = {
     'आपका बच्चा खूब मेहनत कर रहा है।',
     'कमाल कर दिया!',
     'रोज़ की मेहनत रंग ला रही है।',
-    'बहुत खूब! यही सही रास्ता है।',
     'आपका बच्चा आगे बढ़ रहा है।',
     'वाह! कल का दिन शानदार रहा।',
     'मेहनत का फल ज़रूर मिलेगा।',
@@ -61,9 +60,7 @@ export const PRAISE_LINES: Record<Band, readonly string[]> = {
     'आपका बच्चा तेज़ी से सीख रहा है।',
     'हर दिन थोड़ा-थोड़ा, यही जीत है।',
     'बढ़िया! आज भी ऐसा ही करें।',
-    'गर्व करने लायक मेहनत!',
     'पढ़ने की आदत बन रही है।',
-    'शानदार! पाँच मिनट पूरे हुए।',
     'बच्चा रोज़ बेहतर हो रहा है।',
     'इस लगन को बनाए रखें।',
     'खूब पढ़ा, खूब सीखा!',
@@ -74,15 +71,12 @@ export const PRAISE_LINES: Record<Band, readonly string[]> = {
     'कल थोड़ा पढ़ा, आज पाँच मिनट करें।',
     'हर मिनट मायने रखता है।',
     'बस थोड़ा और समय चाहिए।',
-    'शुरू किया, यही बड़ी बात है।',
     'आज पाँच मिनट का लक्ष्य रखें।',
-    'थोड़ा-थोड़ा रोज़ बहुत होता है।',
     'कल की कोशिश अच्छी थी।',
     'पाँच मिनट, बस इतना काफ़ी है।',
     'आज थोड़ा और पढ़ेंगे?',
     'सही दिशा में हैं, बढ़ते रहें।',
     'एक छोटा कदम और!',
-    'आज पूरे पाँच मिनट आज़माएँ।',
     'अच्छा है, और बेहतर हो सकता है।',
     'कल से बेहतर, आज करें।',
     'रोज़ थोड़ा समय निकालें।',
@@ -98,9 +92,7 @@ export const PRAISE_LINES: Record<Band, readonly string[]> = {
     'आज फिर से शुरू करें।',
     'एक छोटी सी शुरुआत आज करें।',
     'कल नहीं हुआ, आज हो सकता है।',
-    'रोज़ पाँच मिनट, बस इतना।',
     'आज एक पाठ ज़रूर पढ़ें।',
-    'पढ़ाई को आज वापस लाएँ।',
     'आज थोड़ा समय निकालें।',
     'हर दिन मायने रखता है।',
     'आज की शुरुआत आपसे है।',

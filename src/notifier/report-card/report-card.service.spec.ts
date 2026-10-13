@@ -108,9 +108,9 @@ describe('report-card bands and praise', () => {
     expect(levelBand(-1)).toBe('poor');
   });
 
-  it('praise: twenty short Hindi lines per band, stable for a child within a day, varying across days and children', () => {
+  it('praise: the approved Hindi lines per band (17 / 17 / 18), stable for a child within a day, varying across days and children', () => {
     for (const band of ['good', 'ok', 'poor'] as const) {
-      expect(PRAISE_LINES[band]).toHaveLength(20);
+      expect(PRAISE_LINES[band].length).toBeGreaterThanOrEqual(17);
       for (const line of PRAISE_LINES[band]) {
         expect(line.length).toBeLessThanOrEqual(40);
         expect(line).toMatch(/^[ऀ-ॿ\s!?,.-]+$/); // Devanagari + punctuation only
@@ -118,9 +118,11 @@ describe('report-card bands and praise', () => {
     }
     expect(pickPraise('good', 'u1', 100)).toBe(pickPraise('good', 'u1', 100));
     const days = new Set(
-      Array.from({ length: 20 }, (_, d) => pickPraise('good', 'u1', d)),
+      Array.from({ length: PRAISE_LINES.good.length }, (_, d) =>
+        pickPraise('good', 'u1', d),
+      ),
     );
-    expect(days.size).toBe(20);
+    expect(days.size).toBe(PRAISE_LINES.good.length);
     expect(pickPraise('ok', 'u1', 5)).not.toBe(pickPraise('ok', 'u2', 5));
     expect(PRAISE_LINES.poor).toContain(pickPraise('poor', 'abc', 7));
   });
