@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { BadRequestException } from '@nestjs/common';
 import { DashboardScoresController } from './dashboard-scores.controller';
 import type { DashboardScoresService } from './dashboard-scores.service';
+import type { ShareMessageService } from './share-message.service';
 import { PUBLIC_CACHE_CONTROL } from './dashboard-scores.dto';
 import { ANONYMOUS, STAFF } from '../../auth/viewer';
 
@@ -17,11 +18,19 @@ function make() {
   const spotlight = jest
     .fn()
     .mockResolvedValue({ top: null, most_improved: null });
-  const ctrl = new DashboardScoresController({
-    scores,
-    spotlight,
-  } as unknown as DashboardScoresService);
-  return { ctrl, scores, spotlight };
+  const generate = jest.fn().mockResolvedValue({
+    message: 'नमस्ते',
+    model: 'm',
+    generated_at: '2026-10-13T00:00:00.000Z',
+  });
+  const ctrl = new DashboardScoresController(
+    {
+      scores,
+      spotlight,
+    } as unknown as DashboardScoresService,
+    { generate } as unknown as ShareMessageService,
+  );
+  return { ctrl, scores, spotlight, generate };
 }
 
 // Nest stores @Header values as route metadata on the handler.
@@ -92,6 +101,22 @@ describe('DashboardScoresController', () => {
     await expect(ctrl.getScores('nope', 'mpl_b', '30')).rejects.toThrow(
       BadRequestException,
     );
+  });
+
+  it('share message: forwards the id and the viewer to the service (the service decides who may ask)', async () => {
+    const { ctrl, generate } = make();
+    const viewer = { kind: 'user', id: ID } as const;
+    expect(await ctrl.getShareMessage(ID, viewer)).toEqual({
+      message: 'नमस्ते',
+      model: 'm',
+      generated_at: '2026-10-13T00:00:00.000Z',
+    });
+    expect(generate).toHaveBeenCalledWith(ID, viewer);
+    await ctrl.getShareMessage(ID);
+    expect(generate).toHaveBeenLastCalledWith(ID, ANONYMOUS);
+    expect(headers(ctrl, 'getShareMessage')).toEqual([
+      { name: 'Cache-Control', value: PUBLIC_CACHE_CONTROL },
+    ]);
   });
 
   it('CSV: text/csv of the children with a filename from entity/metric/range', async () => {

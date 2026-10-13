@@ -51,6 +51,22 @@ export class CacheService implements OnModuleDestroy {
     }
   }
 
+  // Counter with a window: INCR, and EXPIRE on the first hit. Null when Redis
+  // is unreachable — callers rate-limiting on it then let the request through
+  // (the cache is best-effort everywhere).
+  async incr(key: string, ttl_seconds: number): Promise<number | null> {
+    try {
+      const n = await this.redis.incr(key);
+      if (n === 1) await this.redis.expire(key, ttl_seconds);
+      return n;
+    } catch (err) {
+      this.logger.warn(
+        `Cache incr failed for key ${key}: ${(err as Error).message}`,
+      );
+      return null;
+    }
+  }
+
   async del(
     keys: string | string[],
     options?: { throwOnError?: boolean },

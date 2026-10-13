@@ -44,3 +44,8 @@ isHealthy(): Promise<boolean>
 * Call `redis.ping()` with a 5-second timeout.
 * Return true if the response is 'PONG', false otherwise.
 * On error: return false (no throw).
+
+## 2026-10: `incr(key, ttl_seconds)`
+
+INCR + EXPIRE on the first hit; null when Redis is unreachable so a
+rate-limiting caller (share-message.service.ts) lets the request through.

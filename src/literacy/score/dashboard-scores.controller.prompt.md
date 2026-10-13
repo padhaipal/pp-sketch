@@ -29,3 +29,10 @@ forward it to the service. It only has an effect with `metric=usage`. In Time
 mode the CSV filename is `lifteracy-<type>-<code>-usage-time-<window>.csv`
 and its rows carry the flat `time_total`, `time_per_day`, `time_days`
 columns.
+
+## 2026-10: `GET :id/share-message`
+
+The viewer's own unit only — a Hindi WhatsApp message written by an LLM
+from the unit's numbers (share-message.service.ts decides who may ask,
+403 / 404 / 429 otherwise). Private cache control like the rest; nothing is
+stored.
