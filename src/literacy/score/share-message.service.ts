@@ -42,8 +42,13 @@ import type { LiteracyMetric } from './age-bands';
 // the passage gates; Google is reserved for the onboarding classifier).
 export const SHARE_MESSAGE_DEFAULT_PROVIDER: LlmProvider = 'anthropic';
 export const SHARE_MESSAGE_DEFAULT_MODEL = 'claude-haiku-5-5';
-export const SHARE_MESSAGE_TIMEOUT_MS = 12_000;
-export const SHARE_MESSAGE_MAX_TOKENS = 700;
+export const SHARE_MESSAGE_TIMEOUT_MS = 15_000;
+// Devanagari tokenises at roughly three tokens a word, so a six-line Hindi
+// message is 600–900 tokens by itself, and the model may spend hidden
+// reasoning tokens out of the same budget: 700 came back empty or cut off
+// on staging (2026-10-13). The prompt still asks for 3–6 lines; the cap is
+// only a safety net.
+export const SHARE_MESSAGE_MAX_TOKENS = 2500;
 export const SHARE_MESSAGE_TEMPERATURE_RATIO = 0.9;
 // Per viewer per minute — a refresh loop must not burn money.
 export const SHARE_MESSAGE_RATE_LIMIT = 10;
