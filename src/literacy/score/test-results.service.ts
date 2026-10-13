@@ -175,10 +175,27 @@ export interface LatestStudentRow {
   usage_score: number | null;
 }
 
+// A grade-3 pass implies grade 2 at 100%: a 7-year-old who sped past the
+// level-10 pool (g2 null, or scored and failed) and then passed g3 is a g2
+// passer for their school. Roll-up only — the student's own
+// test_results_student row is untouched. A failed or missing g3 implies
+// nothing; mpl_b implies nothing (10-year-olds sit no NIPUN band).
+export function impliedNipunG2(
+  row: Pick<
+    LatestStudentRow,
+    'nipun_g2_score' | 'nipun_g2_passed' | 'nipun_g3_passed'
+  >,
+): [number | null, boolean | null] {
+  if (row.nipun_g3_passed === true && row.nipun_g2_passed !== true) {
+    return [1, true];
+  }
+  return [row.nipun_g2_score, row.nipun_g2_passed];
+}
+
 // A student's contribution to their school's vector on `computedFor`:
 // active/scored flags, unbanded when birth_year is null, and per metric —
 // only when the student has a score AND is inside that metric's age band —
-// n/sum/sumsq/pass/hist.
+// n/sum/sumsq/pass/hist. nipun_g2 is read through impliedNipunG2.
 export function studentVector(
   row: LatestStudentRow,
   computedFor: Date,
@@ -186,7 +203,7 @@ export function studentVector(
   const v = emptyVector();
   v.students_active = row.active ? 1 : 0;
   const scores: Record<TestMetric, [number | null, boolean | null]> = {
-    nipun_g2: [row.nipun_g2_score, row.nipun_g2_passed],
+    nipun_g2: impliedNipunG2(row),
     nipun_g3: [row.nipun_g3_score, row.nipun_g3_passed],
     mpl_b: [row.mpl_b_score, row.mpl_b_passed],
   };

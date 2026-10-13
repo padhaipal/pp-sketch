@@ -11,6 +11,7 @@ import {
   cohortVector,
   emptyVector,
   HIST_LENGTH,
+  impliedNipunG2,
   METRICS,
   NIPUN_SCHOOL_MIN_COHORT,
   NIPUN_SCHOOL_MIN_PASSERS,
@@ -1253,5 +1254,77 @@ describe('TestResultsService — usage backfill writers', () => {
     const { svc, query } = plainService();
     expect(await svc.upsertGeoUsage([], '2026-06-02', at)).toBe(0);
     expect(query).not.toHaveBeenCalled();
+  });
+});
+
+describe('NIPUN grade 3 pass implies grade 2 at 100 % (roll-up only)', () => {
+  const g = (
+    nipun_g2_score: number | null,
+    nipun_g2_passed: boolean | null,
+    nipun_g3_passed: boolean | null,
+  ) => impliedNipunG2({ nipun_g2_score, nipun_g2_passed, nipun_g3_passed });
+
+  it('impliedNipunG2: a g3 pass overrides a null or failed g2; anything else passes g2 through', () => {
+    expect(g(null, null, true)).toEqual([1, true]); // sped past level 10
+    expect(g(0.25, false, true)).toEqual([1, true]); // failed g2, then passed g3
+    expect(g(0.75, true, true)).toEqual([0.75, true]); // earned g2 pass kept as scored
+    expect(g(null, null, false)).toEqual([null, null]); // failed g3 implies nothing
+    expect(g(null, null, null)).toEqual([null, null]); // no g3 implies nothing
+    expect(g(0.25, false, false)).toEqual([0.25, false]);
+    expect(g(0.25, false, null)).toEqual([0.25, false]);
+  });
+
+  it('studentVector: a 7-year-old with no g2 score but a g3 pass is a g2 passer at 1.0; same row at 8 counts for g3 only', () => {
+    const row = (birth_year: number): LatestStudentRow => ({
+      student_id: 'X',
+      geo_entity_id: 'S1',
+      birth_year,
+      birth_month: 7,
+      created_at: null,
+      active: true,
+      nipun_g2_score: null,
+      nipun_g2_passed: null,
+      nipun_g3_score: 0.75,
+      nipun_g3_passed: true,
+      mpl_b_score: null,
+      mpl_b_passed: null,
+      usage_score: null,
+    });
+    const on = new Date('2026-09-13T00:00:00Z');
+    const seven = studentVector(row(2019), on);
+    expect(seven.nipun_g2).toEqual({
+      n: 1,
+      sum: 1,
+      sumsq: 1,
+      pass: 1,
+      hist: [0, 0, 0, 0, 1],
+    });
+    expect(seven.nipun_g3.n).toBe(0);
+    const eight = studentVector(row(2018), on);
+    expect(eight.nipun_g2.n).toBe(0);
+    expect(eight.nipun_g3).toMatchObject({ n: 1, sum: 0.75, pass: 1 });
+  });
+
+  it('a failed g3 with no g2 contributes nothing to g2 (no implication)', () => {
+    const v = studentVector(
+      {
+        student_id: 'X',
+        geo_entity_id: 'S1',
+        birth_year: 2019,
+        birth_month: 7,
+        created_at: null,
+        active: true,
+        nipun_g2_score: null,
+        nipun_g2_passed: null,
+        nipun_g3_score: 0.5,
+        nipun_g3_passed: false,
+        mpl_b_score: null,
+        mpl_b_passed: null,
+        usage_score: null,
+      },
+      new Date('2026-09-13T00:00:00Z'),
+    );
+    expect(v.nipun_g2.n).toBe(0);
+    expect(v.students_scored).toBe(1);
   });
 });
