@@ -54,3 +54,10 @@ this.
 Placeholders → names, `{{SHARE_LINK}}` → the link (appended on its own line
 if the model forgot it), any other `{{…}}` dropped, phone-like digit runs
 removed (the link is protected), whitespace tidied, capped at 1200 chars.
+
+## 2026-10: LLM failures are a 503
+
+An `LlmError` from the provider becomes `ServiceUnavailableException` with
+the provider's message ("credit balance is too low", "`temperature` is
+deprecated…") and an error log line carrying it — the first rollout
+surfaced only "Internal server error" and the message lived in the trace.

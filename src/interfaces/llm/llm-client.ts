@@ -132,10 +132,16 @@ async function singleCall(
           ? { max_tokens: request.max_tokens }
           : {}),
         // Always specified — scaled from the caller's ratio to this
-        // provider's range. extraBody still wins (provider quirks by data).
-        temperature:
-          (request.temperatureRatio ?? DEFAULT_TEMPERATURE_RATIO) *
-          config.temperatureMax,
+        // provider's range — unless the model refuses the field
+        // (config.omitTemperature). extraBody still wins (provider quirks
+        // by data).
+        ...(config.omitTemperature?.(request.model)
+          ? {}
+          : {
+              temperature:
+                (request.temperatureRatio ?? DEFAULT_TEMPERATURE_RATIO) *
+                config.temperatureMax,
+            }),
         ...(typeof config.extraBody === 'function'
           ? config.extraBody(request.model)
           : config.extraBody),

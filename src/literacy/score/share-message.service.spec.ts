@@ -23,6 +23,7 @@ import type { DataSource } from 'typeorm';
 import { ANONYMOUS, STAFF } from '../../auth/viewer';
 import type { CacheService } from '../../interfaces/redis/cache';
 import type { AnthropicLlmService } from '../../interfaces/llm/anthropic/anthropic-llm.service';
+import { LlmError } from '../../interfaces/llm/llm.dto';
 import type { GeoEntityService } from '../../geo-entities/geo-entity.service';
 import type { DashboardScoresService } from './dashboard-scores.service';
 import type { ScoresResponse } from './dashboard-scores.dto';
@@ -532,6 +533,25 @@ describe('ShareMessageService — what the model sees and what comes back', () =
       expect((facts.unit as { type: string }).type).toBe(type);
       expect(facts.share_link).toBeUndefined();
     }
+  });
+
+  it("an LLM failure is a 503 carrying the provider's words, never a bare 500", async () => {
+    const { svc, complete } = make();
+    complete.mockRejectedValueOnce(
+      new LlmError(
+        'anthropic 400: {"error":{"message":"`temperature` is deprecated for this model."}}',
+        false,
+        400,
+      ),
+    );
+    await expect(
+      svc.generate('b1', { kind: 'user', id: 'u-beo' }),
+    ).rejects.toMatchObject({
+      status: 503,
+      message: expect.stringContaining(
+        '`temperature` is deprecated',
+      ) as unknown,
+    });
   });
 
   it('a failing read drops its section, not the message', async () => {
