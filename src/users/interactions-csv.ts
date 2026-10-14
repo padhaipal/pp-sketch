@@ -3,6 +3,13 @@
  * literacy_lesson_states turn. Kept free of Nest/DB imports so the format
  * (escaping, header order, footer) is unit-testable in isolation.
  *
+ * Privacy: the file identifies people by users.id only — never a name or
+ * phone number. The student's and teacher's names are read from the DB
+ * solely to feed censorTranscript (the same pass every dashboard viewer
+ * gets on users/:id/media) and are dropped before the row is serialized
+ * (anonymiseInteractionRow). The teacher's geo entity (school/block) name
+ * is kept: it is a place, not a person.
+ *
  * Format decisions:
  *  - UTF-8 BOM + CRLF line endings so Excel renders Devanagari correctly.
  *  - Timestamps are IST (formatted in SQL), matching the dashboard buckets.
@@ -14,18 +21,23 @@
 /** Rows fetched per keyset batch; bounds both query time and memory. */
 export const INTERACTIONS_BATCH_SIZE = 5000;
 
+import { censorTranscript } from './transcript-censor';
+
 export const CSV_BOM = '\uFEFF';
 export const CSV_EOL = '\r\n';
 
-/** One row of the export query (user.service.findInteractionsPage). */
+/** One anonymised row of the export (user.service.findInteractionsPage). */
 export interface InteractionRow {
   lesson_state_id: string;
   created_at: Date;
   timestamp_ist: string;
-  student_name: string | null;
-  phone: string;
-  referred_by_name: string | null;
-  referred_by_phone: string | null;
+  /** users.id of the student — the only student identifier in the file. */
+  student_id: string;
+  /** users.id of the referring teacher (users.referrer_user_id), if any. */
+  referred_by_id: string | null;
+  /** The teacher's CURRENT geo entity (users.geo_entity_id → geo_entity). */
+  geo_entity_type: string | null;
+  geo_entity_name: string | null;
   level: number | null;
   lesson_type: 'word' | 'passage';
   content: string | null;
@@ -48,12 +60,42 @@ export interface InteractionRow {
   user_message_id: string;
 }
 
+/**
+ * What the SQL returns: the anonymised row plus the two names needed to
+ * censor the transcripts. Never serialized — see anonymiseInteractionRow.
+ */
+export interface InteractionSourceRow extends InteractionRow {
+  student_name: string | null;
+  referred_by_name: string | null;
+}
+
+/**
+ * Drops the names and runs every STT transcript through censorTranscript
+ * with them as known names (plus its phone-number / "mera naam …" passes),
+ * exactly as users/:id/media does for an official viewing a student.
+ */
+export function anonymiseInteractionRow(
+  src: InteractionSourceRow,
+): InteractionRow {
+  const { student_name, referred_by_name, ...row } = src;
+  const names = [student_name, referred_by_name];
+  const censor = (t: string | null): string | null =>
+    t === null ? null : censorTranscript(t, names).text;
+  return {
+    ...row,
+    sarvam_transcript: censor(row.sarvam_transcript),
+    azure_transcript: censor(row.azure_transcript),
+    reverie_transcript: censor(row.reverie_transcript),
+    bodhan_transcript: censor(row.bodhan_transcript),
+  };
+}
+
 export const INTERACTIONS_CSV_HEADER = [
   'timestamp_ist',
-  'student_name',
-  'phone',
-  'referred_by_name',
-  'referred_by_phone',
+  'student_id',
+  'referred_by_id',
+  'geo_entity_type',
+  'geo_entity_name',
   'level',
   'lesson_type',
   'content',
@@ -77,8 +119,8 @@ export const INTERACTIONS_CSV_HEADER = [
 /**
  * Escapes one cell: RFC-4180 quoting, plus spreadsheet formula-injection
  * hardening — a leading =, +, - or @ would otherwise execute as a formula
- * when the CSV is opened in Excel/Sheets (student names and transcripts are
- * attacker-influenced text), so such cells get a leading apostrophe. This
+ * when the CSV is opened in Excel/Sheets (transcripts are attacker-
+ * influenced text), so such cells get a leading apostrophe. This
  * also prefixes legitimately negative numbers (score_change -0.5 → '-0.5):
  * accepted cost of the mitigation.
  */
@@ -98,10 +140,10 @@ function answerStatus(answerCorrect: boolean | null): string {
 export function interactionRowToCsvLine(row: InteractionRow): string {
   const cells: (string | number | null)[] = [
     row.timestamp_ist,
-    row.student_name,
-    row.phone,
-    row.referred_by_name,
-    row.referred_by_phone,
+    row.student_id,
+    row.referred_by_id,
+    row.geo_entity_type,
+    row.geo_entity_name,
     row.level,
     row.lesson_type,
     row.content,

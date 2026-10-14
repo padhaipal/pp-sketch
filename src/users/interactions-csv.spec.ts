@@ -4,6 +4,8 @@ import {
   INTERACTIONS_BATCH_SIZE,
   INTERACTIONS_CSV_HEADER,
   InteractionRow,
+  InteractionSourceRow,
+  anonymiseInteractionRow,
   csvEscape,
   interactionRowToCsvLine,
   interactionsCsvFooterLine,
@@ -15,10 +17,10 @@ function row(over: Partial<InteractionRow> = {}): InteractionRow {
     lesson_state_id: 'lls-1',
     created_at: new Date('2026-08-31T05:00:00Z'),
     timestamp_ist: '2026-08-31 10:30:00',
-    student_name: 'अमन',
-    phone: '919876543210',
-    referred_by_name: null,
-    referred_by_phone: null,
+    student_id: 'u-student',
+    referred_by_id: 'u-teacher',
+    geo_entity_type: 'school',
+    geo_entity_name: 'PS Kupwara',
     level: 8,
     lesson_type: 'passage',
     content: 'क्या तुम इसे पढ़ सकते हो?',
@@ -60,7 +62,10 @@ describe('interactionsCsvHeaderLine', () => {
     const line = interactionsCsvHeaderLine();
     expect(line.startsWith(CSV_BOM)).toBe(true);
     expect(line.endsWith(CSV_EOL)).toBe(true);
-    expect(line).toContain('timestamp_ist,student_name,phone');
+    expect(line).toContain(
+      'timestamp_ist,student_id,referred_by_id,geo_entity_type,geo_entity_name',
+    );
+    expect(line).not.toMatch(/student_name|referred_by_name|phone/);
   });
 });
 
@@ -93,14 +98,14 @@ describe('interactionRowToCsvLine', () => {
   it('nulls become empty cells; answer_correct null → blank status', () => {
     const line = interactionRowToCsvLine(
       row({
-        student_name: null,
+        referred_by_id: null,
         answer_correct: null,
         score_change: null,
         starting_state: null,
       }),
     );
     const cells = line.slice(0, -CSV_EOL.length).split(',');
-    expect(cells[INTERACTIONS_CSV_HEADER.indexOf('student_name')]).toBe('');
+    expect(cells[INTERACTIONS_CSV_HEADER.indexOf('referred_by_id')]).toBe('');
     expect(cells[INTERACTIONS_CSV_HEADER.indexOf('answer_status')]).toBe('');
     expect(cells[INTERACTIONS_CSV_HEADER.indexOf('score_change')]).toBe('');
   });
@@ -118,6 +123,70 @@ describe('interactionRowToCsvLine', () => {
       row({ content: 'एक, दो "तीन"', correct_answer: null }),
     );
     expect(line).toContain('"एक, दो ""तीन"""');
+  });
+});
+
+// The export must never carry a name or phone number: ids only, and the
+// transcripts get the same censor pass as users/:id/media.
+describe('anonymiseInteractionRow', () => {
+  function src(over: Partial<InteractionSourceRow> = {}): InteractionSourceRow {
+    return {
+      ...row(),
+      student_name: 'Rani Devi',
+      referred_by_name: 'Asha Kumari',
+      ...over,
+    };
+  }
+
+  it('drops the student and teacher names', () => {
+    const out = anonymiseInteractionRow(src()) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(out).not.toHaveProperty('student_name');
+    expect(out).not.toHaveProperty('referred_by_name');
+    expect(out.student_id).toBe('u-student');
+    expect(out.referred_by_id).toBe('u-teacher');
+    expect(out.geo_entity_name).toBe('PS Kupwara');
+  });
+
+  it('censors both known names, spoken phone numbers and "mera naam" out of every transcript', () => {
+    const out = anonymiseInteractionRow(
+      src({
+        sarvam_transcript: 'Rani Devi ne padha',
+        azure_transcript: 'Asha Kumari madam',
+        reverie_transcript: 'mera number 98765 43210 hai',
+        bodhan_transcript: 'mera naam Sunita hai',
+      }),
+    );
+    expect(out.sarvam_transcript).toBe('[removed] ne padha');
+    expect(out.azure_transcript).toBe('[removed] madam');
+    expect(out.reverie_transcript).toBe('mera number [removed] hai');
+    expect(out.bodhan_transcript).toBe('mera naam [removed] hai');
+  });
+
+  it('leaves null transcripts and null names alone', () => {
+    const out = anonymiseInteractionRow(
+      src({
+        student_name: null,
+        referred_by_name: null,
+        sarvam_transcript: 'कमल',
+        azure_transcript: null,
+      }),
+    );
+    expect(out.sarvam_transcript).toBe('कमल');
+    expect(out.azure_transcript).toBeNull();
+  });
+
+  it('serialized line never contains the names', () => {
+    const line = interactionRowToCsvLine(
+      anonymiseInteractionRow(
+        src({ sarvam_transcript: 'Rani Devi bolti hai' }),
+      ),
+    );
+    expect(line).not.toContain('Rani');
+    expect(line).not.toContain('Asha');
+    expect(line).toContain('u-student,u-teacher,school,PS Kupwara');
   });
 });
 
@@ -163,10 +232,10 @@ describe('csvEscape — formula-injection hardening', () => {
         lesson_state_id: 'l',
         created_at: new Date('2026-08-31T05:00:00Z'),
         timestamp_ist: '2026-08-31 10:30:00',
-        student_name: null,
-        phone: 'p',
-        referred_by_name: null,
-        referred_by_phone: null,
+        student_id: 'u',
+        referred_by_id: null,
+        geo_entity_type: null,
+        geo_entity_name: null,
         level: null,
         lesson_type: 'word',
         content: null,

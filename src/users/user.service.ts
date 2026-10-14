@@ -9,7 +9,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, EntityManager } from 'typeorm';
 import { validate as isUuid, v4 as uuidv4 } from 'uuid';
 import { UserEntity } from './user.entity';
-import { InteractionRow } from './interactions-csv';
+import {
+  InteractionRow,
+  InteractionSourceRow,
+  anonymiseInteractionRow,
+} from './interactions-csv';
 import { CacheService } from '../interfaces/redis/cache';
 import { CACHE_KEYS, CACHE_TTL } from '../interfaces/redis/cache.dto';
 import { ScoreService } from '../literacy/score/score.service';
@@ -59,6 +63,10 @@ export class UserService {
    * raw-SQL read; re-derives rolled_back = false on the transcript join per
    * the repo conventions. `to` is the caller-clamped upper bound; `cursor`
    * is the (created_at, id) of the last row already emitted.
+   *
+   * Anonymised: people appear as users.id only. The student's and teacher's
+   * names are selected purely so anonymiseInteractionRow can censor them out
+   * of the transcripts; they never reach the caller.
    */
   async findInteractionsPage(options: {
     from: Date | null;
@@ -67,14 +75,16 @@ export class UserService {
     limit: number;
   }): Promise<InteractionRow[]> {
     const { from, to, cursor, limit } = options;
-    return await this.dataSource.query(
+    const rows: InteractionSourceRow[] = await this.dataSource.query(
       `SELECT l.id AS lesson_state_id,
               l.created_at,
               to_char(l.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS timestamp_ist,
+              l.user_id AS student_id,
+              u.referrer_user_id AS referred_by_id,
+              g.type AS geo_entity_type,
+              g.name AS geo_entity_name,
               u.name AS student_name,
-              u.external_id AS phone,
               r.name AS referred_by_name,
-              r.external_id AS referred_by_phone,
               l.level,
               CASE WHEN l.passage_id IS NULL THEN 'word' ELSE 'passage' END AS lesson_type,
               l.word AS content,
@@ -95,6 +105,9 @@ export class UserService {
        FROM literacy_lesson_states l
        JOIN users u ON u.id = l.user_id
        LEFT JOIN users r ON r.id = u.referrer_user_id
+       -- The teacher's current geo entity: the same membership rule the
+       -- dashboard roll-up uses (referrer → users.geo_entity_id).
+       LEFT JOIN geo_entity g ON g.id = r.geo_entity_id
        -- The turn's voice note (user_message_id IS its media row). No
        -- rolled_back filter: the child's recording length is factual
        -- history. duration_ms is container-parsed at ingest
@@ -134,6 +147,7 @@ export class UserService {
        LIMIT $5`,
       [to, from, cursor?.created_at ?? null, cursor?.id ?? null, limit],
     );
+    return rows.map(anonymiseInteractionRow);
   }
 
   constructor(
