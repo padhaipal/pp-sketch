@@ -11,14 +11,16 @@ const VOWEL_MATRA_SET = new Set(
 
 const LONG_A = 'ा';
 
+// Perso-Arabic nukta letters (क़ ख़ ग़ ज़ फ़) are deliberately absent: nukta
+// spellings are accepted per word via NUKTA_VARIANTS, not as a general rule.
 const FAMILIES: string[][] = [
-  ['क', 'ख', 'क़', 'ख़'],
-  ['ग', 'घ', 'ग़'],
+  ['क', 'ख'],
+  ['ग', 'घ'],
   ['च', 'छ'],
-  ['ज', 'झ', 'ज़'],
+  ['ज', 'झ'],
   ['ट', 'ठ', 'त', 'थ'],
   ['ड', 'ढ', 'द', 'ध'],
-  ['प', 'फ', 'फ़'],
+  ['प', 'फ'],
   ['ब', 'भ'],
   ['श', 'ष', 'स'],
   ['र', 'ड़', 'ढ़'],
@@ -42,6 +44,83 @@ const FAMILIES: string[][] = [
 
 const sameFamily = (a: string, b: string) =>
   FAMILIES.some((fam) => fam.includes(a) && fam.includes(b));
+
+// clean() NFC-normalizes, which keeps a nukta as its own code point after its
+// consonant (क़ ख़ ग़ ज़ फ़ ड़ ढ़ are Unicode composition exclusions). Splitting
+// per code point would compare that nukta against the next letter, so group
+// it with its consonant: 'कुकड़' → ['क', 'ु', 'क', 'ड़'], letting the ड़ entries
+// in FAMILIES actually match.
+const NUKTA = '\u093C';
+const letters = (word: string): string[] =>
+  Array.from(word).reduce<string[]>((out, ch) => {
+    if (ch === NUKTA && out.length > 0) out[out.length - 1] += ch;
+    else out.push(ch);
+    return out;
+  }, []);
+
+// Hard coding: words the transcription engines may spell with or without a
+// nukta (नज़र / नजर). Deliberately per word rather than a general rule: every
+// word-list.json word that takes a nukta in its Urdu/English-origin spelling,
+// plus फट (Bodhan hears फ़त). Each spelling in a group is accepted for any
+// other, in both directions. Sentence assessment already strips nuktas
+// (normalizeForAlignment), so passage words need no entries here.
+const NUKTA_VARIANTS: Record<string, string[]> = {
+  कदम: ['क़दम'],
+  कलम: ['क़लम'],
+  कानून: ['क़ानून'],
+  किला: ['क़िला'],
+  हक: ['हक़'],
+  अकल: ['अक़ल'],
+  कसूरी: ['क़सूरी'],
+  चाकू: ['चाक़ू'],
+  खत: ['ख़त'],
+  खून: ['ख़ून'],
+  खुदा: ['ख़ुदा'],
+  खुशी: ['ख़ुशी'],
+  खरीद: ['ख़रीद'],
+  खरगोश: ['ख़रगोश'],
+  नाखून: ['नाख़ून'],
+  तारीख: ['तारीख़'],
+  कारखाना: ['कारख़ाना'],
+  खरबूजा: ['ख़रबूजा', 'खरबूज़ा', 'ख़रबूज़ा'],
+  गम: ['ग़म'],
+  गलत: ['ग़लत'],
+  गजब: ['ग़जब', 'गज़ब', 'ग़ज़ब'],
+  बलगम: ['बलग़म'],
+  बगीचा: ['बग़ीचा'],
+  कागज: ['काग़ज', 'कागज़', 'काग़ज़'],
+  बाजार: ['बाज़ार'],
+  औजार: ['औज़ार'],
+  मेज: ['मेज़'],
+  तरबूज: ['तरबूज़'],
+  दरवाजा: ['दरवाज़ा'],
+  हजम: ['हज़म'],
+  मजदूर: ['मज़दूर'],
+  जहाज: ['जहाज़'],
+  सजा: ['सज़ा'],
+  गज: ['गज़'],
+  जीरा: ['ज़ीरा'],
+  फसल: ['फ़सल'],
+  सफाई: ['सफ़ाई'],
+  काफी: ['काफ़ी', 'कॉफ़ी'],
+  टिफिन: ['टिफ़िन'],
+  फरवरी: ['फ़रवरी'],
+  जिराफ: ['जिराफ़'],
+  माफ: ['माफ़'],
+  सफेद: ['सफ़ेद'],
+  फट: ['फ़ट', 'फ़त'],
+};
+
+const NUKTA_GROUP = new Map<string, string>(
+  Object.entries(NUKTA_VARIANTS).flatMap(([plain, forms]) =>
+    [plain, ...forms].map((form): [string, string] => [form, plain]),
+  ),
+);
+
+const sameNuktaGroup = (a: string, b: string) => {
+  const group = NUKTA_GROUP.get(a);
+  return group !== undefined && group === NUKTA_GROUP.get(b);
+};
 
 const MATRA_TO_VOWEL: Record<string, string> = {
   'ा': 'आ',
@@ -397,11 +476,10 @@ class EvaluateAnswer {
     return studentWords.some((studentWord) => {
       const cleanedStudentWord = this.clean(studentWord);
       if (cleanedStudentWord === cleanedCorrectAnswer) return true;
+      if (sameNuktaGroup(cleanedCorrectAnswer, cleanedStudentWord)) return true;
 
       // Hard coding some common transcription engine mistakes.
       if (cleanedCorrectAnswer === 'ईख' && cleanedStudentWord === 'एक')
-        return true;
-      if (cleanedCorrectAnswer === 'दरवाज़ा' && cleanedStudentWord === 'दरवाजा')
         return true;
       if (cleanedCorrectAnswer === 'हथौड़ा' && cleanedStudentWord === 'हथौड़ी')
         return true;
@@ -504,19 +582,11 @@ class EvaluateAnswer {
       if (cleanedCorrectAnswer === 'इडली' && cleanedStudentWord === 'इटली')
         return true;
       // Nuqta and nasal-mark variants of the same word.
-      if (cleanedCorrectAnswer === 'माफ' && cleanedStudentWord === 'माफ़')
-        return true;
       if (cleanedCorrectAnswer === 'गज' && cleanedStudentWord === 'गाज')
         return true;
       if (cleanedCorrectAnswer === 'गज' && cleanedStudentWord === 'गाज़')
         return true;
       if (cleanedCorrectAnswer === 'गज' && cleanedStudentWord === 'गज्ज')
-        return true;
-      if (cleanedCorrectAnswer === 'दरवाजा' && cleanedStudentWord === 'दरवाज़ा')
-        return true;
-      if (cleanedCorrectAnswer === 'सफेद' && cleanedStudentWord === 'सफ़ेद')
-        return true;
-      if (cleanedCorrectAnswer === 'जहाज' && cleanedStudentWord === 'जहाज़')
         return true;
       if (cleanedCorrectAnswer === 'दुख' && cleanedStudentWord === 'दुःख')
         return true;
@@ -670,15 +740,12 @@ class EvaluateAnswer {
         return false;
       }
 
-      if (cleanedStudentWord.length >= cleanedCorrectAnswer.length) {
-        const offset = cleanedStudentWord.length - cleanedCorrectAnswer.length;
-        for (let i = 0; i < cleanedCorrectAnswer.length; i++) {
-          if (
-            !isEquivalent(
-              cleanedStudentWord[i + offset],
-              cleanedCorrectAnswer[i],
-            )
-          ) {
+      const studentLetters = letters(cleanedStudentWord);
+      const correctLetters = letters(cleanedCorrectAnswer);
+      if (studentLetters.length >= correctLetters.length) {
+        const offset = studentLetters.length - correctLetters.length;
+        for (let i = 0; i < correctLetters.length; i++) {
+          if (!isEquivalent(studentLetters[i + offset], correctLetters[i])) {
             return false;
           }
         }
