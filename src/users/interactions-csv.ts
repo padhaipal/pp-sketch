@@ -80,7 +80,7 @@ export function anonymiseInteractionRow(
   const { student_name, referred_by_name, ...row } = src;
   const names = [student_name, referred_by_name];
   const censor = (t: string | null): string | null =>
-    t === null ? null : censorTranscript(t, names).text;
+    t == null ? null : censorTranscript(t, names).text;
   return {
     ...row,
     sarvam_transcript: censor(row.sarvam_transcript),

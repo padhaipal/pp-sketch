@@ -1348,13 +1348,56 @@ describe('UserService.findInteractionsPage', () => {
     const cursor = { created_at: new Date('2026-08-15T00:00:00Z'), id: 'c1' };
     await expect(
       svc.findInteractionsPage({ from, to, cursor, limit: 5000 }),
-    ).resolves.toBe(rows);
+    ).resolves.toEqual([expect.objectContaining({ lesson_state_id: 'a' })]);
     const [sql, params] = dsQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('ORDER BY l.created_at, l.id');
     expect(sql).toContain('l.created_at <= $1');
     expect(sql).toContain('(l.created_at, l.id) > ($3, $4::uuid)');
     expect(sql).toContain('LIMIT $5');
     expect(params).toEqual([to, from, cursor.created_at, 'c1', 5000]);
+  });
+
+  // Privacy: ids only leave the service; the names are read solely to
+  // censor the transcripts (same pass as users/:id/media) and then dropped.
+  it('anonymises: drops names, censors transcripts, never selects a phone', async () => {
+    const dsQuery = jest.fn().mockResolvedValue([
+      {
+        lesson_state_id: 'a',
+        student_id: 'u-s',
+        referred_by_id: 'u-t',
+        geo_entity_type: 'school',
+        geo_entity_name: 'PS Kupwara',
+        student_name: 'Rani Devi',
+        referred_by_name: 'Asha Kumari',
+        sarvam_transcript: 'Rani ne padha, Asha madam ke saath',
+        azure_transcript: 'mera number 98765 43210',
+        reverie_transcript: null,
+        bodhan_transcript: null,
+      },
+    ]);
+    const svc = svcWith(dsQuery);
+    const [row] = await svc.findInteractionsPage({
+      from: null,
+      to,
+      cursor: null,
+      limit: 1,
+    });
+    expect(row).not.toHaveProperty('student_name');
+    expect(row).not.toHaveProperty('referred_by_name');
+    expect(row).not.toHaveProperty('phone');
+    expect(row.student_id).toBe('u-s');
+    expect(row.referred_by_id).toBe('u-t');
+    expect(row.geo_entity_name).toBe('PS Kupwara');
+    expect(row.sarvam_transcript).toBe(
+      '[removed] ne padha, [removed] madam ke saath',
+    );
+    expect(row.azure_transcript).toBe('mera number [removed]');
+    expect(row.reverie_transcript).toBeNull();
+    const sql = (dsQuery.mock.calls[0] as [string])[0];
+    expect(sql).not.toContain('external_id');
+    expect(sql).toContain('l.user_id AS student_id');
+    expect(sql).toContain('u.referrer_user_id AS referred_by_id');
+    expect(sql).toContain('LEFT JOIN geo_entity g ON g.id = r.geo_entity_id');
   });
 
   it('first page (no cursor, no from) passes nulls', async () => {
