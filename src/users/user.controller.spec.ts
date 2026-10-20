@@ -36,6 +36,7 @@ import type { UserActivityService } from './user-activity.service';
 import type { UserService } from './user.service';
 import type { GeoEntityService } from '../geo-entities/geo-entity.service';
 import type { PiiAccessService } from './pii-access.service';
+import type { TractionService } from './traction.service';
 import { STAFF, type ViewerContext } from '../auth/viewer';
 
 type SimpleRepo = {
@@ -99,6 +100,7 @@ function makeController(opts: {
   // Default: the viewer may see everything (the staff /user/[id] page); the
   // PII tests override it.
   piiAccess?: Partial<PiiAccessService>;
+  tractionSvc?: Partial<TractionService>;
 }): UserController {
   return new UserController(
     (opts.userRepo ?? makeRepo()) as unknown as Repository<UserEntity>,
@@ -119,6 +121,7 @@ function makeController(opts: {
         async (_v: ViewerContext, ids: string[]) => new Set(ids),
       ),
     }) as unknown as PiiAccessService,
+    (opts.tractionSvc ?? {}) as TractionService,
   );
 }
 
@@ -1401,7 +1404,8 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
       lessonStateRepo,
     });
 
-    const out = await ctrl.userMedia('u1', '20');
+    // the staff /user/[id] page (the public would get no transcripts)
+    const out = await ctrl.userMedia('u1', '20', undefined, { kind: 'staff' });
 
     // The interactions read: voice notes + flow taps, newest first, paged.
     // No onboarding flag → onboarding voice notes are excluded at the
@@ -2634,6 +2638,17 @@ describe('UserController — PII by viewer', () => {
         }),
       ]);
     }
+  });
+
+  it('media: the general public (anonymous viewer) gets no transcripts at all; the rows themselves stay', async () => {
+    const { ctrl } = make(false);
+    const out = await ctrl.userMedia(STUDENT_ID, undefined, undefined, {
+      kind: 'anonymous',
+    });
+    expect(out.media.map((m) => [m.id, m.transcripts])).toEqual([
+      ['m1', []],
+      ['m2', []],
+    ]);
   });
 
   it('PATCH :id/profile on a student: 403 unless the viewer is directly above them; the rename itself unchanged', async () => {

@@ -16,6 +16,7 @@ export const QUEUE_NAMES = {
   MIRROR: 'mirror',
   MEDIA_RELOAD_SWEEP: 'media-reload-sweep',
   TEST_RESULTS: 'test-results',
+  TRACTION_WARM: 'traction-warm',
 } as const;
 
 const connection = new Redis(process.env.BULLMQ_REDIS_URL!, {
@@ -111,6 +112,13 @@ export const DEFAULT_JOB_OPTIONS: Record<string, JobsOptions> = {
     attempts: 1,
     removeOnComplete: true,
     removeOnFail: { count: 500 },
+  },
+  // Nightly traction cache warm: a failed night is recomputed on the first
+  // request of the day (users/traction.service.ts), so no retry.
+  [QUEUE_NAMES.TRACTION_WARM]: {
+    attempts: 1,
+    removeOnComplete: true,
+    removeOnFail: { count: 100 },
   },
 };
 

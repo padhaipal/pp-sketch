@@ -95,8 +95,8 @@ export class DashboardScoresController {
   }
 
   // Most improved / top performing at any level below `:id` (the dashboard's
-  // level toggle above the rankings). Teachers come with their number,
-  // students with their name only (2026-10, product decision).
+  // level toggle above the rankings). Teachers come with their name and
+  // number, students with their name only — masked per viewer like scores.
   @Get(':id/rankings')
   @Header('Cache-Control', PUBLIC_CACHE_CONTROL)
   async getRankings(
@@ -104,12 +104,14 @@ export class DashboardScoresController {
     @Query('level') level?: string,
     @Query('metric') metric?: string,
     @Query('window') window?: string,
+    @Viewer() viewer: ViewerContext = ANONYMOUS,
   ): Promise<RankingsResponse> {
     return this.scores.rankings(
       validateGeoEntityId(id),
       validateRankLevel(level),
       validateMetric(metric),
       validateWindow(window),
+      viewer,
     );
   }
 

@@ -218,7 +218,7 @@ block's schools × days gets large.
   latest snapshot against the newest row ≤ as_of − 7 days
   (`TEST_DELTA_DAYS`), whatever the trend's range.
 
-## 2026-10: rankings(id, level, metric, window?) — GET geo-entities/:id/rankings
+## 2026-10: rankings(id, level, metric, window?, viewer?) — GET geo-entities/:id/rankings
 
 Most improved / top performing (five each) among `level` entities below
 `:id` — the dashboard's level toggle above its rankings once drilled in.
@@ -230,10 +230,24 @@ candidate — no downward walk of the 1.7 M-row table). Teachers / students:
 `students({ schools })` over the candidate schools (referrer's current
 school), then `teachers()`. Values: pass rate % / score × 100 / total
 minutes; deltas as everywhere (7 days back; Time ratio). Most improved: n ≥ 5
-for groups, ratio > 1 in Time. Teachers carry their number (`sub`) and
-students their stored name with no number — NOT viewer-masked (product
-decision, 2026-10).
+for groups, ratio > 1 in Time. Teachers carry their name and number (`sub`),
+students their stored name with no number — masked per viewer on the way
+out (`redactRankings`, dashboard-scores.pii.ts) by the same rules as
+scores(): number / student name in full only for the viewer directly above
+(PiiAccessService.visibleTo), first…last otherwise; an unnamed student's
+"Student N" stays. (Until 2026-10 this endpoint answered everyone in full —
+a leak, since it is on the public allowlist.)
 Each `RankRow.path` is the refs from just below `:id` down to the row's own
 view (a geo entity; a teacher's class = school → teacher ref; a student →
 their teacher's class), so the dashboard's double-click can push them onto
 its drill stack.
+
+## 2026-10: the general public (anonymous viewer)
+
+`viewer.kind === 'anonymous'` — the donor page's map, which never names a
+viewer — is `publicView` in dashboard-scores.pii.ts: on top of the masking
+every viewer gets, teachers' and officials' NAMES are masked too (the
+teacher row name, `official.name`, a teacher entity / drill ref name; the
+"Teacher" fallback stays) and `official.spotlight_message` is null. A /d
+link holder still sees every teacher's and official's name. Applies to
+scores (and so spotlight + scores.csv) and rankings.

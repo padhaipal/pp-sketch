@@ -63,6 +63,8 @@ import { UserService, StaffLookupRow } from './user.service';
 import { GeoEntityService } from '../geo-entities/geo-entity.service';
 import { PiiAccessService } from './pii-access.service';
 import { maskPii, visibilityOf } from './pii-mask';
+import { TractionService } from './traction.service';
+import type { TractionResponse } from './traction';
 import { censorTranscript } from './transcript-censor';
 import {
   ANONYMOUS,
@@ -149,12 +151,14 @@ export class UserController {
     private readonly userService: UserService,
     private readonly geoEntityService: GeoEntityService,
     private readonly piiAccess: PiiAccessService,
+    private readonly tractionService: TractionService,
   ) {}
 
   // ─── Staff accounts (education officials) ─────────────────────────────
   // Declared before the ':id/…' routes only for readability — Nest matches
   // by segment count, but 'lookup' and ':id' below MUST come after
-  // 'dashboard', 'dashboard/summary' and 'interactions.csv' (see their
+  // 'dashboard', 'dashboard/summary', 'dashboard/traction' and
+  // 'interactions.csv' (see their
   // placement) or a literal path is captured as an id.
 
   @Post('staff-create')
@@ -272,6 +276,14 @@ export class UserController {
   @Get('dashboard/summary')
   async dashboardSummary(): Promise<DashboardSummaryResponse> {
     return this.userActivityService.getDashboardSummary();
+  }
+
+  // The donor page's traction chart: daily aggregates from 2026-09-01, no
+  // personal data (traction.ts). Public through the pp-dashboard proxy;
+  // cached per IST day and warmed nightly (traction.service.ts).
+  @Get('dashboard/traction')
+  async dashboardTraction(): Promise<TractionResponse> {
+    return this.tractionService.get();
   }
 
   @Get('dashboard')
@@ -504,7 +516,9 @@ export class UserController {
   // the student's own teacher sees name and phone as stored; everyone else
   // gets them masked and `pii: 'masked'`. Whether a recording may be played
   // is decided per request by GET media-meta-data/:id/audio (canHear).
-  // Transcripts are censored for every viewer (transcript-censor.ts).
+  // Transcripts are censored for every viewer (transcript-censor.ts), and
+  // withheld entirely from the general public (an anonymous viewer — the
+  // donor page): what a child said is never sent there.
   @Get(':id/media')
   async userMedia(
     @Param('id') id: string,
@@ -525,6 +539,7 @@ export class UserController {
       phone: canSeePii ? user.external_id : maskPii(user.external_id),
       pii: visibilityOf(canSeePii),
     };
+    const publicView = viewer.kind === 'anonymous';
     const censor = (text: string | null) =>
       text === null
         ? { text, redactions: 0 }
@@ -786,7 +801,7 @@ export class UserController {
           kind: tap ? 'tap' : onboarding ? 'onboarding' : 'voice',
           created_at: m.created_at,
           has_audio: !!m.s3_key,
-          transcripts: transcriptMap.get(m.id) ?? [],
+          transcripts: publicView ? [] : (transcriptMap.get(m.id) ?? []),
           word: lesson?.word ?? null,
           starting_state: lesson?.starting_state ?? null,
           answer: displayedAnswerMap.get(m.id) ?? null,

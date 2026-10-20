@@ -15,7 +15,12 @@ import {
 } from './test-results.service';
 import { PiiAccessService } from '../../users/pii-access.service';
 import { ANONYMOUS, type ViewerContext } from '../../auth/viewer';
-import { piiSubjects, redactScores } from './dashboard-scores.pii';
+import {
+  piiSubjects,
+  rankingSubjects,
+  redactRankings,
+  redactScores,
+} from './dashboard-scores.pii';
 import {
   ACTIVE_WINDOW_DAYS,
   BandVerdict,
@@ -396,8 +401,8 @@ function rankRows(
   return { top, most_improved };
 }
 
-// Students: their own figures; the name as stored (never masked here — a
-// product decision, 2026-10), no number.
+// Students: their own figures; the name as stored (rankings() masks it per
+// viewer on the way out), no number.
 function rankStudents(
   members: MemberRow[],
   metric: LiteracyMetric,
@@ -520,7 +525,7 @@ export class DashboardScoresService {
       viewer,
       piiSubjects(unredacted),
     );
-    return redactScores(unredacted, visible);
+    return redactScores(unredacted, visible, viewer.kind === 'anonymous');
   }
 
   // The dashboard fetches /scores and /spotlight for the same selection at
@@ -669,12 +674,45 @@ export class DashboardScoresService {
   // entity, or a teacher's user id for their students). Same rules as the
   // children lists: tests by pass rate / score with a 7-day delta, Time by
   // total minutes with the window ratio (most improved: ratio > 1). Five
-  // each. Teachers carry their number; students their name, no number.
+  // each. Teachers carry their name and number; students their name, no
+  // number — masked per viewer exactly like the scores response
+  // (dashboard-scores.pii.ts): the leak fixed 2026-10 was this endpoint
+  // answering everyone, the general public included, in full.
   async rankings(
     id: string,
     level: RankLevel,
     metric: DashboardMetric,
     window?: TimeWindow,
+    viewer: ViewerContext = ANONYMOUS,
+  ): Promise<RankingsResponse> {
+    const named = new Set<string>();
+    const unredacted = await this.buildRankings(
+      id,
+      level,
+      metric,
+      window,
+      named,
+    );
+    const visible = await this.piiAccess.visibleTo(
+      viewer,
+      rankingSubjects(unredacted),
+    );
+    return redactRankings(
+      unredacted,
+      visible,
+      viewer.kind === 'anonymous',
+      named,
+    );
+  }
+
+  // The rankings as stored: names and numbers in full. Internal — see
+  // rankings(). Adds to `named` every student that has a stored name.
+  private async buildRankings(
+    id: string,
+    level: RankLevel,
+    metric: DashboardMetric,
+    window: TimeWindow | undefined,
+    named: Set<string>,
   ): Promise<RankingsResponse> {
     const empty = (asOf: string | null): RankingsResponse => ({
       level,
@@ -708,6 +746,7 @@ export class DashboardScoresService {
         30,
         win,
       );
+      for (const m of members) if (m.name) named.add(m.student_id);
       return { level, as_of: asOf, ...rankStudents(members, metric, win) };
     }
     const latest = await this.latestRow(id, metric);
@@ -742,6 +781,7 @@ export class DashboardScoresService {
         30,
         win,
       );
+      for (const m of members) if (m.name) named.add(m.student_id);
       let ranked: { top: RankRow[]; most_improved: RankRow[] };
       if (level === 'student') {
         ranked = rankStudents(members, metric, win);

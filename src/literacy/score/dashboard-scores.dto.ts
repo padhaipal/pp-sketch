@@ -288,8 +288,9 @@ export type RankLevel = (typeof RANK_LEVELS)[number];
 export interface RankRow {
   id: string;
   name: string;
-  // teacher: their phone number in full; null elsewhere (students never
-  // carry a number here)
+  // teacher: their phone number — in full only for the viewer directly
+  // above them, masked otherwise (dashboard-scores.pii.ts); null elsewhere
+  // (students never carry a number here)
   sub: string | null;
   // pass rate % / student score × 100 / total minutes (Time)
   value: number | null;

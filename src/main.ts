@@ -59,6 +59,11 @@ import {
   TEST_RESULTS_CRON,
 } from './literacy/score/test-results.processor';
 import type { TestResultsJobData } from './literacy/score/test-results.processor';
+import { TractionService } from './users/traction.service';
+import {
+  processTractionWarmJob,
+  TRACTION_WARM_CRON,
+} from './users/traction.processor';
 
 const logger = new Logger('Bootstrap');
 
@@ -376,7 +381,32 @@ async function bootstrap() {
     logger.error(`worker(${QUEUE_NAMES.TEST_RESULTS}) ERROR ${err.message}`),
   );
 
-  logger.log('BullMQ workers started for all 12 queues');
+  // Public traction series (donor page): recompute + overwrite the day's
+  // cache key at 01:30 IST, after the nightly test results above.
+  const tractionService = app.get(TractionService);
+  const tractionWarmQueue = createQueue(QUEUE_NAMES.TRACTION_WARM);
+  await tractionWarmQueue.add(
+    'traction-warm-cron',
+    {},
+    { repeat: { pattern: TRACTION_WARM_CRON } },
+  );
+  const tractionWarmWorker = createWorker(
+    QUEUE_NAMES.TRACTION_WARM,
+    async (job) => {
+      await processTractionWarmJob(job, tractionService);
+    },
+    { concurrency: 1 },
+  );
+  tractionWarmWorker.on('failed', (job, err) =>
+    logger.error(
+      `worker(${QUEUE_NAMES.TRACTION_WARM}) FAILED job id=${job?.id} err=${err.message}`,
+    ),
+  );
+  tractionWarmWorker.on('error', (err) =>
+    logger.error(`worker(${QUEUE_NAMES.TRACTION_WARM}) ERROR ${err.message}`),
+  );
+
+  logger.log('BullMQ workers started for all 13 queues');
 
   await app.listen(process.env.PORT ?? 3000);
   logger.log(`Application listening on port ${process.env.PORT ?? 3000}`);
