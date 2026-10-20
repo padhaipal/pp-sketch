@@ -21,7 +21,7 @@ describe('test-results worker registration', () => {
     expect(main).toMatch(
       /'test-results-cron',\s*\{ full: false \},\s*\{ repeat: \{ pattern: TEST_RESULTS_CRON \} \}/,
     );
-    expect(main).toMatch(/BullMQ workers started for all 12 queues/);
+    expect(main).toMatch(/BullMQ workers started for all 13 queues/);
   });
 
   it('queues.ts declares the queue with a single attempt', () => {
