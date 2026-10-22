@@ -4,7 +4,7 @@ import { buildTraction, dateRange, type TractionInputs } from './traction';
 
 const empty = (): TractionInputs => ({
   activityByDay: [],
-  lifetimeMsByUser: new Map(),
+  activeMonths: [],
   students: [],
   teacherDays: [],
   mplb: [],
@@ -113,23 +113,55 @@ describe('buildTraction', () => {
     expect(out.daily.map((d) => d.mpl_b_passed)).toEqual([1, 2, 1]);
   });
 
-  it('cohort hours: mean lifetime hours of that day’s cohort (2 dp), null without one', () => {
+  it('monthly: active students split by onboarding month; the month in progress projected linearly', () => {
     const out = buildTraction(
       {
         ...empty(),
         students: [
-          { id: 'a', onboarded_on: '2026-09-01', units: [] },
-          { id: 'b', onboarded_on: '2026-09-01', units: [] },
+          { id: 'a', onboarded_on: '2026-08-20', units: [] },
+          { id: 'b', onboarded_on: '2026-09-02', units: [] },
+          { id: 'c', onboarded_on: '2026-09-03', units: [] },
         ],
-        lifetimeMsByUser: new Map([['a', 3_600_000 * 3]]),
+        activeMonths: [
+          { user_id: 'a', month: '2026-08' },
+          { user_id: 'a', month: '2026-09' },
+          { user_id: 'b', month: '2026-09' },
+          { user_id: 'c', month: '2026-08' }, // active before onboarding
+          { user_id: 'x', month: '2026-09' }, // not onboarded: ignored
+        ],
       },
-      '2026-09-01',
-      '2026-09-02',
+      '2026-08-01',
+      '2026-09-10',
       AT,
     );
-    expect(out.daily.map((d) => d.cohort_avg_lifetime_hours)).toEqual([
-      1.5,
-      null,
+    expect(out.monthly).toEqual([
+      {
+        month: '2026-08',
+        joined_earlier: 0,
+        joined_this_month: 2,
+        projected_joined_earlier: null,
+        projected_joined_this_month: null,
+      },
+      {
+        month: '2026-09',
+        joined_earlier: 1,
+        joined_this_month: 1,
+        projected_joined_earlier: 3, // 1 × 30 ÷ 10
+        projected_joined_this_month: 3,
+      },
+    ]);
+  });
+
+  it('monthly: a month ending on `to` is complete (no projection)', () => {
+    const out = buildTraction(empty(), '2026-09-01', '2026-09-30', AT);
+    expect(out.monthly).toEqual([
+      {
+        month: '2026-09',
+        joined_earlier: 0,
+        joined_this_month: 0,
+        projected_joined_earlier: null,
+        projected_joined_this_month: null,
+      },
     ]);
   });
 });

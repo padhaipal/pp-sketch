@@ -7,7 +7,7 @@
 import { addDays } from '../notifier/report-card/report-card.utils';
 
 // The chart's x-axis starts here (IST calendar date).
-export const TRACTION_FROM = '2026-08-01';
+export const TRACTION_FROM = '2026-04-01';
 
 export interface TractionDay {
   date: string; // IST YYYY-MM-DD
@@ -28,10 +28,20 @@ export interface TractionDay {
   blocks: number;
   districts: number;
   states: number;
-  // The students onboarded THAT day: their mean lifetime active hours up
-  // to now, 2 dp; null when nobody was onboarded that day. Recent cohorts
-  // have had less time, so the tail is lower by construction.
-  cohort_avg_lifetime_hours: number | null;
+}
+
+// Per IST calendar month: onboarded students with at least one IST day of
+// > 5 min active that month, split by whether they were onboarded before
+// that month or in it (a student active before their onboarding month
+// counts as "this month").
+export interface TractionMonth {
+  month: string; // IST YYYY-MM
+  joined_earlier: number;
+  joined_this_month: number;
+  // The month in progress only (null otherwise): both counts scaled
+  // linearly from the complete days so far to the whole month.
+  projected_joined_earlier: number | null;
+  projected_joined_this_month: number | null;
 }
 
 export interface TractionResponse {
@@ -40,6 +50,7 @@ export interface TractionResponse {
   to: string;
   computed_at: string;
   daily: TractionDay[];
+  monthly: TractionMonth[];
 }
 
 export interface TractionInputs {
@@ -49,8 +60,8 @@ export interface TractionInputs {
     users_over_5min: number;
     active_ms: number;
   }>;
-  // lifetime active ms per user
-  lifetimeMsByUser: Map<string, number>;
+  // (user, IST YYYY-MM) pairs with an IST day > 5 min active, from..to
+  activeMonths: Array<{ user_id: string; month: string }>;
   // onboarded students: IST date of onboarding + the referrer's geo chain
   students: Array<{ id: string; onboarded_on: string; units: UnitRef[] }>;
   // IST dates on which each school-level teacher account was created
@@ -71,7 +82,6 @@ export interface UnitRef {
 const UNIT_TYPES = ['school', 'block', 'district', 'state'] as const;
 
 const MS_PER_MINUTE = 60_000;
-const MS_PER_HOUR = 3_600_000;
 
 const nextDay = (date: string): string =>
   addDays(new Date(`${date}T00:00:00Z`), 1)
@@ -155,18 +165,8 @@ export function buildTraction(
     mplb.push(passing);
   }
 
-  // cohorts: onboarding day → lifetime hours of its students
-  const cohorts = new Map<string, number[]>();
-  for (const s of inputs.students) {
-    const hours = (inputs.lifetimeMsByUser.get(s.id) ?? 0) / MS_PER_HOUR;
-    const c = cohorts.get(s.onboarded_on);
-    if (c) c.push(hours);
-    else cohorts.set(s.onboarded_on, [hours]);
-  }
-
   const daily: TractionDay[] = days.map((date, k) => {
     const a = activity.get(date);
-    const cohort = cohorts.get(date);
     return {
       date,
       users_over_5min: a ? a.users_over_5min : 0,
@@ -178,11 +178,6 @@ export function buildTraction(
       blocks: unitStock.block[k],
       districts: unitStock.district[k],
       states: unitStock.state[k],
-      cohort_avg_lifetime_hours: cohort
-        ? Math.round(
-            (cohort.reduce((x, y) => x + y, 0) / cohort.length) * 100,
-          ) / 100
-        : null,
     };
   });
 
@@ -191,5 +186,48 @@ export function buildTraction(
     to,
     computed_at: computedAt.toISOString(),
     daily,
+    monthly: buildMonthly(inputs, from, to),
   };
+}
+
+// Days in the IST month `ym` (YYYY-MM).
+const daysInMonth = (ym: string): number => {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+};
+
+function buildMonthly(
+  inputs: TractionInputs,
+  from: string,
+  to: string,
+): TractionMonth[] {
+  if (to < from) return [];
+  const months = [...new Set(dateRange(from, to).map((d) => d.slice(0, 7)))];
+  const joined = new Map(
+    inputs.students.map((s) => [s.id, s.onboarded_on.slice(0, 7)]),
+  );
+  const counts = new Map(months.map((m) => [m, { earlier: 0, now: 0 }]));
+  for (const a of inputs.activeMonths) {
+    const c = counts.get(a.month);
+    const j = joined.get(a.user_id);
+    if (!c || j === undefined) continue;
+    if (j < a.month) c.earlier++;
+    else c.now++;
+  }
+  const lastMonth = to.slice(0, 7);
+  const elapsed = Number(to.slice(8, 10));
+  const total = daysInMonth(lastMonth);
+  return months.map((month) => {
+    const c = counts.get(month)!;
+    const partial = month === lastMonth && elapsed < total;
+    const scale = (n: number) =>
+      partial ? Math.round((n * total) / elapsed) : null;
+    return {
+      month,
+      joined_earlier: c.earlier,
+      joined_this_month: c.now,
+      projected_joined_earlier: scale(c.earlier),
+      projected_joined_this_month: scale(c.now),
+    };
+  });
 }
