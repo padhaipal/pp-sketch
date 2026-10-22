@@ -169,11 +169,26 @@ describe('InteractionStreamService', () => {
     expect(sql).toContain('interaction-stream:rows');
     expect(params[0]).toBe(120);
     expect(params[3]).toBe(20);
+    expect(params[4]).toBe(400); // candidate pool
+    expect(sql).toMatch(
+      /END\) IS NOT NULL\s+ORDER BY r\.created_at DESC\s+LIMIT \$4/,
+    );
     expect(cache.set).toHaveBeenCalledWith(
       'dashboard:interactions:v1',
       out,
       45,
     );
+  });
+
+  it('drops a turn that is neither correct nor incorrect', async () => {
+    const { svc, query } = make();
+    query.mockResolvedValueOnce([
+      voice(),
+      voice({ id: 'ungraded', lesson_answer_correct: null }),
+    ]);
+    const out = await svc.get();
+    expect(out.rows).toHaveLength(1);
+    expect(out.rows[0].answer_correct).toBe(true);
   });
 
   it('concurrent misses share one query', async () => {
