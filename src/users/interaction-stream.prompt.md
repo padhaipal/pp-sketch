@@ -14,8 +14,9 @@ Public through the pp-dashboard proxy allowlist; the page polls every 60 s.
   recording_permissions_obtained_at; no onboarding turns.
 - **Row** (interaction-stream.ts `toStreamRow`): `key` = sha256(media id)
   first 16 hex (no ids leave); `at`; `student` = maskPii(name), or a stand-in
-  "A...l" when unnamed (`studentInitials`: two letters from sha256 of the
-  user id, masked — stable, nothing personal); `kind` voice | tap; `answer` = voice: the transcript
+  when unnamed (`studentInitials`: a common Indian first name from
+  `STAND_IN_NAMES` picked by sha256 of the user id, masked — realistic
+  initials, stable, nothing personal); `kind` voice | tap; `answer` = voice: the transcript
   (sarvam → azure → bodhan → reverie, first non-empty) through
   censorTranscript then maskPii — first and last character only; tap: the
   chosen option's text; `correct_answer` = voice: GET users/:id/media's

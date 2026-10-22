@@ -51,6 +51,11 @@ export interface TractionResponse {
   computed_at: string;
   daily: TractionDay[];
   monthly: TractionMonth[];
+  // Headline figures through `to`, all time (not just the window).
+  totals: {
+    hours: number; // active hours over every user, whole
+    students: number; // onboarded students
+  };
 }
 
 export interface TractionInputs {
@@ -82,6 +87,7 @@ export interface UnitRef {
 const UNIT_TYPES = ['school', 'block', 'district', 'state'] as const;
 
 const MS_PER_MINUTE = 60_000;
+const MS_PER_HOUR = 3_600_000;
 
 const nextDay = (date: string): string =>
   addDays(new Date(`${date}T00:00:00Z`), 1)
@@ -187,6 +193,14 @@ export function buildTraction(
     computed_at: computedAt.toISOString(),
     daily,
     monthly: buildMonthly(inputs, from, to),
+    totals: {
+      hours: Math.round(
+        inputs.activityByDay
+          .filter((a) => a.date <= to)
+          .reduce((sum, a) => sum + a.active_ms, 0) / MS_PER_HOUR,
+      ),
+      students: inputs.students.filter((s) => s.onboarded_on <= to).length,
+    },
   };
 }
 
