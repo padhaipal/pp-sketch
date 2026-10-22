@@ -7,7 +7,7 @@
 import { addDays } from '../notifier/report-card/report-card.utils';
 
 // The chart's x-axis starts here (IST calendar date).
-export const TRACTION_FROM = '2026-09-01';
+export const TRACTION_FROM = '2026-08-01';
 
 export interface TractionDay {
   date: string; // IST YYYY-MM-DD

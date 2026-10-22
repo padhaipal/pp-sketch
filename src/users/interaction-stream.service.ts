@@ -95,7 +95,8 @@ export class InteractionStreamService {
          ORDER BY mm.created_at DESC
          LIMIT $4
        )
-       SELECT r.id, r.created_at, r.media_type, r.duration_ms, r.student_name,
+       SELECT r.id, r.user_id, r.created_at, r.media_type, r.duration_ms,
+              r.student_name,
               l.word AS lesson_word,
               l.answer_correct AS lesson_answer_correct,
               pl.word AS prev_word, pl.answer AS prev_answer,

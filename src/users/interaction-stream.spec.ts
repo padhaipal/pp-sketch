@@ -9,6 +9,7 @@ import {
   displayedAnswer,
   pickTranscript,
   rowKey,
+  studentCode,
   toStreamRow,
   wpmOf,
   type InteractionSourceRow,
@@ -25,6 +26,7 @@ const voice = (
   o: Partial<InteractionSourceRow> = {},
 ): InteractionSourceRow => ({
   id: '11111111-1111-4111-8111-111111111111',
+  user_id: 'aaaaaaaa-0000-4000-8000-000000000001',
   created_at: new Date('2026-10-22T13:00:00Z'),
   media_type: 'audio',
   duration_ms: null,
@@ -64,8 +66,16 @@ describe('interaction stream rows', () => {
     expect(row.answer).toBe('[...ल');
   });
 
-  it('a nameless student shows as the masked fallback', () => {
-    expect(toStreamRow(voice({ student_name: null })).student).toBe('S...t');
+  it('an unnamed student is "Student NNNN", stable per student', () => {
+    const a = toStreamRow(voice({ student_name: null })).student;
+    expect(a).toMatch(/^Student \d{4}$/);
+    expect(toStreamRow(voice({ student_name: '  ' })).student).toBe(a);
+    expect(
+      toStreamRow(voice({ student_name: null, user_id: 'other' })).student,
+    ).not.toBe(a);
+    expect(a).toBe(
+      `Student ${studentCode('aaaaaaaa-0000-4000-8000-000000000001')}`,
+    );
   });
 
   it('picks transcripts sarvam → azure → bodhan, skipping empty ones', () => {
