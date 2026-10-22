@@ -8,7 +8,7 @@ import { censorTranscript } from './transcript-censor';
 // interaction-stream.service.ts.
 //
 // What a member of the public sees per turn: the student's name masked
-// ("R...i", or "Student NNNN" when unnamed), when, voice note or tap, what they answered, the expected
+// ("R...i"; a stand-in "A...l" when unnamed), when, voice note or tap, what they answered, the expected
 // answer, whether it was marked correct, reading speed. A voice answer is
 // the transcript run through censorTranscript and then masked to its first
 // and last character — what a child said is never shown in full. No audio,
@@ -22,25 +22,21 @@ export const INTERACTION_STREAM_DELAY_S = 120;
 // which engine's transcript stands for a voice note, first non-empty wins
 const TRANSCRIPT_PREFERENCE = ['sarvam', 'azure', 'bodhan', 'reverie'];
 
-// An unnamed student (most were onboarded before names were asked) is
-// "Student NNNN": four digits from a hash of their id — stable, so the same
-// child is recognisable down the stream, and not derived from anything
-// personal.
-export const studentCode = (userId: string): string =>
-  String(
-    parseInt(
-      createHash('sha256')
-        .update(`student:${userId}`)
-        .digest('hex')
-        .slice(0, 8),
-      16,
-    ) % 10000,
-  ).padStart(4, '0');
+// An unnamed student (most were onboarded before names were asked) gets a
+// stand-in in the same masked shape, "A...l": an upper- and a lower-case
+// letter from a hash of their id — stable, so the same child is
+// recognisable down the stream, and not derived from anything personal.
+export const studentInitials = (userId: string): string => {
+  const h = createHash('sha256').update(`student:${userId}`).digest();
+  const letter = (byte: number, base: number) =>
+    String.fromCharCode(base + (byte % 26));
+  return maskPii(`${letter(h[0], 65)}${letter(h[1], 97)}`);
+};
 
 export interface InteractionStreamRow {
   key: string; // opaque, stable per turn
   at: string; // ISO timestamp of the student's message
-  student: string; // masked name, or "Student NNNN" when unnamed
+  student: string; // masked name, or a stand-in "A...l" when unnamed
   kind: 'voice' | 'tap';
   answer: string | null; // masked transcript, or the tapped option
   correct_answer: string | null;
@@ -123,7 +119,7 @@ export function toStreamRow(r: InteractionSourceRow): InteractionStreamRow {
     at: new Date(r.created_at).toISOString(),
     student: r.student_name?.trim()
       ? maskPii(r.student_name)
-      : `Student ${studentCode(r.user_id)}`,
+      : studentInitials(r.user_id),
     kind: tap ? 'tap' : 'voice',
     answer: tap
       ? r.tap_chosen

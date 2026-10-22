@@ -63,7 +63,7 @@ export class TractionService {
     const started = Date.now();
     const today = istDateIso(now);
     const to = istDateIso(addDays(new Date(`${today}T00:00:00Z`), -1));
-    const inputs = await this.readInputs();
+    const inputs = await this.readInputs(TRACTION_FROM, to);
     const response = buildTraction(inputs, TRACTION_FROM, to, now);
     await this.cacheService.set(
       CACHE_KEYS.traction(today),
@@ -76,19 +76,20 @@ export class TractionService {
     return response;
   }
 
-  private async readInputs(): Promise<TractionInputs> {
+  private async readInputs(from: string, to: string): Promise<TractionInputs> {
     const db = this.dataSource;
     const cutoff = onboardingCutoff();
     const [activityRows, studentRows, teacherRows, mplbRows] =
       await Promise.all([
-        // per IST day ('d') and per user lifetime ('u') from one scan
+        // per IST day ('d') and per (user, IST month) with a day > 5 min
+        // ('m', within the window) from one scan
         db.query<
           Array<{
-            k: 'd' | 'u';
+            k: 'd' | 'm';
             date: string | null;
             user_id: string | null;
             users_over_5min: number | null;
-            active_ms: string | number;
+            active_ms: string | number | null;
           }>
         >(
           `/* traction:activity */
@@ -99,10 +100,11 @@ export class TractionService {
            FROM per_user_day
            GROUP BY ist_date
            UNION ALL
-           SELECT 'u', NULL, user_id, NULL, ROUND(SUM(active_ms))
+           SELECT DISTINCT 'm', to_char(ist_date, 'YYYY-MM'), user_id, NULL::int,
+                  NULL::numeric
            FROM per_user_day
-           GROUP BY user_id`,
-          [FIVE_MIN_MS],
+           WHERE active_ms > $1 AND ist_date BETWEEN $2::date AND $3::date`,
+          [FIVE_MIN_MS, from, to],
         ),
         // onboarded students (UserService.isOnboarded): grandfathered by
         // created_at before the cutoff, else onboarding wrote birth_year +
@@ -173,7 +175,7 @@ export class TractionService {
       ]);
 
     const activityByDay: TractionInputs['activityByDay'] = [];
-    const lifetimeMsByUser = new Map<string, number>();
+    const activeMonths: TractionInputs['activeMonths'] = [];
     for (const r of activityRows) {
       if (r.k === 'd' && r.date) {
         activityByDay.push({
@@ -181,13 +183,13 @@ export class TractionService {
           users_over_5min: Number(r.users_over_5min ?? 0),
           active_ms: Number(r.active_ms),
         });
-      } else if (r.k === 'u' && r.user_id) {
-        lifetimeMsByUser.set(r.user_id, Number(r.active_ms));
+      } else if (r.k === 'm' && r.date && r.user_id) {
+        activeMonths.push({ user_id: r.user_id, month: r.date });
       }
     }
     return {
       activityByDay,
-      lifetimeMsByUser,
+      activeMonths,
       students: studentRows
         .filter((r) => r.onboarded_on)
         .map((r) => ({
