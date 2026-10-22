@@ -152,6 +152,28 @@ describe('buildTraction', () => {
     ]);
   });
 
+  it('totals: all-time hours and onboarded students through `to`, before the window too', () => {
+    const out = buildTraction(
+      {
+        ...empty(),
+        activityByDay: [
+          { date: '2026-03-10', users_over_5min: 1, active_ms: 3_600_000 },
+          { date: '2026-09-02', users_over_5min: 1, active_ms: 5_400_000 },
+          { date: '2026-09-04', users_over_5min: 1, active_ms: 9_000_000 }, // after `to`
+        ],
+        students: [
+          { id: 'a', onboarded_on: '2026-03-01', units: [] },
+          { id: 'b', onboarded_on: '2026-09-02', units: [] },
+          { id: 'c', onboarded_on: '2026-09-04', units: [] }, // after `to`
+        ],
+      },
+      '2026-09-01',
+      '2026-09-03',
+      AT,
+    );
+    expect(out.totals).toEqual({ hours: 3, students: 2 }); // 2.5 h rounds up
+  });
+
   it('monthly: a month ending on `to` is complete (no projection)', () => {
     const out = buildTraction(empty(), '2026-09-01', '2026-09-30', AT);
     expect(out.monthly).toEqual([

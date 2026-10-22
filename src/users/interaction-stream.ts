@@ -8,7 +8,7 @@ import { censorTranscript } from './transcript-censor';
 // interaction-stream.service.ts.
 //
 // What a member of the public sees per turn: the student's name masked
-// ("R...i"; a stand-in "A...l" when unnamed), when, voice note or tap, what they answered, the expected
+// ("R...i"; a masked stand-in name when unnamed), when, voice note or tap, what they answered, the expected
 // answer, whether it was marked correct, reading speed. A voice answer is
 // the transcript run through censorTranscript and then masked to its first
 // and last character — what a child said is never shown in full. No audio,
@@ -23,20 +23,71 @@ export const INTERACTION_STREAM_DELAY_S = 120;
 const TRANSCRIPT_PREFERENCE = ['sarvam', 'azure', 'bodhan', 'reverie'];
 
 // An unnamed student (most were onboarded before names were asked) gets a
-// stand-in in the same masked shape, "A...l": an upper- and a lower-case
-// letter from a hash of their id — stable, so the same child is
-// recognisable down the stream, and not derived from anything personal.
+// stand-in in the same masked shape: a common Indian first name picked by a
+// hash of their id, then masked ("A...v") — realistic initials, stable, so
+// the same child is recognisable down the stream, and not derived from
+// anything personal.
+export const STAND_IN_NAMES = [
+  'Aarav',
+  'Aditi',
+  'Amit',
+  'Ananya',
+  'Anjali',
+  'Arjun',
+  'Ayesha',
+  'Deepak',
+  'Divya',
+  'Gaurav',
+  'Geeta',
+  'Harsh',
+  'Ishaan',
+  'Jyoti',
+  'Kajal',
+  'Karan',
+  'Kavya',
+  'Kiran',
+  'Komal',
+  'Lakshmi',
+  'Manish',
+  'Meera',
+  'Mohit',
+  'Muskan',
+  'Neha',
+  'Nikhil',
+  'Nisha',
+  'Pankaj',
+  'Pooja',
+  'Priya',
+  'Rahul',
+  'Rajesh',
+  'Rani',
+  'Ravi',
+  'Rekha',
+  'Ritu',
+  'Rohit',
+  'Sachin',
+  'Sakshi',
+  'Sanjay',
+  'Shreya',
+  'Sneha',
+  'Sonu',
+  'Sunita',
+  'Suresh',
+  'Tanvi',
+  'Usha',
+  'Varun',
+  'Vikas',
+  'Yash',
+];
 export const studentInitials = (userId: string): string => {
   const h = createHash('sha256').update(`student:${userId}`).digest();
-  const letter = (byte: number, base: number) =>
-    String.fromCharCode(base + (byte % 26));
-  return maskPii(`${letter(h[0], 65)}${letter(h[1], 97)}`);
+  return maskPii(STAND_IN_NAMES[h.readUInt32BE(0) % STAND_IN_NAMES.length]);
 };
 
 export interface InteractionStreamRow {
   key: string; // opaque, stable per turn
   at: string; // ISO timestamp of the student's message
-  student: string; // masked name, or a stand-in "A...l" when unnamed
+  student: string; // masked name, or a masked stand-in name when unnamed
   kind: 'voice' | 'tap';
   answer: string | null; // masked transcript, or the tapped option
   correct_answer: string | null;

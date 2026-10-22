@@ -9,6 +9,7 @@ import {
   displayedAnswer,
   pickTranscript,
   rowKey,
+  STAND_IN_NAMES,
   studentInitials,
   toStreamRow,
   wpmOf,
@@ -66,9 +67,10 @@ describe('interaction stream rows', () => {
     expect(row.answer).toBe('[...ल');
   });
 
-  it('an unnamed student is a stand-in "A...l", stable per student', () => {
+  it('an unnamed student is a masked common Indian name, stable per student', () => {
     const a = toStreamRow(voice({ student_name: null })).student;
-    expect(a).toMatch(/^[A-Z]\.\.\.[a-z]$/);
+    const real = new Set(STAND_IN_NAMES.map((n) => `${n[0]}...${n.at(-1)}`));
+    expect(real.has(a)).toBe(true);
     expect(toStreamRow(voice({ student_name: '  ' })).student).toBe(a);
     expect(
       toStreamRow(voice({ student_name: null, user_id: 'other' })).student,

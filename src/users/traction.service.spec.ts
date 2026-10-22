@@ -52,7 +52,7 @@ describe('TractionService', () => {
   it('a cache hit is returned without touching the database', async () => {
     const { svc, query, cache } = make({ daily: [] });
     expect(await svc.get(NOW)).toEqual({ daily: [] });
-    expect(cache.get).toHaveBeenCalledWith('dashboard:traction:v3:2026-09-03');
+    expect(cache.get).toHaveBeenCalledWith('dashboard:traction:v4:2026-09-03');
     expect(query).not.toHaveBeenCalled();
   });
 
@@ -87,7 +87,7 @@ describe('TractionService', () => {
       projected_joined_this_month: 15, // 1 × 30 days ÷ 2 complete days
     });
     expect(cache.set).toHaveBeenCalledWith(
-      'dashboard:traction:v3:2026-09-03',
+      'dashboard:traction:v4:2026-09-03',
       out,
       26 * 3600,
     );
