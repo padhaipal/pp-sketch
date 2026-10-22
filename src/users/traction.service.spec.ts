@@ -52,16 +52,16 @@ describe('TractionService', () => {
   it('a cache hit is returned without touching the database', async () => {
     const { svc, query, cache } = make({ daily: [] });
     expect(await svc.get(NOW)).toEqual({ daily: [] });
-    expect(cache.get).toHaveBeenCalledWith('dashboard:traction:v1:2026-09-03');
+    expect(cache.get).toHaveBeenCalledWith('dashboard:traction:v2:2026-09-03');
     expect(query).not.toHaveBeenCalled();
   });
 
   it('a miss computes through yesterday (IST) and caches under today’s IST date for 26 h', async () => {
     const { svc, cache } = make();
     const out = await svc.get(NOW);
-    expect(out.from).toBe('2026-09-01');
+    expect(out.from).toBe('2026-08-01');
     expect(out.to).toBe('2026-09-02');
-    expect(out.daily[0]).toEqual(
+    expect(out.daily.find((d) => d.date === '2026-09-01')).toEqual(
       expect.objectContaining({
         date: '2026-09-01',
         users_over_5min: 2,
@@ -73,7 +73,7 @@ describe('TractionService', () => {
       }),
     );
     expect(cache.set).toHaveBeenCalledWith(
-      'dashboard:traction:v1:2026-09-03',
+      'dashboard:traction:v2:2026-09-03',
       out,
       26 * 3600,
     );

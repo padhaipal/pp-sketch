@@ -5,7 +5,7 @@
 daily: TractionDay[] }`. Public through the pp-dashboard proxy allowlist.
 Aggregates only — no ids, names or numbers leave.
 
-- **Window**: `TRACTION_FROM` (2026-09-01, IST) through yesterday (IST);
+- **Window**: `TRACTION_FROM` (2026-08-01, IST) through yesterday (IST);
   today is never included (partial).
 - **Flows** (per IST day): `users_over_5min`, `minutes` (1 dp) — the
   active-time.ts gap rule via `PER_USER_DAY_ACTIVE_CTES`
@@ -23,7 +23,7 @@ Aggregates only — no ids, names or numbers leave.
 - **Cohort**: `cohort_avg_lifetime_hours` = mean lifetime active hours (to
   now) of the students onboarded that day, 2 dp; null without a cohort.
   Nothing hidden — young cohorts are low by construction.
-- **Cache**: pp-redis-cache key `dashboard:traction:v1:<IST date>`, TTL
+- **Cache**: pp-redis-cache key `dashboard:traction:v2:<IST date>`, TTL
   26 h; a concurrent miss shares one in-flight computation.
 - **Warm**: queue `traction-warm`, cron `TRACTION_WARM_CRON` 20:00 UTC =
   01:30 IST (after the 00:15 IST test results), `refresh()` overwrites the

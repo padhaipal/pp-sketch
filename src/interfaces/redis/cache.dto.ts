@@ -16,7 +16,7 @@ export const CACHE_KEYS = {
     `media:stid:${stateTransitionId}`,
   dashboardSummary: () => `dashboard:summary`,
   // public traction series (users/traction.service.ts), per IST date
-  traction: (istDate: string) => `dashboard:traction:v1:${istDate}`,
+  traction: (istDate: string) => `dashboard:traction:v2:${istDate}`,
   // public interaction stream (users/interaction-stream.service.ts)
   interactionStream: () => `dashboard:interactions:v1`,
 } as const;
