@@ -65,6 +65,8 @@ import { PiiAccessService } from './pii-access.service';
 import { maskPii, visibilityOf } from './pii-mask';
 import { TractionService } from './traction.service';
 import type { TractionResponse } from './traction';
+import { InteractionStreamService } from './interaction-stream.service';
+import type { InteractionStreamResponse } from './interaction-stream';
 import { censorTranscript } from './transcript-censor';
 import {
   ANONYMOUS,
@@ -152,12 +154,14 @@ export class UserController {
     private readonly geoEntityService: GeoEntityService,
     private readonly piiAccess: PiiAccessService,
     private readonly tractionService: TractionService,
+    private readonly interactionStreamService: InteractionStreamService,
   ) {}
 
   // ─── Staff accounts (education officials) ─────────────────────────────
   // Declared before the ':id/…' routes only for readability — Nest matches
   // by segment count, but 'lookup' and ':id' below MUST come after
-  // 'dashboard', 'dashboard/summary', 'dashboard/traction' and
+  // 'dashboard', 'dashboard/summary', 'dashboard/traction',
+  // 'dashboard/interactions' and
   // 'interactions.csv' (see their
   // placement) or a literal path is captured as an id.
 
@@ -284,6 +288,15 @@ export class UserController {
   @Get('dashboard/traction')
   async dashboardTraction(): Promise<TractionResponse> {
     return this.tractionService.get();
+  }
+
+  // The donor page's live stream: the latest student turns, at least two
+  // minutes old, names and transcripts masked to first and last character,
+  // no audio and no ids (interaction-stream.ts). Public through the
+  // pp-dashboard proxy; one shared computation per ~minute.
+  @Get('dashboard/interactions')
+  async dashboardInteractions(): Promise<InteractionStreamResponse> {
+    return this.interactionStreamService.get();
   }
 
   @Get('dashboard')

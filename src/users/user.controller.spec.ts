@@ -37,6 +37,7 @@ import type { UserService } from './user.service';
 import type { GeoEntityService } from '../geo-entities/geo-entity.service';
 import type { PiiAccessService } from './pii-access.service';
 import type { TractionService } from './traction.service';
+import type { InteractionStreamService } from './interaction-stream.service';
 import { STAFF, type ViewerContext } from '../auth/viewer';
 
 type SimpleRepo = {
@@ -101,6 +102,7 @@ function makeController(opts: {
   // PII tests override it.
   piiAccess?: Partial<PiiAccessService>;
   tractionSvc?: Partial<TractionService>;
+  streamSvc?: Partial<InteractionStreamService>;
 }): UserController {
   return new UserController(
     (opts.userRepo ?? makeRepo()) as unknown as Repository<UserEntity>,
@@ -122,6 +124,7 @@ function makeController(opts: {
       ),
     }) as unknown as PiiAccessService,
     (opts.tractionSvc ?? {}) as TractionService,
+    (opts.streamSvc ?? {}) as InteractionStreamService,
   );
 }
 
