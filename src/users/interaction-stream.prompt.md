@@ -7,8 +7,11 @@ Public through the pp-dashboard proxy allowlist; the page polls every 60 s.
 
 - **Which turns**: interaction media (INTERACTION_MEDIA_SQL: WhatsApp voice
   notes and flow taps), not rolled back, at least
-  `INTERACTION_STREAM_DELAY_S` (120 s) old, newest
-  `INTERACTION_STREAM_LIMIT` (20). Students only: role student or null, not
+  `INTERACTION_STREAM_DELAY_S` (120 s) old, graded only (`answer_correct`
+  true or false — ungraded turns are never shown; filtered in SQL with the
+  same rule as `toStreamRow`, and again in the service): of the newest
+  `INTERACTION_STREAM_POOL` (400) turns, the newest
+  `INTERACTION_STREAM_LIMIT` (20) graded ones. Students only: role student or null, not
   deleted, onboarded (UserService.isOnboarded rule), not a
   `LOAD_TEST_PHONE_PREFIX` number; only messages after
   recording_permissions_obtained_at; no onboarding turns.

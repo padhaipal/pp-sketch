@@ -7,6 +7,7 @@ import { INTERACTION_MEDIA_SQL, IS_TAP_SQL } from './active-time';
 import {
   INTERACTION_STREAM_DELAY_S,
   INTERACTION_STREAM_LIMIT,
+  INTERACTION_STREAM_POOL,
   toStreamRow,
   type InteractionSourceRow,
   type InteractionStreamResponse,
@@ -51,7 +52,7 @@ export class InteractionStreamService {
     const response: InteractionStreamResponse = {
       computed_at: new Date().toISOString(),
       delay_s: INTERACTION_STREAM_DELAY_S,
-      rows: rows.map(toStreamRow),
+      rows: rows.map(toStreamRow).filter((r) => r.answer_correct !== null),
     };
     await this.cacheService.set(
       CACHE_KEYS.interactionStream(),
@@ -66,7 +67,9 @@ export class InteractionStreamService {
 
   // Students only (onboarded, not deleted, not load-test numbers), their
   // lesson turns after recording consent — no onboarding turns, nothing
-  // rolled back. Lesson columns follow GET users/:id/media: the first
+  // rolled back, and only graded ones (marked correct or incorrect): the
+  // newest INTERACTION_STREAM_POOL turns are read, the newest
+  // INTERACTION_STREAM_LIMIT graded ones kept. Lesson columns follow GET users/:id/media: the first
   // (evaluation) lesson row per message, and the student's previous one for
   // the displayed answer.
   private readRows(): Promise<InteractionSourceRow[]> {
@@ -93,7 +96,7 @@ export class InteractionStreamService {
            AND NOT EXISTS (SELECT 1 FROM onboarding_states os
                            WHERE os.user_message_id = mm.id)
          ORDER BY mm.created_at DESC
-         LIMIT $4
+         LIMIT $5
        )
        SELECT r.id, r.user_id, r.created_at, r.media_type, r.duration_ms,
               r.student_name,
@@ -152,12 +155,20 @@ export class InteractionStreamService {
          ON o.id = (CASE WHEN r.media_type = 'text' AND r.text ~* '${UUID_PATTERN}'
                          THEN r.text::uuid END)
         AND o.media_details->>'role' = 'option'
-       ORDER BY r.created_at DESC`,
+       -- graded turns only: answer_correct (toStreamRow) is not null
+       WHERE (CASE WHEN r.media_type = 'text'
+                   THEN COALESCE(CASE WHEN o.id IS NULL THEN NULL
+                                      ELSE o.media_details->>'correct' = 'true' END,
+                                 l.answer_correct)
+                   ELSE l.answer_correct END) IS NOT NULL
+       ORDER BY r.created_at DESC
+       LIMIT $4`,
       [
         INTERACTION_STREAM_DELAY_S,
         onboardingCutoff(),
         loadTestPrefix,
         INTERACTION_STREAM_LIMIT,
+        INTERACTION_STREAM_POOL,
       ],
     );
   }

@@ -16,6 +16,9 @@ import { censorTranscript } from './transcript-censor';
 
 // at most this many turns per response, newest first
 export const INTERACTION_STREAM_LIMIT = 20;
+// how many of the newest turns are read to find that many graded ones
+// (ungraded turns — neither correct nor incorrect — are not shown)
+export const INTERACTION_STREAM_POOL = 400;
 // a turn is only published once it is this old (enforced in SQL)
 export const INTERACTION_STREAM_DELAY_S = 120;
 
