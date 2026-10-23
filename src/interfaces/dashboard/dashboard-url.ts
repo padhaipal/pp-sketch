@@ -6,7 +6,7 @@ export function dashboardPublicUrl(): string {
   const raw = process.env.DASHBOARD_PUBLIC_URL;
   if (!raw || !/^https?:\/\/[^\s/]+/.test(raw)) {
     throw new Error(
-      `DASHBOARD_PUBLIC_URL must be set to the dashboard origin, e.g. https://dashboard.padhaipal.com (got ${JSON.stringify(raw)})`,
+      `DASHBOARD_PUBLIC_URL must be set to the dashboard origin, e.g. https://dashboard.lifteracy.ai (got ${JSON.stringify(raw)})`,
     );
   }
   return raw.replace(/\/+$/, '');

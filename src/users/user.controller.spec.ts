@@ -1,6 +1,6 @@
 process.env.LOG_PII_HMAC_KEY =
   '0000000000000000000000000000000000000000000000000000000000000000';
-process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.padhaipal.com';
+process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.lifteracy.ai';
 
 jest.mock('bcrypt', () => ({
   compare: jest.fn(),
@@ -884,13 +884,13 @@ describe('UserController.staffCreate', () => {
       role_title: 'Teacher',
       staff_notes: null,
     });
-    expect(out.link).toBe('https://dashboard.padhaipal.com/d/u-new');
+    expect(out.link).toBe('https://dashboard.lifteracy.ai/d/u-new');
     expect(out.user).toEqual(
       expect.objectContaining({
         id: 'u-new',
         geo_entity_name: 'PS Kupwara',
         geo_entity_type: 'school',
-        link: 'https://dashboard.padhaipal.com/d/u-new',
+        link: 'https://dashboard.lifteracy.ai/d/u-new',
       }),
     );
   });
@@ -1007,12 +1007,12 @@ describe('UserController.listStaff', () => {
       out.rows.map((r) => [r.link, r.share_link, r.students, r.geo_code]),
     ).toEqual([
       [
-        'https://dashboard.padhaipal.com/d/t1',
-        'https://dashboard.padhaipal.com/r/919999990001',
+        'https://dashboard.lifteracy.ai/d/t1',
+        'https://dashboard.lifteracy.ai/r/919999990001',
         8,
         '09270904601',
       ],
-      ['https://dashboard.padhaipal.com/d/b1', null, 87, '092711'],
+      ['https://dashboard.lifteracy.ai/d/b1', null, 87, '092711'],
     ]);
     await ctrl.listStaff(undefined, '-5', '9999');
     expect(listStaff).toHaveBeenLastCalledWith('', 0, 500);
@@ -1041,8 +1041,8 @@ describe('UserController.lookup + getStaff', () => {
     const out = await ctrl.lookup('a');
     expect(lookupStaff).toHaveBeenCalledWith('a');
     expect(out.map((r) => r.link)).toEqual([
-      'https://dashboard.padhaipal.com/d/u1',
-      'https://dashboard.padhaipal.com/d/u2',
+      'https://dashboard.lifteracy.ai/d/u1',
+      'https://dashboard.lifteracy.ai/d/u2',
     ]);
     expect(out[1].deleted_at).toEqual(new Date('2026-09-01'));
     await ctrl.lookup(undefined);
@@ -1081,7 +1081,7 @@ describe('UserController.lookup + getStaff', () => {
     expect(out.geo_entity).toEqual({ id: 'g1', type: 'school' });
     expect(out.ancestors).toHaveLength(2);
     expect(out.deleted_at).toEqual(new Date('2026-09-01'));
-    expect(out.link).toBe('https://dashboard.padhaipal.com/d/u1');
+    expect(out.link).toBe('https://dashboard.lifteracy.ai/d/u1');
     await expect(ctrl.getStaff('admin-id')).rejects.toThrow(NotFoundException);
   });
 });
@@ -2391,7 +2391,7 @@ describe('UserController public profile + profile PATCH', () => {
        "id": "u1",
        "name": "Asha Kumari",
        "role_title": "Teacher",
-       "share_link": "https://dashboard.padhaipal.com/r/919876543210",
+       "share_link": "https://dashboard.lifteracy.ai/r/919876543210",
        "spotlight_message": "Read daily!",
      }
     `);

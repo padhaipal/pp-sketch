@@ -1,4 +1,4 @@
-process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.padhaipal.com';
+process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.lifteracy.ai';
 process.env.LOG_PII_HMAC_KEY =
   '0000000000000000000000000000000000000000000000000000000000000000';
 
@@ -400,7 +400,7 @@ describe('processMorningUpdateSendJob', () => {
     expect(sent.media).toEqual([
       { type: 'video', url: 'https://intro' },
       { type: 'image', url: 'https://rc.png', mime_type: 'image/png' },
-      { type: 'text', body: 'https://dashboard.padhaipal.com/r/91999' },
+      { type: 'text', body: 'https://dashboard.lifteracy.ai/r/91999' },
     ]);
   });
 
@@ -1006,7 +1006,7 @@ describe('processMorningUpdateSendJob — child span + error_code branches + ski
       { type: 'image', url: 'wa://img1', mime_type: 'image/png' }, // report card
       {
         type: 'text',
-        body: 'https://dashboard.padhaipal.com/r/919999990001',
+        body: 'https://dashboard.lifteracy.ai/r/919999990001',
       },
     ]);
   });

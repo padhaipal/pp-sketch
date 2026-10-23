@@ -1,4 +1,4 @@
-process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.padhaipal.com';
+process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.lifteracy.ai';
 process.env.ONBOARDING_LLM_PROVIDER = 'openai';
 process.env.ONBOARDING_LLM_MODEL = 'test-classifier';
 // onboardingLlm() asserts the provider's key at read time (boot check).
@@ -642,7 +642,7 @@ describe('helpers', () => {
 
   it('referralText carries the dashboard referral URL', () => {
     expect(referralText('+911234567890')).toBe(
-      'PadhaiPal अपने दोस्तों के साथ शेयर करें बस उन्हें यह लिंक भेजें। https://dashboard.padhaipal.com/r/+911234567890',
+      'PadhaiPal अपने दोस्तों के साथ शेयर करें बस उन्हें यह लिंक भेजें। https://dashboard.lifteracy.ai/r/+911234567890',
     );
   });
 });
