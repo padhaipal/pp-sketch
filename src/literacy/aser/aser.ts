@@ -2,10 +2,12 @@
 // See aser.prompt.md for the full rules. No I/O here: AserService does the
 // DB reads, LiteracyLessonService persists the state inside each lesson
 // snapshot (context.aser), so the lesson-state rows are the source of truth.
+// No ASER-specific stids: every item uses the lesson loop's own.
 
 // ─── Banks ───────────────────────────────────────────────────────────────────
 
-// Five banks, rotated per test run. No bank letter appears in its own
+// Five banks; a student sees every bank once before any repeats
+// (chooseBank). No bank letter appears in its own
 // bank's words, so the word-level letter drills never teach a letter the
 // letter level then tests. Passages are NOT part of the banks.
 export const ASER_BANKS = {
@@ -33,9 +35,37 @@ export const ASER_BANKS = {
 export type AserBank = keyof typeof ASER_BANKS;
 export const ASER_BANK_ORDER: AserBank[] = ['A', 'B', 'C', 'D', 'E'];
 
-// Run n (1-based) uses bank A, B, C, D, E, A, … — the sixth run repeats.
-export function bankForRun(run: number): AserBank {
-  return ASER_BANK_ORDER[(Math.max(run, 1) - 1) % ASER_BANK_ORDER.length];
+// One past run as chooseBank reads it (its latest row): the bank it drew
+// and whether any of that bank's letters or words were actually shown.
+export interface AserBankHistoryEntry {
+  run: number;
+  bank: AserBank;
+  shown: boolean;
+}
+
+// Random bank among those not yet SHOWN in the current cycle. Walking the
+// past runs in order, the cycle restarts once all five have been shown; a
+// run that never reached the letter/word levels showed nothing and uses up
+// nothing. At a cycle start the bank shown last is left out, so the same
+// bank never comes twice in a row across the boundary. Derived from the
+// runs' own state — no rotation record is stored.
+export function chooseBank(
+  history: readonly AserBankHistoryEntry[],
+  random: () => number = Math.random,
+): AserBank {
+  let seen = new Set<AserBank>();
+  let lastShown: AserBank | null = null;
+  for (const h of [...history].sort((a, b) => a.run - b.run)) {
+    if (!h.shown) continue;
+    seen.add(h.bank);
+    lastShown = h.bank;
+    if (seen.size === ASER_BANK_ORDER.length) seen = new Set();
+  }
+  let options = ASER_BANK_ORDER.filter((b) => !seen.has(b));
+  if (seen.size === 0 && lastShown) {
+    options = options.filter((b) => b !== lastShown);
+  }
+  return options[Math.floor(random() * options.length)];
 }
 
 // ─── Rules ───────────────────────────────────────────────────────────────────
@@ -43,9 +73,20 @@ export function bankForRun(run: number): AserBank {
 // Letter and word levels: pass on 4 right, fail on 7 wrong (≤ 10 items).
 export const ASER_PASS_CORRECT = 4;
 export const ASER_FAIL_INCORRECT = 7;
-// Both levels start the test at words; the first two word answers decide
-// the fast jump (both right → paragraph, both wrong → letters).
+// A run that STARTS at words (the onboarding run, or a retest from lesson
+// level 2–8): its first two word answers decide the fast jump (both right
+// → paragraph, both wrong → letters). Never when words are reached later.
 export const ASER_FAST_JUMP_ITEMS = 2;
+
+// Letter / word level verdict from its counts; null = not decided yet.
+export function aserCountVerdict(c: {
+  correct: number;
+  incorrect: number;
+}): AserOutcome | null {
+  if (c.correct >= ASER_PASS_CORRECT) return 'passed';
+  if (c.incorrect >= ASER_FAIL_INCORRECT) return 'failed';
+  return null;
+}
 // Paragraph level: two passages, pass on either. Story level: one passage.
 export const ASER_PARAGRAPH_ATTEMPTS = 2;
 // LIFTeracy passage levels standing in for the ASER paragraph and story.
@@ -62,16 +103,18 @@ export function aserMilestoneForHours(hours: number): number | null {
   return null;
 }
 
-// Fixed stids (not machine transitions; unseeded = nothing is sent). The
-// service prepends START to the first item's prompt and appends COMPLETE on
-// the turn that ends the test; the letter-level item endings replace the
-// letter-drill → word returns (there is no word to go back to).
-export const ASER_TEST_START_STATE_TRANSITION_ID = 'aser-test-start';
-export const ASER_TEST_COMPLETE_STATE_TRANSITION_ID = 'aser-test-complete';
-export const ASER_LETTER_COMPLETE_CORRECT_STATE_TRANSITION_ID =
-  'aser-letter-complete-correct';
-export const ASER_LETTER_COMPLETE_INCORRECT_STATE_TRANSITION_ID =
-  'aser-letter-complete-incorrect';
+// Where a run starts. The onboarding run always starts at words; a retest
+// starts at the ASER level matching the student's pre-test lesson level:
+// word lessons and level 8 → word, 9 → paragraph, 10+ → story.
+export function aserStartStage(
+  milestone: number,
+  lessonLevel: number | null,
+): AserStage {
+  if (milestone === 0 || lessonLevel === null || lessonLevel <= 8) {
+    return 'word';
+  }
+  return lessonLevel === ASER_PARAGRAPH_PASSAGE_LEVEL ? 'paragraph' : 'story';
+}
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -101,9 +144,10 @@ export interface AserState {
   milestone: number; // active hours that triggered it (0 = onboarding)
   bank: AserBank;
   status: 'in_progress' | 'done';
+  startStage: AserStage; // the level the run started at
   stage: AserStage; // level the next item is drawn from
   outcomes: Partial<Record<AserStage, AserOutcome>>;
-  // Answers so far per level (letter / word: counts; paragraph: attempts).
+  // Answers per level — four tests, each counted even when undecided.
   counts: Record<AserStage, { correct: number; incorrect: number }>;
   used: Record<AserStage, string[]>; // items already delivered, per level
   // The item of the current / latest ASER lesson. Its outcome is its FIRST
@@ -118,14 +162,20 @@ export interface AserState {
   placementLevel: number | null;
 }
 
-export function newAserState(run: number, milestone: number): AserState {
+export function newAserState(
+  run: number,
+  milestone: number,
+  bank: AserBank,
+  startStage: AserStage = 'word',
+): AserState {
   const zero = () => ({ correct: 0, incorrect: 0 });
   return {
     run,
     milestone,
-    bank: bankForRun(run),
+    bank,
     status: 'in_progress',
-    stage: 'word',
+    startStage,
+    stage: startStage,
     outcomes: {},
     counts: { letter: zero(), word: zero(), paragraph: zero(), story: zero() },
     used: { letter: [], word: [], paragraph: [], story: [] },
@@ -212,16 +262,18 @@ export function recordAserAnswer(
   const c = counts[stage];
 
   if (stage === 'letter' || stage === 'word') {
-    if (c.correct >= ASER_PASS_CORRECT) {
-      s = { ...s, outcomes: { ...s.outcomes, [stage]: 'passed' } };
+    const verdict = aserCountVerdict(c);
+    if (verdict) {
+      s = { ...s, outcomes: { ...s.outcomes, [stage]: verdict } };
       return afterDecision(s, stage);
     }
-    if (c.incorrect >= ASER_FAIL_INCORRECT) {
-      s = { ...s, outcomes: { ...s.outcomes, [stage]: 'failed' } };
-      return afterDecision(s, stage);
-    }
-    // Fast jump on the first two words: a likely level, not a decision.
-    if (stage === 'word' && c.correct + c.incorrect === ASER_FAST_JUMP_ITEMS) {
+    // Fast jump on the first two words of a run that started at words: a
+    // likely level, not a decision.
+    if (
+      stage === 'word' &&
+      s.startStage === 'word' &&
+      c.correct + c.incorrect === ASER_FAST_JUMP_ITEMS
+    ) {
       if (c.correct === ASER_FAST_JUMP_ITEMS && !s.outcomes.paragraph) {
         return { ...s, stage: 'paragraph' };
       }
@@ -244,11 +296,13 @@ export function recordAserAnswer(
     return s;
   }
 
-  // story: one passage, either way the test ends
-  return finish({
+  // story: one passage. A pass ends the test; a fail drops to paragraph
+  // unless it is already decided (always, unless the run started at story).
+  s = {
     ...s,
     outcomes: { ...s.outcomes, story: correct ? 'passed' : 'failed' },
-  });
+  };
+  return afterDecision(s, stage);
 }
 
 // Records a drill word from a paragraph read (kept out of the story).
@@ -298,23 +352,60 @@ export function withItem(state: AserState, item: AserItem): AserState {
   };
 }
 
-// Applies one lesson turn to the test state riding in its snapshot: the
-// item's FIRST answer is counted, and a drill word chosen during a
-// paragraph read is recorded (kept out of the story). `answerTurn` is false
-// for the lesson's opening row and for comprehension taps.
+// The letter level runs as ONE lesson walking the bank letters through the
+// lesson machine's letter loop (machine context.aserLetters counts each
+// letter's first answer and ends the loop once decided). Its counts before
+// and after a turn tell which letter was answered and how.
+export interface AserLetterCounts {
+  correct: number;
+  incorrect: number;
+  done: boolean;
+}
+
+// Applies one voice turn to the test state riding in the lesson snapshot.
+// - Letter lesson: a change in the machine's letter counts is the asked
+//   letter's first answer. When the letters pass with words undecided, the
+//   lesson returns to `word` on the next ASER word (the machine's
+//   `…-word-correct-last` style return) and that word becomes the item.
+// - Otherwise the item's FIRST answer is counted (answerCorrect).
+// - A drill word chosen during a paragraph read is kept out of the story.
 export const SENTENCE_DRILL_WORD_STID_SUFFIX = '-sentence-word-drillWord';
 export function applyAserTurn(
   state: AserState,
   turn: {
-    answerTurn: boolean;
     answerCorrect: boolean | null;
     stateTransitionId: string;
     word: string;
+    machineState: string;
+    askedLetter: string | null; // wrongLetters[0] before the turn
+    lettersBefore: AserLetterCounts | null;
+    lettersAfter: AserLetterCounts | null;
   },
 ): AserState {
   let s = state;
-  if (turn.answerTurn && s.item && !s.item.answered) {
+  const before = turn.lettersBefore;
+  const after = turn.lettersAfter;
+  if (
+    before &&
+    after &&
+    turn.askedLetter &&
+    after.correct + after.incorrect > before.correct + before.incorrect
+  ) {
+    s = recordAserAnswer(
+      withItem(s, { stage: 'letter', value: turn.askedLetter }),
+      after.correct > before.correct,
+    );
+  } else if (s.item && !s.item.answered) {
     s = recordAserAnswer(s, turn.answerCorrect === true);
+  }
+  if (
+    after?.done &&
+    turn.machineState === 'word' &&
+    s.status === 'in_progress' &&
+    s.stage === 'word' &&
+    s.item?.stage === 'letter'
+  ) {
+    s = withItem(s, { stage: 'word', value: turn.word });
   }
   if (
     s.item?.stage === 'paragraph' &&
@@ -327,49 +418,101 @@ export function applyAserTurn(
 
 // ─── Results (read side) ─────────────────────────────────────────────────────
 
-// One test run as reported (GET /users/:id/literacy-test-scores → aser).
-export interface AserRunResult {
+// The four ASER tests, as stored (test_results_student.aser_lN_*).
+export const ASER_TESTS = [
+  ['aser_l1', 'letter'],
+  ['aser_l2', 'word'],
+  ['aser_l3', 'paragraph'],
+  ['aser_l4', 'story'],
+] as const;
+export type AserTestKey = (typeof ASER_TESTS)[number][0];
+
+// One test within one finished run: answers counted even when the test
+// was left undecided (passed null). `at` = when the run ended (the answer
+// that finished it).
+export interface AserTestPoint {
   run: number;
-  milestone: number;
-  bank: AserBank;
-  status: AserState['status'];
-  // Highest level passed; null while in progress.
-  result: AserLevel | null;
-  outcomes: AserState['outcomes'];
-  placement_level: number | null;
-  started_at: Date;
-  // The row that recorded the last item's answer — when the last question
-  // on the test was submitted. Null while in progress.
-  completed_at: Date | null;
+  at: Date;
+  correct: number;
+  incorrect: number;
+  passed: boolean | null;
 }
 
-// Folds a student's ASER lesson rows (chronological) into one result per
-// run: the run's latest state; completed_at from its first 'done' row.
-export function aserRunsFromRows(
-  rows: ReadonlyArray<{ created_at: Date; aser: AserState }>,
-): AserRunResult[] {
-  const byRun = new Map<number, AserRunResult>();
+// A student's runs of one test, like SnapshotTestScore: latest = the most
+// recent finished run that reached the test; history = all of them, oldest
+// first. 'insufficient_data' until one exists.
+export interface AserTestScore {
+  status: 'ok' | 'insufficient_data';
+  runs_available: number;
+  latest?: AserTestPoint;
+  history?: AserTestPoint[];
+}
+
+// The rows aserTestScoresFromRows reads (user ids = $1), chronological.
+export const ASER_ROWS_SQL = `/* aser:rows */
+  SELECT user_id, created_at, snapshot->'context'->'aser' AS aser
+  FROM literacy_lesson_states
+  WHERE user_id = ANY($1::uuid[])
+    AND snapshot->'context'->'aser'->>'run' IS NOT NULL
+  ORDER BY user_id, created_at`;
+
+// Folds one student's ASER rows (chronological) into the four tests. A run
+// counts once finished: its final state, timestamped by its first 'done'
+// row. Unfinished runs are ignored until they finish.
+export function aserTestScoresFromRows(
+  rows: ReadonlyArray<{ created_at: Date | string; aser: AserState }>,
+): Record<AserTestKey, AserTestScore> {
+  const finished = new Map<number, { at: Date; state: AserState }>();
   for (const { created_at, aser } of rows) {
-    const prev = byRun.get(aser.run);
-    byRun.set(aser.run, {
-      run: aser.run,
-      milestone: aser.milestone,
-      bank: aser.bank,
-      status: aser.status,
-      result: aser.result,
-      outcomes: aser.outcomes,
-      placement_level: aser.placementLevel,
-      started_at: prev?.started_at ?? created_at,
-      completed_at:
-        prev?.completed_at ?? (aser.status === 'done' ? created_at : null),
+    if (aser.status !== 'done') continue;
+    const prev = finished.get(aser.run);
+    finished.set(aser.run, {
+      at: prev?.at ?? new Date(created_at),
+      state: aser,
     });
   }
-  return [...byRun.values()].sort((a, b) => a.run - b.run);
+  const runs = [...finished.values()].sort((a, b) => a.state.run - b.state.run);
+  const out = {} as Record<AserTestKey, AserTestScore>;
+  for (const [key, stage] of ASER_TESTS) {
+    const history: AserTestPoint[] = [];
+    for (const { at, state } of runs) {
+      const c = state.counts[stage];
+      if (c.correct + c.incorrect === 0) continue;
+      const outcome = state.outcomes[stage];
+      history.push({
+        run: state.run,
+        at,
+        correct: c.correct,
+        incorrect: c.incorrect,
+        passed: outcome === undefined ? null : outcome === 'passed',
+      });
+    }
+    out[key] =
+      history.length === 0
+        ? { status: 'insufficient_data', runs_available: 0 }
+        : {
+            status: 'ok',
+            runs_available: history.length,
+            latest: history[history.length - 1],
+            history,
+          };
+  }
+  return out;
 }
 
-// The rows aserRunsFromRows reads (user id = $1).
-export const ASER_ROWS_SQL = `SELECT created_at, snapshot->'context'->'aser' AS aser
-  FROM literacy_lesson_states
-  WHERE user_id = $1
-    AND snapshot->'context'->'aser'->>'run' IS NOT NULL
-  ORDER BY created_at`;
+// Per user: the four tests (every requested id gets an entry).
+export async function computeAserTestScores(
+  query: (sql: string, params: unknown[]) => Promise<unknown>,
+  userIds: string[],
+): Promise<Map<string, Record<AserTestKey, AserTestScore>>> {
+  const rows = (await query(ASER_ROWS_SQL, [userIds])) as Array<{
+    user_id: string;
+    created_at: Date | string;
+    aser: AserState;
+  }>;
+  const byUser = new Map<string, typeof rows>(userIds.map((id) => [id, []]));
+  for (const r of rows) byUser.get(r.user_id)?.push(r);
+  return new Map(
+    [...byUser].map(([id, list]) => [id, aserTestScoresFromRows(list)]),
+  );
+}

@@ -1798,17 +1798,27 @@ describe('machine — sentence retry without a teachable drill word', () => {
   });
 });
 
-// ─── ASER letter item (letterOnly) ───────────────────────────────────────────
+// ─── ASER letter test (aserLetters) ──────────────────────────────────────────
 
-describe('machine — ASER letter item (letterOnly)', () => {
+describe('machine — ASER letter test (one lesson over the bank letters)', () => {
   const ASER = { run: 1 } as never; // opaque to the machine
-  function letterActor(letter: string): ActorHandle {
+  function letterTest(
+    letters: string[],
+    correct = 0,
+    incorrect = 0,
+  ): ActorHandle {
     const actor = createActor(machine, {
       input: {
-        word: letter,
+        word: 'कप',
         userMessageId: 'mm-1',
-        letterOnly: true,
         aser: ASER,
+        aserLetters: {
+          letters,
+          correct,
+          incorrect,
+          passWord: 'कप',
+          failWord: 'जय',
+        },
       },
     });
     actor.start();
@@ -1819,55 +1829,109 @@ describe('machine — ASER letter item (letterOnly)', () => {
     };
   }
 
-  it('opens on the letter drill with the letter’s drill prompt; aser rides along untouched', () => {
-    const a = letterActor('घ');
+  it('opens on the first letter with the letter drill’s own prompt; aser rides along', () => {
+    const a = letterTest(['घ', 'ट', 'ठ']);
     const snap = a.snap();
     expect(snap.value).toBe('letter');
     expect(snap.context.stateTransitionId).toBe(
       'घ-word-routeWrongLetter-drillLetters',
     );
-    expect(snap.context.wrongLetters).toEqual(['घ']);
-    expect(snap.context.answer).toBe('घ');
+    expect(snap.context.wrongLetters).toEqual(['घ', 'ट', 'ठ']);
     expect(snap.context.aser).toBe(ASER);
     a.stop();
   });
 
-  it('right first time → complete + aser-letter-complete-correct, letter scored correct', () => {
+  it('right → the existing “correct, next letter” stid; counted', () => {
     mockMarkLetter.mockReturnValue(true);
-    const a = letterActor('घ');
+    const a = letterTest(['घ', 'ट', 'ठ']);
     a.send({ type: 'ANSWER', studentAnswer: 'घ' });
     const snap = a.snap();
-    expect(snap.status).toBe('done');
-    expect(snap.context.answerCorrect).toBe(true);
-    expect(snap.context.stateTransitionId).toBe('aser-letter-complete-correct');
+    expect(snap.context.stateTransitionId).toBe(
+      'ट-letter-routeWrongLetter-correct-more',
+    );
+    expect(snap.context.aserLetters).toMatchObject({
+      correct: 1,
+      incorrect: 0,
+      done: false,
+    });
     expect(snap.context.pendingCorrect).toEqual(['घ']);
-    expect(snap.context.aser).toBe(ASER);
     a.stop();
   });
 
-  it('wrong → the usual image / letterImage drill, three misses → complete + aser-letter-complete-incorrect', () => {
-    const a = letterActor('घ');
-    a.send({ type: 'ANSWER', studentAnswer: 'ग' });
-    expect(a.snap().value).toBe('image');
-    expect(a.snap().context.answerCorrect).toBe(false);
-    expect(a.snap().context.pendingIncorrect).toEqual(['घ']);
-    a.send({ type: 'ANSWER', studentAnswer: 'x' });
-    a.send({ type: 'ANSWER', studentAnswer: 'x' });
-    expect(a.snap().value).toBe('letterImage');
-    a.send({ type: 'ANSWER', studentAnswer: 'x' });
-    a.send({ type: 'ANSWER', studentAnswer: 'x' });
-    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+  it('the 4th right ends the loop through the normal “…-last” return to the pass word', () => {
+    mockMarkLetter.mockReturnValue(true);
+    const a = letterTest(['घ', 'ट', 'ठ'], 3, 2);
+    a.send({ type: 'ANSWER', studentAnswer: 'घ' });
     const snap = a.snap();
-    expect(snap.status).toBe('done');
+    expect(snap.value).toBe('word');
+    expect(snap.context.stateTransitionId).toBe('कप-letter-word-correct-last');
+    expect(snap.context.word).toBe('कप');
+    expect(snap.context.aserLetters).toMatchObject({
+      correct: 4,
+      incorrect: 2,
+      done: true,
+    });
+    a.stop();
+  });
+
+  it('the 7th wrong: the letter is still taught, then the loop returns to the fail word', () => {
+    const a = letterTest(['घ', 'ट', 'ठ'], 1, 6);
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    let snap = a.snap();
+    expect(snap.value).toBe('image');
+    expect(snap.context.stateTransitionId).toBe('घ-letter-image-wrong');
+    expect(snap.context.wrongLetters).toEqual(['घ']); // queue cut
+    expect(snap.context.word).toBe('जय');
+    expect(snap.context.aserLetters).toMatchObject({
+      incorrect: 7,
+      done: true,
+    });
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    snap = a.snap();
+    expect(snap.value).toBe('word');
     expect(snap.context.stateTransitionId).toBe(
-      'aser-letter-complete-incorrect',
+      'जय-letterImage-word-maxErrors-last',
     );
     a.stop();
   });
 
-  it('a normal word lesson is unaffected (letterOnly defaults false)', () => {
+  it('once decided, a letter drill inside the following word is not counted', () => {
+    mockMarkLetter.mockReturnValue(true);
+    const a = letterTest(['घ'], 3, 0);
+    a.send({ type: 'ANSWER', studentAnswer: 'घ' });
+    expect(a.snap().value).toBe('word');
+    mockMarkLetter.mockReturnValue(false);
+    mockIdentifyCharacterStatus.mockReturnValue({ incorrectChars: ['क'] });
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    expect(a.snap().value).toBe('letter');
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    expect(a.snap().context.aserLetters).toMatchObject({
+      correct: 4,
+      incorrect: 0,
+    });
+    a.stop();
+  });
+
+  it('no-image letters count their first answer too', () => {
+    const a = letterTest(['ण', 'ट'], 0, 0);
+    expect(a.snap().value).toBe('letterNoImage');
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    expect(a.snap().context.aserLetters).toMatchObject({ incorrect: 1 });
+    a.send({ type: 'ANSWER', studentAnswer: 'x' }); // second try: not counted
+    expect(a.snap().context.aserLetters).toMatchObject({ incorrect: 1 });
+    expect(a.snap().context.stateTransitionId).toBe(
+      'ट-letterNoImage-routeWrongLetter-wrong-more',
+    );
+    a.stop();
+  });
+
+  it('a normal word lesson is unaffected', () => {
     const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
-    expect(a.snap().context.letterOnly).toBe(false);
+    expect(a.snap().context.aserLetters).toBeNull();
     expect(a.snap().context.aser).toBeNull();
     a.stop();
   });

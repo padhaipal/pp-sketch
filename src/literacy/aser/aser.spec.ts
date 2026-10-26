@@ -4,7 +4,8 @@ import {
   aserMilestoneForHours,
   type AserStage,
   type AserState,
-  bankForRun,
+  aserStartStage,
+  chooseBank,
   excludedPassageWords,
   newAserState,
   recordAserAnswer,
@@ -26,7 +27,7 @@ function answer(state: AserState, correct: boolean, value?: string): AserState {
 function answers(state: AserState, seq: boolean[]): AserState {
   return seq.reduce((s, c) => answer(s, c), state);
 }
-const fresh = (milestone = 0) => newAserState(1, milestone);
+const fresh = (milestone = 0) => newAserState(1, milestone, 'A');
 const stage = (s: AserState): AserStage | 'done' =>
   s.status === 'done' ? 'done' : s.stage;
 
@@ -41,15 +42,48 @@ describe('ASER banks', () => {
     }
   });
 
-  it('rotates A–E by run, the sixth run repeats A', () => {
-    expect([1, 2, 3, 4, 5, 6].map(bankForRun)).toEqual([
-      'A',
-      'B',
-      'C',
-      'D',
-      'E',
-      'A',
-    ]);
+  const h = (run: number, bank: string, shown = true) => ({
+    run,
+    bank: bank as 'A',
+    shown,
+  });
+  const pick = (history: ReturnType<typeof h>[], r: number) =>
+    chooseBank(history, () => r);
+
+  it('picks at random among banks not yet shown in the cycle', () => {
+    expect(pick([], 0)).toBe('A');
+    expect(pick([], 0.99)).toBe('E');
+    const history = [h(1, 'C'), h(2, 'A')];
+    expect(['B', 'D', 'E']).toContain(pick(history, 0));
+    expect(pick(history, 0)).toBe('B');
+    expect(pick(history, 0.99)).toBe('E');
+  });
+
+  it('a run that showed no bank items uses nothing up', () => {
+    expect(pick([h(1, 'A'), h(2, 'B', false)], 0)).toBe('B');
+  });
+
+  it('every bank once before any repeats; never the same bank twice in a row across cycles', () => {
+    const history = ['C', 'A', 'E', 'B', 'D'].map((b, i) => h(i + 1, b));
+    for (const r of [0, 0.3, 0.6, 0.99]) {
+      expect(pick(history, r)).not.toBe('D');
+    }
+    const full = [...history, h(6, 'B')];
+    expect(['A', 'C', 'D', 'E']).toContain(pick(full, 0.5));
+  });
+
+  it('works over many simulated runs', () => {
+    const history: ReturnType<typeof h>[] = [];
+    for (let run = 1; run <= 20; run++) {
+      history.push(h(run, chooseBank(history)));
+    }
+    for (let c = 0; c < 4; c++) {
+      const cycle = history.slice(c * 5, c * 5 + 5).map((x) => x.bank);
+      expect(new Set(cycle).size).toBe(5);
+    }
+    for (let i = 1; i < history.length; i++) {
+      expect(history[i].bank).not.toBe(history[i - 1].bank);
+    }
   });
 });
 
@@ -172,7 +206,7 @@ describe('recordAserAnswer — routing', () => {
   });
 
   it('retests carry no placement', () => {
-    const s = answers(newAserState(2, 5), [true, true, true, true]);
+    const s = answers(newAserState(2, 5, 'B'), [true, true, true, true]);
     expect(s.status).toBe('done');
     expect(s.placementLevel).toBeNull();
   });
@@ -185,26 +219,129 @@ describe('recordAserAnswer — routing', () => {
   });
 });
 
+describe('retests', () => {
+  it('start at the ASER level of the pre-test lesson level; onboarding always at words', () => {
+    expect(aserStartStage(0, 10)).toBe('word');
+    expect(aserStartStage(2, null)).toBe('word');
+    expect(aserStartStage(2, 2)).toBe('word');
+    expect(aserStartStage(2, 8)).toBe('word');
+    expect(aserStartStage(5, 9)).toBe('paragraph');
+    expect(aserStartStage(5, 10)).toBe('story');
+    expect(aserStartStage(5, 12)).toBe('story');
+  });
+
+  it('from paragraph: both wrong → words with NO fast jump on the first two', () => {
+    let s = newAserState(2, 2, 'B', 'paragraph');
+    expect(s.stage).toBe('paragraph');
+    s = answers(s, [false, false]);
+    expect(s.stage).toBe('word');
+    s = answers(s, [false, false]);
+    expect(s.stage).toBe('word'); // no drop to letters
+    s = answers(s, [true, true]);
+    expect(s.stage).toBe('word'); // no jump either
+    s = answers(s, [true, true]);
+    expect(s.outcomes.word).toBe('passed');
+    expect(s.status).toBe('done'); // paragraph already failed
+    expect(s.placementLevel).toBeNull();
+  });
+
+  it('from words (level 2–8) the fast jump applies', () => {
+    const s = answers(newAserState(2, 2, 'B', 'word'), [true, true]);
+    expect(s.stage).toBe('paragraph');
+  });
+
+  it('from story: pass ends it; fail drops to paragraph', () => {
+    expect(answer(newAserState(3, 5, 'C', 'story'), true).result).toBe('story');
+    const s = answer(newAserState(3, 5, 'C', 'story'), false);
+    expect(s.status).toBe('in_progress');
+    expect(s.stage).toBe('paragraph');
+  });
+});
+
+const turn = (
+  correct: boolean,
+  stid: string,
+  word: string,
+  extra: Partial<Parameters<typeof applyAserTurn>[1]> = {},
+): Parameters<typeof applyAserTurn>[1] => ({
+  answerCorrect: correct,
+  stateTransitionId: stid,
+  word,
+  machineState: 'word',
+  askedLetter: null,
+  lettersBefore: null,
+  lettersAfter: null,
+  ...extra,
+});
+
+describe('letter test turns (one lesson over the bank letters)', () => {
+  const lt = (correct: number, incorrect: number, done = false) => ({
+    correct,
+    incorrect,
+    done,
+  });
+  it('a change in the machine letter counts records the asked letter', () => {
+    let s = answers(fresh(), [false, false]);
+    expect(s.stage).toBe('letter');
+    s = applyAserTurn(
+      s,
+      turn(false, 'ट-letter-routeWrongLetter-correct-more', 'कप', {
+        machineState: 'letter',
+        askedLetter: 'छ',
+        lettersBefore: lt(0, 0),
+        lettersAfter: lt(1, 0),
+      }),
+    );
+    expect(s.counts.letter).toEqual({ correct: 1, incorrect: 0 });
+    expect(s.used.letter).toEqual(['छ']);
+    // a drill turn (image) with unchanged counts records nothing
+    const same = applyAserTurn(
+      s,
+      turn(true, 'ट-image-letterImage-correct', 'कप', {
+        machineState: 'letterImage',
+        askedLetter: 'ट',
+        lettersBefore: lt(1, 0),
+        lettersAfter: lt(1, 0),
+      }),
+    );
+    expect(same).toBe(s);
+  });
+
+  it('letters pass with words undecided → the word the loop returns to is the next word item', () => {
+    let s = answers(fresh(), [false, false]);
+    s = answers(s, [true, true, true]);
+    s = applyAserTurn(
+      s,
+      turn(true, 'कप-letter-word-correct-last', 'कप', {
+        machineState: 'word',
+        askedLetter: 'घ',
+        lettersBefore: lt(3, 0),
+        lettersAfter: lt(4, 0, true),
+      }),
+    );
+    expect(s.outcomes.letter).toBe('passed');
+    expect(s.stage).toBe('word');
+    expect(s.item).toEqual({ stage: 'word', value: 'कप' });
+    expect(s.used.word).toContain('कप');
+    // its first answer counts as a word answer
+    s = applyAserTurn(s, turn(true, 'कप-word-complete-correct-first', 'कप'));
+    expect(s.counts.word).toEqual({ correct: 1, incorrect: 2 });
+  });
+});
+
 describe('passage word exclusion', () => {
   it('paragraphs exclude words drilled at the word level; the story also paragraph drills', () => {
     let s = withItem(fresh(), { stage: 'word', value: 'जय' });
-    s = applyAserTurn(s, {
-      answerTurn: true,
-      answerCorrect: false,
-      stateTransitionId: 'ज-word-routeWrongLetter-drillLetters',
-      word: 'जय',
-    });
+    s = applyAserTurn(
+      s,
+      turn(false, 'ज-word-routeWrongLetter-drillLetters', 'जय'),
+    );
     s = answers(s, [true, true, true, true]);
     expect(stage(s)).toBe('paragraph');
     expect([...excludedPassageWords(s)]).toEqual(['जय']);
 
     s = withItem(s, { stage: 'paragraph', value: 'p1' });
-    s = applyAserTurn(s, {
-      answerTurn: true,
-      answerCorrect: false,
-      stateTransitionId: 'बादल-sentence-word-drillWord',
-      word: 'बादल',
-    });
+    s = applyAserTurn(s, turn(false, 'बादल-sentence-word-drillWord', 'बादल'));
     // a correct word answer is feedback but no drill: not excluded
     expect(s.wordDrills).toEqual(['जय']);
     expect(s.paragraphDrills).toEqual(['बादल']);
@@ -214,15 +351,16 @@ describe('passage word exclusion', () => {
     expect([...excludedPassageWords(s)].sort()).toEqual(['जय', 'बादल'].sort());
   });
 
-  it('a non-answer turn (lesson opening) counts nothing', () => {
-    const s = withItem(fresh(), { stage: 'word', value: 'जय' });
-    expect(
-      applyAserTurn(s, {
-        answerTurn: false,
-        answerCorrect: null,
-        stateTransitionId: 'जय-start-word-initial',
-        word: 'जय',
-      }),
-    ).toBe(s);
+  it('only the first answer to an item counts; later turns in the lesson count nothing', () => {
+    let s = withItem(fresh(), { stage: 'word', value: 'जय' });
+    s = applyAserTurn(
+      s,
+      turn(false, 'ज-word-routeWrongLetter-drillLetters', 'जय'),
+    );
+    const again = applyAserTurn(
+      s,
+      turn(true, 'जय-letter-word-correct-last', 'जय'),
+    );
+    expect(again).toBe(s);
   });
 });

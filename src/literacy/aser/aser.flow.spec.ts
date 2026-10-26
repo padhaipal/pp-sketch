@@ -142,26 +142,26 @@ function makeWorld(due: Record<string, unknown>) {
   return { rows, say, next, tap, last, aser, normalSelections, score, query };
 }
 
+const ONBOARDING = {
+  has_lessons: false,
+  last_run: null,
+  last_milestone: null,
+  story_passed: false,
+  mpl_b_passed: false,
+  active_ms: 0,
+  bank_history: null,
+  lesson_level: null,
+};
+
 describe('ASER delivered through the lesson loop', () => {
   it('onboarding test: 2 words right → paragraph → story failed → placed at level 9', async () => {
-    const w = makeWorld({
-      has_lessons: false,
-      last_run: null,
-      last_milestone: null,
-      story_passed: false,
-      mpl_b_passed: false,
-      active_ms: 0,
-    });
+    const w = makeWorld(ONBOARDING);
 
-    // first lesson ever → ASER run 1, bank A, a word item, intro stid first
+    // first lesson ever → ASER run 1, a word item with its normal prompt
     let out = await w.next();
-    expect(out.stateTransitionIds[0]).toBe('aser-test-start');
-    expect(w.aser()).toMatchObject({
-      run: 1,
-      milestone: 0,
-      bank: 'A',
-      stage: 'word',
-    });
+    const first = w.last().snapshot.context.word as string;
+    expect(out.stateTransitionIds).toEqual([`${first}-start-word-initial`]);
+    expect(w.aser()).toMatchObject({ run: 1, milestone: 0, stage: 'word' });
     expect(w.last().level).toBeNull(); // ASER rows carry no level
 
     // two words read right
@@ -199,7 +199,10 @@ describe('ASER delivered through the lesson loop', () => {
     out = await w.next();
     expect(w.last().passage_id).toBe(P10[0].id);
     out = await w.say('कुछ भी नहीं');
-    expect(out.stateTransitionIds).toContain('aser-test-complete');
+    // no ASER-specific stid: the lesson just carries on
+    expect(out.stateTransitionIds.some((x) => x.startsWith('aser'))).toBe(
+      false,
+    );
     expect(w.aser()).toMatchObject({
       status: 'done',
       result: 'paragraph',
@@ -222,15 +225,8 @@ describe('ASER delivered through the lesson loop', () => {
     expect(w.last().snapshot.context.aser).toBeNull();
   });
 
-  it('first two words wrong → letter items (letter drill only, scored)', async () => {
-    const w = makeWorld({
-      has_lessons: false,
-      last_run: null,
-      last_milestone: null,
-      story_passed: false,
-      mpl_b_passed: false,
-      active_ms: 0,
-    });
+  it('first two words wrong → the letter test runs as one letter-loop lesson with the existing stids', async () => {
+    const w = makeWorld(ONBOARDING);
     await w.next();
     for (let i = 0; i < 2; i++) {
       if (i > 0) await w.next();
@@ -239,28 +235,57 @@ describe('ASER delivered through the lesson loop', () => {
       while (w.last().snapshot.status !== 'done') await w.say('क');
     }
     expect(w.aser().stage).toBe('letter');
-    expect(w.aser().wordDrills).toHaveLength(2);
-    const out = await w.next();
-    const letter = w.last().snapshot.context.word as string;
+    expect(w.aser().counts.word).toEqual({ correct: 0, incorrect: 2 });
+    let out = await w.next();
+    const queue = w.last().snapshot.context.wrongLetters as string[];
+    expect(queue).toHaveLength(10);
     expect(out.stateTransitionIds).toEqual([
-      `${letter}-word-routeWrongLetter-drillLetters`,
+      `${queue[0]}-word-routeWrongLetter-drillLetters`,
     ]);
-    expect(w.last().snapshot.context.letterOnly).toBe(true);
-    const done = await w.say(letter);
-    expect(done.isComplete).toBe(true);
-    expect(done.stateTransitionIds).toEqual(['aser-letter-complete-correct']);
-    expect(w.aser().counts.letter).toEqual({ correct: 1, incorrect: 0 });
+    // four letters right: "correct, next letter" ×3, then the normal
+    // "…-last" return to the next ASER word
+    for (let i = 0; i < 3; i++) {
+      out = await w.say(queue[i]);
+      expect(out.stateTransitionIds).toEqual([
+        `${queue[i + 1]}-letter-routeWrongLetter-correct-more`,
+      ]);
+    }
+    out = await w.say(queue[3]);
+    const nextWord = w.last().snapshot.context.word as string;
+    expect(out.stateTransitionIds).toEqual([
+      `${nextWord}-letter-word-correct-last`,
+    ]);
+    expect(w.aser().outcomes.letter).toBe('passed');
+    expect(w.aser().counts.letter).toEqual({ correct: 4, incorrect: 0 });
+    expect(w.aser().item).toEqual({ stage: 'word', value: nextWord });
+    // that word's first answer is the next word-test answer
+    await w.say(nextWord);
+    expect(w.aser().counts.word).toEqual({ correct: 1, incorrect: 2 });
+  });
+
+  it('everything wrong at onboarding: word test 0–2 (undecided), letter test 0–7 (failed)', async () => {
+    const w = makeWorld(ONBOARDING);
+    await w.next();
+    for (let i = 0; i < 2; i++) {
+      if (i > 0) await w.next();
+      await w.say('क');
+      while (w.last().snapshot.status !== 'done') await w.say('क');
+    }
+    await w.next();
+    let guard = 0;
+    while (w.aser().status !== 'done' && guard++ < 100) await w.say('क');
+    expect(w.aser()).toMatchObject({
+      status: 'done',
+      result: 'beginner',
+      placementLevel: 1,
+      outcomes: { letter: 'failed' },
+    });
+    expect(w.aser().counts.letter).toEqual({ correct: 0, incorrect: 7 });
+    expect(w.aser().counts.word).toEqual({ correct: 0, incorrect: 2 });
   });
 
   it('an abandoned item is delivered again (resume)', async () => {
-    const w = makeWorld({
-      has_lessons: false,
-      last_run: null,
-      last_milestone: null,
-      story_passed: false,
-      mpl_b_passed: false,
-      active_ms: 0,
-    });
+    const w = makeWorld(ONBOARDING);
     await w.next();
     const word = w.last().snapshot.context.word;
     // the student goes quiet; much later a new lesson starts
@@ -283,7 +308,7 @@ describe('ASER delivered through the lesson loop', () => {
     expect(w.last().snapshot.context.aser).toBeNull();
   });
 
-  it('a retest at 5 h starts with no placement', async () => {
+  it('a retest at 5 h: a bank not yet shown, starting at the student’s level (9 → paragraph)', async () => {
     const w = makeWorld({
       has_lessons: true,
       last_run: 2,
@@ -291,9 +316,22 @@ describe('ASER delivered through the lesson loop', () => {
       story_passed: false,
       mpl_b_passed: false,
       active_ms: 5.2 * 3_600_000,
+      bank_history: [
+        { run: 1, bank: 'C', shown: true },
+        { run: 2, bank: 'A', shown: true },
+      ],
+      lesson_level: 9,
     });
     await w.next();
-    expect(w.aser()).toMatchObject({ run: 3, milestone: 5, bank: 'C' });
+    expect(w.aser()).toMatchObject({
+      run: 3,
+      milestone: 5,
+      startStage: 'paragraph',
+      stage: 'paragraph',
+      placementLevel: null,
+    });
+    expect(['B', 'D', 'E']).toContain(w.aser().bank);
+    expect(w.last().passage_id).toBe(w.aser().item!.value);
   });
 
   it('not due between milestones', async () => {
@@ -311,14 +349,7 @@ describe('ASER delivered through the lesson loop', () => {
 
   it('the paragraph skips passages containing a word drilled at the word level', async () => {
     const rnd = jest.spyOn(Math, 'random').mockReturnValue(0.1);
-    const w = makeWorld({
-      has_lessons: false,
-      last_run: null,
-      last_milestone: null,
-      story_passed: false,
-      mpl_b_passed: false,
-      active_ms: 0,
-    });
+    const w = makeWorld(ONBOARDING);
     await w.next();
     expect(w.last().snapshot.context.word).toBe('जय'); // in P9[0]
     await w.say('क');

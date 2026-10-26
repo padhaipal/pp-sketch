@@ -9,12 +9,15 @@ import { IST_DATE_SQL } from '../../users/daily-activity.sql';
 import { splitLessonWords } from '../literacy-lesson/lesson-words.utils';
 import {
   abandonAser,
+  ASER_BANKS,
   ASER_PARAGRAPH_PASSAGE_LEVEL,
   ASER_STORY_PASSAGE_LEVEL,
-  ASER_TEST_START_STATE_TRANSITION_ID,
+  type AserBankHistoryEntry,
   aserMilestoneForHours,
+  aserStartStage,
   type AserItem,
   type AserState,
+  chooseBank,
   excludedPassageWords,
   newAserState,
   remainingBankItems,
@@ -26,17 +29,22 @@ export type AserPlan =
   | {
       kind: 'aser';
       aser: AserState;
-      // Machine input for the item: a letter (letterOnly), a word, or a
-      // passage (sentence + passageId + its level).
+      // Machine input: the letter test (aserLetters — one lesson over the
+      // remaining bank letters), a word, or a passage (sentence + passageId
+      // + its level).
       input: {
         word: string;
-        letterOnly?: boolean;
+        aserLetters?: {
+          letters: string[];
+          correct: number;
+          incorrect: number;
+          passWord: string;
+          failWord: string;
+        };
         sentence?: string[];
         passageId?: string;
         level?: number;
       };
-      // Stids to send before the item's own prompt (the test intro).
-      prependStids: string[];
     }
   | {
       kind: 'normal';
@@ -63,6 +71,19 @@ interface DueRow {
   story_passed: boolean;
   mpl_b_passed: boolean;
   active_ms: string | number | null;
+  // Each past run's bank and whether any of it was shown (its latest row).
+  bank_history: AserBankHistoryEntry[] | null;
+  // The latest normal lesson's level (ASER rows have none).
+  lesson_level: number | null;
+}
+
+function shuffle<T>(items: readonly T[]): T[] {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
 }
 
 // Delivers the ASER test inside the normal lesson loop. Reads only — the
@@ -81,11 +102,12 @@ export class AserService {
     prev: AserState | null | undefined,
   ): Promise<AserPlan> {
     if (prev && prev.status === 'in_progress') {
-      // Resume: an item never answered (abandoned) is delivered again.
+      // Resume: an item never answered (abandoned) is delivered again; an
+      // abandoned letter test restarts on the letters not yet answered.
       if (prev.item && !prev.item.answered) {
-        return this.deliver(userId, prev, prev.item, []);
+        return this.deliver(userId, prev, prev.item);
       }
-      return this.drawNext(userId, prev, []);
+      return this.drawNext(userId, prev);
     }
     if (prev && prev.status === 'done') {
       // The lesson right after a test: the onboarding test places the
@@ -100,11 +122,12 @@ export class AserService {
     const due = await this.dueTest(userId);
     if (!due) return NORMAL;
     this.logger.log(
-      `planFreshLesson: starting ASER run ${due.run} (milestone ${due.milestone}h) for user ${userId}`,
+      `planFreshLesson: starting ASER run ${due.run} (milestone ${due.milestone}h, bank ${due.bank}, at ${due.startStage}) for user ${userId}`,
     );
-    return this.drawNext(userId, newAserState(due.run, due.milestone), [
-      ASER_TEST_START_STATE_TRANSITION_ID,
-    ]);
+    return this.drawNext(
+      userId,
+      newAserState(due.run, due.milestone, due.bank, due.startStage),
+    );
   }
 
   // Is a test due now? Never once the student has passed MPL-B (any nightly
@@ -112,17 +135,30 @@ export class AserService {
   // (right after onboarding); then 2 h, 5 h, 10 h, every 5 h of all-time
   // active time (users/active-time.ts rule, per IST day like the nightly
   // usage metric and its backfill) — one test per milestone reached.
-  private async dueTest(
-    userId: string,
-  ): Promise<{ run: number; milestone: number } | null> {
+  private async dueTest(userId: string): Promise<{
+    run: number;
+    milestone: number;
+    bank: ReturnType<typeof chooseBank>;
+    startStage: ReturnType<typeof aserStartStage>;
+  } | null> {
     const rows: DueRow[] = await this.dataSource.query(
-      `WITH aser AS (
-         SELECT (snapshot->'context'->'aser'->>'run')::int AS run,
+      `/* aser:due */
+       WITH aser AS (
+         SELECT created_at,
+                (snapshot->'context'->'aser'->>'run')::int AS run,
                 (snapshot->'context'->'aser'->>'milestone')::int AS milestone,
-                snapshot->'context'->'aser'->>'result' AS result
+                snapshot->'context'->'aser'->>'result' AS result,
+                snapshot->'context'->'aser'->>'bank' AS bank,
+                jsonb_array_length(snapshot->'context'->'aser'->'used'->'letter')
+                  + jsonb_array_length(snapshot->'context'->'aser'->'used'->'word')
+                  > 0 AS shown
          FROM literacy_lesson_states
          WHERE user_id = $1
            AND snapshot->'context'->'aser'->>'run' IS NOT NULL
+       ),
+       run_latest AS (
+         SELECT DISTINCT ON (run) run, bank, shown
+         FROM aser ORDER BY run, created_at DESC
        ),
        msgs AS (
          SELECT created_at, ${IS_TAP_SQL()} AS is_tap,
@@ -147,6 +183,11 @@ export class AserService {
          EXISTS (SELECT 1 FROM test_results_student
                  WHERE student_id = $1 AND mpl_b_passed = true)
            AS mpl_b_passed,
+         (SELECT json_agg(json_build_object('run', run, 'bank', bank, 'shown', shown))
+          FROM run_latest) AS bank_history,
+         (SELECT level FROM literacy_lesson_states
+          WHERE user_id = $1 AND level IS NOT NULL
+          ORDER BY created_at DESC LIMIT 1) AS lesson_level,
          (SELECT COALESCE(ROUND(SUM(gap_ms)), 0) FROM gaps
           WHERE prev_ist_date = ist_date
             AND ${COUNTED_GAP_SQL('gap_ms', 'is_tap')}) AS active_ms`,
@@ -159,30 +200,61 @@ export class AserService {
       : 0;
     const last = r.last_milestone == null ? -1 : Number(r.last_milestone);
     if (milestone === null || milestone <= last) return null;
-    return { run: Number(r.last_run ?? 0) + 1, milestone };
+    return {
+      run: Number(r.last_run ?? 0) + 1,
+      milestone,
+      bank: chooseBank(r.bank_history ?? []),
+      startStage: aserStartStage(
+        milestone,
+        r.lesson_level == null ? null : Number(r.lesson_level),
+      ),
+    };
   }
 
-  private async drawNext(
-    userId: string,
-    state: AserState,
-    prependStids: string[],
-  ): Promise<AserPlan> {
-    if (state.stage === 'letter' || state.stage === 'word') {
+  private async drawNext(userId: string, state: AserState): Promise<AserPlan> {
+    if (state.stage === 'letter') {
+      const letters = shuffle(remainingBankItems(state));
+      if (letters.length === 0) {
+        // Unreachable: 4 right / 7 wrong always decides within 10 letters.
+        this.logger.warn(
+          `drawNext: letter bank ${state.bank} exhausted for user ${userId} — ending ASER run ${state.run}`,
+        );
+        return this.endEarly(state);
+      }
+      // The word the letter loop returns to: the next ASER word when the
+      // letters pass and words are undecided; otherwise (and on a fail —
+      // the test is over then) a bank word just for practice.
+      const words = shuffle(remainingBankItems({ ...state, stage: 'word' }));
+      const spare =
+        words.length > 0 ? words : [...ASER_BANKS[state.bank].words];
+      const c = state.counts.letter;
+      return {
+        kind: 'aser',
+        aser: { ...state, item: null },
+        input: {
+          word: spare[0],
+          aserLetters: {
+            letters,
+            correct: c.correct,
+            incorrect: c.incorrect,
+            passWord: spare[0],
+            failWord: spare[spare.length > 1 ? 1 : 0],
+          },
+        },
+      };
+    }
+    if (state.stage === 'word') {
       const remaining = remainingBankItems(state);
       if (remaining.length === 0) {
-        // Unreachable: 4 right / 7 wrong always decides within 10 items.
+        // Unreachable: 4 right / 7 wrong always decides within 10 words.
         this.logger.warn(
-          `drawNext: ${state.stage} bank ${state.bank} exhausted for user ${userId} — ending ASER run ${state.run}`,
+          `drawNext: word bank ${state.bank} exhausted for user ${userId} — ending ASER run ${state.run}`,
         );
         return this.endEarly(state);
       }
       const value = remaining[Math.floor(Math.random() * remaining.length)];
-      return this.deliver(
-        userId,
-        withItem(state, { stage: state.stage, value }),
-        { stage: state.stage, value },
-        prependStids,
-      );
+      const item: AserItem = { stage: 'word', value };
+      return this.deliver(userId, withItem(state, item), item);
     }
     const passage = await this.selectPassage(userId, state);
     if (!passage) {
@@ -201,7 +273,6 @@ export class AserService {
         passageId: passage.id,
         level: passage.level,
       },
-      prependStids,
     };
   }
 
@@ -211,23 +282,13 @@ export class AserService {
     userId: string,
     state: AserState,
     item: AserItem,
-    prependStids: string[],
   ): Promise<AserPlan> {
     if (item.stage === 'letter') {
-      return {
-        kind: 'aser',
-        aser: state,
-        input: { word: item.value, letterOnly: true },
-        prependStids,
-      };
+      // Letters are only ever recorded once answered (applyAserTurn).
+      return this.drawNext(userId, { ...state, item: null });
     }
     if (item.stage === 'word') {
-      return {
-        kind: 'aser',
-        aser: state,
-        input: { word: item.value },
-        prependStids,
-      };
+      return { kind: 'aser', aser: state, input: { word: item.value } };
     }
     const rows: Array<{ id: string; text: string; level: number }> =
       await this.dataSource.query(
@@ -240,7 +301,7 @@ export class AserService {
       this.logger.warn(
         `deliver: ASER passage ${item.value} gone for user ${userId} — drawing another`,
       );
-      return this.drawNext(userId, { ...state, item: null }, prependStids);
+      return this.drawNext(userId, { ...state, item: null });
     }
     return {
       kind: 'aser',
@@ -251,7 +312,6 @@ export class AserService {
         passageId: rows[0].id,
         level: rows[0].level,
       },
-      prependStids,
     };
   }
 

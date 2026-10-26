@@ -15,11 +15,7 @@ import {
   selectDrillWord,
 } from './sentence-assessment';
 import { identifyCharacterStatus } from './identify-character-status.utils';
-import {
-  ASER_LETTER_COMPLETE_CORRECT_STATE_TRANSITION_ID,
-  ASER_LETTER_COMPLETE_INCORRECT_STATE_TRANSITION_ID,
-  type AserState,
-} from '../aser/aser';
+import { aserCountVerdict, type AserState } from '../aser/aser';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -75,10 +71,21 @@ interface Context {
   // rides inside the flow, no read-aloud, no drill. Old snapshots rehydrate
   // with undefined (= false).
   readInFlow: boolean;
-  // ASER letter-level item (2026-10): the lesson is the letter subroutine
-  // alone for `word` (= the letter) and completes where it would return to
-  // the word. Old snapshots rehydrate with undefined (= false).
-  letterOnly: boolean;
+  // ASER letter test (2026-10): the lesson walks the bank letters
+  // (wrongLetters) through the letter loop, counting each letter's FIRST
+  // answer. Once 4 right / 7 wrong decide it, the queue is cut to the
+  // current letter, so the loop leaves through its normal `…-last` return
+  // to `word` — on passWord (letters passed) or failWord, which `word` then
+  // holds. `done` stops further counting (a later drill inside that word
+  // is an ordinary drill). Null outside the letter test; old snapshots
+  // rehydrate with undefined.
+  aserLetters: {
+    correct: number;
+    incorrect: number;
+    done: boolean;
+    passWord: string;
+    failWord: string;
+  } | null;
   // ASER test state riding along (aser/aser.ts). The machine never reads or
   // changes it; LiteracyLessonService advances it between turns. Null (or
   // undefined on old snapshots) outside a test.
@@ -170,6 +177,25 @@ function sentenceArgs(context: Context, event: AnswerEvent) {
 
 const NO_IMAGE_LETTERS = new Set(['ञ', 'ण']);
 
+// ASER letter test: a right answer now decides it (→ the `…-last` exit).
+function aserLetterEndsOnCorrect(context: Context): boolean {
+  const a = context.aserLetters;
+  return (
+    a != null &&
+    !a.done &&
+    aserCountVerdict({ correct: a.correct + 1, incorrect: a.incorrect }) !==
+      null
+  );
+}
+const COUNT_RIGHT = {
+  type: 'countAserLetter',
+  params: { correct: true },
+} as const;
+const COUNT_WRONG = {
+  type: 'countAserLetter',
+  params: { correct: false },
+} as const;
+
 // ─── Machine ─────────────────────────────────────────────────────────────────
 
 export const machine = setup({
@@ -185,8 +211,15 @@ export const machine = setup({
       // Level 11+ (2026-09): skip the read-aloud and open on the
       // comprehension flow with the passage inside it.
       readInFlow?: boolean;
-      // ASER letter item: `word` is a single letter, run only its drill.
-      letterOnly?: boolean;
+      // ASER letter test: the letters still to ask (in order), the counts
+      // carried from earlier in the run, and the word each verdict returns to.
+      aserLetters?: {
+        letters: string[];
+        correct: number;
+        incorrect: number;
+        passWord: string;
+        failWord: string;
+      };
       aser?: AserState | null;
     },
   },
@@ -228,6 +261,24 @@ export const machine = setup({
         return updates;
       },
     ),
+    // ASER letter test: count the asked letter's first answer; once 4
+    // right / 7 wrong decide it, cut the queue to this letter and point
+    // `word` at the word the loop's `…-last` exit returns to.
+    countAserLetter: assign(({ context }, params: { correct: boolean }) => {
+      const a = context.aserLetters;
+      if (!a || a.done) return {};
+      const counts = {
+        correct: a.correct + (params.correct ? 1 : 0),
+        incorrect: a.incorrect + (params.correct ? 0 : 1),
+      };
+      const verdict = aserCountVerdict(counts);
+      if (!verdict) return { aserLetters: { ...a, ...counts } };
+      return {
+        aserLetters: { ...a, ...counts, done: true },
+        wrongLetters: context.wrongLetters.slice(0, 1),
+        word: verdict === 'passed' ? a.passWord : a.failWord,
+      };
+    }),
     dropFirstWrongLetter: assign({
       wrongLetters: ({ context }) => context.wrongLetters.slice(1),
     }),
@@ -250,17 +301,28 @@ export const machine = setup({
     // (context, answer, stid, and the start router must all agree).
     const sentence =
       input.sentence && input.sentence.length > 0 ? input.sentence : null;
-    const letterOnly = input.letterOnly === true && !sentence;
+    const aserLetters =
+      input.aserLetters && input.aserLetters.letters.length > 0 && !sentence
+        ? input.aserLetters
+        : null;
     return {
       word: input.word,
       sentence,
       passageId: input.passageId ?? null,
       level: input.level ?? null,
       readInFlow: input.readInFlow === true && !!input.passageId && !!sentence,
-      letterOnly,
+      aserLetters: aserLetters
+        ? {
+            correct: aserLetters.correct,
+            incorrect: aserLetters.incorrect,
+            done: false,
+            passWord: aserLetters.passWord,
+            failWord: aserLetters.failWord,
+          }
+        : null,
       aser: input.aser ?? null,
       sentenceErrors: 0,
-      wrongLetters: letterOnly ? [input.word] : [],
+      wrongLetters: aserLetters ? [...aserLetters.letters] : [],
       wordErrors: 0,
       imageErrors: 0,
       letterErrors: 0,
@@ -268,14 +330,14 @@ export const machine = setup({
       letterNoImageErrors: 0,
       answer: sentence ? sentence.join(' ') : input.word,
       answerCorrect: null,
-      // A letter item opens with the letter drill's own prompt.
+      // The ASER letter test opens with the letter drill's own prompt.
       stateTransitionId:
         input.readInFlow === true && input.passageId && sentence
           ? `${input.passageId}-passage-comprehension-initial`
           : sentence
             ? 'sentence-start-sentence-initial'
-            : letterOnly
-              ? `${input.word}-word-routeWrongLetter-drillLetters`
+            : aserLetters
+              ? `${aserLetters.letters[0]}-word-routeWrongLetter-drillLetters`
               : `${input.word}-start-word-initial`,
       userMessageId: input.userMessageId,
       pendingCorrect: [],
@@ -294,9 +356,9 @@ export const machine = setup({
           guard: ({ context }) => context.readInFlow === true,
           target: 'comprehension',
         },
-        // ASER letter item: straight into the letter drill.
+        // ASER letter test: straight into the letter loop.
         {
-          guard: ({ context }) => context.letterOnly === true,
+          guard: ({ context }) => context.aserLetters != null,
           target: 'routeWrongLetter',
         },
         {
@@ -510,19 +572,6 @@ export const machine = setup({
           wrongLetters: () => [],
         }),
       ],
-      // ASER letter item: the drill is over — there is no word to return
-      // to. The letter's outcome (answerCorrect from the transition that got
-      // here) picks the ending stid; pending scores ride through untouched.
-      always: {
-        guard: ({ context }) => context.letterOnly === true,
-        target: 'complete',
-        actions: assign({
-          stateTransitionId: ({ context }) =>
-            context.answerCorrect === true
-              ? ASER_LETTER_COMPLETE_CORRECT_STATE_TRANSITION_ID
-              : ASER_LETTER_COMPLETE_INCORRECT_STATE_TRANSITION_ID,
-        }),
-      },
       on: {
         ANSWER: [
           // (Sentence drill) student got the drilled word correct on the first
@@ -788,11 +837,14 @@ export const machine = setup({
           {
             guard: and([
               { type: 'checkAnswer', params: { fn: markLetter } },
-              ({ context }) => context.wrongLetters.length === 1,
+              ({ context }) =>
+                context.wrongLetters.length === 1 ||
+                aserLetterEndsOnCorrect(context),
             ]),
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              COUNT_RIGHT,
               assign({ answerCorrect: () => true }),
               assign({
                 stateTransitionId: ({ context }) =>
@@ -810,6 +862,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
+              COUNT_RIGHT,
               assign({ answerCorrect: () => true }),
               assign({
                 stateTransitionId: ({ context }) =>
@@ -827,6 +880,7 @@ export const machine = setup({
             target: 'image',
             actions: [
               { type: 'clearPendingScores' },
+              COUNT_WRONG,
               assign({ answerCorrect: () => false }),
               assign({
                 stateTransitionId: ({ context }) =>
@@ -1017,11 +1071,14 @@ export const machine = setup({
             guard: and([
               { type: 'checkAnswer', params: { fn: markLetter } },
               ({ context }) => context.letterNoImageErrors === 0,
-              ({ context }) => context.wrongLetters.length === 1,
+              ({ context }) =>
+                context.wrongLetters.length === 1 ||
+                aserLetterEndsOnCorrect(context),
             ]),
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              COUNT_RIGHT,
               assign({ answerCorrect: () => true }),
               assign({
                 stateTransitionId: ({ context }) =>
@@ -1043,6 +1100,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
+              COUNT_RIGHT,
               assign({ answerCorrect: () => true }),
               assign({
                 stateTransitionId: ({ context }) =>
@@ -1098,6 +1156,7 @@ export const machine = setup({
             target: 'letterNoImage',
             actions: [
               { type: 'clearPendingScores' },
+              COUNT_WRONG,
               assign({ answerCorrect: () => false }),
               assign({
                 stateTransitionId: ({ context }) =>

@@ -30,8 +30,8 @@ import {
 import { splitLessonWords } from './lesson-words.utils';
 import { AserService } from '../aser/aser.service';
 import {
-  ASER_TEST_COMPLETE_STATE_TRANSITION_ID,
   applyAserTurn,
+  type AserLetterCounts,
   type AserState,
 } from '../aser/aser';
 import {
@@ -263,13 +263,12 @@ export class LiteracyLessonService {
         // row — the ratchet then reads the last NORMAL lesson's level, which
         // is how a retest hands the student back their pre-test level.
         let selectedLevel: number | null;
-        // ASER (aser/aser.ts): test state before this turn, and the stids
-        // to send before the lesson's own (the test intro).
+        // ASER (aser/aser.ts): the test state before this turn. ASER uses
+        // only the lesson loop's own stids — none are added here.
         const prevAser: AserState | null =
           (currentState?.snapshot?.context as { aser?: AserState | null })
             ?.aser ?? null;
         let aserBefore: AserState | null = null;
-        const aserPrependStids: string[] = [];
 
         if (startFresh) {
           // 5. Start a new lesson — an ASER item when a test is due or in
@@ -283,7 +282,6 @@ export class LiteracyLessonService {
           let input: InputFrom<typeof machine>;
           if (plan?.kind === 'aser') {
             selectedLevel = null;
-            aserPrependStids.push(...plan.prependStids);
             input = {
               ...plan.input,
               aser: plan.aser,
@@ -358,18 +356,26 @@ export class LiteracyLessonService {
               JSON.stringify(snapshot),
             ) as LessonSnapshot;
             const ctx = plain.context;
+            const prevCtx = currentState!.snapshot.context as {
+              wrongLetters?: string[];
+              aserLetters?: AserLetterCounts | null;
+            };
             (ctx as { aser: AserState | null }).aser = applyAserTurn(prevAser, {
-              answerTurn: true,
               answerCorrect: ctx.answerCorrect ?? null,
               stateTransitionId: ctx.stateTransitionId,
               word: ctx.word,
+              machineState: String(plain.value),
+              askedLetter: prevCtx.wrongLetters?.[0] ?? null,
+              lettersBefore: prevCtx.aserLetters ?? null,
+              lettersAfter: ctx.aserLetters ?? null,
             });
             snapshot = plain;
           }
         }
         const aserAfter: AserState | null =
           (snapshot.context as { aser?: AserState | null }).aser ?? null;
-        // The test ended on this turn (its last item's first answer).
+        // The test ended on this turn (its last item's first answer) — logged
+        // only; the student just carries on with the lesson.
         const aserCompleted =
           aserBefore?.status === 'in_progress' && aserAfter?.status === 'done';
         if (aserAfter) {
@@ -457,13 +463,9 @@ export class LiteracyLessonService {
         const stateTransitionIds = isStaleRestart
           ? [
               STALE_LESSON_RESTART_STATE_TRANSITION_ID,
-              ...aserPrependStids,
               snapshotContext.stateTransitionId,
             ]
-          : [...aserPrependStids, snapshotContext.stateTransitionId];
-        if (aserCompleted) {
-          stateTransitionIds.push(ASER_TEST_COMPLETE_STATE_TRANSITION_ID);
-        }
+          : [snapshotContext.stateTransitionId];
         stateTransitionIds.push(...flooredStids);
 
         const isComplete = snapshot.status === 'done';
