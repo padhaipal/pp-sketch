@@ -5,6 +5,7 @@ import {
   assessSentence,
   readErrorBudget,
   selectDrillWord,
+  FLAT_READ_ERROR_BUDGET,
   FLAWED_WORD_RATIO_MAX,
   flawedWordBudgetOk,
   MIN_READ_WPM,
@@ -80,6 +81,33 @@ describe('readErrorBudget', () => {
 });
 
 describe('assessSentence', () => {
+  it('maxErrors replaces the 10% budget (levels 9-10: flat three)', () => {
+    expect(FLAT_READ_ERROR_BUDGET).toBe(3);
+    const words = [
+      'घर',
+      'नल',
+      'कमल',
+      'सड़क',
+      'बादल',
+      'पहाड़',
+      'नदी',
+      'सागर',
+      'कलम',
+      'पतंग',
+    ];
+    const long = [...words, ...words, ...words, ...words, ...words]; // 50
+    expect(readErrorBudget(long.length)).toBe(5);
+    // the first word of four of the ten-word blocks never read
+    const four = long.filter((_, i) => !(i % 10 === 0 && i < 40));
+    const three = long.filter((_, i) => !(i % 10 === 0 && i < 30));
+    const read = (t: string[], maxErrors?: number) =>
+      assessSentence({ words: long, transcripts: [t.join(' ')], maxErrors });
+    expect(read(four).errorCount).toBe(4);
+    expect(read(four).passed).toBe(true); // 4 ≤ 10% budget of 5
+    expect(read(four, 3).passed).toBe(false);
+    expect(read(three, 3).passed).toBe(true);
+  });
+
   it('passes a verbatim read', () => {
     const words = ['घर', 'में', 'नल', 'है'];
     const result = assessSentence({

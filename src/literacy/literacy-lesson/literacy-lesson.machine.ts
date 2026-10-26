@@ -9,10 +9,13 @@ import {
 } from './evaluate-answer.utils';
 import {
   assessSentence,
+  FLAT_READ_ERROR_BUDGET,
+  FLAT_READ_ERROR_BUDGET_LEVELS,
   MIN_READ_WPM,
   selectDrillWord,
 } from './sentence-assessment';
 import { identifyCharacterStatus } from './identify-character-status.utils';
+import { aserCountVerdict, type AserState } from '../aser/aser';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -68,6 +71,25 @@ interface Context {
   // rides inside the flow, no read-aloud, no drill. Old snapshots rehydrate
   // with undefined (= false).
   readInFlow: boolean;
+  // ASER letter test (2026-10): the lesson walks the bank letters
+  // (wrongLetters) through the letter loop, counting each letter's FIRST
+  // answer. Once 4 right / 7 wrong decide it, the queue is cut to the
+  // current letter, so the loop leaves through its normal `…-last` return
+  // to `word` — on wordIfPassed (letters passed) or wordIfFailed, which `word` then
+  // holds. `done` stops further counting (a later drill inside that word
+  // is an ordinary drill). Null outside the letter test; old snapshots
+  // rehydrate with undefined.
+  aserLetters: {
+    correct: number;
+    incorrect: number;
+    done: boolean;
+    wordIfPassed: string;
+    wordIfFailed: string;
+  } | null;
+  // ASER test state riding along (aser/aser.ts). The machine never reads or
+  // changes it; LiteracyLessonService advances it between turns. Null (or
+  // undefined on old snapshots) outside a test.
+  aser: AserState | null;
   sentenceErrors: number;
   wrongLetters: string[];
   wordErrors: number;
@@ -133,18 +155,46 @@ function minWpmFor(level: number | null | undefined): number | null {
     : null;
 }
 
+// Levels 9 and 10 allow a flat three errors (the ASER rule, 2026-10);
+// every other level keeps the 10% budget.
+function maxErrorsFor(level: number | null | undefined): number | null {
+  return level != null && FLAT_READ_ERROR_BUDGET_LEVELS.has(level)
+    ? FLAT_READ_ERROR_BUDGET
+    : null;
+}
+
 // What every sentence guard hands to assessSentence: the words, each
-// engine's transcript, and the speed gate when the level carries one.
+// engine's transcript, the speed gate and the error budget for the level.
 function sentenceArgs(context: Context, event: AnswerEvent) {
   return {
     words: context.sentence ?? [],
     transcripts: transcriptsOf(event),
     durationMs: event.durationMs ?? null,
     minWpm: minWpmFor(context.level),
+    maxErrors: maxErrorsFor(context.level),
   };
 }
 
 const NO_IMAGE_LETTERS = new Set(['ञ', 'ण']);
+
+// ASER letter test: a right answer now decides it (→ the `…-last` exit).
+function aserLetterEndsOnCorrect(context: Context): boolean {
+  const a = context.aserLetters;
+  return (
+    a != null &&
+    !a.done &&
+    aserCountVerdict({ correct: a.correct + 1, incorrect: a.incorrect }) !==
+      null
+  );
+}
+const COUNT_RIGHT = {
+  type: 'countAserLetter',
+  params: { correct: true },
+} as const;
+const COUNT_WRONG = {
+  type: 'countAserLetter',
+  params: { correct: false },
+} as const;
 
 // ─── Machine ─────────────────────────────────────────────────────────────────
 
@@ -161,6 +211,16 @@ export const machine = setup({
       // Level 11+ (2026-09): skip the read-aloud and open on the
       // comprehension flow with the passage inside it.
       readInFlow?: boolean;
+      // ASER letter test: the letters still to ask (in order), the counts
+      // carried from earlier in the run, and the word each verdict returns to.
+      aserLetters?: {
+        letters: string[];
+        correct: number;
+        incorrect: number;
+        wordIfPassed: string;
+        wordIfFailed: string;
+      };
+      aser?: AserState | null;
     },
   },
 
@@ -201,6 +261,24 @@ export const machine = setup({
         return updates;
       },
     ),
+    // ASER letter test: count the asked letter's first answer; once 4
+    // right / 7 wrong decide it, cut the queue to this letter and point
+    // `word` at the word the loop's `…-last` exit returns to.
+    countAserLetter: assign(({ context }, params: { correct: boolean }) => {
+      const a = context.aserLetters;
+      if (!a || a.done) return {};
+      const counts = {
+        correct: a.correct + (params.correct ? 1 : 0),
+        incorrect: a.incorrect + (params.correct ? 0 : 1),
+      };
+      const verdict = aserCountVerdict(counts);
+      if (!verdict) return { aserLetters: { ...a, ...counts } };
+      return {
+        aserLetters: { ...a, ...counts, done: true },
+        wrongLetters: context.wrongLetters.slice(0, 1),
+        word: verdict === 'passed' ? a.wordIfPassed : a.wordIfFailed,
+      };
+    }),
     dropFirstWrongLetter: assign({
       wrongLetters: ({ context }) => context.wrongLetters.slice(1),
     }),
@@ -223,14 +301,28 @@ export const machine = setup({
     // (context, answer, stid, and the start router must all agree).
     const sentence =
       input.sentence && input.sentence.length > 0 ? input.sentence : null;
+    const aserLetters =
+      input.aserLetters && input.aserLetters.letters.length > 0 && !sentence
+        ? input.aserLetters
+        : null;
     return {
       word: input.word,
       sentence,
       passageId: input.passageId ?? null,
       level: input.level ?? null,
       readInFlow: input.readInFlow === true && !!input.passageId && !!sentence,
+      aserLetters: aserLetters
+        ? {
+            correct: aserLetters.correct,
+            incorrect: aserLetters.incorrect,
+            done: false,
+            wordIfPassed: aserLetters.wordIfPassed,
+            wordIfFailed: aserLetters.wordIfFailed,
+          }
+        : null,
+      aser: input.aser ?? null,
       sentenceErrors: 0,
-      wrongLetters: [],
+      wrongLetters: aserLetters ? [...aserLetters.letters] : [],
       wordErrors: 0,
       imageErrors: 0,
       letterErrors: 0,
@@ -238,12 +330,15 @@ export const machine = setup({
       letterNoImageErrors: 0,
       answer: sentence ? sentence.join(' ') : input.word,
       answerCorrect: null,
+      // The ASER letter test opens with the letter drill's own prompt.
       stateTransitionId:
         input.readInFlow === true && input.passageId && sentence
           ? `${input.passageId}-passage-comprehension-initial`
           : sentence
             ? 'sentence-start-sentence-initial'
-            : `${input.word}-start-word-initial`,
+            : aserLetters
+              ? `${aserLetters.letters[0]}-word-routeWrongLetter-drillLetters`
+              : `${input.word}-start-word-initial`,
       userMessageId: input.userMessageId,
       pendingCorrect: [],
       pendingIncorrect: [],
@@ -260,6 +355,11 @@ export const machine = setup({
         {
           guard: ({ context }) => context.readInFlow === true,
           target: 'comprehension',
+        },
+        // ASER letter test: straight into the letter loop.
+        {
+          guard: ({ context }) => context.aserLetters != null,
+          target: 'routeWrongLetter',
         },
         {
           guard: ({ context }) =>
@@ -737,11 +837,14 @@ export const machine = setup({
           {
             guard: and([
               { type: 'checkAnswer', params: { fn: markLetter } },
-              ({ context }) => context.wrongLetters.length === 1,
+              ({ context }) =>
+                context.wrongLetters.length === 1 ||
+                aserLetterEndsOnCorrect(context),
             ]),
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              COUNT_RIGHT,
               assign({ answerCorrect: () => true }),
               assign({
                 stateTransitionId: ({ context }) =>
@@ -759,6 +862,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
+              COUNT_RIGHT,
               assign({ answerCorrect: () => true }),
               assign({
                 stateTransitionId: ({ context }) =>
@@ -776,6 +880,7 @@ export const machine = setup({
             target: 'image',
             actions: [
               { type: 'clearPendingScores' },
+              COUNT_WRONG,
               assign({ answerCorrect: () => false }),
               assign({
                 stateTransitionId: ({ context }) =>
@@ -966,11 +1071,14 @@ export const machine = setup({
             guard: and([
               { type: 'checkAnswer', params: { fn: markLetter } },
               ({ context }) => context.letterNoImageErrors === 0,
-              ({ context }) => context.wrongLetters.length === 1,
+              ({ context }) =>
+                context.wrongLetters.length === 1 ||
+                aserLetterEndsOnCorrect(context),
             ]),
             target: 'word',
             actions: [
               { type: 'clearPendingScores' },
+              COUNT_RIGHT,
               assign({ answerCorrect: () => true }),
               assign({
                 stateTransitionId: ({ context }) =>
@@ -992,6 +1100,7 @@ export const machine = setup({
             target: 'routeWrongLetter',
             actions: [
               { type: 'clearPendingScores' },
+              COUNT_RIGHT,
               assign({ answerCorrect: () => true }),
               assign({
                 stateTransitionId: ({ context }) =>
@@ -1047,6 +1156,7 @@ export const machine = setup({
             target: 'letterNoImage',
             actions: [
               { type: 'clearPendingScores' },
+              COUNT_WRONG,
               assign({ answerCorrect: () => false }),
               assign({
                 stateTransitionId: ({ context }) =>

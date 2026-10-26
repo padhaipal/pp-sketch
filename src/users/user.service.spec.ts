@@ -1121,14 +1121,73 @@ describe('UserService.getLiteracyTestScores', () => {
     expect(scores.mpl_b.status).toBe('insufficient_data');
     expect(scores.mpl_b.attempts_available).toBe(0);
     expect(scores.nipun_grade_1.status).toBe('insufficient_data');
-    // The four-key response contract (nipun_grade_1 is back since 2026-10,
-    // scored over level-8 lessons).
+    // The response contract: four snapshot tests (nipun_grade_1 is back
+    // since 2026-10, scored over level-8 lessons) + the four ASER tests.
     expect(Object.keys(scores).sort()).toEqual([
+      'aser_l1',
+      'aser_l2',
+      'aser_l3',
+      'aser_l4',
       'mpl_b',
       'nipun_grade_1',
       'nipun_grade_2',
       'nipun_grade_3',
     ]);
+    expect(scores.aser_l1).toEqual({
+      status: 'insufficient_data',
+      runs_available: 0,
+    });
+  });
+
+  it('ASER: each finished run’s counts per test (kept when undecided), timestamped by the answer that ended the run', async () => {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue(userRow);
+    const cache = makeCache();
+    cache.get.mockResolvedValue(null);
+    const zero = { correct: 0, incorrect: 0 };
+    const st = (run: number, status: string, extra = {}) => ({
+      run,
+      status,
+      outcomes: {},
+      counts: { letter: zero, word: zero, paragraph: zero, story: zero },
+      ...extra,
+    });
+    const allWrong = {
+      outcomes: { letter: 'failed' },
+      counts: {
+        letter: { correct: 0, incorrect: 7 },
+        word: { correct: 0, incorrect: 2 },
+        paragraph: zero,
+        story: zero,
+      },
+    };
+    const dsQuery = jest.fn().mockImplementation(async (sql: string) => {
+      if (!sql.includes('aser:rows')) return [];
+      return [
+        { user_id: USER_ID, created_at: day(1), aser: st(1, 'in_progress') },
+        { user_id: USER_ID, created_at: day(2), aser: st(1, 'done', allWrong) },
+        { user_id: USER_ID, created_at: day(3), aser: st(1, 'done', allWrong) },
+        { user_id: USER_ID, created_at: day(9), aser: st(2, 'in_progress') },
+      ];
+    });
+    const svc = makeService(repo, dsQuery, cache, makeScore());
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    expect(scores.aser_l1?.latest).toEqual({
+      run: 1,
+      at: day(2),
+      correct: 0,
+      incorrect: 7,
+      passed: false,
+    });
+    expect(scores.aser_l2?.latest).toEqual({
+      run: 1,
+      at: day(2),
+      correct: 0,
+      incorrect: 2,
+      passed: null,
+    });
+    expect(scores.aser_l3?.status).toBe('insufficient_data');
+    expect(scores.aser_l4?.status).toBe('insufficient_data');
   });
 
   it('counts only the FIRST attempt at each question — repeats never count', async () => {

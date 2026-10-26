@@ -78,6 +78,43 @@ export class TestResultStudentEntity {
   @Column({ type: 'integer', default: 0 })
   usage_attempts: number;
 
+  // ASER (migration 1794000000000-AddAserMetrics): l1 letter, l2 word,
+  // l3 paragraph, l4 story — the latest finished run that reached the test.
+  // Counts are kept when the test was left undecided (passed NULL); `at` is
+  // when that run ended. All NULL until the student has such a run.
+  @Column({ type: 'integer', nullable: true })
+  aser_l1_correct: number | null;
+  @Column({ type: 'integer', nullable: true })
+  aser_l1_incorrect: number | null;
+  @Column({ type: 'boolean', nullable: true })
+  aser_l1_passed: boolean | null;
+  @Column({ type: 'timestamptz', nullable: true })
+  aser_l1_at: Date | null;
+  @Column({ type: 'integer', nullable: true })
+  aser_l2_correct: number | null;
+  @Column({ type: 'integer', nullable: true })
+  aser_l2_incorrect: number | null;
+  @Column({ type: 'boolean', nullable: true })
+  aser_l2_passed: boolean | null;
+  @Column({ type: 'timestamptz', nullable: true })
+  aser_l2_at: Date | null;
+  @Column({ type: 'integer', nullable: true })
+  aser_l3_correct: number | null;
+  @Column({ type: 'integer', nullable: true })
+  aser_l3_incorrect: number | null;
+  @Column({ type: 'boolean', nullable: true })
+  aser_l3_passed: boolean | null;
+  @Column({ type: 'timestamptz', nullable: true })
+  aser_l3_at: Date | null;
+  @Column({ type: 'integer', nullable: true })
+  aser_l4_correct: number | null;
+  @Column({ type: 'integer', nullable: true })
+  aser_l4_incorrect: number | null;
+  @Column({ type: 'boolean', nullable: true })
+  aser_l4_passed: boolean | null;
+  @Column({ type: 'timestamptz', nullable: true })
+  aser_l4_at: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;
 }
@@ -199,6 +236,33 @@ export class TestResultGeoEntityEntity {
     default: () => `'{${Array(31).fill(0).join(',')}}'`,
   })
   usage_hist: number[];
+
+  // ASER per test: students whose latest run reached it, passed, failed
+  // (undecided = n − pass − fail). No age band.
+  @Column({ type: 'integer', default: 0 })
+  aser_l1_n: number;
+  @Column({ type: 'integer', default: 0 })
+  aser_l1_pass: number;
+  @Column({ type: 'integer', default: 0 })
+  aser_l1_fail: number;
+  @Column({ type: 'integer', default: 0 })
+  aser_l2_n: number;
+  @Column({ type: 'integer', default: 0 })
+  aser_l2_pass: number;
+  @Column({ type: 'integer', default: 0 })
+  aser_l2_fail: number;
+  @Column({ type: 'integer', default: 0 })
+  aser_l3_n: number;
+  @Column({ type: 'integer', default: 0 })
+  aser_l3_pass: number;
+  @Column({ type: 'integer', default: 0 })
+  aser_l3_fail: number;
+  @Column({ type: 'integer', default: 0 })
+  aser_l4_n: number;
+  @Column({ type: 'integer', default: 0 })
+  aser_l4_pass: number;
+  @Column({ type: 'integer', default: 0 })
+  aser_l4_fail: number;
 
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;

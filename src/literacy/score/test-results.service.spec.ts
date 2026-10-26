@@ -7,6 +7,9 @@ import type { DataSource } from 'typeorm';
 import { createQueue } from '../../interfaces/redis/queues';
 import {
   addVector,
+  ASER_GEO_COLUMNS,
+  ASER_KEYS,
+  ASER_STUDENT_COLUMNS,
   bandVerdict,
   cohortVector,
   emptyVector,
@@ -64,6 +67,7 @@ interface GeoRow {
     string,
     { n: number; sum: string; sumsq: string; pass: number; hist: number[] }
   >;
+  aser: Record<string, { n: number; pass: number; fail: number }>;
 }
 interface Run {
   id: string;
@@ -96,6 +100,8 @@ class FakeDb {
   answers = new Map<string, ComprehensionRow[]>();
   // Finished level-8 lessons (NIPUN g1).
   lessons8 = new Map<string, Level8LessonRow[]>();
+  // ASER lesson rows (aser/aser.ts ASER_ROWS_SQL shape).
+  aserRows = new Map<string, Array<{ created_at: Date; aser: unknown }>>();
   results: ResultRow[] = [];
   geo: GeoRow[] = [];
   runs: Run[] = [];
@@ -189,11 +195,18 @@ class FakeDb {
               .map(({ t, tap }) => ({ user_id: id, created_at: t, tap })),
           );
         }
+        case 'aser:rows': {
+          const ids = params[0] as string[];
+          return ids.flatMap((id) =>
+            (this.aserRows.get(id) ?? []).map((r) => ({ user_id: id, ...r })),
+          );
+        }
         case 'test-results:upsert-students': {
           const created = this.tick();
-          for (let i = 0; i < params.length; i += 18) {
+          const stride = 18 + ASER_STUDENT_COLUMNS.length;
+          for (let i = 0; i < params.length; i += stride) {
             const [student_id, geo_entity_id, computed_for, ...scores] =
-              params.slice(i, i + 18) as [
+              params.slice(i, i + stride) as [
                 string,
                 string | null,
                 string,
@@ -260,6 +273,12 @@ class FakeDb {
                   r.computed_for === computedFor
                     ? (r.scores[12] as number | null)
                     : null,
+                ...Object.fromEntries(
+                  ASER_KEYS.flatMap((k, j) => [
+                    [`${k}_correct`, r.scores[15 + 4 * j]],
+                    [`${k}_passed`, r.scores[17 + 4 * j]],
+                  ]),
+                ),
                 active: (this.lessons.get(s.id) ?? []).some(
                   (l) => l.getTime() >= since,
                 ),
@@ -291,7 +310,7 @@ class FakeDb {
         }
         case 'test-results:upsert-geo': {
           const head = 5 + VERDICT_COLUMNS.length;
-          const per = head + METRICS.length * 5;
+          const per = head + METRICS.length * 5 + ASER_GEO_COLUMNS.length;
           for (let i = 0; i < params.length; i += per) {
             const p = params.slice(i, i + per);
             const row: GeoRow = {
@@ -308,7 +327,16 @@ class FakeDb {
               nipun_schools_fail: p[10] as number,
               nipun_schools_insufficient: p[11] as number,
               metrics: {},
+              aser: {},
             };
+            ASER_KEYS.forEach((k, j) => {
+              const b = head + METRICS.length * 5 + j * 3;
+              row.aser[k] = {
+                n: p[b] as number,
+                pass: p[b + 1] as number,
+                fail: p[b + 2] as number,
+              };
+            });
             METRICS.forEach((m, k) => {
               const b = head + k * 5;
               row.metrics[m] = {
@@ -510,6 +538,8 @@ describe('TestResultsService.run — candidates and skip criterion', () => {
       null,
       null,
       0,
+      // ASER l1–l4 (correct, incorrect, passed, at): never taken
+      ...Array<null>(ASER_STUDENT_COLUMNS.length).fill(null),
     ]);
   });
 
@@ -592,7 +622,10 @@ describe('TestResultsService.run — candidates and skip criterion', () => {
       String(sql).includes('test-results:upsert-students'),
     );
     expect(
-      upserts.map(([, params]) => (params as unknown[]).length / 18),
+      upserts.map(
+        ([, params]) =>
+          (params as unknown[]).length / (18 + ASER_STUDENT_COLUMNS.length),
+      ),
     ).toEqual([STUDENT_BATCH_SIZE, 1]);
   });
 });
@@ -1387,7 +1420,7 @@ describe('TestResultsService — usage backfill writers', () => {
     expect(n).toBe(2);
     const [sql, params] = query.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('test-results:backfill-geo');
-    expect(sql).toMatch(/usage_hist, created_at\)\s+VALUES/);
+    expect(sql).toMatch(/aser_l4_fail, created_at\)\s+VALUES/);
     expect(sql).toMatch(
       /DO UPDATE SET usage_n = EXCLUDED\.usage_n, usage_sum = EXCLUDED\.usage_sum, usage_sumsq = EXCLUDED\.usage_sumsq, usage_pass = EXCLUDED\.usage_pass, usage_hist = EXCLUDED\.usage_hist$/,
     );
@@ -1507,5 +1540,113 @@ describe('a higher NIPUN grade pass implies the lower grades at 100 % (roll-up o
     );
     expect(v.nipun_g2.n).toBe(0);
     expect(v.students_scored).toBe(1);
+  });
+});
+
+describe('TestResultsService.run — ASER (four tests, no age band)', () => {
+  const run = (
+    runNo: number,
+    extra: Record<string, unknown>,
+  ): Record<string, unknown> => ({
+    run: runNo,
+    milestone: 0,
+    bank: 'A',
+    status: 'done',
+    startStage: 'word',
+    stage: 'word',
+    outcomes: {},
+    counts: {
+      letter: { correct: 0, incorrect: 0 },
+      word: { correct: 0, incorrect: 0 },
+      paragraph: { correct: 0, incorrect: 0 },
+      story: { correct: 0, incorrect: 0 },
+    },
+    used: { letter: [], word: [], paragraph: [], story: [] },
+    item: null,
+    wordDrills: [],
+    paragraphDrills: [],
+    result: null,
+    placementLevel: null,
+    ...extra,
+  });
+
+  it('stores each test of the latest finished run (counts even when undecided) and counts takers / passes / fails per area', async () => {
+    const db = new FakeDb();
+    seed(db);
+    // A: everything wrong at onboarding — 2 wrong words (undecided),
+    // 7 wrong letters (failed). Run 2 in progress: ignored.
+    const ended = new Date('2026-09-11T10:00:00Z');
+    db.aserRows.set('A', [
+      {
+        created_at: new Date('2026-09-11T09:00:00Z'),
+        aser: run(1, { status: 'in_progress' }),
+      },
+      {
+        created_at: ended,
+        aser: run(1, {
+          outcomes: { letter: 'failed' },
+          counts: {
+            letter: { correct: 0, incorrect: 7 },
+            word: { correct: 0, incorrect: 2 },
+            paragraph: { correct: 0, incorrect: 0 },
+            story: { correct: 0, incorrect: 0 },
+          },
+          result: 'beginner',
+        }),
+      },
+      {
+        created_at: new Date('2026-09-11T11:00:00Z'),
+        aser: run(2, { status: 'in_progress' }),
+      },
+    ]);
+    // B (same school S1): passed words 4–1, then failed both paragraphs.
+    db.aserRows.set('B', [
+      {
+        created_at: ended,
+        aser: run(1, {
+          outcomes: { word: 'passed', paragraph: 'failed' },
+          counts: {
+            letter: { correct: 0, incorrect: 0 },
+            word: { correct: 4, incorrect: 1 },
+            paragraph: { correct: 0, incorrect: 2 },
+            story: { correct: 0, incorrect: 0 },
+          },
+          result: 'word',
+        }),
+      },
+    ]);
+    const { svc } = makeService(db);
+    await svc.run({ full: true, now: NOW });
+
+    const a = db.results.find((r) => r.student_id === 'A')!;
+    expect(a.scores.slice(15)).toEqual([
+      0,
+      7,
+      false,
+      ended, // l1 letter: failed
+      0,
+      2,
+      null,
+      ended, // l2 word: undecided, still counted
+      null,
+      null,
+      null,
+      null, // l3 not taken
+      null,
+      null,
+      null,
+      null, // l4 not taken
+    ]);
+    const s1 = db.geo.find((g) => g.geo_entity_id === 'S1')!;
+    expect(s1.aser).toEqual({
+      aser_l1: { n: 1, pass: 0, fail: 1 },
+      aser_l2: { n: 2, pass: 1, fail: 0 },
+      aser_l3: { n: 1, pass: 0, fail: 1 },
+      aser_l4: { n: 0, pass: 0, fail: 0 },
+    });
+    // rolled up unchanged to the ancestors (B1, D)
+    expect(db.geo.find((g) => g.geo_entity_id === 'D')!.aser.aser_l2).toEqual(
+      expect.objectContaining({ n: 2, pass: 1 }),
+    );
   });
 });
