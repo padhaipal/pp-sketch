@@ -104,3 +104,12 @@ uploadStaticMedia()
 - `GET /media-meta-data/comprehension-stids` rows now carry `level`,
   `passage_type`, `question_type` resolved from the stid prefix (passage id
   for flow stids; option → question → passage for explanation stids).
+
+## 2026-10 additions
+
+- `POST /media-meta-data/manual-passage` (200, slow ~1-2.5 min/row) — one
+  hand-written passage family from the dashboard CSV upload. Body = the
+  GeneratedContent shape (`passage`, `question`) + optional provenance
+  `filename`, `row`. Root span `manual-passage-controller`; delegates to
+  `MediaMetaDataService.createManualPassageMedia`; returns
+  `LlmGenerateResponse`. Declared before `DELETE :id`.
