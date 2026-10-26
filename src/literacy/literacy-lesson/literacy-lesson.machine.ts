@@ -9,10 +9,17 @@ import {
 } from './evaluate-answer.utils';
 import {
   assessSentence,
+  FLAT_READ_ERROR_BUDGET,
+  FLAT_READ_ERROR_BUDGET_LEVELS,
   MIN_READ_WPM,
   selectDrillWord,
 } from './sentence-assessment';
 import { identifyCharacterStatus } from './identify-character-status.utils';
+import {
+  ASER_LETTER_COMPLETE_CORRECT_STATE_TRANSITION_ID,
+  ASER_LETTER_COMPLETE_INCORRECT_STATE_TRANSITION_ID,
+  type AserState,
+} from '../aser/aser';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -68,6 +75,14 @@ interface Context {
   // rides inside the flow, no read-aloud, no drill. Old snapshots rehydrate
   // with undefined (= false).
   readInFlow: boolean;
+  // ASER letter-level item (2026-10): the lesson is the letter subroutine
+  // alone for `word` (= the letter) and completes where it would return to
+  // the word. Old snapshots rehydrate with undefined (= false).
+  letterOnly: boolean;
+  // ASER test state riding along (aser/aser.ts). The machine never reads or
+  // changes it; LiteracyLessonService advances it between turns. Null (or
+  // undefined on old snapshots) outside a test.
+  aser: AserState | null;
   sentenceErrors: number;
   wrongLetters: string[];
   wordErrors: number;
@@ -133,14 +148,23 @@ function minWpmFor(level: number | null | undefined): number | null {
     : null;
 }
 
+// Levels 9 and 10 allow a flat three errors (the ASER rule, 2026-10);
+// every other level keeps the 10% budget.
+function maxErrorsFor(level: number | null | undefined): number | null {
+  return level != null && FLAT_READ_ERROR_BUDGET_LEVELS.has(level)
+    ? FLAT_READ_ERROR_BUDGET
+    : null;
+}
+
 // What every sentence guard hands to assessSentence: the words, each
-// engine's transcript, and the speed gate when the level carries one.
+// engine's transcript, the speed gate and the error budget for the level.
 function sentenceArgs(context: Context, event: AnswerEvent) {
   return {
     words: context.sentence ?? [],
     transcripts: transcriptsOf(event),
     durationMs: event.durationMs ?? null,
     minWpm: minWpmFor(context.level),
+    maxErrors: maxErrorsFor(context.level),
   };
 }
 
@@ -161,6 +185,9 @@ export const machine = setup({
       // Level 11+ (2026-09): skip the read-aloud and open on the
       // comprehension flow with the passage inside it.
       readInFlow?: boolean;
+      // ASER letter item: `word` is a single letter, run only its drill.
+      letterOnly?: boolean;
+      aser?: AserState | null;
     },
   },
 
@@ -223,14 +250,17 @@ export const machine = setup({
     // (context, answer, stid, and the start router must all agree).
     const sentence =
       input.sentence && input.sentence.length > 0 ? input.sentence : null;
+    const letterOnly = input.letterOnly === true && !sentence;
     return {
       word: input.word,
       sentence,
       passageId: input.passageId ?? null,
       level: input.level ?? null,
       readInFlow: input.readInFlow === true && !!input.passageId && !!sentence,
+      letterOnly,
+      aser: input.aser ?? null,
       sentenceErrors: 0,
-      wrongLetters: [],
+      wrongLetters: letterOnly ? [input.word] : [],
       wordErrors: 0,
       imageErrors: 0,
       letterErrors: 0,
@@ -238,12 +268,15 @@ export const machine = setup({
       letterNoImageErrors: 0,
       answer: sentence ? sentence.join(' ') : input.word,
       answerCorrect: null,
+      // A letter item opens with the letter drill's own prompt.
       stateTransitionId:
         input.readInFlow === true && input.passageId && sentence
           ? `${input.passageId}-passage-comprehension-initial`
           : sentence
             ? 'sentence-start-sentence-initial'
-            : `${input.word}-start-word-initial`,
+            : letterOnly
+              ? `${input.word}-word-routeWrongLetter-drillLetters`
+              : `${input.word}-start-word-initial`,
       userMessageId: input.userMessageId,
       pendingCorrect: [],
       pendingIncorrect: [],
@@ -260,6 +293,11 @@ export const machine = setup({
         {
           guard: ({ context }) => context.readInFlow === true,
           target: 'comprehension',
+        },
+        // ASER letter item: straight into the letter drill.
+        {
+          guard: ({ context }) => context.letterOnly === true,
+          target: 'routeWrongLetter',
         },
         {
           guard: ({ context }) =>
@@ -472,6 +510,19 @@ export const machine = setup({
           wrongLetters: () => [],
         }),
       ],
+      // ASER letter item: the drill is over — there is no word to return
+      // to. The letter's outcome (answerCorrect from the transition that got
+      // here) picks the ending stid; pending scores ride through untouched.
+      always: {
+        guard: ({ context }) => context.letterOnly === true,
+        target: 'complete',
+        actions: assign({
+          stateTransitionId: ({ context }) =>
+            context.answerCorrect === true
+              ? ASER_LETTER_COMPLETE_CORRECT_STATE_TRANSITION_ID
+              : ASER_LETTER_COMPLETE_INCORRECT_STATE_TRANSITION_ID,
+        }),
+      },
       on: {
         ANSWER: [
           // (Sentence drill) student got the drilled word correct on the first

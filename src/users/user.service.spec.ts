@@ -1121,13 +1121,65 @@ describe('UserService.getLiteracyTestScores', () => {
     expect(scores.mpl_b.status).toBe('insufficient_data');
     expect(scores.mpl_b.attempts_available).toBe(0);
     expect(scores.nipun_grade_1.status).toBe('insufficient_data');
-    // The four-key response contract (nipun_grade_1 is back since 2026-10,
-    // scored over level-8 lessons).
+    // The response contract: four snapshot tests (nipun_grade_1 is back
+    // since 2026-10, scored over level-8 lessons) + the ASER runs (2026-10).
     expect(Object.keys(scores).sort()).toEqual([
+      'aser',
       'mpl_b',
       'nipun_grade_1',
       'nipun_grade_2',
       'nipun_grade_3',
+    ]);
+    expect(scores.aser).toEqual([]);
+  });
+
+  it('folds the ASER lesson rows into one result per run, completed_at = the answer that ended it', async () => {
+    const repo = makeRepo();
+    repo.findOneBy.mockResolvedValue(userRow);
+    const cache = makeCache();
+    cache.get.mockResolvedValue(null);
+    const st = (run: number, status: string, extra = {}) => ({
+      run,
+      milestone: run === 1 ? 0 : 2,
+      bank: run === 1 ? 'A' : 'B',
+      status,
+      result: null,
+      outcomes: {},
+      placementLevel: null,
+      ...extra,
+    });
+    const dsQuery = jest.fn().mockImplementation(async (sql: string) => {
+      if (!sql.includes("snapshot->'context'->'aser' AS aser")) return [];
+      return [
+        { created_at: day(1), aser: st(1, 'in_progress') },
+        {
+          created_at: day(2),
+          aser: st(1, 'done', {
+            result: 'word',
+            outcomes: { word: 'passed', paragraph: 'failed' },
+            placementLevel: 3,
+          }),
+        },
+        { created_at: day(3), aser: st(1, 'done', { result: 'word' }) },
+        { created_at: day(9), aser: st(2, 'in_progress') },
+      ];
+    });
+    const svc = makeService(repo, dsQuery, cache, makeScore());
+    const scores = (await svc.getLiteracyTestScores(USER_ID))!;
+    expect(scores.aser).toEqual([
+      expect.objectContaining({
+        run: 1,
+        status: 'done',
+        result: 'word',
+        started_at: day(1),
+        completed_at: day(2),
+      }),
+      expect.objectContaining({
+        run: 2,
+        status: 'in_progress',
+        started_at: day(9),
+        completed_at: null,
+      }),
     ]);
   });
 

@@ -265,3 +265,22 @@ event's `durationMs`; the inbound processor reads it off the audio entity
 before the call (the same value it already used for the wpm stid). The
 gate itself is `MIN_READ_WPM` in sentence-assessment.ts, applied from
 level 9 (literacy-lesson.machine.ts `READ_SPEED_GATE_FROM_LEVEL`).
+
+## 2026-10: ASER test delivery (aser/aser.prompt.md)
+
+- Fresh start asks `AserService.planFreshLesson(userId, latest row's
+  context.aser)`: an ASER item (machine input + `aser`, row `level` NULL,
+  `aser-test-start` prepended on the first) or a normal selection, with
+  `forcedLevel` = the onboarding run's placement for the lesson right after
+  it. AserService is `@Optional()` only for legacy unit specs.
+- Continue path: when the latest row is mid-test, `applyAserTurn` updates
+  `context.aser` on a JSON copy of the snapshot before the INSERT;
+  `aser-test-complete` is appended (after the machine stid) on the turn that
+  ends it. Comprehension taps carry `aser` unchanged.
+- selectNextString: ASER rows excluded from recent_rows and
+  lifetime_done_count; `has_aser_placement` holds a placed student at the
+  base instead of the new-user floor while recent_rows < 8;
+  `forcedLevel` overrides the computed cap (then the usual clamps).
+- completedReading uses the passage level when the row has no selected
+  level (ASER rows).
+- `splitLessonWords` moved to lesson-words.utils.ts (shared with AserService).

@@ -72,3 +72,17 @@ decrement, by decision). A missing / zero duration skips the gate.
 word (one akshara off) counts toward this cap only; a substituted /
 omitted / transposed word toward both this cap and the 10 % error budget
 (`flawedWordCount` on the assessment). Same wrong-read branches as before.
+
+## 2026-10: ASER items (aser/aser.prompt.md)
+
+- Input/context gained `letterOnly` (an ASER letter item: `word` is the
+  letter, `wrongLetters = [letter]`, initial stid
+  `${letter}-word-routeWrongLetter-drillLetters`, the start router goes to
+  `routeWrongLetter`) and `aser` (opaque test state, carried, never read).
+  When a letter item's drill returns to `word`, an eventless transition
+  completes the lesson with `aser-letter-complete-correct|incorrect` (by
+  answerCorrect); pending scores ride through. Old snapshots rehydrate with
+  undefined for both (= off).
+- Sentence guards pass `maxErrors = 3` at passage levels 9 and 10
+  (`FLAT_READ_ERROR_BUDGET`) instead of the 10% budget; the flawed-word cap
+  and speed gate are unchanged.

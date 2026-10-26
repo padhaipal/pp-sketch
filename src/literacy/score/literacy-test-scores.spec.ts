@@ -154,7 +154,11 @@ describe('literacy test scores — golden output', () => {
         { createSeedScores: jest.fn() } as never,
         { delete: jest.fn() } as never,
       );
-      out[id] = await svc.getLiteracyTestScores(id);
+      // The golden covers the four snapshot tests; the ASER runs (2026-10,
+      // aser/aser.ts) are appended after them and tested in the user spec.
+      const { aser, ...snapshotTests } = (await svc.getLiteracyTestScores(id))!;
+      expect(aser).toEqual([]);
+      out[id] = snapshotTests;
     }
     expect(JSON.stringify(out)).toBe(GOLDEN_JSON);
   });

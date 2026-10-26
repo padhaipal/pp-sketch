@@ -23,6 +23,8 @@ jest.mock('./evaluate-answer.utils', () => ({
 }));
 jest.mock('./sentence-assessment', () => ({
   MIN_READ_WPM: 40,
+  FLAT_READ_ERROR_BUDGET: 3,
+  FLAT_READ_ERROR_BUDGET_LEVELS: new Set([9, 10]),
   assessSentence: (...args: unknown[]) => mockAssessSentence(...args),
   selectDrillWord: (...args: unknown[]) => mockSelectDrillWord(...args),
 }));
@@ -1438,6 +1440,7 @@ describe('machine — sentence state', () => {
       transcripts: ['नल', 'घर'],
       durationMs: null,
       minWpm: null, // no level on this snapshot → no speed gate
+      maxErrors: null,
     });
     a.stop();
   });
@@ -1451,6 +1454,7 @@ describe('machine — sentence state', () => {
       transcripts: ['नल घर'],
       durationMs: null,
       minWpm: null,
+      maxErrors: null,
     });
     a.stop();
   });
@@ -1470,6 +1474,7 @@ describe('machine — sentence state', () => {
       transcripts: ['नल घर'],
       durationMs: 4_000,
       minWpm: MIN_READ_WPM,
+      maxErrors: 3, // levels 9-10: flat three errors
     });
     nine.stop();
     mockAssessSentence.mockClear();
@@ -1480,6 +1485,7 @@ describe('machine — sentence state', () => {
       transcripts: ['नल घर'],
       durationMs: 4_000,
       minWpm: null,
+      maxErrors: null,
     });
     expect(READ_SPEED_GATE_FROM_LEVEL).toBe(9);
     eight.stop();
@@ -1546,6 +1552,7 @@ describe('machine — sentence state', () => {
       transcripts: ['नल'],
       durationMs: null,
       minWpm: null,
+      maxErrors: null,
     });
     expect(mockSelectDrillWord).toHaveBeenCalledWith(failedWords);
     a.stop();
@@ -1787,6 +1794,81 @@ describe('machine — sentence retry without a teachable drill word', () => {
     expect(snap.context.stateTransitionId).toBe(
       `${PASSAGE_ID}-sentence-comprehension-correct-retry`,
     );
+    a.stop();
+  });
+});
+
+// ─── ASER letter item (letterOnly) ───────────────────────────────────────────
+
+describe('machine — ASER letter item (letterOnly)', () => {
+  const ASER = { run: 1 } as never; // opaque to the machine
+  function letterActor(letter: string): ActorHandle {
+    const actor = createActor(machine, {
+      input: {
+        word: letter,
+        userMessageId: 'mm-1',
+        letterOnly: true,
+        aser: ASER,
+      },
+    });
+    actor.start();
+    return {
+      send: (event) => actor.send(event),
+      snap: () => actor.getSnapshot(),
+      stop: () => actor.stop(),
+    };
+  }
+
+  it('opens on the letter drill with the letter’s drill prompt; aser rides along untouched', () => {
+    const a = letterActor('घ');
+    const snap = a.snap();
+    expect(snap.value).toBe('letter');
+    expect(snap.context.stateTransitionId).toBe(
+      'घ-word-routeWrongLetter-drillLetters',
+    );
+    expect(snap.context.wrongLetters).toEqual(['घ']);
+    expect(snap.context.answer).toBe('घ');
+    expect(snap.context.aser).toBe(ASER);
+    a.stop();
+  });
+
+  it('right first time → complete + aser-letter-complete-correct, letter scored correct', () => {
+    mockMarkLetter.mockReturnValue(true);
+    const a = letterActor('घ');
+    a.send({ type: 'ANSWER', studentAnswer: 'घ' });
+    const snap = a.snap();
+    expect(snap.status).toBe('done');
+    expect(snap.context.answerCorrect).toBe(true);
+    expect(snap.context.stateTransitionId).toBe('aser-letter-complete-correct');
+    expect(snap.context.pendingCorrect).toEqual(['घ']);
+    expect(snap.context.aser).toBe(ASER);
+    a.stop();
+  });
+
+  it('wrong → the usual image / letterImage drill, three misses → complete + aser-letter-complete-incorrect', () => {
+    const a = letterActor('घ');
+    a.send({ type: 'ANSWER', studentAnswer: 'ग' });
+    expect(a.snap().value).toBe('image');
+    expect(a.snap().context.answerCorrect).toBe(false);
+    expect(a.snap().context.pendingIncorrect).toEqual(['घ']);
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    expect(a.snap().value).toBe('letterImage');
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    a.send({ type: 'ANSWER', studentAnswer: 'x' });
+    const snap = a.snap();
+    expect(snap.status).toBe('done');
+    expect(snap.context.stateTransitionId).toBe(
+      'aser-letter-complete-incorrect',
+    );
+    a.stop();
+  });
+
+  it('a normal word lesson is unaffected (letterOnly defaults false)', () => {
+    const a = makeActor({ word: 'कमल', userMessageId: 'mm-1' });
+    expect(a.snap().context.letterOnly).toBe(false);
+    expect(a.snap().context.aser).toBeNull();
     a.stop();
   });
 });

@@ -17,6 +17,7 @@ import {
   Equals,
 } from 'class-validator';
 import type { GeoEntity } from '../geo-entities/geo-entity.dto';
+import type { AserRunResult } from '../literacy/aser/aser';
 
 export interface User {
   id: string;
@@ -959,4 +960,7 @@ export interface LiteracyTestScores {
   // MPL-B: 20 level-11/12 first attempts selected by the four-filter
   // algorithm in UserService.getLiteracyTestScores; pass at score > 0.5.
   mpl_b: SnapshotTestScore;
+  // ASER (Hindi) proxy runs, oldest first (literacy/aser/aser.ts). Only the
+  // per-user endpoint sets it; the nightly job does not store ASER yet.
+  aser?: AserRunResult[];
 }
