@@ -1816,8 +1816,8 @@ describe('machine — ASER letter test (one lesson over the bank letters)', () =
           letters,
           correct,
           incorrect,
-          passWord: 'कप',
-          failWord: 'जय',
+          wordIfPassed: 'कप',
+          wordIfFailed: 'जय',
         },
       },
     });

@@ -76,14 +76,14 @@ omitted / transposed word toward both this cap and the 10 % error budget
 ## 2026-10: ASER letter test (aser/aser.prompt.md)
 
 - Input/context gained `aserLetters` (letters to ask, counts carried from
-  earlier in the run, passWord / failWord) and `aser` (opaque test state,
+  earlier in the run, wordIfPassed / wordIfFailed) and `aser` (opaque test state,
   carried, never read). With `aserLetters`, `wrongLetters` = the letters,
   the initial stid is `${letters[0]}-word-routeWrongLetter-drillLetters`
   and the start router goes to `routeWrongLetter`.
 - `countAserLetter` (letter state: every answer; letterNoImage: first try)
   counts the asked letter; on 4 right / 7 wrong it sets `done`, cuts
-  `wrongLetters` to the current letter and sets `word` to passWord /
-  failWord. The `…-last` guards also fire on a right answer that decides it
+  `wrongLetters` to the current letter and sets `word` to wordIfPassed /
+  wordIfFailed. The `…-last` guards also fire on a right answer that decides it
   (`aserLetterEndsOnCorrect`). No new stids: the loop's own `…-more` /
   `…-last` stids carry the feedback. Old snapshots rehydrate with undefined.
 - Sentence guards pass `maxErrors = 3` at passage levels 9 and 10

@@ -75,7 +75,7 @@ interface Context {
   // (wrongLetters) through the letter loop, counting each letter's FIRST
   // answer. Once 4 right / 7 wrong decide it, the queue is cut to the
   // current letter, so the loop leaves through its normal `…-last` return
-  // to `word` — on passWord (letters passed) or failWord, which `word` then
+  // to `word` — on wordIfPassed (letters passed) or wordIfFailed, which `word` then
   // holds. `done` stops further counting (a later drill inside that word
   // is an ordinary drill). Null outside the letter test; old snapshots
   // rehydrate with undefined.
@@ -83,8 +83,8 @@ interface Context {
     correct: number;
     incorrect: number;
     done: boolean;
-    passWord: string;
-    failWord: string;
+    wordIfPassed: string;
+    wordIfFailed: string;
   } | null;
   // ASER test state riding along (aser/aser.ts). The machine never reads or
   // changes it; LiteracyLessonService advances it between turns. Null (or
@@ -217,8 +217,8 @@ export const machine = setup({
         letters: string[];
         correct: number;
         incorrect: number;
-        passWord: string;
-        failWord: string;
+        wordIfPassed: string;
+        wordIfFailed: string;
       };
       aser?: AserState | null;
     },
@@ -276,7 +276,7 @@ export const machine = setup({
       return {
         aserLetters: { ...a, ...counts, done: true },
         wrongLetters: context.wrongLetters.slice(0, 1),
-        word: verdict === 'passed' ? a.passWord : a.failWord,
+        word: verdict === 'passed' ? a.wordIfPassed : a.wordIfFailed,
       };
     }),
     dropFirstWrongLetter: assign({
@@ -316,8 +316,8 @@ export const machine = setup({
             correct: aserLetters.correct,
             incorrect: aserLetters.incorrect,
             done: false,
-            passWord: aserLetters.passWord,
-            failWord: aserLetters.failWord,
+            wordIfPassed: aserLetters.wordIfPassed,
+            wordIfFailed: aserLetters.wordIfFailed,
           }
         : null,
       aser: input.aser ?? null,

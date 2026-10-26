@@ -38,8 +38,8 @@ export type AserPlan =
           letters: string[];
           correct: number;
           incorrect: number;
-          passWord: string;
-          failWord: string;
+          wordIfPassed: string;
+          wordIfFailed: string;
         };
         sentence?: string[];
         passageId?: string;
@@ -237,8 +237,8 @@ export class AserService {
             letters,
             correct: c.correct,
             incorrect: c.incorrect,
-            passWord: spare[0],
-            failWord: spare[spare.length > 1 ? 1 : 0],
+            wordIfPassed: spare[0],
+            wordIfFailed: spare[spare.length > 1 ? 1 : 0],
           },
         },
       };
