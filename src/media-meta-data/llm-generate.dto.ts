@@ -176,6 +176,13 @@ export interface LlmGenerateQuestionResult {
   solvability?: GateObservability;
   /** Passage-quality gate counters + true-vote tally (absent = never ran). */
   quality?: GateObservability & { true_votes?: number };
+  /**
+   * Plain-language account of why a 'discarded' question failed its gate
+   * (explainGateFailure) — what the check tests, the tally, and for the
+   * judge the wrong option it kept picking. For a human author fixing the
+   * content (manual uploads); `reason` stays the terse machine summary.
+   */
+  explanation?: string;
 }
 
 export interface LlmGenerateResponse {
@@ -272,6 +279,127 @@ export function validateLlmGenerateRequest(body: unknown): LlmGenerateRequest {
   return { provider: provider as LlmProvider, model, messages: validated };
 }
 
+// ─── Manual passage upload ───────────────────────────────────────────────────
+
+/**
+ * media_details.model for passage families an author wrote by hand and
+ * uploaded from the dashboard (POST /media-meta-data/manual-passage). Same
+ * gates as LLM content; source = 'dashboard'.
+ */
+export const MANUAL_PASSAGE_MODEL = 'manual';
+
+const MANUAL_FILENAME_MAX_CHARS = 255;
+const MANUAL_ROW_MAX = 100_000;
+
+export interface ManualPassageRequest {
+  /** Uploaded CSV's name, for provenance only. */
+  filename?: string;
+  /** 1-based CSV data row, for provenance only. */
+  row?: number;
+}
+
+/**
+ * Validates the provenance fields of a manual-passage body. The content
+ * itself (`passage`, `question` — the GeneratedContent shape) is validated
+ * by validateGeneratedContent so a bad row comes back as a structured
+ * per-row rejection rather than a 400.
+ */
+export function validateManualPassageRequest(
+  body: unknown,
+): ManualPassageRequest {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new BadRequestException('manual-passage body must be an object');
+  }
+  const raw = body as Record<string, unknown>;
+  const out: ManualPassageRequest = {};
+  if (raw.filename !== undefined) {
+    if (
+      typeof raw.filename !== 'string' ||
+      raw.filename.length > MANUAL_FILENAME_MAX_CHARS ||
+      CONTROL_CHARS_RE.test(raw.filename)
+    ) {
+      throw new BadRequestException(
+        `filename must be a string of at most ${MANUAL_FILENAME_MAX_CHARS} chars`,
+      );
+    }
+    out.filename = raw.filename;
+  }
+  if (raw.row !== undefined) {
+    if (
+      typeof raw.row !== 'number' ||
+      !Number.isInteger(raw.row) ||
+      raw.row < 1 ||
+      raw.row > MANUAL_ROW_MAX
+    ) {
+      throw new BadRequestException(
+        `row must be an integer 1-${MANUAL_ROW_MAX}`,
+      );
+    }
+    out.row = raw.row;
+  }
+  return out;
+}
+
+const OPTION_LETTERS = ['A', 'B', 'C', 'D'];
+
+/**
+ * Human-readable "why did this fail" for a gate_failure record. The gates
+ * only return votes/picks (no model rationale), so this explains what the
+ * check tests and what the tally means. Option letters follow the content's
+ * own option order (= option_a…d in an uploaded CSV).
+ */
+export function explainGateFailure(
+  gateFailure: {
+    gate: 'quality' | 'judge' | 'solvability';
+    [k: string]: unknown;
+  },
+  question: GeneratedQuestion,
+  thresholds: {
+    qualityRequiredValid: number;
+    qualityPassMinTrue: number;
+    judgeRequiredValid: number;
+    solvabilityRejectMinCorrect: number;
+  },
+): string {
+  const letter = (i: number) => OPTION_LETTERS[i] ?? String(i + 1);
+  switch (gateFailure.gate) {
+    case 'quality': {
+      const trueVotes = (gateFailure.true_votes as number | undefined) ?? 0;
+      return (
+        `Passage quality check failed: the reviewer model judged the passage acceptable in ${trueVotes} of ${thresholds.qualityRequiredValid} runs (needs at least ${thresholds.qualityPassMinTrue}). ` +
+        'Passages of 50 words or fewer are checked for spelling and grammar only; longer passages are also scored on naturalness, readability for 8–10 year olds, and narrative quality (clear problem and resolution) or educational value. ' +
+        'The question was not checked.'
+      );
+    }
+    case 'judge': {
+      const picks = (gateFailure.judge_picks as number[] | undefined) ?? [];
+      const counts = new Map<number, number>();
+      for (const p of picks) counts.set(p, (counts.get(p) ?? 0) + 1);
+      const tally = [...counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(
+          ([i, n]) =>
+            `${letter(i)} ("${question.options[i]?.text ?? '?'}") ×${n}`,
+        )
+        .join(', ');
+      const correctIndex = question.options.findIndex((o) => o.correct);
+      return (
+        `Answer check failed: reading the passage, the model chose a wrong option in ${picks.length} of ${thresholds.judgeRequiredValid} runs (every run must pick the marked answer, ${letter(correctIndex)}). ` +
+        `Wrong picks: ${tally || 'none recorded'}. ` +
+        'Usually the marked answer is wrong, the question is ambiguous, or a distractor is also defensible from the passage.'
+      );
+    }
+    case 'solvability': {
+      const correct = (gateFailure.correct as number | undefined) ?? 0;
+      const valid = (gateFailure.valid_runs as number | undefined) ?? 0;
+      return (
+        `Guessability check failed: WITHOUT the passage, the model still picked the correct answer ${correct} of ${valid} times (rejected at ${thresholds.solvabilityRejectMinCorrect} or more for ${question.options.length} options). ` +
+        'The question can be answered from general knowledge or the options give the answer away — make it depend on the passage.'
+      );
+    }
+  }
+}
+
 // ─── LLM output parsing ──────────────────────────────────────────────────────
 
 function requireCleanString(
@@ -326,7 +454,20 @@ export function parseGeneratedContent(raw: string): GeneratedContent {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new LlmOutputInvalidError('completion must be a JSON object');
   }
-  const root = parsed as Record<string, unknown>;
+  return validateGeneratedContent(parsed);
+}
+
+/**
+ * Validates an already-parsed passage family — the shared content gate for
+ * both the LLM completion (parseGeneratedContent) and manual uploads
+ * (POST /media-meta-data/manual-passage). Same untrusted-input rules: fields
+ * are copied one-by-one, never spread.
+ */
+export function validateGeneratedContent(value: unknown): GeneratedContent {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new LlmOutputInvalidError('content must be a JSON object');
+  }
+  const root = value as Record<string, unknown>;
 
   const rawPassage = root.passage;
   if (!rawPassage || typeof rawPassage !== 'object') {

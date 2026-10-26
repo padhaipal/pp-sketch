@@ -3745,6 +3745,249 @@ describe('createLlmGeneratedMedia', () => {
   });
 });
 
+describe('createManualPassageMedia', () => {
+  function seq() {
+    let n = 0;
+    (uuidV4 as unknown as jest.Mock).mockImplementation(
+      () => `00000000-0000-4000-8000-${String(n++).padStart(12, '0')}`,
+    );
+  }
+
+  afterEach(() => {
+    (uuidV4 as unknown as jest.Mock).mockImplementation(() => 'gen-uuid');
+  });
+
+  function body(overrides?: Record<string, unknown>) {
+    return {
+      ...(JSON.parse(generatedJson()) as Record<string, unknown>),
+      filename: 'tom.csv',
+      row: 3,
+      ...overrides,
+    };
+  }
+
+  function setup(opts: { completeBatch?: jest.Mock; duplicateId?: string }) {
+    seq();
+    const saved: Record<string, unknown>[] = [];
+    const dsTransaction = jest
+      .fn()
+      .mockImplementation(async (cb: (m: unknown) => Promise<void>) =>
+        cb({
+          save: jest.fn(async (entities: Record<string, unknown>[]) => {
+            saved.push(...entities);
+            return entities;
+          }),
+        }),
+      );
+    const dsQuery = jest
+      .fn()
+      .mockResolvedValue(opts.duplicateId ? [{ id: opts.duplicateId }] : []);
+    const repo = makeRepo();
+    repo.save.mockImplementation(async (e: unknown) => e);
+    const completeBatch =
+      opts.completeBatch ??
+      gateStub({ judge: 'correct', solvability: 'wrong' });
+    const openaiComplete = jest.fn();
+    const { service } = makeService({
+      repo,
+      dsQuery,
+      dsTransaction,
+      openaiLlm: { complete: openaiComplete },
+      sarvamLlm: { completeBatch } as never,
+    });
+    return {
+      service,
+      saved,
+      dsQuery,
+      dsTransaction,
+      completeBatch,
+      openaiComplete,
+    };
+  }
+
+  it('runs every gate on the uploaded family and inserts it live with manual provenance', async () => {
+    const { service, saved, completeBatch, openaiComplete } = setup({});
+
+    const result = await service.createManualPassageMedia(body(), carrier);
+
+    expect(result.status).toBe('created');
+    expect(result.level).toBe(9);
+    // No generation call — but quality (5) + judge (10) + solvability (24).
+    expect(openaiComplete).not.toHaveBeenCalled();
+    expect(completeBatch).toHaveBeenCalledTimes(5 + 10 + 24);
+
+    const passage = saved.find(
+      (e) => (e.media_details as { role?: string })?.role === 'passage',
+    )!;
+    expect(passage.source).toBe('dashboard');
+    expect(passage.rolled_back).toBe(false);
+    expect(passage.text).toBe(PASSAGE_TEXT);
+    const details = passage.media_details as Record<string, unknown>;
+    expect(details.model).toBe('manual');
+    expect(details.prompt_tokens).toBeUndefined();
+    expect((details.quality as { verdict: string }).verdict).toBe('pass');
+    expect(passage.generation_request_json).toEqual({
+      origin: 'manual_upload',
+      filename: 'tom.csv',
+      row: 3,
+    });
+    expect(saved.every((e) => e.source === 'dashboard')).toBe(true);
+    // Explanation TTS like any live family.
+    expect(mockQueueAddBulk).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a duplicate of a live passage (whitespace-normalised) before any gate runs', async () => {
+    const { service, dsQuery, completeBatch, dsTransaction } = setup({
+      duplicateId: 'existing-passage',
+    });
+
+    const result = await service.createManualPassageMedia(
+      body({
+        passage: {
+          text: `  ${PASSAGE_TEXT.replace(/ /g, '   ')}\n`,
+          passage_type: 'narrative',
+        },
+      }),
+      carrier,
+    );
+
+    expect(result.status).toBe('rejected');
+    expect(result.retriable).toBe(false);
+    expect(result.reason).toContain('duplicate');
+    expect(result.reason).toContain('existing-passage');
+    const [sql, params] = dsQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("media_details->>'role' = 'passage'");
+    expect(sql).toContain('rolled_back = false');
+    expect(sql).toContain("status = 'ready'");
+    // Collapse first, then trim: btrim alone strips spaces, not newlines.
+    expect(sql).toContain("btrim(regexp_replace(text, '\\s+', ' ', 'g'))");
+    expect(params).toEqual([PASSAGE_TEXT]);
+    expect(completeBatch).not.toHaveBeenCalled();
+    expect(dsTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'missing explanation',
+      {
+        question: {
+          text: 'कहानी किसके लिए है?',
+          question_type: 'R1.2',
+          options: [
+            { text: 'क', correct: true, explanation: { text: 'हाँ' } },
+            { text: 'ख', correct: false },
+          ],
+        },
+      },
+      'explanation',
+    ],
+    [
+      'two correct options',
+      {
+        question: {
+          text: 'कहानी किसके लिए है?',
+          question_type: 'R1.2',
+          options: [
+            { text: 'क', correct: true, explanation: { text: 'हाँ' } },
+            { text: 'ख', correct: true, explanation: { text: 'हाँ' } },
+          ],
+        },
+      },
+      'exactly one correct',
+    ],
+    [
+      'digits in the passage',
+      { passage: { text: 'राम के पास 3 आम हैं।', passage_type: 'narrative' } },
+      'digits',
+    ],
+    ['missing question', { question: undefined }, 'question'],
+  ])(
+    'content error (%s) → rejected, not retriable, nothing run or written',
+    async (_label, overrides, reasonPart) => {
+      const { service, dsQuery, completeBatch, dsTransaction } = setup({});
+      const result = await service.createManualPassageMedia(
+        body(overrides),
+        carrier,
+      );
+      expect(result.status).toBe('rejected');
+      expect(result.retriable).toBe(false);
+      expect(result.reason).toContain(reasonPart);
+      expect(dsQuery).not.toHaveBeenCalled();
+      expect(completeBatch).not.toHaveBeenCalled();
+      expect(dsTransaction).not.toHaveBeenCalled();
+    },
+  );
+
+  it('quality failure: family soft-deleted, final, with a plain-language explanation', async () => {
+    const { service, saved } = setup({
+      completeBatch: gateStub({ quality: 'fail' }),
+    });
+
+    const result = await service.createManualPassageMedia(body(), carrier);
+
+    expect(result.status).toBe('rejected');
+    expect(result.retriable).toBe(false);
+    expect(result.question!.status).toBe('discarded');
+    expect(result.question!.explanation).toContain(
+      'Passage quality check failed',
+    );
+    expect(result.question!.explanation).toContain('0 of 5');
+    expect(saved.length).toBeGreaterThan(0);
+    expect(saved.every((e) => e.rolled_back === true)).toBe(true);
+    expect(mockQueueAddBulk).not.toHaveBeenCalled();
+  });
+
+  it('judge failure explains which wrong option the model kept picking', async () => {
+    const { service } = setup({
+      completeBatch: gateStub({ judge: 'wrong' }),
+    });
+
+    const result = await service.createManualPassageMedia(body(), carrier);
+
+    expect(result.retriable).toBe(false);
+    expect(result.question!.status).toBe('discarded');
+    const explanation = result.question!.explanation!;
+    expect(explanation).toContain('Answer check failed');
+    expect(explanation).toContain('marked answer, A');
+    expect(explanation).toContain(`B ("${WRONG_OPTION_TEXT}") ×10`);
+  });
+
+  it('solvability failure explains the question is guessable without the passage', async () => {
+    const { service } = setup({
+      completeBatch: gateStub({ judge: 'correct', solvability: 'correct' }),
+    });
+
+    const result = await service.createManualPassageMedia(body(), carrier);
+
+    expect(result.retriable).toBe(false);
+    expect(result.question!.explanation).toContain('Guessability check failed');
+    expect(result.question!.explanation).toContain('24 of 24');
+  });
+
+  it('unverified gate → nothing written, retriable', async () => {
+    const { service, dsTransaction } = setup({
+      completeBatch: gateStub({ quality: 'invalid' }),
+    });
+
+    const result = await service.createManualPassageMedia(body(), carrier);
+
+    expect(result.status).toBe('rejected');
+    expect(result.retriable).toBe(true);
+    expect(result.question!.status).toBe('unverified');
+    expect(dsTransaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed provenance field with 400', async () => {
+    const { service } = setup({});
+    await expect(
+      service.createManualPassageMedia(body({ row: 0 }), carrier),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      service.createManualPassageMedia('nope', carrier),
+    ).rejects.toThrow(BadRequestException);
+  });
+});
+
 describe('listComprehensionStids', () => {
   it('returns parsed rows with clamped pagination and passage meta', async () => {
     const dsQuery = jest
