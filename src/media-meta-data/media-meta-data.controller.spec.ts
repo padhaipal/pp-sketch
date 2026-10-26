@@ -30,7 +30,10 @@ jest.mock('../otel/otel', () => ({
 // request context into the outbound carrier. The mocks below are passthrough
 // stubs so the controller code runs without pulling in the real SDK.
 jest.mock('@opentelemetry/api', () => ({
-  context: { active: jest.fn(() => 'active-ctx') },
+  context: {
+    active: jest.fn(() => 'active-ctx'),
+    with: jest.fn((_ctx: unknown, fn: () => unknown) => fn()),
+  },
   trace: {
     setSpan: jest.fn((_ctx, span) => ({ wrappedSpan: span })),
     getActiveSpan: jest.fn(() => undefined),
@@ -419,6 +422,34 @@ describe('MediaMetaDataController.deleteMedia', () => {
 
     await expect(ctrl.deleteMedia('mm-1')).resolves.toEqual({ deleted: true });
     expect(markRolledBack).toHaveBeenCalledWith('mm-1');
+  });
+});
+
+describe('MediaMetaDataController.manualPassage', () => {
+  it('runs the service under its own root span and returns its outcome', async () => {
+    const outcome = { status: 'created', passage_id: 'p-1', level: 9 };
+    const createManualPassageMedia = jest.fn().mockResolvedValue(outcome);
+    const { ctrl } = makeController({ mediaSvc: { createManualPassageMedia } });
+    const body = { passage: {}, question: {}, row: 1 };
+
+    await expect(ctrl.manualPassage(body)).resolves.toBe(outcome);
+    expect(mockStartRootSpan).toHaveBeenCalledWith('manual-passage-controller');
+    expect(createManualPassageMedia).toHaveBeenCalledWith(body, {
+      traceparent: 'tp-with-baggage',
+    });
+    expect(mockSpanEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends the span when the service throws', async () => {
+    const createManualPassageMedia = jest
+      .fn()
+      .mockRejectedValue(new BadRequestException('bad'));
+    const { ctrl } = makeController({ mediaSvc: { createManualPassageMedia } });
+
+    await expect(ctrl.manualPassage('nope')).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(mockSpanEnd).toHaveBeenCalledTimes(1);
   });
 });
 

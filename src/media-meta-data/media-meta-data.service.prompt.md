@@ -414,3 +414,25 @@ After all items processed:
   gone.
 - findMediaByStateTransitionId now also serves `media_type='flow'` rows (no
   wa_media_url required — flows are never preloaded to WhatsApp).
+
+## Manual passage upload (2026-10)
+
+- `createManualPassageMedia(body, otel_carrier)` — the LLM-free twin of
+  createLlmGeneratedMedia for families an author wrote by hand (dashboard
+  CSV upload, one row per request). Order: `validateManualPassageRequest`
+  (provenance; 400 on bad filename/row) → `validateGeneratedContent` (the
+  SAME content gate as LLM output; failure → `rejected`, retriable false) →
+  duplicate check (any live — ready, not rolled back — passage whose
+  whitespace-normalised text matches → `rejected`, retriable false, before
+  any gate; questions don't matter) → `gateAndPersistPassageFamily`.
+- `gateAndPersistPassageFamily(content, provenance, carrier)` — private;
+  the shared back half of both paths (level → quality → judge →
+  solvability → insert → explanation TTS), unchanged behaviour.
+  Provenance sets source/model/generation_request_json/log prefix and
+  whether a gate failure is retriable (LLM: true, fresh sample may pass;
+  manual: false, no override — the author fixes the row).
+- Manual rows: source `dashboard`, `media_details.model = 'manual'`,
+  `generation_request_json = { origin: 'manual_upload', filename?, row? }`.
+- Every discarded question (both paths) now carries
+  `question.explanation` from `explainGateFailure` — plain-language why
+  (what the check tests, tally, judge's wrong picks by option letter).

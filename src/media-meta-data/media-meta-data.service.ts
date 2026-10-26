@@ -50,6 +50,10 @@ import {
   parseGeneratedContent,
   passageLevelFromWordCount,
   validateLlmGenerateRequest,
+  validateGeneratedContent,
+  validateManualPassageRequest,
+  explainGateFailure,
+  MANUAL_PASSAGE_MODEL,
 } from './llm-generate.dto';
 import { oggOpusDurationMs } from './audio-duration.utils';
 import {
@@ -67,6 +71,7 @@ import {
 } from './passage-judge';
 import {
   PassageQualityVerdict,
+  QUALITY_PASS_MIN_TRUE,
   QUALITY_REQUIRED_VALID,
   runPassageQuality,
 } from './passage-quality';
@@ -1083,6 +1088,131 @@ export class MediaMetaDataService {
       }
       throw err;
     }
+    return this.gateAndPersistPassageFamily(
+      content,
+      {
+        source: LLM_PROVIDER_TO_MEDIA_SOURCE[request.provider],
+        model: request.model,
+        label: `${request.provider}/${request.model}`,
+        logPrefix: 'llm-generate',
+        passageDetails: {
+          prompt_tokens: completion.prompt_tokens,
+          completion_tokens: completion.completion_tokens,
+        },
+        generationRequestJson: {
+          provider: request.provider,
+          model: request.model,
+          messages: request.messages,
+        },
+        gateFailureRetriable: true,
+      },
+      otel_carrier,
+    );
+  }
+
+  /**
+   * Seeds one hand-written passage family (passage + one question + options
+   * + explanations) uploaded from the dashboard — the LLM-free twin of
+   * createLlmGeneratedMedia. Same content validation (validateGeneratedContent)
+   * and the SAME gates, insert and TTS (gateAndPersistPassageFamily); nothing
+   * is bypassed and a failed gate cannot be overridden. Differences:
+   *   - a passage whose text (whitespace-normalised) matches any live
+   *     passage is rejected before any gate runs, whatever its question;
+   *   - content errors and gate failures are final (retriable: false) —
+   *     the author fixes the row; only 'unverified' (no verdict) retries.
+   * Rows: source = 'dashboard', media_details.model = 'manual',
+   * generation_request_json = { origin: 'manual_upload', filename, row }.
+   */
+  async createManualPassageMedia(
+    body: unknown,
+    otel_carrier: OtelCarrier,
+  ): Promise<LlmGenerateResponse> {
+    const request = validateManualPassageRequest(body);
+
+    let content: GeneratedContent;
+    try {
+      content = validateGeneratedContent(body);
+    } catch (err) {
+      if (err instanceof LlmOutputInvalidError) {
+        return { status: 'rejected', reason: err.message, retriable: false };
+      }
+      throw err;
+    }
+
+    const duplicateId = await this.findLivePassageIdByText(
+      content.passage.text,
+    );
+    if (duplicateId) {
+      return {
+        status: 'rejected',
+        reason: `duplicate: this reading passage is already live (passage ${duplicateId}) — duplicate passages are not allowed, even with a different question`,
+        retriable: false,
+      };
+    }
+
+    const where = [
+      request.filename,
+      request.row !== undefined ? `row ${request.row}` : undefined,
+    ].filter(Boolean);
+    return this.gateAndPersistPassageFamily(
+      content,
+      {
+        source: 'dashboard',
+        model: MANUAL_PASSAGE_MODEL,
+        label: ['manual upload', ...where].join(' '),
+        logPrefix: 'manual-passage',
+        generationRequestJson: {
+          origin: 'manual_upload',
+          ...(request.filename !== undefined && {
+            filename: request.filename,
+          }),
+          ...(request.row !== undefined && { row: request.row }),
+        },
+        gateFailureRetriable: false,
+      },
+      otel_carrier,
+    );
+  }
+
+  // Live passage with the same text, compared whitespace-normalised (trim +
+  // runs of whitespace → one space). Same visibility filter as lesson
+  // selection: ready, not rolled back — a gate-failed (soft-deleted) family
+  // never blocks a corrected re-upload.
+  private async findLivePassageIdByText(text: string): Promise<string | null> {
+    const rows: Array<{ id: string }> = await this.dataSource.query(
+      `SELECT id FROM media_metadata
+        WHERE media_type = 'text' AND status = 'ready' AND rolled_back = false
+          AND media_details->>'role' = 'passage'
+          AND btrim(regexp_replace(text, '\\s+', ' ', 'g')) = $1
+        LIMIT 1`,
+      [text.trim().replace(/\s+/g, ' ')],
+    );
+    return rows[0]?.id ?? null;
+  }
+
+  /**
+   * The shared back half of passage seeding (LLM or manual): level from
+   * word count → quality → judge → solvability gates → transactional insert
+   * of the family (soft-deleted with gate_failure on a failed gate) →
+   * explanation TTS for live content. Gate details: createLlmGeneratedMedia.
+   */
+  private async gateAndPersistPassageFamily(
+    content: GeneratedContent,
+    provenance: {
+      source: string;
+      model: string;
+      /** Origin for logs: `provider/model` or `manual upload <file> row N`. */
+      label: string;
+      logPrefix: string;
+      /** Extra passage-row media_details (e.g. token counts). */
+      passageDetails?: Record<string, unknown>;
+      generationRequestJson: Record<string, unknown>;
+      /** `retriable` on a gate-failed (discarded) response. */
+      gateFailureRetriable: boolean;
+    },
+    otel_carrier: OtelCarrier,
+  ): Promise<LlmGenerateResponse> {
+    const span = trace.getActiveSpan();
     const question = content.question;
 
     const level = passageLevelFromWordCount(content.passage.text);
@@ -1266,7 +1396,7 @@ export class MediaMetaDataService {
     const rolledBack = gateFailure !== null;
 
     // 5. Build the entity tree with server-minted ids only.
-    const source = LLM_PROVIDER_TO_MEDIA_SOURCE[request.provider];
+    const source = provenance.source;
     assertValidMediaSource(source);
     const passageId = uuid();
     const questionId = uuid();
@@ -1292,9 +1422,8 @@ export class MediaMetaDataService {
           role: 'passage',
           level,
           passage_type: content.passage.passage_type,
-          model: request.model,
-          prompt_tokens: completion.prompt_tokens,
-          completion_tokens: completion.completion_tokens,
+          model: provenance.model,
+          ...provenance.passageDetails,
           // Quality verdict is recorded whatever the outcome that reaches
           // an insert (pass or fail — unverified never inserts). The
           // dashboard filters on exactly this shape.
@@ -1309,11 +1438,7 @@ export class MediaMetaDataService {
             unparseable: qualityVerdict.unparseable,
           },
         },
-        generation_request_json: {
-          provider: request.provider,
-          model: request.model,
-          messages: request.messages,
-        },
+        generation_request_json: provenance.generationRequestJson,
       }),
     );
     entities.push(
@@ -1328,7 +1453,7 @@ export class MediaMetaDataService {
         media_details: {
           role: 'question',
           question_type: question.question_type,
-          model: request.model,
+          model: provenance.model,
           // Judge never runs when quality already failed the family;
           // level-8 passages skip it by design (judge.skipped = true).
           ...(judgeVerdict
@@ -1373,7 +1498,7 @@ export class MediaMetaDataService {
           media_details: {
             role: 'option',
             correct: option.correct,
-            model: request.model,
+            model: provenance.model,
           },
         }),
       );
@@ -1393,7 +1518,7 @@ export class MediaMetaDataService {
           rolled_back: rolledBack,
           media_details: {
             role: 'explanation',
-            model: request.model,
+            model: provenance.model,
             sendable: false,
           },
         }),
@@ -1425,7 +1550,7 @@ export class MediaMetaDataService {
           media_details: {
             role: 'flow',
             question_type: question.question_type,
-            model: request.model,
+            model: provenance.model,
           },
         }),
       );
@@ -1439,19 +1564,29 @@ export class MediaMetaDataService {
 
     if (gateFailure) {
       this.logger.log(
-        `llm-generate: soft-deleted passage ${passageId} (level ${level}) — ${gateFailure.reason}`,
+        `${provenance.logPrefix}: soft-deleted passage ${passageId} (level ${level}) — ${gateFailure.reason}`,
       );
       return {
         status: 'rejected',
         reason: gateFailure.reason,
-        // The content is persisted for troubleshooting, but a fresh sample
-        // may well pass the gates.
-        retriable: true,
+        // The content is persisted for troubleshooting. A fresh LLM sample
+        // may well pass the gates; a hand-written family is final (the
+        // author fixes it and re-uploads).
+        retriable: provenance.gateFailureRetriable,
         passage_id: passageId,
         level,
         question: {
           status: 'discarded',
           reason: gateFailure.reason,
+          explanation: explainGateFailure(gateFailure, question, {
+            qualityRequiredValid: QUALITY_REQUIRED_VALID,
+            qualityPassMinTrue: QUALITY_PASS_MIN_TRUE,
+            judgeRequiredValid: JUDGE_REQUIRED_VALID,
+            solvabilityRejectMinCorrect:
+              SOLVABILITY_REJECT_MIN_CORRECT[
+                question.options.length as 2 | 3 | 4
+              ],
+          }),
           question_id: questionId,
           quality: qualityReport,
           ...(judgeVerdict && { judge: pickGateObservability(judgeVerdict) }),
@@ -1463,7 +1598,7 @@ export class MediaMetaDataService {
     }
 
     this.logger.log(
-      `llm-generate: created passage ${passageId} (level ${level}) with its question from ${request.provider}/${request.model}`,
+      `${provenance.logPrefix}: created passage ${passageId} (level ${level}) with its question from ${provenance.label}`,
     );
 
     // 7. TTS fan-out through the existing ElevenLabs pathway (transcript ends
@@ -1488,7 +1623,7 @@ export class MediaMetaDataService {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(
-        `llm-generate: text entities created but TTS enqueue failed for passage ${passageId}: ${message}`,
+        `${provenance.logPrefix}: text entities created but TTS enqueue failed for passage ${passageId}: ${message}`,
       );
       response.tts_error = `audio generation failed to start: ${message}`;
     }
