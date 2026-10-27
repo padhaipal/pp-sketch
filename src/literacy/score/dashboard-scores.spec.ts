@@ -22,7 +22,15 @@ import {
 } from './dashboard-scores.dto';
 import type { GeoEntityService } from '../../geo-entities/geo-entity.service';
 import { PiiAccessService } from '../../users/pii-access.service';
-import { STAFF } from '../../auth/viewer';
+import { ANONYMOUS, STAFF, type ViewerContext } from '../../auth/viewer';
+
+// A /d link holder (an official) who is directly above nobody in these
+// fixtures unless `visible` says so — the default viewer of these tests.
+// The general public (ANONYMOUS) is tested explicitly.
+const LINK: ViewerContext = {
+  kind: 'user',
+  id: '00000000-0000-4000-8000-0000000000aa',
+};
 
 // ─── Arithmetic ──────────────────────────────────────────────────────────────
 
@@ -927,12 +935,22 @@ function makeService(fixture: {
       },
     ),
   };
+  const real = new DashboardScoresService(
+    { query } as unknown as DataSource,
+    geo as unknown as GeoEntityService,
+    new PiiAccessService({ query } as unknown as DataSource),
+  );
+  // calls without a viewer are made as LINK (see above)
+  const svc = {
+    scores: (...a: Parameters<DashboardScoresService['scores']>) =>
+      real.scores(a[0], a[1], a[2], a[3], a[4] ?? LINK),
+    spotlight: (...a: Parameters<DashboardScoresService['spotlight']>) =>
+      real.spotlight(a[0], a[1], a[2], a[3], a[4] ?? LINK),
+    rankings: (...a: Parameters<DashboardScoresService['rankings']>) =>
+      real.rankings(a[0], a[1], a[2], a[3], a[4] ?? LINK),
+  };
   return {
-    svc: new DashboardScoresService(
-      { query } as unknown as DataSource,
-      geo as unknown as GeoEntityService,
-      new PiiAccessService({ query } as unknown as DataSource),
-    ),
+    svc,
     query,
     geo,
   };
@@ -1547,12 +1565,19 @@ describe('DashboardScoresService.scores — school level (students)', () => {
     expect(out.students_series?.[0].points[0]).toMatchObject({ date: AS_OF });
   });
 
-  it("rankings: a block's TEACHERS carry their number; its STUDENTS their stored name and no number", async () => {
+  it("rankings: a block's TEACHERS carry their name and number; its STUDENTS their name and no number (as stored for staff)", async () => {
     const fx = fixture();
     fx.teachers = [{ ...T1, external_id: '919876500001' }];
     fx.geoRows.push(geoRow('B1', AS_OF, 2, 1, [1, 0.5]));
+    // staff: everything in full (the one-hop rule itself: PiiAccessService)
     const { svc } = makeService(fx);
-    const teachers = await svc.rankings('B1', 'teacher', 'nipun_g2');
+    const teachers = await svc.rankings(
+      'B1',
+      'teacher',
+      'nipun_g2',
+      undefined,
+      STAFF,
+    );
     expect(teachers.top).toEqual([
       expect.objectContaining({ id: 'T1', name: 'Asha', sub: '919876500001' }),
     ]);
@@ -1561,7 +1586,13 @@ describe('DashboardScoresService.scores — school level (students)', () => {
       ['S1', 'school'],
       ['T1', 'teacher'],
     ]);
-    const students = await svc.rankings('B1', 'student', 'nipun_g2');
+    const students = await svc.rankings(
+      'B1',
+      'student',
+      'nipun_g2',
+      undefined,
+      STAFF,
+    );
     expect(students.top.length).toBeGreaterThan(0);
     expect(students.top.every((r) => r.sub === null)).toBe(true);
     expect(students.top.map((r) => r.name)).toContain('Bittu Yadav');
@@ -1569,6 +1600,64 @@ describe('DashboardScoresService.scores — school level (students)', () => {
     expect(students.top[0].value).toBe(100);
     // a student opens their teacher's class
     expect(students.top[0].path.map((r) => r.id)).toEqual(['S1', 'T1']);
+  });
+
+  it('rankings: anyone else gets the numbers and student names masked; the general public the teacher names too (the 2026-10 leak)', async () => {
+    const fx = fixture();
+    fx.teachers = [{ ...T1, external_id: '919876500001' }];
+    fx.geoRows.push(geoRow('B1', AS_OF, 2, 1, [1, 0.5]));
+    const { svc } = makeService(fx);
+    const linkT = await svc.rankings('B1', 'teacher', 'nipun_g2');
+    expect(linkT.top).toEqual([
+      expect.objectContaining({ id: 'T1', name: 'Asha', sub: '9...1' }),
+    ]);
+    const linkS = await svc.rankings('B1', 'student', 'nipun_g2');
+    expect(linkS.top.map((r) => r.name)).toContain('B...v');
+    expect(linkS.top.map((r) => r.name)).not.toContain('Bittu Yadav');
+
+    const pubT = await svc.rankings(
+      'B1',
+      'teacher',
+      'nipun_g2',
+      undefined,
+      ANONYMOUS,
+    );
+    expect(pubT.top).toEqual([
+      expect.objectContaining({ id: 'T1', name: 'A...a', sub: '9...1' }),
+    ]);
+    expect(pubT.top[0].path.find((r) => r.type === 'teacher')?.name).toBe(
+      'A...a',
+    );
+    const pubS = await svc.rankings(
+      'B1',
+      'student',
+      'nipun_g2',
+      undefined,
+      ANONYMOUS,
+    );
+    expect(JSON.stringify(pubS)).not.toMatch(/Bittu|Asha|9198765/);
+  });
+
+  it('scores for the general public: teacher and official names masked, spotlight messages withheld', async () => {
+    const { svc } = makeService(fixture());
+    const school = await svc.scores('S1', 'nipun_g2', 30, undefined, ANONYMOUS);
+    const t1 = (
+      school.children as Array<{
+        id: string;
+        name: string;
+        official: {
+          name: string | null;
+          spotlight_message: string | null;
+        } | null;
+      }>
+    ).find((c) => c.id === 'T1')!;
+    expect(t1.name).toBe('A...a');
+    expect(t1.official).toEqual(
+      expect.objectContaining({ name: 'A...a', spotlight_message: null }),
+    );
+    const cls = await svc.scores('T1', 'nipun_g2', 30, undefined, ANONYMOUS);
+    expect(cls.entity.name).toBe('A...a');
+    expect(JSON.stringify(cls)).not.toMatch(/Bittu/);
   });
 
   it('class level: a teacher with no scored students yet → 200 with nulls', async () => {

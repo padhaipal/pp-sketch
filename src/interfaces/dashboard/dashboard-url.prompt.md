@@ -12,4 +12,4 @@ slashes.
   /users/staff-create and every staff read). The `/d/:id` route ships with
   Prompt C; until then the link is dead by design.
 
-Never hardcode `https://dashboard.padhaipal.com` elsewhere.
+Never hardcode `https://dashboard.lifteracy.ai` elsewhere.

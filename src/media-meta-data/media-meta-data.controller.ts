@@ -236,6 +236,39 @@ export class MediaMetaDataController {
     }
   }
 
+  // Hand-written passage family (one CSV row from the dashboard upload) →
+  // the same content validation, quality/judge/solvability gates, insert
+  // and TTS as llm-generate; only the LLM call is replaced. Same latency
+  // (~1-2.5 min per gated item), so the dashboard sends one row per request.
+  @Post('manual-passage')
+  @HttpCode(HttpStatus.OK)
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        passage: { type: 'object' },
+        question: { type: 'object' },
+        filename: { type: 'string' },
+        row: { type: 'number' },
+      },
+    },
+  })
+  @ApiResponse({ status: 200 })
+  async manualPassage(@Body() body: unknown) {
+    const span = startRootSpan('manual-passage-controller');
+    try {
+      const ctxWithSpan = trace.setSpan(context.active(), span);
+      return await context.with(ctxWithSpan, () =>
+        this.mediaMetaDataService.createManualPassageMedia(
+          body,
+          injectCarrierFromContext(ctxWithSpan),
+        ),
+      );
+    } finally {
+      span.end();
+    }
+  }
+
   @Delete(':id')
   async deleteMedia(@Param('id') id: string): Promise<DeleteResponse> {
     await this.mediaMetaDataService.markRolledBack(id);

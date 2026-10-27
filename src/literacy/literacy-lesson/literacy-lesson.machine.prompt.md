@@ -72,3 +72,20 @@ decrement, by decision). A missing / zero duration skips the gate.
 word (one akshara off) counts toward this cap only; a substituted /
 omitted / transposed word toward both this cap and the 10 % error budget
 (`flawedWordCount` on the assessment). Same wrong-read branches as before.
+
+## 2026-10: ASER letter test (aser/aser.prompt.md)
+
+- Input/context gained `aserLetters` (letters to ask, counts carried from
+  earlier in the run, wordIfPassed / wordIfFailed) and `aser` (opaque test state,
+  carried, never read). With `aserLetters`, `wrongLetters` = the letters,
+  the initial stid is `${letters[0]}-word-routeWrongLetter-drillLetters`
+  and the start router goes to `routeWrongLetter`.
+- `countAserLetter` (letter state: every answer; letterNoImage: first try)
+  counts the asked letter; on 4 right / 7 wrong it sets `done`, cuts
+  `wrongLetters` to the current letter and sets `word` to wordIfPassed /
+  wordIfFailed. The `…-last` guards also fire on a right answer that decides it
+  (`aserLetterEndsOnCorrect`). No new stids: the loop's own `…-more` /
+  `…-last` stids carry the feedback. Old snapshots rehydrate with undefined.
+- Sentence guards pass `maxErrors = 3` at passage levels 9 and 10
+  (`FLAT_READ_ERROR_BUDGET`) instead of the 10% budget; the flawed-word cap
+  and speed gate are unchanged.

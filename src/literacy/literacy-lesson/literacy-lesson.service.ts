@@ -1,10 +1,15 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { SpanStatusCode } from '@opentelemetry/api';
 import { Repository, DataSource } from 'typeorm';
 import * as path from 'path';
 import * as fs from 'fs';
-import { createActor } from 'xstate';
+import { createActor, type InputFrom } from 'xstate';
 import { LiteracyLessonStateEntity } from './literacy-lesson-state.entity';
 import { ScoreService } from '../score/score.service';
 import { tracer } from '../../otel/otel';
@@ -22,6 +27,13 @@ import {
   ProcessAnswerResult,
   validateProcessAnswerOptions,
 } from './literacy-lesson.dto';
+import { splitLessonWords } from './lesson-words.utils';
+import { AserService } from '../aser/aser.service';
+import {
+  applyAserTurn,
+  type AserLetterCounts,
+  type AserState,
+} from '../aser/aser';
 import {
   SENTENCE_RECENT_ROWS_WINDOW,
   TurnRow,
@@ -125,17 +137,6 @@ interface NextString {
   passageLevel: number | null;
 }
 
-// Splits a persisted `word` column value into its component words. Sentences
-// are stored space-joined today, but tolerate full paragraph punctuation
-// (danda, double danda, commas, Latin stops, quotes, dashes) so a future
-// punctuated paragraph still round-trips into clean words for recency
-// exclusion and level derivation.
-function splitLessonWords(stored: string): string[] {
-  return stored
-    .split(/[\s।॥,.!?;:'"“”‘’()[\]{}\-–—~]+/u)
-    .filter((w) => w.length > 0);
-}
-
 // Lesson level of a persisted `word` column value: grapheme count for a
 // single word, 7 + log2(word count) for a stored sentence (the inverse of
 // the 2^(level − 7) sizing rule).
@@ -157,6 +158,10 @@ export class LiteracyLessonService {
     private readonly lessonStateRepo: Repository<LiteracyLessonStateEntity>,
     private readonly dataSource: DataSource,
     private readonly scoreService: ScoreService,
+    // ASER test delivery (aser/aser.service.ts). Optional only so unit specs
+    // that predate it can build the service without it — Nest always
+    // injects it (LiteracyLessonModule provides it).
+    @Optional() private readonly aserService?: AserService,
   ) {
     const wordListPath = path.join(__dirname, 'word-list.json');
     this.wordList = JSON.parse(
@@ -253,16 +258,44 @@ export class LiteracyLessonService {
         let snapshot: LessonSnapshot;
         // Difficulty cap written onto this row: freshly computed for a new
         // lesson, carried forward from the current lesson's row on continue.
-        // Null only for a continue against a pre-migration row that never had
-        // a level — self-heals on the next fresh selection.
+        // Null for a continue against a pre-migration row that never had a
+        // level (self-heals on the next fresh selection) and for every ASER
+        // row — the ratchet then reads the last NORMAL lesson's level, which
+        // is how a retest hands the student back their pre-test level.
         let selectedLevel: number | null;
+        // ASER (aser/aser.ts): the test state before this turn. ASER uses
+        // only the lesson loop's own stids — none are added here.
+        const prevAser: AserState | null =
+          (currentState?.snapshot?.context as { aser?: AserState | null })
+            ?.aser ?? null;
+        let aserBefore: AserState | null = null;
 
         if (startFresh) {
-          // 5. Start a new lesson
-          const lesson = await this.selectNextString(validated.user.id);
-          selectedLevel = lesson.level;
-          const actor = createActor(machine, {
-            input: {
+          // 5. Start a new lesson — an ASER item when a test is due or in
+          // progress, otherwise the normal selection.
+          const plan = this.aserService
+            ? await this.aserService.planFreshLesson(
+                validated.user.id,
+                prevAser,
+              )
+            : null;
+          let input: InputFrom<typeof machine>;
+          if (plan?.kind === 'aser') {
+            selectedLevel = null;
+            input = {
+              ...plan.input,
+              aser: plan.aser,
+              userMessageId: validated.user_message_id,
+            };
+            span.setAttribute('pp.lesson.aser.run', plan.aser.run);
+            span.setAttribute('pp.lesson.aser.stage', plan.aser.stage);
+          } else {
+            const lesson = await this.selectNextString(
+              validated.user.id,
+              plan?.forcedLevel ?? null,
+            );
+            selectedLevel = lesson.level;
+            input = {
               word: lesson.word,
               sentence: lesson.sentence ?? undefined,
               passageId: lesson.passageId ?? undefined,
@@ -270,9 +303,12 @@ export class LiteracyLessonService {
               readInFlow:
                 lesson.passageId != null &&
                 lesson.level >= PASSAGE_FLOW_LEVEL_THRESHOLD,
+              // A run that had to end at this start rides on this row.
+              aser: plan?.finishedAser ?? null,
               userMessageId: validated.user_message_id,
-            },
-          });
+            };
+          }
+          const actor = createActor(machine, { input });
           actor.start();
 
           snapshot = actor.getSnapshot();
@@ -310,6 +346,46 @@ export class LiteracyLessonService {
 
           snapshot = actor.getSnapshot();
           actor.stop();
+
+          // 6b. ASER: count the item's first answer / note a paragraph
+          // drill word, on a plain copy of the snapshot (the machine
+          // never touches context.aser).
+          if (prevAser && prevAser.status === 'in_progress') {
+            aserBefore = prevAser;
+            const plain = JSON.parse(
+              JSON.stringify(snapshot),
+            ) as LessonSnapshot;
+            const ctx = plain.context;
+            const prevCtx = currentState!.snapshot.context as {
+              wrongLetters?: string[];
+              aserLetters?: AserLetterCounts | null;
+            };
+            (ctx as { aser: AserState | null }).aser = applyAserTurn(prevAser, {
+              answerCorrect: ctx.answerCorrect ?? null,
+              stateTransitionId: ctx.stateTransitionId,
+              word: ctx.word,
+              machineState: String(plain.value),
+              askedLetter: prevCtx.wrongLetters?.[0] ?? null,
+              lettersBefore: prevCtx.aserLetters ?? null,
+              lettersAfter: ctx.aserLetters ?? null,
+            });
+            snapshot = plain;
+          }
+        }
+        const aserAfter: AserState | null =
+          (snapshot.context as { aser?: AserState | null }).aser ?? null;
+        // The test ended on this turn (its last item's first answer) — logged
+        // only; the student just carries on with the lesson.
+        const aserCompleted =
+          aserBefore?.status === 'in_progress' && aserAfter?.status === 'done';
+        if (aserAfter) {
+          span.setAttribute('pp.lesson.aser.run', aserAfter.run);
+          span.setAttribute('pp.lesson.aser.status', aserAfter.status);
+        }
+        if (aserCompleted && aserAfter) {
+          this.logger.log(
+            `processAnswer: ASER run ${aserAfter.run} done for user ${validated.user.id} — ${String(aserAfter.result)}`,
+          );
         }
 
         // 7. Read pending scores
@@ -457,6 +533,8 @@ export class LiteracyLessonService {
         // never the raw passage text — the count must match what alignment
         // scored, and punctuation is not a word.
         const sentenceTokens = snapshot.context.sentence;
+        // ASER rows carry no selected level: use the passage's own.
+        const readLevel = selectedLevel ?? snapshot.context.level ?? null;
         const completedReading =
           snapshot.context.answerCorrect === true &&
           CORRECT_PASSAGE_READ_STID_RE.test(
@@ -464,9 +542,9 @@ export class LiteracyLessonService {
           ) &&
           sentenceTokens != null &&
           sentenceTokens.length > 0 &&
-          selectedLevel != null &&
-          selectedLevel > SENTENCE_LEVEL_THRESHOLD
-            ? { wordCount: sentenceTokens.length, level: selectedLevel }
+          readLevel != null &&
+          readLevel > SENTENCE_LEVEL_THRESHOLD
+            ? { wordCount: sentenceTokens.length, level: readLevel }
             : undefined;
 
         return {
@@ -692,7 +770,12 @@ export class LiteracyLessonService {
     );
   }
 
-  private async selectNextString(userId: string): Promise<NextString> {
+  // `forcedLevel`: the onboarding ASER test's placement — the lesson right
+  // after the test is selected AT that level, skipping the ratchet.
+  private async selectNextString(
+    userId: string,
+    forcedLevel: number | null = null,
+  ): Promise<NextString> {
     return tracer.startActiveSpan('literacy.selectNextString', async (span) => {
       span.setAttribute('pp.user.id', userId);
       try {
@@ -715,6 +798,8 @@ export class LiteracyLessonService {
           recent_turns: TurnRow[];
           lifetime_done_count: number;
           recent_passage_ids: string[];
+          // The onboarding ASER test placed this student (aser/aser.ts).
+          has_aser_placement?: boolean;
         }
         const rows: SelectNextWordRow[] = await this.dataSource.query(
           `WITH recent_distinct_words AS (
@@ -736,6 +821,8 @@ export class LiteracyLessonService {
                    snapshot->'context'->>'stateTransitionId' AS stid
             FROM literacy_lesson_states
             WHERE user_id = $1
+              -- ASER test rows never feed progression (aser/aser.ts)
+              AND snapshot->'context'->>'aser' IS NULL
             ORDER BY created_at DESC
             LIMIT $3
           ),
@@ -795,7 +882,12 @@ export class LiteracyLessonService {
             ) AS recent_turns,
             (SELECT COUNT(*)::int FROM literacy_lesson_states
               WHERE user_id = $1 AND snapshot->>'status' = 'done'
+                AND snapshot->'context'->>'aser' IS NULL
             ) AS lifetime_done_count,
+            EXISTS (SELECT 1 FROM literacy_lesson_states
+              WHERE user_id = $1
+                AND snapshot->'context'->'aser'->>'placementLevel' IS NOT NULL
+            ) AS has_aser_placement,
             COALESCE(
               (SELECT json_agg(passage_id ORDER BY latest_at DESC)
                FROM recent_passages),
@@ -900,6 +992,14 @@ export class LiteracyLessonService {
           if (accelerate) {
             maxLength = base + LEVEL_BOOST_INCREMENT;
           } else if (
+            data.has_aser_placement === true &&
+            recentRowCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH
+          ) {
+            // Placed by the onboarding ASER test: too little lesson history
+            // to judge yet, so hold the placement instead of the new-user
+            // floor (ASER rows are not in recent_rows).
+            maxLength = base;
+          } else if (
             distinctWordCount < NEW_USER_THRESHOLD ||
             recentRowCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH
           ) {
@@ -922,6 +1022,10 @@ export class LiteracyLessonService {
           // progression (base ≥ 8, the branch above) is untouched.
           maxLength = Math.min(maxLength, SENTENCE_LEVEL_THRESHOLD + 1);
           span.setAttribute('pp.lesson.word.accelerated', accelerate);
+        }
+        if (forcedLevel != null) {
+          maxLength = forcedLevel;
+          span.setAttribute('pp.lesson.aser.placement_level', forcedLevel);
         }
         maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR);
         maxLength = Math.min(maxLength, MAX_LESSON_LEVEL);

@@ -34,6 +34,7 @@ import {
   LiteracyTestScores,
 } from './user.dto';
 import { computeLiteracyTestScores } from '../literacy/score/literacy-test-scores';
+import { computeAserTestScores } from '../literacy/aser/aser';
 
 export interface PublicProfileRow {
   id: string;
@@ -788,11 +789,15 @@ export class UserService {
   ): Promise<LiteracyTestScores | null> {
     const user = await this.findByIdOrExternalId(input);
     if (!user) return null;
-    const scores = await computeLiteracyTestScores(
-      (sql, params) => this.dataSource.query(sql, params),
-      [user.id],
-    );
-    return scores.get(user.id) ?? null;
+    const query = (sql: string, params: unknown[]) =>
+      this.dataSource.query(sql, params);
+    const [scores, aser] = await Promise.all([
+      computeLiteracyTestScores(query, [user.id]),
+      computeAserTestScores(query, [user.id]),
+    ]);
+    const userScores = scores.get(user.id);
+    if (!userScores) return null;
+    return { ...userScores, ...aser.get(user.id) };
   }
 
   private async populateUserCache(user: User): Promise<void> {

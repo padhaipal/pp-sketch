@@ -64,7 +64,7 @@ WhatsApp pre-load, then sends.
     throw a `RequeueRequestedError` to trigger the 1-s requeue.
 
 5.) If row exists with `status === 'ready'` and `wa_media_url` is set →
-    build `fullMedia` as `[...job.data.media, { type: 'image', url, mime_type: 'image/png' }, { type: 'text', body: \`https://dashboard.padhaipal.com/r/${user_external_id}\` }]`
+    build `fullMedia` as `[...job.data.media, { type: 'image', url, mime_type: 'image/png' }, { type: 'text', body: \`https://dashboard.lifteracy.ai/r/${user_external_id}\` }]`
     and call `wabotOutbound.sendNotification({ user_external_id, media: fullMedia })`.
     The trailing text item is the same public referral URL the QR code on the
     report card encodes — pp-dashboard's `/r/:id` route 302-redirects to the

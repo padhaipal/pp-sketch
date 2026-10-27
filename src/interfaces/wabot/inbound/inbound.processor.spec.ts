@@ -1,4 +1,4 @@
-process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.padhaipal.com';
+process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.lifteracy.ai';
 process.env.LOG_PII_HMAC_KEY = process.env.LOG_PII_HMAC_KEY ?? 'a'.repeat(64);
 
 import { Job } from 'bullmq';
@@ -358,7 +358,7 @@ describe('processWabotInboundJob — new user onboarding', () => {
       { type: 'text', body: 'नमस्ते!' },
     ]);
     expect(
-      media.some((m) => m.body?.includes('dashboard.padhaipal.com/r/')),
+      media.some((m) => m.body?.includes('dashboard.lifteracy.ai/r/')),
     ).toBe(false);
   });
 

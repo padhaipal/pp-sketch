@@ -12,6 +12,11 @@ import {
 } from './literacy-test-scores';
 import { ageOn, inBand, LiteracyMetric, TestMetric } from './age-bands';
 import {
+  ASER_TESTS,
+  type AserTestKey,
+  computeAserTestScores,
+} from '../aser/aser';
+import {
   ACTIVITY_EVENT_SQL,
   IS_TAP_SQL,
   activeMs,
@@ -19,6 +24,8 @@ import {
 } from '../../users/active-time';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
+
+export const ASER_KEYS: readonly AserTestKey[] = ASER_TESTS.map(([k]) => k);
 
 export const TEST_METRICS: readonly TestMetric[] = [
   'nipun_g1',
@@ -68,6 +75,20 @@ export const VERDICT_COLUMNS = [
   'nipun_schools_fail',
   'nipun_schools_insufficient',
 ] as const;
+// test_results_student ASER columns, in bind order (per test: right,
+// wrong, verdict, when the run ended).
+export const ASER_STUDENT_COLUMNS = ASER_KEYS.flatMap((k) => [
+  `${k}_correct`,
+  `${k}_incorrect`,
+  `${k}_passed`,
+  `${k}_at`,
+]);
+// test_results_geo_entity ASER columns, in bind order.
+export const ASER_GEO_COLUMNS = ASER_KEYS.flatMap((k) => [
+  `${k}_n`,
+  `${k}_pass`,
+  `${k}_fail`,
+]);
 export const ACTIVE_WINDOW_DAYS = 14;
 // A 'running' test_runs row older than this is a crashed run, not a live
 // one, and must not block tonight.
@@ -93,6 +114,14 @@ export interface MetricVector {
   hist: number[];
 }
 
+// ASER per test (no age band): students whose latest run reached it, and
+// how many passed / failed (the rest left it undecided).
+export interface AserCounts {
+  n: number;
+  pass: number;
+  fail: number;
+}
+
 export interface GeoVector {
   students_active: number;
   students_scored: number;
@@ -112,6 +141,7 @@ export interface GeoVector {
   nipun_g3: MetricVector;
   mpl_b: MetricVector;
   usage: MetricVector;
+  aser: Record<AserTestKey, AserCounts>;
 }
 
 export function emptyVector(): GeoVector {
@@ -138,6 +168,9 @@ export function emptyVector(): GeoVector {
     nipun_g3: metric('nipun_g3'),
     mpl_b: metric('mpl_b'),
     usage: metric('usage'),
+    aser: Object.fromEntries(
+      ASER_KEYS.map((k) => [k, { n: 0, pass: 0, fail: 0 }]),
+    ) as Record<AserTestKey, AserCounts>,
   };
 }
 
@@ -159,6 +192,11 @@ export function addVector(into: GeoVector, from: GeoVector): GeoVector {
     for (let i = 0; i < into[m].hist.length; i++) {
       into[m].hist[i] += from[m].hist[i];
     }
+  }
+  for (const k of ASER_KEYS) {
+    into.aser[k].n += from.aser[k].n;
+    into.aser[k].pass += from.aser[k].pass;
+    into.aser[k].fail += from.aser[k].fail;
   }
   return into;
 }
@@ -184,6 +222,15 @@ export interface LatestStudentRow {
   // Minutes from the row dated computed_for only (an older row's minutes
   // belong to another day); null → 0.
   usage_score: number | null;
+  // ASER per test: null correct = never taken (optional: older fixtures).
+  aser_l1_correct?: number | null;
+  aser_l1_passed?: boolean | null;
+  aser_l2_correct?: number | null;
+  aser_l2_passed?: boolean | null;
+  aser_l3_correct?: number | null;
+  aser_l3_passed?: boolean | null;
+  aser_l4_correct?: number | null;
+  aser_l4_passed?: boolean | null;
 }
 
 // A pass at a higher NIPUN grade implies the lower grades at 100%: a child
@@ -239,6 +286,16 @@ export function studentVector(
   v.usage.sumsq = minutes * minutes;
   v.usage.pass = minutes > USAGE_PASS_MINUTES ? 1 : 0;
   v.usage.hist[histIndex('usage', minutes)] = 1;
+  // ASER: no age band — every student who took the test counts.
+  for (const k of ASER_KEYS) {
+    if (row[`${k}_correct`] == null) continue;
+    const passed = row[`${k}_passed`];
+    v.aser[k] = {
+      n: 1,
+      pass: passed === true ? 1 : 0,
+      fail: passed === false ? 1 : 0,
+    };
+  }
   const age = ageOn(
     computedFor,
     row.birth_year,
@@ -520,6 +577,10 @@ export class TestResultsService {
       batch.map((c) => c.id),
       computedFor,
     );
+    const aser = await computeAserTestScores(
+      (sql, params) => this.dataSource.query(sql, params),
+      batch.map((c) => c.id),
+    );
     const values: string[] = [];
     const params: unknown[] = [];
     let p = 0;
@@ -535,13 +596,24 @@ export class TestResultsService {
         mpl_b: { score: null, passed: null, attempts: 0 },
       };
       const u = usage.get(c.id) ?? { minutes: null, notes: 0 };
+      const a = aser.get(c.id);
+      // Bound AFTER the columns before it (push numbers the params).
+      const aserCols = () =>
+        ASER_KEYS.map((k) => {
+          const latest = a?.[k]?.latest;
+          return (
+            `${push(latest?.correct ?? null)}, ${push(latest?.incorrect ?? null)}, ` +
+            `${push(latest?.passed ?? null)}, ${push(latest?.at ?? null)}::timestamptz`
+          );
+        }).join(', ');
       values.push(
         `(${push(c.id)}, ${push(c.geo_entity_id)}, ${push(computedFor)}::date, ` +
           `${push(s.nipun_g1.score)}, ${push(s.nipun_g1.passed)}, ${push(s.nipun_g1.attempts)}, ` +
           `${push(s.nipun_g2.score)}, ${push(s.nipun_g2.passed)}, ${push(s.nipun_g2.attempts)}, ` +
           `${push(s.nipun_g3.score)}, ${push(s.nipun_g3.passed)}, ${push(s.nipun_g3.attempts)}, ` +
           `${push(s.mpl_b.score)}, ${push(s.mpl_b.passed)}, ${push(s.mpl_b.attempts)}, ` +
-          `${push(u.minutes)}, ${push(u.minutes === null ? null : u.minutes > USAGE_PASS_MINUTES)}, ${push(u.notes)})`,
+          `${push(u.minutes)}, ${push(u.minutes === null ? null : u.minutes > USAGE_PASS_MINUTES)}, ${push(u.notes)}, ` +
+          `${aserCols()})`,
       );
     }
     if (values.length === 0) return 0;
@@ -553,7 +625,8 @@ export class TestResultsService {
           nipun_g2_score, nipun_g2_passed, nipun_g2_attempts,
           nipun_g3_score, nipun_g3_passed, nipun_g3_attempts,
           mpl_b_score, mpl_b_passed, mpl_b_attempts,
-          usage_score, usage_passed, usage_attempts)
+          usage_score, usage_passed, usage_attempts,
+          ${ASER_STUDENT_COLUMNS.join(', ')})
        VALUES ${values.join(',\n')}
        ON CONFLICT (student_id, computed_for) DO UPDATE SET
          geo_entity_id = EXCLUDED.geo_entity_id,
@@ -562,6 +635,7 @@ export class TestResultsService {
          nipun_g3_score = EXCLUDED.nipun_g3_score, nipun_g3_passed = EXCLUDED.nipun_g3_passed, nipun_g3_attempts = EXCLUDED.nipun_g3_attempts,
          mpl_b_score = EXCLUDED.mpl_b_score, mpl_b_passed = EXCLUDED.mpl_b_passed, mpl_b_attempts = EXCLUDED.mpl_b_attempts,
          usage_score = EXCLUDED.usage_score, usage_passed = EXCLUDED.usage_passed, usage_attempts = EXCLUDED.usage_attempts,
+         ${ASER_STUDENT_COLUMNS.map((c) => `${c} = EXCLUDED.${c}`).join(', ')},
          created_at = now()`,
       params,
     );
@@ -627,6 +701,8 @@ export class TestResultsService {
               t.nipun_g3_score::float8 AS nipun_g3_score, t.nipun_g3_passed,
               t.mpl_b_score::float8 AS mpl_b_score, t.mpl_b_passed,
               CASE WHEN t.computed_for = $2::date THEN t.usage_score::float8 END AS usage_score,
+              t.aser_l1_correct, t.aser_l1_passed, t.aser_l2_correct, t.aser_l2_passed,
+              t.aser_l3_correct, t.aser_l3_passed, t.aser_l4_correct, t.aser_l4_passed,
               EXISTS (SELECT 1 FROM literacy_lesson_states l
                       WHERE l.user_id = t.student_id AND l.created_at >= $1) AS active
        FROM test_results_student t
@@ -804,7 +880,11 @@ export class TestResultsService {
         (m) =>
           `${push(v[m].n)}, ${push(v[m].sum.toFixed(3))}, ${push(v[m].sumsq.toFixed(4))}, ${push(v[m].pass)}, ${push(v[m].hist)}::integer[]`,
       );
-      values.push(`(${[...head, ...metricCols].join(', ')})`);
+      const aserCols = ASER_KEYS.map(
+        (k) =>
+          `${push(v.aser[k].n)}, ${push(v.aser[k].pass)}, ${push(v.aser[k].fail)}`,
+      );
+      values.push(`(${[...head, ...metricCols, ...aserCols].join(', ')})`);
     }
     const metricColumnNames = METRICS.flatMap((m) => [
       `${m}_n`,
@@ -821,6 +901,7 @@ export class TestResultsService {
           'students_unbanded',
           ...VERDICT_COLUMNS,
           ...metricColumnNames,
+          ...ASER_GEO_COLUMNS,
         ];
     const setClause = updatable.map((c) => `${c} = EXCLUDED.${c}`).join(', ');
     const createdAtCol = backfill ? ', created_at' : '';
@@ -834,7 +915,7 @@ export class TestResultsService {
     await this.dataSource.query(
       `/* test-results:${backfill ? 'backfill-geo' : 'upsert-geo'} */
        INSERT INTO test_results_geo_entity
-         (geo_entity_id, computed_for, students_active, students_scored, students_unbanded, ${VERDICT_COLUMNS.join(', ')}, ${metricColumnNames.join(', ')}${createdAtCol})
+         (geo_entity_id, computed_for, students_active, students_scored, students_unbanded, ${VERDICT_COLUMNS.join(', ')}, ${metricColumnNames.join(', ')}, ${ASER_GEO_COLUMNS.join(', ')}${createdAtCol})
        VALUES ${rowsSql}
        ON CONFLICT (geo_entity_id, computed_for) DO UPDATE SET ${setClause}${createdAtSet}`,
       params,

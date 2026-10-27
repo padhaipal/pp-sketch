@@ -53,3 +53,14 @@ matches it alongside the `…-sentence-comprehension-correct-first|retry` pair,
 so `findMediaByStateTransitionId` resolves the same stored flow row
 (`${passageId}-sentence-comprehension`). Capture group 1 is still the passage
 id.
+
+## 2026-10: manual uploads
+
+- `validateGeneratedContent(obj)` — the content checks split out of
+  `parseGeneratedContent` (which now just JSON-parses then calls it); also
+  used for manual uploads.
+- `validateManualPassageRequest(body)` — provenance only: `filename`
+  (≤255 chars, no control chars), `row` (int 1-100000).
+- `MANUAL_PASSAGE_MODEL = 'manual'`.
+- `explainGateFailure(gateFailure, question, thresholds)` — human-readable
+  failure reason → `LlmGenerateQuestionResult.explanation`.

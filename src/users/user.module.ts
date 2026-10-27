@@ -6,6 +6,8 @@ import { ScoreEntity } from '../literacy/score/score.entity';
 import { LiteracyLessonStateEntity } from '../literacy/literacy-lesson/literacy-lesson-state.entity';
 import { UserService } from './user.service';
 import { UserActivityService } from './user-activity.service';
+import { TractionService } from './traction.service';
+import { InteractionStreamService } from './interaction-stream.service';
 import { UserController } from './user.controller';
 import { CacheService } from '../interfaces/redis/cache';
 import { ScoreModule } from '../literacy/score/score.module';
@@ -27,7 +29,13 @@ import { PiiAccessModule } from './pii-access.module';
     PiiAccessModule,
   ],
   controllers: [UserController],
-  providers: [UserService, UserActivityService, CacheService],
-  exports: [UserService, UserActivityService],
+  providers: [
+    UserService,
+    UserActivityService,
+    TractionService,
+    InteractionStreamService,
+    CacheService,
+  ],
+  exports: [UserService, UserActivityService, TractionService],
 })
 export class UserModule {}

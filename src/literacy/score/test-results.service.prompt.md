@@ -19,6 +19,19 @@ _attempts` per student; `nipun_g1_n/_sum/_sumsq/_pass/_hist[5]` and
 NULL scores and zero vectors; a student's g1 appears on their next
 rescore.
 
+## ASER (migration 1794000000000-AddAserMetrics, 2026-10)
+
+Four tests, l1 letter / l2 word / l3 paragraph / l4 story
+(literacy/aser/aser.prompt.md). Per batch, `computeAserTestScores` (one
+`aser:rows` read) gives each test's latest FINISHED run that reached it:
+`aser_lN_correct`, `_incorrect` (kept when undecided), `_passed` (NULL =
+undecided) and `_at` (the answer that ended the run); all NULL when never
+taken. Per area, `aser_lN_n` (students whose latest row has the test),
+`_pass`, `_fail` — NO age band, every student with a geo counts — summed
+up the tree like the other vectors (`AserCounts` in `GeoVector.aser`). The
+usage backfill leaves them alone. ASER does not count towards
+`students_scored`. No backfill: earlier rows stay NULL / 0.
+
 ## Why sums, not averages
 
 `test_results_geo_entity` stores, per metric, `n`, `sum`, `sumsq`, `pass`

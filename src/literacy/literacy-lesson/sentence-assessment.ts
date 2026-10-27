@@ -121,6 +121,8 @@ export type SentenceArgs = {
   durationMs?: number | null;
   // words-per-minute floor to enforce; null = no speed gate
   minWpm?: number | null;
+  // errors allowed instead of the 10% budget; null = readErrorBudget
+  maxErrors?: number | null;
 };
 
 export function readingWpm(
@@ -354,6 +356,16 @@ const STATUS_RANK: Record<SentenceWordStatus, number> = {
   omitted: 4,
 };
 
+/**
+ * Flat error budget for passage levels 9 and 10 (2026-10, the ASER rule —
+ * three errors for the paragraph and the story alike). Every level-9/10 read
+ * uses it, ASER or not; the flawed-word cap and the speed gate still apply.
+ */
+export const FLAT_READ_ERROR_BUDGET = 3;
+export const FLAT_READ_ERROR_BUDGET_LEVELS: ReadonlySet<number> = new Set([
+  9, 10,
+]);
+
 /** Number of word errors allowed for a passing read of `wordCount` words. */
 export function readErrorBudget(wordCount: number): number {
   return Math.max(
@@ -380,6 +392,7 @@ export function assessSentence({
   transcripts,
   durationMs = null,
   minWpm = null,
+  maxErrors = null,
 }: SentenceArgs): SentenceAssessment {
   if (words.length === 0) {
     console.error('assessSentence: words is empty');
@@ -442,7 +455,7 @@ export function assessSentence({
   const flawedWordCount = fused.filter((w) => w.status !== 'correct').length;
   return {
     passed:
-      errorCount <= readErrorBudget(wordCount) &&
+      errorCount <= (maxErrors ?? readErrorBudget(wordCount)) &&
       flawedWordBudgetOk(flawedWordCount, wordCount) &&
       !tooSlow,
     wordCount,

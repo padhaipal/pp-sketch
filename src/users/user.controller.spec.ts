@@ -1,6 +1,6 @@
 process.env.LOG_PII_HMAC_KEY =
   '0000000000000000000000000000000000000000000000000000000000000000';
-process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.padhaipal.com';
+process.env.DASHBOARD_PUBLIC_URL = 'https://dashboard.lifteracy.ai';
 
 jest.mock('bcrypt', () => ({
   compare: jest.fn(),
@@ -36,6 +36,8 @@ import type { UserActivityService } from './user-activity.service';
 import type { UserService } from './user.service';
 import type { GeoEntityService } from '../geo-entities/geo-entity.service';
 import type { PiiAccessService } from './pii-access.service';
+import type { TractionService } from './traction.service';
+import type { InteractionStreamService } from './interaction-stream.service';
 import { STAFF, type ViewerContext } from '../auth/viewer';
 
 type SimpleRepo = {
@@ -99,6 +101,8 @@ function makeController(opts: {
   // Default: the viewer may see everything (the staff /user/[id] page); the
   // PII tests override it.
   piiAccess?: Partial<PiiAccessService>;
+  tractionSvc?: Partial<TractionService>;
+  streamSvc?: Partial<InteractionStreamService>;
 }): UserController {
   return new UserController(
     (opts.userRepo ?? makeRepo()) as unknown as Repository<UserEntity>,
@@ -119,6 +123,8 @@ function makeController(opts: {
         async (_v: ViewerContext, ids: string[]) => new Set(ids),
       ),
     }) as unknown as PiiAccessService,
+    (opts.tractionSvc ?? {}) as TractionService,
+    (opts.streamSvc ?? {}) as InteractionStreamService,
   );
 }
 
@@ -878,13 +884,13 @@ describe('UserController.staffCreate', () => {
       role_title: 'Teacher',
       staff_notes: null,
     });
-    expect(out.link).toBe('https://dashboard.padhaipal.com/d/u-new');
+    expect(out.link).toBe('https://dashboard.lifteracy.ai/d/u-new');
     expect(out.user).toEqual(
       expect.objectContaining({
         id: 'u-new',
         geo_entity_name: 'PS Kupwara',
         geo_entity_type: 'school',
-        link: 'https://dashboard.padhaipal.com/d/u-new',
+        link: 'https://dashboard.lifteracy.ai/d/u-new',
       }),
     );
   });
@@ -1001,12 +1007,12 @@ describe('UserController.listStaff', () => {
       out.rows.map((r) => [r.link, r.share_link, r.students, r.geo_code]),
     ).toEqual([
       [
-        'https://dashboard.padhaipal.com/d/t1',
-        'https://dashboard.padhaipal.com/r/919999990001',
+        'https://dashboard.lifteracy.ai/d/t1',
+        'https://dashboard.lifteracy.ai/r/919999990001',
         8,
         '09270904601',
       ],
-      ['https://dashboard.padhaipal.com/d/b1', null, 87, '092711'],
+      ['https://dashboard.lifteracy.ai/d/b1', null, 87, '092711'],
     ]);
     await ctrl.listStaff(undefined, '-5', '9999');
     expect(listStaff).toHaveBeenLastCalledWith('', 0, 500);
@@ -1035,8 +1041,8 @@ describe('UserController.lookup + getStaff', () => {
     const out = await ctrl.lookup('a');
     expect(lookupStaff).toHaveBeenCalledWith('a');
     expect(out.map((r) => r.link)).toEqual([
-      'https://dashboard.padhaipal.com/d/u1',
-      'https://dashboard.padhaipal.com/d/u2',
+      'https://dashboard.lifteracy.ai/d/u1',
+      'https://dashboard.lifteracy.ai/d/u2',
     ]);
     expect(out[1].deleted_at).toEqual(new Date('2026-09-01'));
     await ctrl.lookup(undefined);
@@ -1075,7 +1081,7 @@ describe('UserController.lookup + getStaff', () => {
     expect(out.geo_entity).toEqual({ id: 'g1', type: 'school' });
     expect(out.ancestors).toHaveLength(2);
     expect(out.deleted_at).toEqual(new Date('2026-09-01'));
-    expect(out.link).toBe('https://dashboard.padhaipal.com/d/u1');
+    expect(out.link).toBe('https://dashboard.lifteracy.ai/d/u1');
     await expect(ctrl.getStaff('admin-id')).rejects.toThrow(NotFoundException);
   });
 });
@@ -1401,7 +1407,8 @@ describe('UserController.userMedia — exact query shape + branch handling', () 
       lessonStateRepo,
     });
 
-    const out = await ctrl.userMedia('u1', '20');
+    // the staff /user/[id] page (the public would get no transcripts)
+    const out = await ctrl.userMedia('u1', '20', undefined, { kind: 'staff' });
 
     // The interactions read: voice notes + flow taps, newest first, paged.
     // No onboarding flag → onboarding voice notes are excluded at the
@@ -2384,7 +2391,7 @@ describe('UserController public profile + profile PATCH', () => {
        "id": "u1",
        "name": "Asha Kumari",
        "role_title": "Teacher",
-       "share_link": "https://dashboard.padhaipal.com/r/919876543210",
+       "share_link": "https://dashboard.lifteracy.ai/r/919876543210",
        "spotlight_message": "Read daily!",
      }
     `);
@@ -2634,6 +2641,17 @@ describe('UserController — PII by viewer', () => {
         }),
       ]);
     }
+  });
+
+  it('media: the general public (anonymous viewer) gets no transcripts at all; the rows themselves stay', async () => {
+    const { ctrl } = make(false);
+    const out = await ctrl.userMedia(STUDENT_ID, undefined, undefined, {
+      kind: 'anonymous',
+    });
+    expect(out.media.map((m) => [m.id, m.transcripts])).toEqual([
+      ['m1', []],
+      ['m2', []],
+    ]);
   });
 
   it('PATCH :id/profile on a student: 403 unless the viewer is directly above them; the rename itself unchanged', async () => {
