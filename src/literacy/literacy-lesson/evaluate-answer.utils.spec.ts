@@ -70,6 +70,8 @@ describe('evaluate-answer.utils', () => {
       ['वह', 'वे'],
       ['इडली', 'इटली'],
       ['एक', 'एकाएक'],
+      ['कौआ', 'कौवा'],
+      ['कौआ', 'कोवा'],
     ])(
       'accepts hardcoded transcription pair correct=%s student=%s',
       (correct, student) => {
@@ -138,12 +140,64 @@ describe('evaluate-answer.utils', () => {
       expect(markWord({ correctAnswer: 'टठ', studentAnswer: 'तथ' })).toBe(true);
     });
 
-    it('does NOT actually treat nukta variant ज़ and ज as same family (FAMILIES bug)', () => {
-      // NFC does not compose ज+़ into U+095B (it's in Unicode's composition
-      // exclusion list), and markWord compares one UTF-16 code unit at a time.
-      // So although FAMILIES contains the multi-char string 'ज़', sameFamily
-      // never sees it during the per-position compare. Documenting the gap.
+    it('does NOT treat ज़ and ज as same family (nukta words are hardcoded per word)', () => {
       expect(markWord({ correctAnswer: 'जा', studentAnswer: 'ज़ा' })).toBe(
+        false,
+      );
+    });
+
+    it.each([
+      ['कुकर', 'कुकड़'],
+      ['डर', 'ड़र'],
+    ])(
+      'treats a nukta letter as one letter in family matching: correct=%s student=%s',
+      (correct, student) => {
+        expect(
+          markWord({ correctAnswer: correct, studentAnswer: student }),
+        ).toBe(true);
+      },
+    );
+
+    it.each([
+      ['कागज', 'काग़ज़'],
+      ['कागज', 'कागज़'],
+      ['काग़ज़', 'कागज'],
+      ['बाजार', 'बाज़ार'],
+      ['बाज़ार', 'बाजार'],
+      ['गजब', 'ग़ज़ब'],
+      ['खरबूजा', 'ख़रबूज़ा'],
+      ['कारखाना', 'कारख़ाना'],
+      ['कदम', 'क़दम'],
+      ['खून', 'ख़ून'],
+      ['गलत', 'ग़लत'],
+      ['फसल', 'फ़सल'],
+      ['काफी', 'कॉफ़ी'],
+      ['फट', 'फ़त'],
+      ['दरवाज़ा', 'दरवाजा'],
+      ['दरवाजा', 'दरवाज़ा'],
+      ['माफ', 'माफ़'],
+      ['सफेद', 'सफ़ेद'],
+      ['जहाज', 'जहाज़'],
+    ])(
+      'accepts hardcoded nukta variant correct=%s student=%s',
+      (correct, student) => {
+        expect(
+          markWord({ correctAnswer: correct, studentAnswer: student }),
+        ).toBe(true);
+      },
+    );
+
+    it('accepts a precomposed nukta letter from the engine', () => {
+      expect(
+        markWord({ correctAnswer: 'बाजार', studentAnswer: 'बा\u095Bार' }),
+      ).toBe(true);
+    });
+
+    it('does not accept a nukta spelling of a different word', () => {
+      expect(markWord({ correctAnswer: 'कदम', studentAnswer: 'क़लम' })).toBe(
+        false,
+      );
+      expect(markWord({ correctAnswer: 'फल', studentAnswer: 'फ़ल' })).toBe(
         false,
       );
     });
@@ -373,6 +427,7 @@ describe('evaluate-answer.utils', () => {
       ['ृ', 'ऋ'],
       ['ऋ', 'री'],
       ['छ', 'अच्छा'],
+      ['ज', 'जाओ'],
     ])('accepts hardcoded letter pair correct=%s student=%s', (c, s) => {
       expect(markLetter({ correctAnswer: c, studentAnswer: s })).toBe(true);
     });
