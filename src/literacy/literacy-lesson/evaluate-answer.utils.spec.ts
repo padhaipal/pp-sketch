@@ -427,6 +427,7 @@ describe('evaluate-answer.utils', () => {
       ['ृ', 'ऋ'],
       ['ऋ', 'री'],
       ['छ', 'अच्छा'],
+      ['ज', 'जाओ'],
     ])('accepts hardcoded letter pair correct=%s student=%s', (c, s) => {
       expect(markLetter({ correctAnswer: c, studentAnswer: s })).toBe(true);
     });

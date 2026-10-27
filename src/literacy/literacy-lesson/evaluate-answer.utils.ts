@@ -1045,6 +1045,7 @@ class EvaluateAnswer {
       if (cleanedCorrectAnswer === 'ऋ' && cleaned === 'जी') return true;
       if (cleanedCorrectAnswer === 'ऋ' && cleaned === 'ली') return true;
       if (cleanedCorrectAnswer === 'ज' && cleaned === 'क्या') return true;
+      if (cleanedCorrectAnswer === 'ज' && cleaned === 'जाओ') return true;
 
       // A bare consonant read with a trailing ो, as some dialects do.
       if (cleanedCorrectAnswer === 'त' && cleaned === 'तो') return true;
