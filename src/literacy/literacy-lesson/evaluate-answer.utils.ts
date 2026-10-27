@@ -683,6 +683,10 @@ class EvaluateAnswer {
         return true;
       if (cleanedCorrectAnswer === 'कछुआ' && cleanedStudentWord === 'कछुवा')
         return true;
+      if (cleanedCorrectAnswer === 'कौआ' && cleanedStudentWord === 'कौवा')
+        return true;
+      if (cleanedCorrectAnswer === 'कौआ' && cleanedStudentWord === 'कोवा')
+        return true;
       if (cleanedCorrectAnswer === 'अखरोट' && cleanedStudentWord === 'अकरोट')
         return true;
       if (cleanedCorrectAnswer === 'मोबाइल' && cleanedStudentWord === 'मोबाईल')

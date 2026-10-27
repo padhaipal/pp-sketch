@@ -70,6 +70,8 @@ describe('evaluate-answer.utils', () => {
       ['वह', 'वे'],
       ['इडली', 'इटली'],
       ['एक', 'एकाएक'],
+      ['कौआ', 'कौवा'],
+      ['कौआ', 'कोवा'],
     ])(
       'accepts hardcoded transcription pair correct=%s student=%s',
       (correct, student) => {
