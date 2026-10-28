@@ -142,6 +142,10 @@ function makeWorld(due: Record<string, unknown>) {
   return { rows, say, next, tap, last, aser, normalSelections, score, query };
 }
 
+// A wrong answer for any item: no ASER bank letter or word contains ञ.
+// ('क' is a bank C letter, so the "all wrong" test sometimes got one right.)
+const WRONG = 'ञ';
+
 const ONBOARDING = {
   has_lessons: false,
   last_run: null,
@@ -231,8 +235,8 @@ describe('ASER delivered through the lesson loop', () => {
     for (let i = 0; i < 2; i++) {
       if (i > 0) await w.next();
       // drain the wrong word's drill until the lesson ends
-      await w.say('क');
-      while (w.last().snapshot.status !== 'done') await w.say('क');
+      await w.say(WRONG);
+      while (w.last().snapshot.status !== 'done') await w.say(WRONG);
     }
     expect(w.aser().stage).toBe('letter');
     expect(w.aser().counts.word).toEqual({ correct: 0, incorrect: 2 });
@@ -268,12 +272,12 @@ describe('ASER delivered through the lesson loop', () => {
     await w.next();
     for (let i = 0; i < 2; i++) {
       if (i > 0) await w.next();
-      await w.say('क');
-      while (w.last().snapshot.status !== 'done') await w.say('क');
+      await w.say(WRONG);
+      while (w.last().snapshot.status !== 'done') await w.say(WRONG);
     }
     await w.next();
     let guard = 0;
-    while (w.aser().status !== 'done' && guard++ < 100) await w.say('क');
+    while (w.aser().status !== 'done' && guard++ < 100) await w.say(WRONG);
     expect(w.aser()).toMatchObject({
       status: 'done',
       result: 'beginner',
@@ -352,8 +356,8 @@ describe('ASER delivered through the lesson loop', () => {
     const w = makeWorld(ONBOARDING);
     await w.next();
     expect(w.last().snapshot.context.word).toBe('जय'); // in P9[0]
-    await w.say('क');
-    while (w.last().snapshot.status !== 'done') await w.say('क');
+    await w.say(WRONG);
+    while (w.last().snapshot.status !== 'done') await w.say(WRONG);
     for (let i = 0; i < 4; i++) {
       await w.next();
       await w.say(w.last().snapshot.context.word as string);
