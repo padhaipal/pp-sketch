@@ -865,7 +865,7 @@ export class DashboardScoresService {
     ]);
     const nameOf = new Map(geoRows.map((r) => [r.id, r.name]));
     const out = rows
-      .filter((r) => usingLifteracy(r))
+      .filter((r) => usingLifteracy(r, metric))
       .map((r) => {
         const pr = passRate(r.pass, r.n);
         return {
@@ -1603,7 +1603,7 @@ export class DashboardScoresService {
     const byId = new Map(rows.map((r) => [r.geo_entity_id, r]));
     return refs.map((ref) => {
       const row = byId.get(ref.id);
-      const using = usingLifteracy(row);
+      const using = usingLifteracy(row, metric);
       const pr = row ? passRate(row.pass, row.n) : null;
       const tf = win ? (time.get(ref.id) ?? timeFields(0, 0, 0)) : null;
       return {

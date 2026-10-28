@@ -79,6 +79,20 @@ describe('dashboard-scores arithmetic', () => {
     expect(usingLifteracy(undefined)).toBe(false);
   });
 
+  it('usingLifteracy in Time mode counts any student, scored or not', () => {
+    const banded = { n: 2, students_scored: 0, students_unbanded: 0 };
+    expect(usingLifteracy(banded, 'usage')).toBe(true);
+    expect(usingLifteracy(banded, 'mpl_b')).toBe(false);
+    expect(usingLifteracy(banded, 'nipun_g2')).toBe(false);
+    expect(
+      usingLifteracy(
+        { n: 0, students_scored: 0, students_unbanded: 0 },
+        'usage',
+      ),
+    ).toBe(false);
+    expect(usingLifteracy(undefined, 'usage')).toBe(false);
+  });
+
   it('validators', () => {
     expect(validateMetric('mpl_b')).toBe('mpl_b');
     expect(validateMetric('nipun_g1')).toBe('nipun_g1');
@@ -1775,6 +1789,27 @@ describe('DashboardScoresService.scores — Time windows (usage)', () => {
         ],
       },
     ]);
+  });
+
+  it('a school whose students practised but have no test score yet is in use (Time only)', async () => {
+    // New state: students with a birth year, none scored yet.
+    const unscored = { students_scored: 0, students_unbanded: 0 };
+    const fx = {
+      entities: ENTITIES,
+      geoRows: [
+        geoRow('B1', AS_OF, 2, 0, [31], unscored),
+        geoRow('S1', AS_OF, 2, 0, [31], unscored),
+      ],
+    };
+    const time = await makeService(fx).svc.scores('B1', 'usage', 30, '30d');
+    const s1 = (time.children as ChildRow[]).find((c) => c.id === 'S1');
+    expect(s1).toEqual(
+      expect.objectContaining({ using_lifteracy: true, time_sum: 31 }),
+    );
+    const test = await makeService(fx).svc.scores('B1', 'mpl_b', 30);
+    expect((test.children as ChildRow[]).find((c) => c.id === 'S1')).toEqual(
+      expect.objectContaining({ using_lifteracy: false, bin: 'none' }),
+    );
   });
 
   it('last 30 days: sums every stored day in the 30 days to as_of; delta vs the 30 before', async () => {

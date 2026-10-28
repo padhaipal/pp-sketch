@@ -506,17 +506,24 @@ export function binOf(
 // A child "uses Lifteracy" when it has a row at as_of with anyone scored or
 // unbanded — NOT students_active: a school whose students went quiet has
 // still used Lifteracy and keeps its last colour; activity is a separate
-// number.
+// number. Time mode (`usage`, 2026-10): any student in the row counts —
+// `usage_n` holds every student whatever their birth year or test results,
+// so a new state whose banded students have practised but not yet scored
+// is coloured, not grey.
 export function usingLifteracy(
   row:
     | {
+        n?: number;
         students_scored: number;
         students_unbanded: number;
       }
     | null
     | undefined,
+  metric?: DashboardMetric,
 ): boolean {
-  return !!row && row.students_scored + row.students_unbanded > 0;
+  if (!row) return false;
+  if (metric === 'usage') return (row.n ?? 0) > 0;
+  return row.students_scored + row.students_unbanded > 0;
 }
 
 // First name if set, else a stable ordinal within the school — never
