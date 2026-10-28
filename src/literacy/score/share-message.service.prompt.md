@@ -39,7 +39,13 @@ message as JSON; `SHARE_MESSAGE_SYSTEM_PROMPT` sets the rules: Hindi only,
 3–6 lines, one or two angles, priority to whatever is remarkable in the
 numbers (the model decides — no thresholds are hard-coded), placeholders
 copied verbatim, no invented facts, no phone numbers, `{{SHARE_LINK}}` as
-the last line for parents and no link for teachers.
+the last line for parents and no link for teachers. Since 2026-10-28 also:
+address the group in the plural (“abhibhavakon”), use `audience_description`
+for who the group is and who sends it, never name "Lifteracy" (many
+readers don't know it), and with no users yet stay positive (be the first
+to try it / benefit of daily reading) without saying no child has used it.
+The prompt no longer defines `"officials"`; the model goes by
+`audience_description` for district / state / country.
 
 ## Model
 
