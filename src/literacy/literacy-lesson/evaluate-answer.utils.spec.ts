@@ -1298,3 +1298,74 @@ describe('TEACHABLE_GRAPHEMES', () => {
     }
   });
 });
+
+/* ───────── spelling variants and split words (weekly review, 1 Nov 2026) ───────── */
+describe('markWord — simplified spellings and split words', () => {
+  it.each([
+    ['बरतन', 'बर्तन'],
+    ['गरम', 'गर्म'],
+    ['गरमी', 'गर्मी'],
+    ['कुरता', 'कुर्ता'],
+    ['बरफ', 'बर्फ'],
+    ['परदे', 'पर्दे'],
+    ['छतरी', 'छत्री'],
+    ['दरपन', 'दर्पण'],
+  ])('accepts the standard spelling of %s (%s)', (correct, heard) => {
+    expect(markWord({ correctAnswer: correct, studentAnswer: heard })).toBe(
+      true,
+    );
+    expect(
+      markWord({
+        correctAnswer: correct,
+        studentAnswer: `${heard} ~ ${heard}। ~ ${heard}`,
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts the standard spelling among other words', () => {
+    expect(
+      markWord({
+        correctAnswer: 'कुरता',
+        studentAnswer: 'उसने लाल कुर्ता पहना ~ उसने लाल कुर्ता पहना।',
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ['पता', 'पत्ता'],
+    ['बचा', 'बच्चा'],
+    ['पका', 'पक्का'],
+    ['गरम', 'नरम'],
+  ])('still rejects a different word: %s read as %s', (correct, heard) => {
+    expect(markWord({ correctAnswer: correct, studentAnswer: heard })).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    ['चायवाला', 'चाय वाला ~ चाय वाला। ~ चाय वाला'],
+    ['चायवाला', 'चाय वाला ~ जयवाला। ~ जयवाला'],
+    ['बहनजी', 'बहन जी ~ बहन जी। ~ बहन जी'],
+    ['आओ', 'आ ओ ~ आ ओ।'],
+    ['गए', 'ग ए ~ गए।'],
+  ])('accepts %s when one engine splits it (%s)', (correct, heard) => {
+    expect(markWord({ correctAnswer: correct, studentAnswer: heard })).toBe(
+      true,
+    );
+  });
+
+  it('does not join words across engines', () => {
+    expect(
+      markWord({ correctAnswer: 'चायवाला', studentAnswer: 'चाय ~ वाला' }),
+    ).toBe(false);
+  });
+
+  it('does not accept a split answer with extra words', () => {
+    expect(
+      markWord({
+        correctAnswer: 'चायवाला',
+        studentAnswer: 'मेरे चाय वाला दोस्त ~ मेरे चाय वाला दोस्त',
+      }),
+    ).toBe(false);
+  });
+});

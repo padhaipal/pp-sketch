@@ -478,3 +478,25 @@ describe('flawed-word cap (FLAWED_WORD_RATIO_MAX)', () => {
     expect(out.passed).toBe(false);
   });
 });
+
+describe('assessSentence — simplified spellings', () => {
+  it('marks बरतन heard as बर्तन correct, not close', () => {
+    const words = ['बरतन', 'मत', 'पटक', 'धो', 'कर', 'रख'];
+    const result = assessSentence({
+      words,
+      transcripts: ['बर्तन मत पटक धो कर रख ~ बर्तन मत पटक धो कर रखें।'],
+    });
+    expect(result.words[0].status).toBe('correct');
+    expect(result.errorCount).toBe(0);
+    expect(result.passed).toBe(true);
+  });
+
+  it('marks कुरता heard as कुर्ता correct', () => {
+    const words = ['उसने', 'लाल', 'कुरता', 'पहना', 'है'];
+    const result = assessSentence({
+      words,
+      transcripts: ['उसने लाल कुर्ता पहना है'],
+    });
+    expect(result.words[2].status).toBe('correct');
+  });
+});
