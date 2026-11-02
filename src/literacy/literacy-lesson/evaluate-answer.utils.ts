@@ -122,6 +122,26 @@ const sameNuktaGroup = (a: string, b: string) => {
   return group !== undefined && group === NUKTA_GROUP.get(b);
 };
 
+// Spelling variants, not reading errors (weekly review, 1 Nov 2026). Lesson
+// content writes some words in a simplified, conjunct-free spelling (बरतन,
+// गरम, गरमी, कुरता, बरफ, दरपन) while every STT engine writes the standard
+// spelling (बर्तन, गर्म, गर्मी, कुर्ता, बर्फ, दर्पण). A child who reads the word
+// correctly was marked wrong and drilled on it. spellingKey drops a virama
+// between two consonants (र्त → रत) and folds ण into न, so both spellings
+// compare equal. A doubled consonant keeps both letters (पत्ता → पतता ≠ पता,
+// बच्चा → बचचा ≠ बचा), so real misreadings still fail.
+const VIRAMA_BETWEEN_CONSONANTS = /्(?=[क-ह])/g;
+const spellingKey = (word: string): string =>
+  word.replace(VIRAMA_BETWEEN_CONSONANTS, '').replace(/ण/g, 'न');
+const sameSpelling = (a: string, b: string): boolean =>
+  a.length > 0 && b.length > 0 && spellingKey(a) === spellingKey(b);
+
+// The combined transcript joins the engines with ' ~ '
+// (literacy-lesson.service.ts TRANSCRIPT_JOIN). Split it back so whole-answer
+// rules see one engine at a time.
+const engineTranscripts = (studentAnswer: string): string[] =>
+  studentAnswer.split('~').filter((segment) => segment.trim().length > 0);
+
 const MATRA_TO_VOWEL: Record<string, string> = {
   'ा': 'आ',
   'ि': 'इ',
@@ -473,10 +493,27 @@ class EvaluateAnswer {
     if (cleanedCorrectAnswer === 'चख' && cleanedFullStudentAnswer === 'चख')
       return true;
 
+    // Split words, checked per engine: one engine's whole transcript, spaces
+    // removed, equals the target ("चाय वाला" → चायवाला, "बहन जी" → बहनजी).
+    // The checks above compare the joined transcript of all engines, so they
+    // miss whenever more than one engine replied ("आ ओ ~ आ ओ।" → आओआओ); this
+    // also covers those words.
+    if (
+      engineTranscripts(studentAnswer).some((segment) => {
+        const cleanedSegment = this.clean(segment);
+        return (
+          cleanedSegment === cleanedCorrectAnswer ||
+          sameSpelling(cleanedSegment, cleanedCorrectAnswer)
+        );
+      })
+    )
+      return true;
+
     return studentWords.some((studentWord) => {
       const cleanedStudentWord = this.clean(studentWord);
       if (cleanedStudentWord === cleanedCorrectAnswer) return true;
       if (sameNuktaGroup(cleanedCorrectAnswer, cleanedStudentWord)) return true;
+      if (sameSpelling(cleanedCorrectAnswer, cleanedStudentWord)) return true;
 
       // Hard coding some common transcription engine mistakes.
       if (cleanedCorrectAnswer === 'ईख' && cleanedStudentWord === 'एक')
