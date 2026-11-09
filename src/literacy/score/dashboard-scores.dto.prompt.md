@@ -11,9 +11,12 @@ Types for GET /geo-entities/:id/scores, /scores.csv and /spotlight
   null at n = 0. `delta(latest, prior)` to 1 dp, null when either is missing.
 - `binOf(pass_rate, using)`: high ≥ 80, mid 50–79, low < 50, none when
   n = 0 or not using Lifteracy.
-- `usingLifteracy(row)`: a row at as_of with `students_scored +
+- `usingLifteracy(row, metric?)`: a row at as_of with `students_scored +
 students_unbanded > 0` — NOT students_active: a school whose students went
-  quiet keeps its last colour; activity is a separate number.
+  quiet keeps its last colour; activity is a separate number. For `usage`
+  (Time) it is `n > 0` instead (`usage_n` counts every student, no birth
+  year or test needed — 2026-10: new states with banded, unscored students
+  were grey); the test metrics and the NIPUN verdict keep the first rule.
 - `CHILD_TYPE_OF`: country → state → district → block → school → teacher;
   a teacher's children are students (`scores(<teacher user id>)`).
   `ChildType` includes `'teacher'`; `GeoRef.type` is `GeoEntityType |
