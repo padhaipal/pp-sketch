@@ -78,6 +78,15 @@ export class TestResultStudentEntity {
   @Column({ type: 'integer', default: 0 })
   usage_attempts: number;
 
+  // The ASER proxy as one figure (migration 1795000000000-AddAserGrade):
+  // ASER level ÷ 4 and the age's pass rule; NULL outside the 6–7 band.
+  @Column({ type: 'numeric', precision: 4, scale: 3, nullable: true })
+  aser_grade_score: string | null;
+  @Column({ type: 'boolean', nullable: true })
+  aser_grade_passed: boolean | null;
+  @Column({ type: 'integer', default: 0 })
+  aser_grade_attempts: number;
+
   // ASER (migration 1794000000000-AddAserMetrics): l1 letter, l2 word,
   // l3 paragraph, l4 story — the latest finished run that reached the test.
   // Counts are kept when the test was left undecided (passed NULL); `at` is
@@ -236,6 +245,19 @@ export class TestResultGeoEntityEntity {
     default: () => `'{${Array(31).fill(0).join(',')}}'`,
   })
   usage_hist: number[];
+
+  // aser_grade: 6–7 year olds with an ASER result; pass = reads at grade
+  // level; histogram over ASER levels 0–4.
+  @Column({ type: 'integer', default: 0 })
+  aser_grade_n: number;
+  @Column({ type: 'numeric', precision: 10, scale: 3, default: 0 })
+  aser_grade_sum: string;
+  @Column({ type: 'numeric', precision: 12, scale: 4, default: 0 })
+  aser_grade_sumsq: string;
+  @Column({ type: 'integer', default: 0 })
+  aser_grade_pass: number;
+  @Column({ type: 'integer', array: true, default: () => "'{0,0,0,0,0}'" })
+  aser_grade_hist: number[];
 
   // ASER per test: students whose latest run reached it, passed, failed
   // (undecided = n − pass − fail). No age band.

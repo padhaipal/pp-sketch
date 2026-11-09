@@ -95,3 +95,11 @@ Every class-level student row carries `phone` = `users.external_id` (the
 WhatsApp number), uncensored, so the teacher dashboard can show it beside
 the name (and in place of one for an unnamed student). `label` stays free of
 phone digits.
+
+## 2026-11: `metric=aser_grade`
+
+In `DASHBOARD_METRICS` (before the verdict). Read like any test metric
+(`aser_grade_n / _pass / _sum / _sumsq`, student `aser_grade_score /
+_passed / _attempts`). `testMeta('aser_grade')` = `{ age_band: [6, 8] }` —
+no `pass_mark`: six-year-olds pass at the paragraph, seven-year-olds at the
+story (aser/aser.prompt.md).

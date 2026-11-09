@@ -36,3 +36,9 @@ unbanded — excluded from every `n`, counted in `students_unbanded`.
 The dashboard keeps a fallback copy of the bands
 (pp-dashboard dashboard-types.ts `METRIC_AGE_BANDS`) for a pp-sketch that
 predates `age_band` in the scores response — keep in sync.
+
+## 2026-11: `aser_grade`
+
+`LiteracyMetric` / `METRIC_AGE_BANDS` gain `aser_grade: [6, 8]` — the ASER
+proxy as one figure (aser/aser.prompt.md). It overlaps nipun_g1 / nipun_g2;
+its pass rule differs per age (aser.ts `aserGradePassed`).

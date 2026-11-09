@@ -21,6 +21,7 @@ export const DASHBOARD_METRICS: readonly DashboardMetric[] = [
   'nipun_g2',
   'nipun_g3',
   'mpl_b',
+  'aser_grade',
   VERDICT_METRIC,
 ];
 // 30 = the last 30 days; 'all' = all time (no lower bound on the series;
@@ -352,6 +353,10 @@ export function testMeta(
   metric: DashboardMetric,
 ): Pick<ScoresResponse, 'age_band' | 'pass_mark'> {
   if (metric === 'usage' || metric === VERDICT_METRIC) return {};
+  // aser_grade has no single pass mark: the rule depends on the child's age
+  // (aser.ts aserGradePassed).
+  if (metric === 'aser_grade')
+    return { age_band: [...METRIC_AGE_BANDS[metric]] };
   return {
     age_band: [...METRIC_AGE_BANDS[metric]],
     pass_mark: Math.round(

@@ -34,7 +34,7 @@ import {
   LiteracyTestScores,
 } from './user.dto';
 import { computeLiteracyTestScores } from '../literacy/score/literacy-test-scores';
-import { computeAserTestScores } from '../literacy/aser/aser';
+import { aserLevelHistory, computeAserTestScores } from '../literacy/aser/aser';
 
 export interface PublicProfileRow {
   id: string;
@@ -797,7 +797,12 @@ export class UserService {
     ]);
     const userScores = scores.get(user.id);
     if (!userScores) return null;
-    return { ...userScores, ...aser.get(user.id) };
+    const tests = aser.get(user.id);
+    return {
+      ...userScores,
+      ...tests,
+      ...(tests ? { aser_levels: aserLevelHistory(tests) } : {}),
+    };
   }
 
   private async populateUserCache(user: User): Promise<void> {

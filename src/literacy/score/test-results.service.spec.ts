@@ -7,6 +7,7 @@ import type { DataSource } from 'typeorm';
 import { createQueue } from '../../interfaces/redis/queues';
 import {
   addVector,
+  aserGradeColumns,
   ASER_GEO_COLUMNS,
   ASER_KEYS,
   ASER_STUDENT_COLUMNS,
@@ -203,7 +204,8 @@ class FakeDb {
         }
         case 'test-results:upsert-students': {
           const created = this.tick();
-          const stride = 18 + ASER_STUDENT_COLUMNS.length;
+          // … then aser_grade_score / _passed / _attempts
+          const stride = 18 + ASER_STUDENT_COLUMNS.length + 3;
           for (let i = 0; i < params.length; i += stride) {
             const [student_id, geo_entity_id, computed_for, ...scores] =
               params.slice(i, i + stride) as [
@@ -540,6 +542,10 @@ describe('TestResultsService.run — candidates and skip criterion', () => {
       0,
       // ASER l1–l4 (correct, incorrect, passed, at): never taken
       ...Array<null>(ASER_STUDENT_COLUMNS.length).fill(null),
+      // aser_grade score / passed / attempts
+      null,
+      null,
+      0,
     ]);
   });
 
@@ -624,7 +630,7 @@ describe('TestResultsService.run — candidates and skip criterion', () => {
     expect(
       upserts.map(
         ([, params]) =>
-          (params as unknown[]).length / (18 + ASER_STUDENT_COLUMNS.length),
+          (params as unknown[]).length / (18 + ASER_STUDENT_COLUMNS.length + 3),
       ),
     ).toEqual([STUDENT_BATCH_SIZE, 1]);
   });
@@ -1533,6 +1539,98 @@ describe('a higher NIPUN grade pass implies the lower grades at 100 % (roll-up o
     expect(eight.nipun_g3).toMatchObject({ n: 1, sum: 0.75, pass: 1 });
   });
 
+  it('studentVector, aser_grade: a six-year-old passes with the paragraph or story, a seven-year-old only with the story; letters / words, eight and over and unknown ages never count as passes', () => {
+    // highest test passed: 1 letter … 4 story (0 = took one, passed none)
+    const aser = (birth_year: number | null, level: number | null) =>
+      studentVector(
+        {
+          ...row(birth_year ?? 2019),
+          birth_year,
+          nipun_g3_score: null,
+          nipun_g3_passed: null,
+          ...(level === null
+            ? {}
+            : Object.fromEntries(
+                ASER_KEYS.flatMap((k, i) => [
+                  [`${k}_correct`, 1],
+                  [`${k}_passed`, i < level],
+                ]),
+              )),
+        },
+        on,
+      );
+    const six = (level: number) => aser(2020, level).aser_grade;
+    const seven = (level: number) => aser(2019, level).aser_grade;
+    expect(six(3)).toEqual({
+      n: 1,
+      sum: 0.75,
+      sumsq: 0.5625,
+      pass: 1,
+      hist: [0, 0, 0, 1, 0],
+    });
+    expect(six(4).pass).toBe(1);
+    expect([six(0), six(1), six(2)].map((m) => [m.n, m.pass])).toEqual([
+      [1, 0],
+      [1, 0],
+      [1, 0],
+    ]);
+    expect(seven(3)).toMatchObject({ n: 1, pass: 0 });
+    expect(seven(4)).toMatchObject({ n: 1, sum: 1, pass: 1 });
+    // eight and over, five and under, no birth year: not in the figure at all
+    for (const v of [aser(2018, 4), aser(2021, 4), aser(null, 4)]) {
+      expect(v.aser_grade.n).toBe(0);
+      expect(v.aser_grade.pass).toBe(0);
+      expect(v.students_scored).toBe(1); // still a student using the tests
+    }
+    // never tested: nothing
+    expect(aser(2020, null).aser_grade.n).toBe(0);
+    expect(aser(2020, null).students_scored).toBe(0);
+  });
+
+  it('aserGradeColumns: the student row carries level ÷ 4 and the age rule, nothing outside 6–7', () => {
+    const at = new Date('2026-09-11T10:00:00Z');
+    const test = (passed: boolean | null, runs = 1) => ({
+      status: 'ok' as const,
+      runs_available: runs,
+      latest: { run: runs, at, correct: 1, incorrect: 0, passed },
+    });
+    const none = { status: 'insufficient_data' as const, runs_available: 0 };
+    const paragraph = {
+      aser_l1: none,
+      aser_l2: test(true, 2),
+      aser_l3: test(true),
+      aser_l4: test(false),
+    };
+    expect(aserGradeColumns(paragraph, 6)).toEqual({
+      score: 0.75,
+      passed: true,
+      attempts: 2,
+    });
+    expect(aserGradeColumns(paragraph, 7)).toEqual({
+      score: 0.75,
+      passed: false,
+      attempts: 2,
+    });
+    for (const age of [5, 8, 12, null]) {
+      expect(aserGradeColumns(paragraph, age)).toEqual({
+        score: null,
+        passed: null,
+        attempts: 2,
+      });
+    }
+    expect(
+      aserGradeColumns(
+        { aser_l1: none, aser_l2: none, aser_l3: none, aser_l4: none },
+        6,
+      ),
+    ).toEqual({ score: null, passed: null, attempts: 0 });
+    expect(aserGradeColumns(undefined, 6)).toEqual({
+      score: null,
+      passed: null,
+      attempts: 0,
+    });
+  });
+
   it('a failed g3 with no g2 contributes nothing to g2 (no implication)', () => {
     const v = studentVector(
       { ...row(2019), nipun_g3_score: 0.5, nipun_g3_passed: false },
@@ -1619,7 +1717,7 @@ describe('TestResultsService.run — ASER (four tests, no age band)', () => {
     await svc.run({ full: true, now: NOW });
 
     const a = db.results.find((r) => r.student_id === 'A')!;
-    expect(a.scores.slice(15)).toEqual([
+    expect(a.scores.slice(15, 31)).toEqual([
       0,
       7,
       false,
@@ -1637,7 +1735,20 @@ describe('TestResultsService.run — ASER (four tests, no age band)', () => {
       null,
       null, // l4 not taken
     ]);
+    // aser_grade (both are seven): A level 0, B level 2 (word) — neither
+    // reads at grade level, both count
+    expect(a.scores.slice(31)).toEqual([0, false, 1]);
+    expect(
+      db.results.find((r) => r.student_id === 'B')!.scores.slice(31),
+    ).toEqual([0.5, false, 1]);
     const s1 = db.geo.find((g) => g.geo_entity_id === 'S1')!;
+    expect(s1.metrics.aser_grade).toEqual({
+      n: 2,
+      sum: '0.500',
+      sumsq: '0.2500',
+      pass: 0,
+      hist: [1, 0, 1, 0, 0],
+    });
     expect(s1.aser).toEqual({
       aser_l1: { n: 1, pass: 0, fail: 1 },
       aser_l2: { n: 2, pass: 1, fail: 0 },

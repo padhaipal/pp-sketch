@@ -156,8 +156,15 @@ describe('literacy test scores — golden output', () => {
       );
       // The golden covers the four snapshot tests; the four ASER tests
       // (2026-10, aser/aser.ts) follow them and are tested in the user spec.
-      const { aser_l1, aser_l2, aser_l3, aser_l4, ...snapshotTests } =
-        (await svc.getLiteracyTestScores(id))!;
+      const {
+        aser_l1,
+        aser_l2,
+        aser_l3,
+        aser_l4,
+        aser_levels,
+        ...snapshotTests
+      } = (await svc.getLiteracyTestScores(id))!;
+      expect(aser_levels).toEqual([]);
       for (const t of [aser_l1, aser_l2, aser_l3, aser_l4]) {
         expect(t?.status).toBe('insufficient_data');
       }
