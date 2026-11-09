@@ -5,6 +5,7 @@ import { buildTraction, dateRange, type TractionInputs } from './traction';
 const empty = (): TractionInputs => ({
   activityByDay: [],
   activeMonths: [],
+  messageDays: [],
   students: [],
   teacherDays: [],
   mplb: [],
@@ -141,6 +142,10 @@ describe('buildTraction', () => {
         joined_this_month: 2,
         projected_joined_earlier: null,
         projected_joined_this_month: null,
+        mau: 0,
+        dau_avg: 0,
+        dau_mau: null,
+        projected_dau_mau: null,
       },
       {
         month: '2026-09',
@@ -148,8 +153,104 @@ describe('buildTraction', () => {
         joined_this_month: 1,
         projected_joined_earlier: 3, // 1 × 30 ÷ 10
         projected_joined_this_month: 3,
+        mau: 0,
+        dau_avg: 0,
+        dau_mau: null,
+        projected_dau_mau: null,
       },
     ]);
+  });
+
+  it('monthly DAU / MAU: onboarded students who wrote that month, averaged over every day of it', () => {
+    const out = buildTraction(
+      {
+        ...empty(),
+        students: [
+          { id: 'a', onboarded_on: '2026-08-20', units: [] },
+          { id: 'b', onboarded_on: '2026-09-02', units: [] },
+        ],
+        messageDays: [
+          // August (31 days): a writes on 3 days → MAU 1, DAU 3/31
+          { user_id: 'a', date: '2026-08-20' },
+          { user_id: 'a', date: '2026-08-21' },
+          { user_id: 'a', date: '2026-08-21' }, // repeated row: one day
+          { user_id: 'a', date: '2026-08-30' },
+          { user_id: 'b', date: '2026-08-30' }, // onboarded in September: ignored
+          { user_id: 'x', date: '2026-08-30' }, // never onboarded: ignored
+          // September, 10 complete days: a on 4 days, b on 2 → MAU 2, DAU 0.6
+          { user_id: 'a', date: '2026-09-01' },
+          { user_id: 'a', date: '2026-09-02' },
+          { user_id: 'a', date: '2026-09-03' },
+          { user_id: 'a', date: '2026-09-04' },
+          { user_id: 'b', date: '2026-09-02' },
+          { user_id: 'b', date: '2026-09-09' },
+          { user_id: 'a', date: '2026-09-11' }, // after `to`: ignored
+        ],
+      },
+      '2026-08-01',
+      '2026-09-10',
+      AT,
+    );
+    expect(out.monthly[0]).toEqual(
+      expect.objectContaining({
+        month: '2026-08',
+        mau: 1,
+        dau_avg: 0.1, // 3 ÷ 31
+        dau_mau: 9.7,
+        projected_dau_mau: null,
+      }),
+    );
+    expect(out.monthly[1]).toEqual(
+      expect.objectContaining({
+        month: '2026-09',
+        mau: 2,
+        dau_avg: 0.6, // 6 student-days ÷ 10 complete days
+        dau_mau: 30,
+        // August had no writer in its first 10 days: nothing to scale by
+        projected_dau_mau: null,
+      }),
+    );
+  });
+
+  it('monthly DAU / MAU: the month in progress is estimated from how last month settled', () => {
+    const day = (user_id: string, date: string) => ({ user_id, date });
+    const out = buildTraction(
+      {
+        ...empty(),
+        students: ['a', 'b', 'c', 'd'].map((id) => ({
+          id,
+          onboarded_on: '2026-07-01',
+          units: [],
+        })),
+        messageDays: [
+          // August, first 10 days: a ×5, b ×5 → 10 ÷ 10 ÷ 2 = 50 %
+          ...[1, 2, 3, 4, 5].map((d) => day('a', `2026-08-0${d}`)),
+          ...[1, 2, 3, 4, 5].map((d) => day('b', `2026-08-0${d}`)),
+          // … then c and d write once each: 12 ÷ 31 ÷ 4 = 9.68 % for the month
+          day('c', '2026-08-20'),
+          day('d', '2026-08-25'),
+          // September so far (10 days): a ×4 → 4 ÷ 10 ÷ 1 = 40 %
+          ...[1, 2, 3, 4].map((d) => day('a', `2026-09-0${d}`)),
+        ],
+      },
+      '2026-08-01',
+      '2026-09-10',
+      AT,
+    );
+    expect(out.monthly[0]).toEqual(
+      expect.objectContaining({
+        mau: 4,
+        dau_mau: 9.7,
+        projected_dau_mau: null,
+      }),
+    );
+    expect(out.monthly[1]).toEqual(
+      expect.objectContaining({
+        mau: 1,
+        dau_mau: 40,
+        projected_dau_mau: 7.7, // 40 % × (9.68 ÷ 50)
+      }),
+    );
   });
 
   it('totals: all-time hours and onboarded students through `to`, before the window too', () => {
@@ -183,6 +284,10 @@ describe('buildTraction', () => {
         joined_this_month: 0,
         projected_joined_earlier: null,
         projected_joined_this_month: null,
+        mau: 0,
+        dau_avg: 0,
+        dau_mau: null,
+        projected_dau_mau: null,
       },
     ]);
   });

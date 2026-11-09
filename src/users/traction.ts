@@ -42,6 +42,24 @@ export interface TractionMonth {
   // linearly from the complete days so far to the whole month.
   projected_joined_earlier: number | null;
   projected_joined_this_month: number | null;
+  // DAU / MAU ("stickiness", 2026-11) over students onboarded by the end of
+  // that month. A student is active on a day when they sent at least one
+  // message that IST day.
+  //   mau     = students who sent a message on any day of the month
+  //   dau_avg = the mean, over every day of the month (days nobody wrote
+  //             count as 0; the month in progress: its complete days), of
+  //             how many of them sent a message that day — 1 dp
+  //   dau_mau = dau_avg ÷ mau as a percentage, 1 dp; null when mau is 0
+  mau: number;
+  dau_avg: number;
+  dau_mau: number | null;
+  // The month in progress only (null otherwise): the month-end estimate.
+  // The ratio starts high and settles as the month's audience builds up, so
+  // it is scaled by how the PREVIOUS month moved from the same number of
+  // days in to its end: dau_mau × (previous month's final ratio ÷ its ratio
+  // over its first N days). Null when the previous month has nothing to
+  // compare with.
+  projected_dau_mau: number | null;
 }
 
 export interface TractionResponse {
@@ -67,6 +85,8 @@ export interface TractionInputs {
   }>;
   // (user, IST YYYY-MM) pairs with an IST day > 5 min active, from..to
   activeMonths: Array<{ user_id: string; month: string }>;
+  // (user, IST date) pairs with at least one message that day, from..to
+  messageDays: Array<{ user_id: string; date: string }>;
   // onboarded students: IST date of onboarding + the referrer's geo chain
   students: Array<{ id: string; onboarded_on: string; units: UnitRef[] }>;
   // IST dates on which each school-level teacher account was created
@@ -231,17 +251,78 @@ function buildMonthly(
   const lastMonth = to.slice(0, 7);
   const elapsed = Number(to.slice(8, 10));
   const total = daysInMonth(lastMonth);
+
+  // DAU / MAU: per month, the students who wrote (onboarded by the end of
+  // that month) and their student-days — plus the same over only the first
+  // `elapsed` days of each month, for the month-end estimate.
+  const tally = () => ({ users: new Set<string>(), userDays: 0 });
+  const writers = new Map(months.map((m) => [m, tally()]));
+  const early = new Map(months.map((m) => [m, tally()]));
+  const seenDay = new Set<string>();
+  for (const d of inputs.messageDays) {
+    if (d.date < from || d.date > to) continue;
+    const month = d.date.slice(0, 7);
+    const w = writers.get(month);
+    const j = joined.get(d.user_id);
+    if (!w || j === undefined || j > month) continue;
+    const key = `${d.user_id}|${d.date}`;
+    if (seenDay.has(key)) continue;
+    seenDay.add(key);
+    w.users.add(d.user_id);
+    w.userDays++;
+    if (Number(d.date.slice(8, 10)) <= elapsed) {
+      const e = early.get(month)!;
+      e.users.add(d.user_id);
+      e.userDays++;
+    }
+  }
+  const windowDays = new Map<string, number>();
+  for (const d of dateRange(from, to)) {
+    const m = d.slice(0, 7);
+    windowDays.set(m, (windowDays.get(m) ?? 0) + 1);
+  }
+  const ratio = (userDays: number, days: number, mau: number): number | null =>
+    mau > 0 && days > 0 ? userDays / days / mau : null;
+  const pct = (r: number | null): number | null =>
+    r === null ? null : Math.round(r * 1000) / 10;
+  // Month-end estimate for the month in progress (see TractionMonth).
+  const projectRatio = (month: string, soFar: number | null): number | null => {
+    const prevMonth = months[months.indexOf(month) - 1];
+    if (soFar === null || prevMonth === undefined) return null;
+    const w = writers.get(prevMonth)!;
+    const e = early.get(prevMonth)!;
+    const full = ratio(
+      w.userDays,
+      windowDays.get(prevMonth) ?? 0,
+      w.users.size,
+    );
+    const start = ratio(
+      e.userDays,
+      Math.min(elapsed, windowDays.get(prevMonth) ?? 0),
+      e.users.size,
+    );
+    if (full === null || start === null || start === 0) return null;
+    return Math.min(1, soFar * (full / start));
+  };
   return months.map((month) => {
     const c = counts.get(month)!;
     const partial = month === lastMonth && elapsed < total;
     const scale = (n: number) =>
       partial ? Math.round((n * total) / elapsed) : null;
+    const w = writers.get(month)!;
+    const mau = w.users.size;
+    const days = windowDays.get(month) ?? 1;
+    const soFar = ratio(w.userDays, days, mau);
     return {
       month,
       joined_earlier: c.earlier,
       joined_this_month: c.now,
       projected_joined_earlier: scale(c.earlier),
       projected_joined_this_month: scale(c.now),
+      mau,
+      dau_avg: Math.round((w.userDays / days) * 10) / 10,
+      dau_mau: pct(soFar),
+      projected_dau_mau: partial ? pct(projectRatio(month, soFar)) : null,
     };
   });
 }

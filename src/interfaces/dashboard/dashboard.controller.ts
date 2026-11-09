@@ -7,7 +7,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { DashboardService } from './dashboard.service';
 import {
   CreateShareTokenDto,
@@ -83,11 +83,45 @@ export class DashboardController {
   // Dev-only: not in the public /api/quiz/ proxy whitelist and not in the admin
   // proxy whitelist, so reachable only via the authenticated /swagger UI (dev role).
   @Get('subscribers')
-  async getSubscribers(): Promise<{
+  @ApiOperation({
+    summary: 'The "Get updates" mailing list (newest first)',
+    description:
+      'Everyone who left an email in a "Get updates" form (the home page and ' +
+      'the quiz). Leave `since` empty for the whole list. To get only the NEW ' +
+      'sign-ups, put the `latest_created_at` value from your previous call ' +
+      'into `since` (a plain date such as 2026-11-01 also works): only people ' +
+      'who signed up after that moment are returned.',
+  })
+  @ApiQuery({
+    name: 'since',
+    required: false,
+    description:
+      'Only sign-ups after this moment — an ISO date or date-time, e.g. ' +
+      '2026-11-01 or 2026-11-01T09:30:00.000Z.',
+    example: '2026-11-01',
+  })
+  async getSubscribers(@Query('since') since?: string): Promise<{
     subscribers: { email: string; name: string | null; created_at: Date }[];
     count: number;
+    // The newest sign-up returned — pass it as `since` next time. Null when
+    // nothing is returned (keep using the value you had).
+    latest_created_at: Date | null;
   }> {
-    const subscribers = await this.dashboardService.getMailingListSubscribers();
-    return { subscribers, count: subscribers.length };
+    let sinceDate: Date | undefined;
+    if (since !== undefined && since !== '') {
+      sinceDate = new Date(since);
+      if (Number.isNaN(sinceDate.getTime())) {
+        throw new BadRequestException(
+          'since must be a date, e.g. 2026-11-01 or 2026-11-01T09:30:00.000Z',
+        );
+      }
+    }
+    const subscribers =
+      await this.dashboardService.getMailingListSubscribers(sinceDate);
+    return {
+      subscribers,
+      count: subscribers.length,
+      latest_created_at: subscribers[0]?.created_at ?? null,
+    };
   }
 }

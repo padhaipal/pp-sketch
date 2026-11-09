@@ -81,11 +81,12 @@ export class TractionService {
     const cutoff = onboardingCutoff();
     const [activityRows, studentRows, teacherRows, mplbRows] =
       await Promise.all([
-        // per IST day ('d') and per (user, IST month) with a day > 5 min
-        // ('m', within the window) from one scan
+        // per IST day ('d'), per (user, IST month) with a day > 5 min ('m')
+        // and per (user, IST day) with any message ('u') — the last two
+        // within the window — from one scan
         db.query<
           Array<{
-            k: 'd' | 'm';
+            k: 'd' | 'm' | 'u';
             date: string | null;
             user_id: string | null;
             users_over_5min: number | null;
@@ -103,7 +104,11 @@ export class TractionService {
            SELECT DISTINCT 'm', to_char(ist_date, 'YYYY-MM'), user_id, NULL::int,
                   NULL::numeric
            FROM per_user_day
-           WHERE active_ms > $1 AND ist_date BETWEEN $2::date AND $3::date`,
+           WHERE active_ms > $1 AND ist_date BETWEEN $2::date AND $3::date
+           UNION ALL
+           SELECT 'u', ist_date::text, user_id, NULL::int, NULL::numeric
+           FROM per_user_day
+           WHERE ist_date BETWEEN $2::date AND $3::date`,
           [FIVE_MIN_MS, from, to],
         ),
         // onboarded students (UserService.isOnboarded): grandfathered by
@@ -176,6 +181,7 @@ export class TractionService {
 
     const activityByDay: TractionInputs['activityByDay'] = [];
     const activeMonths: TractionInputs['activeMonths'] = [];
+    const messageDays: TractionInputs['messageDays'] = [];
     for (const r of activityRows) {
       if (r.k === 'd' && r.date) {
         activityByDay.push({
@@ -185,11 +191,14 @@ export class TractionService {
         });
       } else if (r.k === 'm' && r.date && r.user_id) {
         activeMonths.push({ user_id: r.user_id, month: r.date });
+      } else if (r.k === 'u' && r.date && r.user_id) {
+        messageDays.push({ user_id: r.user_id, date: r.date });
       }
     }
     return {
       activityByDay,
       activeMonths,
+      messageDays,
       students: studentRows
         .filter((r) => r.onboarded_on)
         .map((r) => ({
