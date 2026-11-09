@@ -87,21 +87,16 @@ function makeWorld(due: Record<string, unknown>) {
           recent_words: [],
           unique_in_add_window: 0,
           unique_in_keep_window: 0,
-          unique_in_boost_window: 0,
           recent_row_count: 0,
-          distinct_word_count: 0,
           prev_level: null,
           recent_turns: [],
           lifetime_done_count: 0,
           recent_passage_ids: [],
-          has_aser_placement: rows.some(
-            (r) => r.snapshot.context.aser?.placementLevel != null,
-          ),
         },
       ];
     }
     if (sql.includes("media_details->>'role' = 'passage'")) {
-      // normal selectPassage (first call per selection: exact level)
+      // normal selectPassage (always the student's own level)
       normalSelections.push(params[0] as number);
       return [{ id: P9[0].id, text: P9[0].text, level: params[0] }];
     }

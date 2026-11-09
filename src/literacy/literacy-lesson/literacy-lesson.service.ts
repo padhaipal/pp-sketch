@@ -45,19 +45,12 @@ const SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH = 8;
 const SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME = 15;
 const MIN_UNIQUE_WORDS_FOR_PROGRESS = 3;
 const MIN_WORD_LENGTH_FLOOR = 2;
-const NEW_USER_THRESHOLD = 3;
-// Fast-find accelerator: a student cruising through recent words jumps the
-// cap by +3 instead of +1 so they reach their real level in fewer lessons.
-// A first-try-correct word costs exactly 2 rows (its selection row + its
-// 'done' row — see MIN complete-word:row ratio of 2), so "3 distinct
-// completed words in the last 6 rows" is only reachable when the last three
-// lessons were all completed first try. The 2-row / 4-row conditions catch a
-// perfect first (or first-two) start, when the new-user gate would otherwise
-// pin the student at level 2.
-const LEVEL_BOOST_WINDOW = 6;
-const LEVEL_BOOST_INCREMENT = 3;
-const FIRST_WORD_ROW_COUNT = 2;
-const SECOND_WORD_ROW_COUNT = 4;
+// One step per lesson (2026-11): a new lesson's level is at most this far
+// from the previous lesson's level, up or down. Every progression rule below
+// moves by one; selectNextString also clamps its result to this as a
+// backstop. The only selection not measured against a previous level is the
+// onboarding ASER placement (`forcedLevel`), the student's first lesson.
+const MAX_LEVEL_STEP = 1;
 // Above this lesson level the student gets a reading passage (LLM-generated,
 // selected from media_metadata by media_details.level) instead of single
 // words. Passage levels are computed from word count at seeding time:
@@ -67,15 +60,17 @@ import { PASSAGE_COMPREHENSION_INITIAL_SUFFIX } from '../../media-meta-data/llm-
 const SENTENCE_LEVEL_THRESHOLD = 7;
 // Level 11+ (2026-09): no read-aloud — the lesson opens on the comprehension
 // flow with the passage text inside it. Keyed on the STUDENT's selected
-// level, so a nearest-level fallback passage is still read in the flow.
+// level (the passage is always at that level — see selectPassage).
 const PASSAGE_FLOW_LEVEL_THRESHOLD = 11;
 const MAX_LESSON_LEVEL = 12;
 // Ops lever: MAX_LESSON_LEVEL_CAP (env) lowers the selection ceiling — e.g. 7
-// holds every student in the word band while the passage bank is re-seeded
-// (the 2026-08 TEMP cap of #65/#72, now toggled via Railway instead of a
-// code revert). Unset or outside [MIN_WORD_LENGTH_FLOOR, MAX_LESSON_LEVEL]
-// means no extra cap. Read per selection so specs can toggle it; in prod a
-// Railway variable change redeploys the service.
+// brings every student down into the word band while the passage bank is
+// re-seeded (the 2026-08 TEMP cap of #65/#72, now toggled via Railway instead
+// of a code revert). A student above the cap comes down ONE level per lesson
+// (MAX_LEVEL_STEP), not all at once. Unset or outside
+// [MIN_WORD_LENGTH_FLOOR, MAX_LESSON_LEVEL] means no extra cap. Read per
+// selection so specs can toggle it; in prod a Railway variable change
+// redeploys the service.
 function effectiveMaxLessonLevel(): number {
   const cap = parseInt(process.env.MAX_LESSON_LEVEL_CAP ?? '', 10);
   return cap >= MIN_WORD_LENGTH_FLOOR && cap <= MAX_LESSON_LEVEL
@@ -130,10 +125,11 @@ interface NextString {
   level: number;
   // media_metadata id of the selected reading passage; null for word lessons.
   passageId: string | null;
-  // The passage's own word-count level (media_details.level). Can differ
-  // from `level` when selectPassage fell back to the nearest level; the
-  // lesson machine keys its level-8 skip-comprehension guard on THIS value
-  // because the generation gates are keyed on it too. Null for word lessons.
+  // The passage's own word-count level (media_details.level) — the same as
+  // `level` for a normal lesson, since selectPassage only serves the
+  // student's own level. The lesson machine keys its level-8
+  // skip-comprehension guard on THIS value because the generation gates are
+  // keyed on it too. Null for word lessons.
   passageLevel: number | null;
 }
 
@@ -673,14 +669,13 @@ export class LiteracyLessonService {
     };
   }
 
-  // Random ready reading passage for the level that the student has NEVER
-  // been assigned (`seenPassageIds` = every passage in their history, newest
-  // first); widens to the nearest level (8-12) before ever repeating. Only
-  // when the whole bank is exhausted — no unseen passage at any lesson level
-  // — does it reuse, least-recently-seen first (`reused: true`, so the
-  // caller can log/alert: time to seed more). The explicit
-  // <= MAX_LESSON_LEVEL bound keeps level-13 (250+ word) passages out of
-  // lessons even if a future caller skips the maxLength clamp.
+  // Random ready reading passage AT the student's level that they have
+  // never been assigned (`seenPassageIds` = every passage in their history,
+  // newest first). When they have been assigned every passage at that level,
+  // one of those is served again, least-recently-seen first (`reused: true`,
+  // so the caller can log/alert: time to seed more at that level). A passage
+  // from another level is never served. Null only when the level has no
+  // ready passage at all.
   private async selectPassage(
     level: number,
     seenPassageIds: string[],
@@ -695,46 +690,26 @@ export class LiteracyLessonService {
       text: string;
       level: number;
     }
-    const seen = seenPassageIds.length > 0 ? seenPassageIds : [];
     const select = `SELECT id, text, (media_details->>'level')::int AS level
        FROM media_metadata
        WHERE media_type = 'text' AND status = 'ready' AND rolled_back = false
          AND media_details->>'role' = 'passage'
-         AND (media_details->>'level')::int <= ${MAX_LESSON_LEVEL}`;
-    const exactLevel = `AND (media_details->>'level')::int = $1`;
-    const bandLevels = `AND (media_details->>'level')::int BETWEEN ${SENTENCE_LEVEL_THRESHOLD + 1} AND ${MAX_LESSON_LEVEL}`;
-    const nearestFirst = `ABS((media_details->>'level')::int - $1),`;
-    // 1. Exact level, unseen.
+         AND (media_details->>'level')::int = $1`;
+    // 1. Unseen.
     let rows: PassageRow[] = await this.dataSource.query(
-      `${select} AND NOT (id = ANY($2::uuid[])) ${exactLevel}
+      `${select} AND NOT (id = ANY($2::uuid[]))
        ORDER BY random() LIMIT 1`,
-      [level, seen],
+      [level, seenPassageIds],
     );
-    // 2. Nearest level in the sentence band, unseen.
-    if (rows.length === 0) {
-      rows = await this.dataSource.query(
-        `${select} AND NOT (id = ANY($2::uuid[])) ${bandLevels}
-         ORDER BY ${nearestFirst} random() LIMIT 1`,
-        [level, seen],
-      );
-    }
     if (rows.length > 0) return { ...rows[0], reused: false };
-    if (seen.length === 0) return null; // empty bank, nothing to reuse
-    // 3. Bank exhausted → exact level, least-recently-seen first ($2 is
-    //    newest-first, so the highest array position is the oldest).
+    if (seenPassageIds.length === 0) return null; // nothing to reuse
+    // 2. Level exhausted → least-recently-seen first ($2 is newest-first, so
+    //    the highest array position is the oldest).
     rows = await this.dataSource.query(
-      `${select} AND id = ANY($2::uuid[]) ${exactLevel}
+      `${select} AND id = ANY($2::uuid[])
        ORDER BY array_position($2::uuid[], id) DESC, random() LIMIT 1`,
-      [level, seen],
+      [level, seenPassageIds],
     );
-    // 4. Nearest level, least-recently-seen first.
-    if (rows.length === 0) {
-      rows = await this.dataSource.query(
-        `${select} AND id = ANY($2::uuid[]) ${bandLevels}
-         ORDER BY ${nearestFirst} array_position($2::uuid[], id) DESC, random() LIMIT 1`,
-        [level, seen],
-      );
-    }
     return rows[0] ? { ...rows[0], reused: true } : null;
   }
 
@@ -771,7 +746,8 @@ export class LiteracyLessonService {
   }
 
   // `forcedLevel`: the onboarding ASER test's placement — the lesson right
-  // after the test is selected AT that level, skipping the ratchet.
+  // after the test is selected AT that level, skipping the ratchet and the
+  // one-step clamp (it is the student's first lesson: no previous level).
   private async selectNextString(
     userId: string,
     forcedLevel: number | null = null,
@@ -785,9 +761,7 @@ export class LiteracyLessonService {
           recent_words: string[];
           unique_in_add_window: number;
           unique_in_keep_window: number;
-          unique_in_boost_window: number;
           recent_row_count: number;
-          distinct_word_count: number;
           // Cap of the most recent row that HAS a stored level. Null when
           // every row is null (post-migration cold state) — the caller then
           // derives the base from the most recent word's length.
@@ -798,8 +772,6 @@ export class LiteracyLessonService {
           recent_turns: TurnRow[];
           lifetime_done_count: number;
           recent_passage_ids: string[];
-          // The onboarding ASER test placed this student (aser/aser.ts).
-          has_aser_placement?: boolean;
         }
         const rows: SelectNextWordRow[] = await this.dataSource.query(
           `WITH recent_distinct_words AS (
@@ -833,18 +805,13 @@ export class LiteracyLessonService {
             WHERE s.user_id = $1
             ORDER BY s.letter_id, s.created_at DESC
           ),
-          distinct_word_count AS (
-            SELECT COUNT(DISTINCT word)::int AS count
-            FROM literacy_lesson_states
-            WHERE user_id = $1
-          ),
           recent_passages AS (
             SELECT passage_id, MAX(created_at) AS latest_at
             FROM literacy_lesson_states
             WHERE user_id = $1 AND passage_id IS NOT NULL
             GROUP BY passage_id
             ORDER BY latest_at DESC
-            LIMIT $7
+            LIMIT $6
           )
           SELECT
             COALESCE(
@@ -862,15 +829,10 @@ export class LiteracyLessonService {
               0
             ) AS unique_in_add_window,
             COALESCE(
-              (SELECT COUNT(DISTINCT word)::int FROM recent_rows WHERE rn <= $6 AND is_done),
-              0
-            ) AS unique_in_keep_window,
-            COALESCE(
               (SELECT COUNT(DISTINCT word)::int FROM recent_rows WHERE rn <= $5 AND is_done),
               0
-            ) AS unique_in_boost_window,
+            ) AS unique_in_keep_window,
             COALESCE((SELECT COUNT(*)::int FROM recent_rows), 0) AS recent_row_count,
-            COALESCE((SELECT count FROM distinct_word_count), 0) AS distinct_word_count,
             (SELECT s.level FROM literacy_lesson_states s
               WHERE s.user_id = $1 AND s.level IS NOT NULL
               ORDER BY s.created_at DESC
@@ -884,10 +846,6 @@ export class LiteracyLessonService {
               WHERE user_id = $1 AND snapshot->>'status' = 'done'
                 AND snapshot->'context'->>'aser' IS NULL
             ) AS lifetime_done_count,
-            EXISTS (SELECT 1 FROM literacy_lesson_states
-              WHERE user_id = $1
-                AND snapshot->'context'->'aser'->>'placementLevel' IS NOT NULL
-            ) AS has_aser_placement,
             COALESCE(
               (SELECT json_agg(passage_id ORDER BY latest_at DESC)
                FROM recent_passages),
@@ -898,7 +856,6 @@ export class LiteracyLessonService {
             RECENT_WORDS_TO_EXCLUDE,
             SENTENCE_RECENT_ROWS_WINDOW,
             SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH,
-            LEVEL_BOOST_WINDOW,
             SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME,
             RECENT_PASSAGES_TO_EXCLUDE,
           ],
@@ -909,9 +866,7 @@ export class LiteracyLessonService {
         const recentWords = data.recent_words;
         const uniqueInAddWindow = Number(data.unique_in_add_window);
         const uniqueInKeepWindow = Number(data.unique_in_keep_window);
-        const uniqueInBoostWindow = Number(data.unique_in_boost_window);
         const recentRowCount = Number(data.recent_row_count);
-        const distinctWordCount = Number(data.distinct_word_count);
         // Ratchet base: the last stored cap, or (cold state) the most recent
         // word's own level. recentWords[0] is the most recent row's word
         // because recent_distinct_words orders by MAX(created_at) DESC.
@@ -935,9 +890,10 @@ export class LiteracyLessonService {
         // Determine max lesson level. The base is the stored cap (ratchet),
         // falling back to the most recent word's own level only when no row
         // has a stored level yet (post-migration cold state). recentWords is
-        // empty only at a user's very first selection, where the accelerator
-        // can't fire and the new-user gate forces the floor — so `base` is
-        // never read against an empty history.
+        // empty only at a user's very first selection: there is no previous
+        // level then, and that lesson is the onboarding ASER placement
+        // (`forcedLevel`) or, without one, the floor clamp below.
+        const hasPreviousLevel = prevLevel !== null || recentWords.length > 0;
         const base = prevLevel ?? lessonLevel(recentWords[0] ?? '');
 
         let maxLength: number;
@@ -977,38 +933,12 @@ export class LiteracyLessonService {
             signal.lowCompletionDecrement,
           );
         } else {
-          // Word section (level ≤ 7): fast-find accelerator (+3), checked
-          // BEFORE the new-user gate so a strong start escapes the level-2
-          // floor: three distinct completed words in the last 6 rows, OR a
-          // perfect first word (1 done, 2 rows ever), OR a perfect first two
-          // words (2 done, 4 rows ever).
-          const accelerate =
-            uniqueInBoostWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS ||
-            (uniqueInKeepWindow >= 1 &&
-              recentRowCount === FIRST_WORD_ROW_COUNT) ||
-            (uniqueInKeepWindow >= 2 &&
-              recentRowCount === SECOND_WORD_ROW_COUNT);
-
-          if (accelerate) {
-            maxLength = base + LEVEL_BOOST_INCREMENT;
-          } else if (
-            data.has_aser_placement === true &&
-            recentRowCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH
-          ) {
-            // Placed by the onboarding ASER test: too little lesson history
-            // to judge yet, so hold the placement instead of the new-user
-            // floor (ASER rows are not in recent_rows).
+          // Word section (level ≤ 7): one step up, hold, or one step down.
+          if (recentRowCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH) {
+            // Too little lesson history to judge yet (ASER rows are not in
+            // recent_rows): hold the level — for a new student that is the
+            // onboarding ASER placement.
             maxLength = base;
-          } else if (
-            distinctWordCount < NEW_USER_THRESHOLD ||
-            recentRowCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH
-          ) {
-            maxLength = MIN_WORD_LENGTH_FLOOR;
-          } else if (recentWords.length === 0) {
-            this.logger.warn(
-              `selectNextString: distinct_word_count=${distinctWordCount} but recent_words is empty for user ${userId}; falling back to min word length`,
-            );
-            maxLength = MIN_WORD_LENGTH_FLOOR;
           } else if (uniqueInAddWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
             maxLength = base + 1;
           } else if (uniqueInKeepWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
@@ -1016,12 +946,6 @@ export class LiteracyLessonService {
           } else {
             maxLength = base - 1;
           }
-          // Entering the sentence band always lands on level 8: the
-          // accelerator must never skip the short-passage levels
-          // (7 + 3 → 8, not 10; 6 + 3 → 8, not 9). Sentence-band
-          // progression (base ≥ 8, the branch above) is untouched.
-          maxLength = Math.min(maxLength, SENTENCE_LEVEL_THRESHOLD + 1);
-          span.setAttribute('pp.lesson.word.accelerated', accelerate);
         }
         if (forcedLevel != null) {
           maxLength = forcedLevel;
@@ -1030,13 +954,26 @@ export class LiteracyLessonService {
         maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR);
         maxLength = Math.min(maxLength, MAX_LESSON_LEVEL);
         maxLength = Math.min(maxLength, effectiveMaxLessonLevel());
+        if (forcedLevel == null && hasPreviousLevel) {
+          // One step per lesson, applied last so nothing above — the env cap
+          // included — moves a student more than MAX_LEVEL_STEP in a lesson.
+          maxLength = Math.min(
+            Math.max(maxLength, base - MAX_LEVEL_STEP),
+            base + MAX_LEVEL_STEP,
+          );
+        }
+        // The level recorded on the lesson row. It stays the student's level
+        // even when a word lesson has to stand in for a missing passage.
+        const level = maxLength;
         span.setAttribute('pp.lesson.word.max_length', maxLength);
         span.setAttribute('pp.lesson.word.prev_level', prevLevel ?? -1);
 
         // Passage lesson: a random ready reading passage at the student's
-        // level (media_details.level, set from word count at seeding time),
-        // excluding recently-lessoned passages. Falls back to the nearest
-        // level, then to a level-7 word lesson when no passage exists at all.
+        // level (media_details.level, set from word count at seeding time)
+        // that they have not been assigned; once they have been assigned all
+        // of them, the least recently seen one again. Never a passage from
+        // another level. When the level has no passage at all, the student
+        // gets a level-7 word lesson and KEEPS their level.
         if (maxLength > SENTENCE_LEVEL_THRESHOLD) {
           const passage = await this.selectPassage(
             maxLength,
@@ -1049,10 +986,10 @@ export class LiteracyLessonService {
             span.setAttribute('pp.lesson.word.count', sentence.length);
             span.setAttribute('pp.lesson.passage.reused', passage.reused);
             if (passage.reused) {
-              // Every passage at every lesson level has been assigned to this
-              // student already — seed more; least-recently-seen is served.
+              // Every passage at this level has been assigned to this student
+              // already — seed more; least-recently-seen is served.
               this.logger.warn(
-                `selectNextString: passage bank exhausted at level ${String(maxLength)} — reusing ${passage.id} (user on the span)`,
+                `selectNextString: level ${String(maxLength)} passages exhausted — reusing ${passage.id} (user on the span)`,
               );
             }
             this.logger.log(
@@ -1061,13 +998,13 @@ export class LiteracyLessonService {
             return {
               word: '',
               sentence,
-              level: maxLength,
+              level,
               passageId: passage.id,
               passageLevel: passage.level,
             };
           }
           this.logger.warn(
-            `selectNextString: no ready reading passage for level ${maxLength} — falling back to a word lesson at level ${SENTENCE_LEVEL_THRESHOLD}`,
+            `selectNextString: no ready reading passage for level ${maxLength} — serving a level-${SENTENCE_LEVEL_THRESHOLD} word lesson, level kept`,
           );
           span.setAttribute(
             'pp.lesson.word.selection',
@@ -1146,7 +1083,7 @@ export class LiteracyLessonService {
           return {
             word: fallbackWord,
             sentence: null,
-            level: maxLength,
+            level,
             passageId: null,
             passageLevel: null,
           };
@@ -1194,7 +1131,7 @@ export class LiteracyLessonService {
         return {
           word: selected,
           sentence: null,
-          level: maxLength,
+          level,
           passageId: null,
           passageLevel: null,
         };

@@ -152,7 +152,6 @@ describe('LiteracyLessonService.processAnswer — start fresh', () => {
           unique_in_add_window: 0,
           unique_in_keep_window: 0,
           recent_row_count: 0,
-          distinct_word_count: 0,
         },
       ])
       // INSERT
@@ -187,7 +186,6 @@ describe('LiteracyLessonService.processAnswer — start fresh', () => {
           unique_in_add_window: 0,
           unique_in_keep_window: 0,
           recent_row_count: 0,
-          distinct_word_count: 0,
         },
       ])
       .mockResolvedValueOnce([{ id: 'lls-1' }]);
@@ -217,7 +215,6 @@ describe('LiteracyLessonService.processAnswer — start fresh', () => {
           unique_in_add_window: 0,
           unique_in_keep_window: 0,
           recent_row_count: 0,
-          distinct_word_count: 0,
         },
       ])
       .mockResolvedValueOnce([{ id: 'lls-1' }]);
@@ -244,7 +241,6 @@ describe('LiteracyLessonService.processAnswer — start fresh', () => {
           unique_in_add_window: 0,
           unique_in_keep_window: 0,
           recent_row_count: 0,
-          distinct_word_count: 0,
         },
       ])
       .mockResolvedValueOnce([{ id: 'lls-1' }]);
@@ -394,7 +390,6 @@ describe('LiteracyLessonService.processAnswer — rolled-back media', () => {
           unique_in_add_window: 0,
           unique_in_keep_window: 0,
           recent_row_count: 0,
-          distinct_word_count: 0,
         },
       ])
       .mockResolvedValueOnce([]); // INSERT — zero rows (media rolled back)
@@ -442,7 +437,6 @@ describe('LiteracyLessonService.processAnswer — score recording', () => {
           unique_in_add_window: 0,
           unique_in_keep_window: 0,
           recent_row_count: 0,
-          distinct_word_count: 0,
         },
       ])
       .mockResolvedValueOnce([{ id: 'lls-1' }]);
@@ -542,7 +536,6 @@ describe('LiteracyLessonService.processAnswer — isComplete flag', () => {
           unique_in_add_window: 0,
           unique_in_keep_window: 0,
           recent_row_count: 0,
-          distinct_word_count: 0,
         },
       ])
       .mockResolvedValueOnce([{ id: 'lls-1' }]);
@@ -615,14 +608,13 @@ describe('LiteracyLessonService — selectNextWord branches (via processAnswer f
     return makeService({ repo, dsQuery });
   }
 
-  it('new user (distinct_word_count < 3) → maxLength floor of 2 — only short words possible', async () => {
+  it('first selection with no history and no placement → floor of 2 — only short words possible', async () => {
     const { svc } = setupSelect({
       letter_scores: [],
       recent_words: [],
       unique_in_add_window: 0,
       unique_in_keep_window: 0,
       recent_row_count: 0,
-      distinct_word_count: 0,
     });
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     // The actor was created with a 2-char word from the test list.
@@ -638,7 +630,6 @@ describe('LiteracyLessonService — selectNextWord branches (via processAnswer f
       unique_in_add_window: 3,
       unique_in_keep_window: 3,
       recent_row_count: 8,
-      distinct_word_count: 5,
     });
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     const createActorMock = jest.requireMock('xstate').createActor as jest.Mock;
@@ -653,7 +644,6 @@ describe('LiteracyLessonService — selectNextWord branches (via processAnswer f
       unique_in_add_window: 1,
       unique_in_keep_window: 3,
       recent_row_count: 8,
-      distinct_word_count: 5,
     });
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     const createActorMock = jest.requireMock('xstate').createActor as jest.Mock;
@@ -668,7 +658,6 @@ describe('LiteracyLessonService — selectNextWord branches (via processAnswer f
       unique_in_add_window: 0,
       unique_in_keep_window: 0,
       recent_row_count: 8,
-      distinct_word_count: 5,
     });
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     const createActorMock = jest.requireMock('xstate').createActor as jest.Mock;
@@ -677,16 +666,15 @@ describe('LiteracyLessonService — selectNextWord branches (via processAnswer f
     expect([...(input.word as string)].length).toBeLessThanOrEqual(2);
   });
 
-  it('defensive: distinct_word_count >= 3 but recent_words empty → falls back to floor + WARN', async () => {
+  it('defensive: rows but recent_words empty (no previous level) → floor, no throw', async () => {
     const { svc } = setupSelect({
       letter_scores: [],
       recent_words: [],
       unique_in_add_window: 5,
       unique_in_keep_window: 5,
       recent_row_count: 10,
-      distinct_word_count: 10,
     });
-    // No throw — service warns and falls back.
+    // No throw — there is no previous level, so the floor applies.
     await expect(
       svc.processAnswer({ user, user_message_id: 'mm-1' }),
     ).resolves.toBeDefined();
@@ -710,7 +698,6 @@ describe('LiteracyLessonService — selectNextWord branches (via processAnswer f
       unique_in_add_window: 0,
       unique_in_keep_window: 0,
       recent_row_count: 0,
-      distinct_word_count: 0,
     });
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     expect(mockSpanSetAttribute.mock.calls).toContainEqual([
@@ -734,7 +721,6 @@ describe('LiteracyLessonService — selectNextWord branches (via processAnswer f
       unique_in_add_window: 0,
       unique_in_keep_window: 0,
       recent_row_count: 0,
-      distinct_word_count: 0,
     });
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     expect(mockSpanSetAttribute.mock.calls).toContainEqual([
@@ -757,7 +743,6 @@ describe('LiteracyLessonService — selectNextWord branches (via processAnswer f
       unique_in_add_window: 0,
       unique_in_keep_window: 0,
       recent_row_count: 0,
-      distinct_word_count: 0,
     });
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     const createActorMock = jest.requireMock('xstate').createActor as jest.Mock;
@@ -793,9 +778,7 @@ function freshRow(over: Record<string, unknown> = {}): Record<string, unknown> {
     recent_words: [],
     unique_in_add_window: 0,
     unique_in_keep_window: 0,
-    unique_in_boost_window: 0,
     recent_row_count: 0,
-    distinct_word_count: 0,
     prev_level: null,
     recent_turns: [],
     lifetime_done_count: 0,
@@ -827,7 +810,7 @@ describe('LiteracyLessonService.processAnswer — lesson-path age boundaries', (
     const { nowSpy, repo } = stateAt(900_000);
     const dsQuery = jest
       .fn()
-      .mockResolvedValueOnce([freshRow({ distinct_word_count: 0 })]) // selectNextWord (startFresh)
+      .mockResolvedValueOnce([freshRow()]) // selectNextWord (startFresh)
       .mockResolvedValueOnce([{ id: 'lls-1' }]);
     mockActorGetSnapshot.mockReturnValue(happySnapshot());
     const { svc } = makeService({ repo, dsQuery });
@@ -1057,36 +1040,22 @@ describe('LiteracyLessonService.processAnswer — persisted snapshot fields', ()
 describe('LiteracyLessonService.selectNextWord — exact length thresholds', () => {
   // TEST_WORD_LIST grapheme lengths: अब=2, कमल=3, पानी/खाना/सूरज=4, दीवार/किताब=5.
 
-  it('new user (distinct_word_count < 3) floors maxLength to 2 → only अब qualifies', async () => {
+  it('thin history (< 8 rows) HOLDS the level — no drop to the floor of 2', async () => {
     const word = await selectedWord(
       freshRow({
-        distinct_word_count: 2,
-        recent_row_count: 20,
-        recent_words: ['कमल'],
-        unique_in_add_window: 5,
-        letter_scores: seed(['स', 'ू', 'र', 'ज'], -5), // सूरज would win if it qualified
-      }),
-    );
-    expect(word).toBe('अब');
-  });
-
-  it('distinct_word_count exactly 3 does NOT floor (kills < → <=) → a length-4 word can win', async () => {
-    const word = await selectedWord(
-      freshRow({
-        distinct_word_count: 3,
-        recent_row_count: 20,
-        recent_words: ['कमल'], // mostRecentLen 3, +1 progression → maxLength 4
-        unique_in_add_window: 5,
+        recent_row_count: 7,
+        recent_words: ['पानी'], // level 4 held → a length-4 word still qualifies
+        unique_in_add_window: 0,
+        unique_in_keep_window: 0,
         letter_scores: seed(['स', 'ू', 'र', 'ज'], -5),
       }),
     );
     expect(word).toBe('सूरज');
   });
 
-  it('recent_row_count exactly 8 does NOT floor (kills < → <=) → length-4 word can win', async () => {
+  it('recent_row_count exactly 8 is enough history to step up (kills < → <=) → length-4 word can win', async () => {
     const word = await selectedWord(
       freshRow({
-        distinct_word_count: 20,
         recent_row_count: 8,
         recent_words: ['कमल'],
         unique_in_add_window: 5,
@@ -1099,7 +1068,6 @@ describe('LiteracyLessonService.selectNextWord — exact length thresholds', () 
   it('progression: uniqueInAddWindow >= 3 → maxLength = mostRecentLen + 1 (kills +1 → -1)', async () => {
     const word = await selectedWord(
       freshRow({
-        distinct_word_count: 20,
         recent_row_count: 20,
         recent_words: ['कमल'], // len 3 → +1 → 4
         unique_in_add_window: 3,
@@ -1113,7 +1081,6 @@ describe('LiteracyLessonService.selectNextWord — exact length thresholds', () 
   it('plateau: uniqueInAddWindow < 3 but uniqueInKeepWindow >= 3 → maxLength = mostRecentLen', async () => {
     const word = await selectedWord(
       freshRow({
-        distinct_word_count: 20,
         recent_row_count: 20,
         recent_words: ['पानी'], // len 4 → plateau → maxLength 4
         unique_in_add_window: 2,
@@ -1127,7 +1094,6 @@ describe('LiteracyLessonService.selectNextWord — exact length thresholds', () 
   it('regression: neither window threshold met → maxLength = mostRecentLen - 1', async () => {
     const word = await selectedWord(
       freshRow({
-        distinct_word_count: 20,
         recent_row_count: 20,
         recent_words: ['पानी'], // len 4 → -1 → maxLength 3
         unique_in_add_window: 0,
@@ -1147,7 +1113,6 @@ describe('LiteracyLessonService.selectNextWord — scoring + exclusion + tie-bre
   it('excludes recently-seen words even when they have the minimum score (kills !has → has)', async () => {
     const word = await selectedWord(
       freshRow({
-        distinct_word_count: 20,
         recent_row_count: 20,
         recent_words: ['कमल'], // कमल recent → excluded; mostRecentLen 3, +1 → maxLength 4
         unique_in_add_window: 5,
@@ -1172,7 +1137,6 @@ describe('LiteracyLessonService.selectNextWord — scoring + exclusion + tie-bre
     //   the longest 0-word (सूरज) wins instead.
     const word = await selectedWord(
       freshRow({
-        distinct_word_count: 20,
         recent_row_count: 20,
         recent_words: ['खाना'], // len 4 → plateau → maxLength 4 (len-5 words excluded)
         unique_in_add_window: 2,
@@ -1190,7 +1154,6 @@ describe('LiteracyLessonService.selectNextWord — scoring + exclusion + tie-bre
     // Only seed scores → no reviewed → baseline 0 → कमल = -3 (min).
     const word = await selectedWord(
       freshRow({
-        distinct_word_count: 20,
         recent_row_count: 20,
         recent_words: ['खाना'],
         unique_in_add_window: 5,
@@ -1203,7 +1166,6 @@ describe('LiteracyLessonService.selectNextWord — scoring + exclusion + tie-bre
   it('falls back to a random two-letter word when every candidate is recently seen', async () => {
     const word = await selectedWord(
       freshRow({
-        distinct_word_count: 20,
         recent_row_count: 20,
         recent_words: [...TEST_WORD_LIST], // everything excluded → empty candidates
         unique_in_add_window: 5,
@@ -1219,7 +1181,6 @@ describe('LiteracyLessonService.selectNextWord — scoring + exclusion + tie-bre
     const rndSpy = jest.spyOn(Math, 'random').mockReturnValue(0.6);
     const word = await selectedWord(
       freshRow({
-        distinct_word_count: 20,
         recent_row_count: 20,
         recent_words: ['दीवार'], // mostRecentLen 5, +1 → maxLength 6 (all qualify)
         unique_in_add_window: 5,
@@ -1310,7 +1271,6 @@ describe('LiteracyLessonService — span telemetry', () => {
       unique_in_add_window: 3,
       unique_in_keep_window: 5,
       recent_row_count: 20,
-      distinct_word_count: 20,
     });
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     const calls = mockSpanSetAttribute.mock.calls;
@@ -1461,7 +1421,7 @@ describe('LiteracyLessonService — log messages', () => {
       .spyOn(Logger.prototype, 'warn')
       .mockImplementation(() => undefined);
     // floor maxLength 2 → only अब; अ/ब are unscored → 2 unknown graphemes.
-    const { svc } = freshStart(freshRow({ distinct_word_count: 0 }));
+    const { svc } = freshStart(freshRow());
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('unknown grapheme(s) for user u1'),
@@ -1476,7 +1436,6 @@ describe('LiteracyLessonService — log messages', () => {
     // floor maxLength 2 → only अब; provide scores for both अ and ब.
     const { svc } = freshStart(
       freshRow({
-        distinct_word_count: 0,
         letter_scores: seed(['अ', 'ब'], 0),
       }),
     );
@@ -1488,33 +1447,11 @@ describe('LiteracyLessonService — log messages', () => {
     warnSpy.mockRestore();
   });
 
-  it('warns when distinct_word_count >= 3 but recent_words is empty', async () => {
-    const warnSpy = jest
-      .spyOn(Logger.prototype, 'warn')
-      .mockImplementation(() => undefined);
-    const { svc } = freshStart(
-      freshRow({
-        distinct_word_count: 10,
-        recent_row_count: 10,
-        recent_words: [],
-        unique_in_add_window: 5,
-        unique_in_keep_window: 5,
-      }),
-    );
-    await svc.processAnswer({ user, user_message_id: 'mm-1' });
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'distinct_word_count=10 but recent_words is empty for user u1',
-      ),
-    );
-    warnSpy.mockRestore();
-  });
-
   it('logs the selection summary on a successful pick', async () => {
     const logSpy = jest
       .spyOn(Logger.prototype, 'log')
       .mockImplementation(() => undefined);
-    const { svc } = freshStart(freshRow({ distinct_word_count: 0 }));
+    const { svc } = freshStart(freshRow());
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining('selectNextString: selected=अब'),
@@ -1528,7 +1465,6 @@ describe('LiteracyLessonService — log messages', () => {
       .mockImplementation(() => undefined);
     const { svc } = freshStart(
       freshRow({
-        distinct_word_count: 20,
         recent_row_count: 20,
         recent_words: [...TEST_WORD_LIST], // everything excluded
         unique_in_add_window: 5,
@@ -1568,8 +1504,8 @@ describe('LiteracyLessonService — exact SQL statements', () => {
 });
 
 describe('LiteracyLessonService — maxLength span value at thresholds', () => {
-  it('new user floors maxLength to exactly 2', async () => {
-    const { svc } = freshStart(freshRow({ distinct_word_count: 2 }));
+  it('no history and no placement → maxLength is exactly the floor of 2', async () => {
+    const { svc } = freshStart(freshRow());
     await svc.processAnswer({ user, user_message_id: 'mm-1' });
     expect(mockSpanSetAttribute.mock.calls).toContainEqual([
       'pp.lesson.word.max_length',
@@ -1577,10 +1513,9 @@ describe('LiteracyLessonService — maxLength span value at thresholds', () => {
     ]);
   });
 
-  it('defensive (recent_words empty) floors maxLength to exactly 2', async () => {
+  it('defensive (rows but recent_words empty) → maxLength is exactly the floor of 2', async () => {
     const { svc } = freshStart(
       freshRow({
-        distinct_word_count: 10,
         recent_row_count: 10,
         recent_words: [],
         unique_in_add_window: 5,
@@ -1597,7 +1532,6 @@ describe('LiteracyLessonService — maxLength span value at thresholds', () => {
   it('regression path sets maxLength to mostRecentLen - 1 (kills the else-if → true)', async () => {
     const { svc } = freshStart(
       freshRow({
-        distinct_word_count: 20,
         recent_row_count: 20,
         recent_words: ['पानी'], // len 4 → regression → maxLength 3
         unique_in_add_window: 0,
@@ -1670,7 +1604,6 @@ describe('LiteracyLessonService — reviewed-vs-baseline scoring sign (L403/L406
     // seed-branch → true (treat all as raw): कमल = 4.2, पानी = 4.1 → zero-word.
     const word = await selectedWord(
       freshRow({
-        distinct_word_count: 20,
         recent_row_count: 20,
         recent_words: ['खाना'], // len 4 → plateau → maxLength 4
         unique_in_add_window: 2,
@@ -1693,7 +1626,6 @@ describe('LiteracyLessonService — reviewed-vs-baseline scoring sign (L403/L406
     // कमल → 3×(1-2.1) = -3.3 < -3.1 → कमल would win instead.
     const word = await selectedWord(
       freshRow({
-        distinct_word_count: 20,
         recent_row_count: 20,
         recent_words: ['खाना'], // len 4 → plateau → maxLength 4
         unique_in_add_window: 2,
@@ -1738,7 +1670,6 @@ describe('LiteracyLessonService — selectNextWord SQL (timeout progression regr
           unique_in_add_window: 0,
           unique_in_keep_window: 0,
           recent_row_count: 0,
-          distinct_word_count: 0,
         },
       ])
       .mockResolvedValueOnce([{ id: 'lls-1' }]);
@@ -1763,11 +1694,11 @@ describe('LiteracyLessonService — selectNextWord SQL (timeout progression regr
   it('keep window counts only completed words', async () => {
     const sql = await capturedSql();
     expect(sql).toContain(
-      'COUNT(DISTINCT word)::int FROM recent_rows WHERE rn <= $6 AND is_done',
+      'COUNT(DISTINCT word)::int FROM recent_rows WHERE rn <= $5 AND is_done',
     );
   });
 
-  it('recent_row_count still counts ALL rows — the new-user gate must see timed-out attempts', async () => {
+  it('recent_row_count still counts ALL rows — the thin-history hold must see timed-out attempts', async () => {
     const sql = await capturedSql();
     expect(sql).toContain(
       'COUNT(*)::int FROM recent_rows), 0) AS recent_row_count',
@@ -1803,7 +1734,6 @@ describe('LiteracyLessonService — word-length decisions on timeout-shaped hist
     // and promoted the user; post-fix the query returns 0 completed words.
     await selectedWord(
       freshRow({
-        distinct_word_count: 5,
         recent_row_count: 8,
         recent_words: ['कमल'], // len 3
         unique_in_add_window: 0,
@@ -1816,7 +1746,6 @@ describe('LiteracyLessonService — word-length decisions on timeout-shaped hist
   it('serial timeouts at the floor: regression never goes below 2', async () => {
     await selectedWord(
       freshRow({
-        distinct_word_count: 5,
         recent_row_count: 8,
         recent_words: ['अब'], // len 2, already at floor
         unique_in_add_window: 0,
@@ -1829,7 +1758,6 @@ describe('LiteracyLessonService — word-length decisions on timeout-shaped hist
   it('3 completed words inside the add window → length increases by exactly 1', async () => {
     await selectedWord(
       freshRow({
-        distinct_word_count: 5,
         recent_row_count: 8,
         recent_words: ['कमल'], // len 3
         unique_in_add_window: 3,
@@ -1842,7 +1770,6 @@ describe('LiteracyLessonService — word-length decisions on timeout-shaped hist
   it('completions only in the keep window (recent timeouts after older completions) → length holds', async () => {
     await selectedWord(
       freshRow({
-        distinct_word_count: 5,
         recent_row_count: 15,
         recent_words: ['कमल'], // len 3
         unique_in_add_window: 1,
@@ -1889,7 +1816,6 @@ async function freshSentenceStart(
 // Progression prerequisites so the level derives from recent_words[0].
 const progressed = (over: Record<string, unknown>) =>
   freshRow({
-    distinct_word_count: 10,
     recent_row_count: 15,
     unique_in_add_window: 0,
     unique_in_keep_window: 3, // keep the current level
@@ -1898,7 +1824,7 @@ const progressed = (over: Record<string, unknown>) =>
 
 // Level ≥ 8 selects a reading passage from media_metadata (2026-07). The
 // passage pool is mocked via routedDsQuery; an empty pool exercises the
-// word-lesson fallback.
+// word-lesson stand-in (the student keeps their level).
 describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 8)', () => {
   it('a would-be level 8 (7-grapheme word + progression) becomes a passage lesson', async () => {
     const { input, dsQuery } = await freshSentenceStart(
@@ -1946,14 +1872,15 @@ describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 
     expect(params[7]).toBe('passage-1'); // passage_id
   });
 
-  it('falls back to a level-7 word lesson when no passage exists at all', async () => {
-    const { input } = await freshSentenceStart(
+  it('serves a level-7 word lesson when the level has no passage at all, and KEEPS the level', async () => {
+    const { input, dsQuery } = await freshSentenceStart(
       progressed({ recent_words: ['चौकीदार'], unique_in_add_window: 3 }),
       happySnapshot(),
       [], // empty passage pool
     );
     expect(input.sentence).toBeUndefined();
     expect(TEST_WORD_LIST).toContain(input.word);
+    expect(insertParamsOf(dsQuery)[6]).toBe(8); // recorded level: still 8
     expect(mockSpanSetAttribute.mock.calls).toContainEqual([
       'pp.lesson.word.selection',
       'passage-missing-word-fallback',
@@ -1975,9 +1902,9 @@ describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 
     expect(passageCall[1]).toEqual([8, ['old-p1', 'old-p2']]);
   });
 
-  // ── selectPassage ladder (2026-09: never twice while anything is unseen) ──
+  // ── selectPassage (2026-11: the student's own level only) ──
   // Query shapes: unseen = `NOT (id = ANY($2` ; reuse = `array_position` ;
-  // exact level = `= $1` ; nearest level = `BETWEEN`.
+  // both pin the level with `= $1`. Nothing ranges over other levels.
   const isUnseen = (sql: string) => sql.includes('NOT (id = ANY($2');
   const isReuse = (sql: string) => sql.includes('array_position');
   const isExact = (sql: string) =>
@@ -1993,18 +1920,17 @@ describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 
       recent_passage_ids: ['newest-p', 'older-p', 'oldest-p'],
     });
 
-  it('never repeats while an unseen passage exists at ANOTHER level: exact level exhausted → nearest unseen, no reuse query', async () => {
+  it('an unseen passage at the level is served; no reuse query runs', async () => {
     const { input, dsQuery } = await freshSentenceStart(
       heldAt8(),
       happySnapshot(),
       (sql) => {
-        if (isUnseen(sql) && isExact(sql)) return []; // level 8 fully seen
         if (isUnseen(sql))
-          return [{ id: 'fresh-l9', text: 'नया वाक्य यहाँ', level: 9 }];
+          return [{ id: 'fresh-l8', text: 'नया वाक्य यहाँ', level: 8 }];
         throw new Error(`reuse query must not run: ${sql.slice(0, 60)}`);
       },
     );
-    expect(input.passageId).toBe('fresh-l9');
+    expect(input.passageId).toBe('fresh-l8');
     expect(passageSql(dsQuery).some(isReuse)).toBe(false);
     expect(mockSpanSetAttribute.mock.calls).toContainEqual([
       'pp.lesson.passage.reused',
@@ -2012,15 +1938,15 @@ describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 
     ]);
   });
 
-  it('bank exhausted (nothing unseen at any level) → reuses the LEAST-recently-seen passage at the exact level and flags it', async () => {
+  it('level exhausted → reuses the LEAST-recently-seen passage at the SAME level and flags it; no other level is ever queried', async () => {
     const { input, dsQuery } = await freshSentenceStart(
       heldAt8(),
       happySnapshot(),
       (sql, params) => {
-        if (isUnseen(sql)) return [];
+        if (isUnseen(sql)) return []; // every level-8 passage already seen
         // the reuse query asks Postgres for the oldest by array position; the
         // fake honours that by answering with the last id of the seen list
-        if (isReuse(sql) && isExact(sql)) {
+        if (isReuse(sql)) {
           const seen = params[1] as string[];
           return [
             { id: seen[seen.length - 1], text: 'पुराना वाक्य', level: 8 },
@@ -2031,35 +1957,54 @@ describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 
     );
     expect(input.passageId).toBe('oldest-p');
     const sqls = passageSql(dsQuery);
-    // ladder order: unseen exact → unseen nearest → reuse exact
+    // order: unseen at the level → reuse at the level. Nothing else.
     expect(sqls.map((s) => [isUnseen(s), isReuse(s), isExact(s)])).toEqual([
       [true, false, true],
-      [true, false, false],
       [false, true, true],
     ]);
-    expect(sqls[2]).toContain('ORDER BY array_position($2::uuid[], id) DESC');
+    expect(sqls.some((s) => s.includes('BETWEEN'))).toBe(false);
+    expect(sqls[1]).toContain('ORDER BY array_position($2::uuid[], id) DESC');
+    const passageParams = dsQuery.mock.calls
+      .filter((c) =>
+        (c[0] as string).includes("media_details->>'role' = 'passage'"),
+      )
+      .map((c) => (c[1] as unknown[])[0]);
+    expect(passageParams).toEqual([8, 8]);
     expect(mockSpanSetAttribute.mock.calls).toContainEqual([
       'pp.lesson.passage.reused',
       true,
     ]);
+    expect(insertParamsOf(dsQuery)[6]).toBe(8);
   });
 
-  it('bank exhausted and nothing at the exact level → reuses the nearest level, least-recently-seen first', async () => {
+  it('warns that the level is exhausted when a passage is reused', async () => {
+    const warnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    await freshSentenceStart(heldAt8(), happySnapshot(), (sql) =>
+      isReuse(sql) ? [{ id: 'oldest-p', text: 'पुराना वाक्य', level: 8 }] : [],
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('level 8 passages exhausted — reusing oldest-p'),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('a level with NO passage (history is all from other levels) → word lesson, level kept, nothing borrowed', async () => {
     const { input, dsQuery } = await freshSentenceStart(
       heldAt8(),
       happySnapshot(),
-      (sql) => {
-        if (isUnseen(sql)) return [];
-        if (isReuse(sql) && isExact(sql)) return [];
-        if (isReuse(sql))
-          return [{ id: 'older-p', text: 'पास का वाक्य', level: 9 }];
-        return [];
-      },
+      () => [],
     );
-    expect(input.passageId).toBe('older-p');
-    const last = passageSql(dsQuery).at(-1)!;
-    expect(last).toContain('BETWEEN');
-    expect(last).toContain('array_position($2::uuid[], id) DESC');
+    expect(input.passageId).toBeUndefined();
+    expect(input.sentence).toBeUndefined();
+    expect(passageSql(dsQuery)).toHaveLength(2); // unseen, reuse — both level 8
+    expect(passageSql(dsQuery).every(isExact)).toBe(true);
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.word.selection',
+      'passage-missing-word-fallback',
+    ]);
+    expect(insertParamsOf(dsQuery)[6]).toBe(8);
   });
 
   it('a student with no passage history and an empty bank gets the word fallback, never a reuse query', async () => {
@@ -2405,30 +2350,25 @@ describe('LiteracyLessonService — sentence observability (kills literal mutant
   });
 });
 
-// ─── persisted difficulty cap (level) + fast-find accelerator ────────────────
+// ─── persisted difficulty cap (level), one step per lesson ───────────────────
 
-// Runs one fresh selection with `over` merged into a non-gated base fixture
-// (distinct/rows high enough to skip the new-user gate unless the test lowers
-// them) and returns the computed cap (via the max_length span) and the level
-// written to the INSERT (param index 6).
+// Runs one fresh selection with `over` merged into a base fixture with enough
+// rows to skip the thin-history hold (unless the test lowers them) and
+// returns the computed cap (via the max_length span) and the level written to
+// the INSERT (param index 6).
 async function runLevel(
   over: Record<string, unknown>,
-): Promise<{ maxLength: number; levelParam: unknown; accelerated: unknown }> {
+): Promise<{ maxLength: number; levelParam: unknown }> {
+  mockSpanSetAttribute.mockClear();
   const { svc, dsQuery } = freshStart(
-    freshRow({ recent_row_count: 20, distinct_word_count: 20, ...over }),
+    freshRow({ recent_row_count: 20, ...over }),
   );
   await svc.processAnswer({ user, user_message_id: 'mm-1' });
   const calls = mockSpanSetAttribute.mock.calls;
   const maxLength = calls.find((c) => c[0] === 'pp.lesson.word.max_length')![1];
-  // Absent on the sentence-section branch (level ≥ 8), which has no
-  // accelerator.
-  const accelerated = calls.find(
-    (c) => c[0] === 'pp.lesson.word.accelerated',
-  )?.[1];
   return {
     maxLength: maxLength as number,
     levelParam: insertParamsOf(dsQuery)[6],
-    accelerated,
   };
 }
 
@@ -2515,13 +2455,17 @@ describe('LiteracyLessonService — difficulty cap ratchet', () => {
     expect(maxLength).toBe(2);
   });
 
-  it('emits prev_level and accelerated span attributes', async () => {
-    const { accelerated } = await runLevel({
+  it('emits the prev_level span attribute (and no accelerated attribute)', async () => {
+    await runLevel({
       prev_level: 6,
       recent_words: ['अब'],
       unique_in_keep_window: 3,
     });
-    expect(accelerated).toBe(false);
+    expect(
+      mockSpanSetAttribute.mock.calls.some(
+        (c) => c[0] === 'pp.lesson.word.accelerated',
+      ),
+    ).toBe(false);
     expect(mockSpanSetAttribute.mock.calls).toContainEqual([
       'pp.lesson.word.prev_level',
       6,
@@ -2551,23 +2495,32 @@ describe('LiteracyLessonService — MAX_LESSON_LEVEL_CAP env cap', () => {
     expect(levelParam).toBe(7);
   });
 
-  it('a stored prev_level of 10 is pulled down to 7', async () => {
+  it('a student above the cap comes down ONE level per lesson (10 → 9)', async () => {
     const { maxLength, levelParam } = await runLevel({
       prev_level: 10,
       recent_words: ['अब कमल'],
       // no two-lesson signal → the band would hold at 10
     });
+    expect(maxLength).toBe(9);
+    expect(levelParam).toBe(9);
+  });
+
+  it('a student one level above the cap lands on it (8 → 7)', async () => {
+    const { maxLength, levelParam } = await runLevel({
+      prev_level: 8,
+      recent_words: ['अब कमल'],
+    });
     expect(maxLength).toBe(7);
     expect(levelParam).toBe(7);
   });
 
-  it('a +3 boost that would cross into the passage band is held at 7', async () => {
+  it('a first-try-pass signal above the cap still steps DOWN, never up (10 → 9)', async () => {
     const { maxLength } = await runLevel({
-      prev_level: 6, // +3 → 9 (passage lesson)
-      recent_words: ['अब'],
-      unique_in_boost_window: 3,
+      prev_level: 10,
+      recent_words: ['अब कमल'],
+      recent_turns: TWO_FIRST_TRY_TURNS,
     });
-    expect(maxLength).toBe(7);
+    expect(maxLength).toBe(9);
   });
 
   it('word-band behaviour below the cap is unchanged (hold at 6)', async () => {
@@ -2648,122 +2601,151 @@ describe('LiteracyLessonService — cap cold-start (all levels null)', () => {
   });
 });
 
-describe('LiteracyLessonService — fast-find accelerator (+3)', () => {
-  it('boosts by 3 when 3 distinct words completed in the last 6 rows', async () => {
-    // base 3 + 3 = 6 sits below the 7 ceiling so this pins the increment
-    // itself, not the clamp.
-    const { maxLength, accelerated } = await runLevel({
+describe('LiteracyLessonService — one level per lesson (no accelerator, no level-2 start)', () => {
+  it('3 distinct words completed in the newest rows → +1, never +3', async () => {
+    const { maxLength, levelParam } = await runLevel({
       prev_level: 3,
       recent_words: ['अब'],
-      unique_in_boost_window: 3,
+      unique_in_add_window: 3,
+      unique_in_keep_window: 3,
     });
-    expect(maxLength).toBe(6);
-    expect(accelerated).toBe(true);
+    expect(maxLength).toBe(4);
+    expect(levelParam).toBe(4);
   });
 
-  it('boost overrides the new-user gate on a perfect first word (2 rows, 1 done)', async () => {
-    const { maxLength, accelerated } = await runLevel({
-      prev_level: 2,
-      recent_words: ['अब'],
-      recent_row_count: 2, // would otherwise trip the < 8 gate → level 2
-      distinct_word_count: 1, // and the < 3 gate
-      unique_in_keep_window: 1,
-    });
-    expect(maxLength).toBe(5);
-    expect(accelerated).toBe(true);
-  });
-
-  it('cold-start perfect-first-word boost derives base from word length then +3', async () => {
+  it('a perfect first word (2 rows, 1 done) holds the level — no boost', async () => {
     const { maxLength } = await runLevel({
-      prev_level: null,
-      recent_words: ['अब'], // base 2
+      prev_level: 3,
+      recent_words: ['अब'],
       recent_row_count: 2,
-      distinct_word_count: 1,
+      unique_in_add_window: 1,
       unique_in_keep_window: 1,
     });
-    expect(maxLength).toBe(5);
+    expect(maxLength).toBe(3);
   });
 
-  it('boosts on a perfect first two words (4 rows, 2 done)', async () => {
-    const { maxLength, accelerated } = await runLevel({
+  it('a perfect first two words (4 rows, 2 done) holds the level — no boost', async () => {
+    const { maxLength } = await runLevel({
       prev_level: 3,
       recent_words: ['अब'],
       recent_row_count: 4,
-      distinct_word_count: 2,
+      unique_in_add_window: 2,
       unique_in_keep_window: 2,
     });
-    expect(maxLength).toBe(6);
-    expect(accelerated).toBe(true);
+    expect(maxLength).toBe(3);
   });
 
-  it('does NOT boost the 2-row case when no word was completed (0 done)', async () => {
-    // First word attempted but not completed → gate applies → floor 2.
-    const { maxLength, accelerated } = await runLevel({
-      prev_level: 2,
-      recent_words: ['अब'],
-      recent_row_count: 2,
-      distinct_word_count: 1,
-      unique_in_keep_window: 0, // nothing done
-    });
-    expect(accelerated).toBe(false);
-    expect(maxLength).toBe(2);
-  });
-
-  it('requires EXACTLY 2 rows for the first-word boost (3 rows does not qualify)', async () => {
-    // 3 rows, 1 done, thin history → new-user gate → 2 (no boost).
-    const { maxLength, accelerated } = await runLevel({
-      prev_level: 2,
+  it('thin history (< 8 rows) holds the stored level instead of dropping to 2', async () => {
+    const { maxLength, levelParam } = await runLevel({
+      prev_level: 5,
       recent_words: ['अब'],
       recent_row_count: 3,
-      distinct_word_count: 1,
-      unique_in_keep_window: 1,
+      unique_in_add_window: 0,
+      unique_in_keep_window: 0,
     });
-    expect(accelerated).toBe(false);
-    expect(maxLength).toBe(2);
+    expect(maxLength).toBe(5);
+    expect(levelParam).toBe(5);
   });
 
-  it('requires EXACTLY 4 rows for the first-two-words boost (8 rows does not qualify)', async () => {
-    // 8 rows, keep=2 (<3), no add, no boost → normal ladder decrements.
-    const { maxLength, accelerated } = await runLevel({
-      prev_level: 7,
+  it('7 rows is still thin history: completions do not step the level up', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 5,
+      recent_words: ['अब'],
+      recent_row_count: 7,
+      unique_in_add_window: 3,
+      unique_in_keep_window: 3,
+    });
+    expect(maxLength).toBe(5);
+  });
+
+  it('8 rows is enough history: completions step up by 1, none step down by 1', async () => {
+    const up = await runLevel({
+      prev_level: 5,
       recent_words: ['अब'],
       recent_row_count: 8,
-      distinct_word_count: 8,
-      unique_in_keep_window: 2,
+      unique_in_add_window: 3,
+      unique_in_keep_window: 3,
     });
-    expect(accelerated).toBe(false);
-    expect(maxLength).toBe(6); // base - 1
+    expect(up.maxLength).toBe(6);
+    const down = await runLevel({
+      prev_level: 5,
+      recent_words: ['अब'],
+      recent_row_count: 8,
+      unique_in_add_window: 0,
+      unique_in_keep_window: 0,
+    });
+    expect(down.maxLength).toBe(4);
   });
 
-  it('does not boost when only 2 words completed in the last 6 rows (drilled history)', async () => {
-    // A drilled recent history fits only 2 distinct done words in 6 rows.
-    const { maxLength, accelerated } = await runLevel({
+  it('cold start with thin history holds the last word’s own level', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: null,
+      recent_words: ['कमल'], // base 3
+      recent_row_count: 2,
+      unique_in_keep_window: 1,
+    });
+    expect(maxLength).toBe(3);
+  });
+
+  it('level 7 enters the passage band at exactly 8', async () => {
+    const { maxLength } = await runLevel({
       prev_level: 7,
       recent_words: ['अब'],
-      unique_in_boost_window: 2,
-      unique_in_add_window: 0,
-      unique_in_keep_window: 2,
-    });
-    expect(accelerated).toBe(false);
-    expect(maxLength).toBe(6);
-  });
-
-  it('a boost crossing into the passage band lands on level 8, never higher', async () => {
-    const { maxLength } = await runLevel({
-      prev_level: 6, // +3 would be 9 — the band-entry cap lands it on 8
-      recent_words: ['अब'],
-      unique_in_boost_window: 3,
+      unique_in_add_window: 3,
+      unique_in_keep_window: 3,
     });
     expect(maxLength).toBe(8);
   });
 
-  it('a level-7 boost enters the sentence band at exactly 8 (no level skipping)', async () => {
-    const { maxLength } = await runLevel({
-      prev_level: 7, // +3 would be 10 — capped to the band entry level
-      recent_words: ['अब'],
-      unique_in_boost_window: 3,
-    });
-    expect(maxLength).toBe(8);
+  // The rule itself: whatever the signals, the env cap or the passage bank
+  // say, a lesson's recorded level is within 1 of the previous lesson's.
+  it('never moves more than one level from the previous level, for any signal mix', async () => {
+    const histories: Record<string, unknown>[] = [
+      { recent_turns: [] },
+      { recent_turns: TWO_FIRST_TRY_TURNS },
+      { recent_turns: [], lifetime_done_count: 5 }, // churn → decrement
+    ];
+    const moves = new Set<number>();
+    for (const cap of [undefined, '2', '7']) {
+      if (cap === undefined) delete process.env.MAX_LESSON_LEVEL_CAP;
+      else process.env.MAX_LESSON_LEVEL_CAP = cap;
+      try {
+        for (let prev = 2; prev <= 12; prev++) {
+          for (const rows of [2, 7, 8, 20]) {
+            for (const add of [0, 3]) {
+              for (const keep of [0, 3]) {
+                for (const history of histories) {
+                  for (const passages of [DEFAULT_TEST_PASSAGES, []]) {
+                    const { svc, dsQuery } = freshStart(
+                      freshRow({
+                        prev_level: prev,
+                        recent_words: ['अब'],
+                        recent_row_count: rows,
+                        unique_in_add_window: add,
+                        unique_in_keep_window: keep,
+                        ...history,
+                      }),
+                      happySnapshot(),
+                      passages,
+                    );
+                    await svc.processAnswer({ user, user_message_id: 'mm-1' });
+                    const level = insertParamsOf(dsQuery)[6] as number;
+                    moves.add(level - prev);
+                    expect(Math.abs(level - prev)).toBeLessThanOrEqual(1);
+                    expect(level).toBeGreaterThanOrEqual(2);
+                    expect(level).toBeLessThanOrEqual(12);
+                  }
+                }
+              }
+            }
+          }
+        }
+      } finally {
+        delete process.env.MAX_LESSON_LEVEL_CAP;
+      }
+    }
+    // The sweep really exercises all three outcomes.
+    expect([...moves].sort()).toEqual([-1, 0, 1]);
   });
 });
 
@@ -2843,7 +2825,6 @@ describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8
     prev_level: 9,
     recent_words: ['अब कमल'],
     recent_row_count: 18,
-    distinct_word_count: 20,
     ...over,
   });
 
@@ -2938,14 +2919,6 @@ describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8
       }),
     );
     expect(maxLength).toBe(7);
-  });
-
-  it('never applies the word-section accelerator in the sentence band', async () => {
-    const { maxLength, accelerated } = await runLevel(
-      sentenceBand({ unique_in_boost_window: 3 }),
-    );
-    expect(maxLength).toBe(9);
-    expect(accelerated).toBeUndefined();
   });
 });
 
