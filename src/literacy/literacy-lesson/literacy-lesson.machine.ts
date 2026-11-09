@@ -14,7 +14,7 @@ import {
   MIN_READ_WPM,
   selectDrillWord,
 } from './sentence-assessment';
-import { identifyCharacterStatus } from './identify-character-status.utils';
+import { identifyWrongLetters } from './spelled-out.utils';
 import { aserCountVerdict, type AserState } from '../aser/aser';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -791,13 +791,14 @@ export const machine = setup({
               assign({ answerCorrect: () => false }),
               { type: 'increment', params: { keys: 'wordErrors' } },
               assign({
-                wrongLetters: ({ context, event }) => {
-                  const { incorrectChars } = identifyCharacterStatus({
+                // identifyWrongLetters = identifyCharacterStatus, except a
+                // spelled-out answer ("ड में आ की मात्रा …") is decoded first
+                // so letters the child named correctly are not drilled.
+                wrongLetters: ({ context, event }) =>
+                  identifyWrongLetters({
                     correctAnswer: context.word,
                     studentAnswer: event.studentAnswer,
-                  });
-                  return incorrectChars;
-                },
+                  }),
               }),
               assign({
                 stateTransitionId: ({ context }) =>
