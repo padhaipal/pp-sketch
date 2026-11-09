@@ -113,7 +113,9 @@ Use `Array.from(word).length` throughout — consistent with how the machine dec
 
 1.) **Single DB round-trip.** Fetch letter scores, recent words, snapshot count, and distinct-word count in one query.
 
-2.) **Determine max word length.** In pseudocode:
+2.) **Determine max word length.** SUPERSEDED — see "2026-11: one level per
+lesson" at the end of this file for the current rule (no new-user floor, no
+accelerator). The original pseudocode:
 
 ```
 if distinct_word_count < NEW_USER_THRESHOLD:
@@ -159,14 +161,16 @@ means no extra cap. Read per selection (Railway redeploys on variable change,
 so no restart step; specs toggle `process.env` directly).
 
 Setting it to 7 reproduces the 2026-08 TEMP level-7 cap (#65, reverted in
-#72): every student is held in the word band; NOTHING else is disabled — the
+#72): every student is brought into the word band — ONE level per lesson
+since 2026-11 (a level-10 student goes 9, 8, 7 over three lessons, reading
+passages on the way down), not all at once; NOTHING else is disabled — the
 sentence machine states, selectPassage, computeSentenceBandSignal,
-comprehension handling, and passage generation/gates are all live and simply
-unreachable from selection. Mid-lesson students continue at their stored
+comprehension handling, and passage generation/gates are all live and, once
+a student is at the cap, simply unreachable from selection. Mid-lesson students continue at their stored
 level (continue path skips selection), so completedReading at 8+ still
 fires (see "completedReading" below). While capped, new lesson rows are written at the capped level, so
-prev_level ratchets down; on lifting the cap students re-climb (the +3
-accelerator can jump 7→10 in one selection).
+prev_level ratchets down; on lifting the cap students re-climb one level per
+lesson by the normal rules.
 
 TOGGLE: set/unset the Railway variable. No code change in either direction.
 
@@ -178,14 +182,14 @@ TOGGLE: set/unset the Railway variable. No code change in either direction.
   any unseen one exists** (2026-09; was "last 10 excluded"): the selection
   SQL ships every passage id in the student's history
   (`RECENT_PASSAGES_TO_EXCLUDE = 10_000_000`, newest first) and
-  `selectPassage` walks: (1) exact level, unseen → (2) nearest level 8–12,
-  unseen → bank exhausted: (3) exact level, least-recently-seen first
-  (`ORDER BY array_position($2, id) DESC`) → (4) nearest level, LRU. Steps 3–4
-  return `reused: true` → span `pp.lesson.passage.reused` + a warn
-  ("passage bank exhausted … reusing") — the signal to seed more. An empty
-  bank with no history still falls back to a level-7 word lesson. "Seen" =
-  any literacy_lesson_states row with that passage_id (assigned, not
-  necessarily completed).
+  `selectPassage` walks (2026-11 — the student's OWN level only, see the
+  section at the end): (1) exact level, unseen → (2) exact level,
+  least-recently-seen first (`ORDER BY array_position($2, id) DESC`). Step 2
+  returns `reused: true` → span `pp.lesson.passage.reused` + a warn
+  ("level N passages exhausted … reusing") — the signal to seed more at that
+  level. A level with no ready passage at all gets a level-7 word lesson and
+  the student keeps their level. "Seen" = any literacy_lesson_states row with
+  that passage_id (assigned, not necessarily completed).
 - Sentence-band progression (base ≥ 8, 2026-08): the single round-trip SQL
   ships only the raw inputs — `recent_turns` (json_agg of {rn, is_done,
   stid} over the 18-row window, newest first) and `lifetime_done_count`
@@ -243,8 +247,7 @@ null.
 
 - `PASSAGE_FLOW_LEVEL_THRESHOLD = 11`. selectNextString is unchanged; the
   machine input gets `readInFlow: passageId != null && lesson.level >= 11`
-  (student's level, not the passage's — a nearest-level fallback passage is
-  still read in the flow).
+  (student's level; since 2026-11 the passage is always at that level).
 - `ProcessAnswerResult.flowPassageText`: set whenever the snapshot sits in
   `comprehension` with `readInFlow` (initial send and the voice-note nudge);
   the passage row's RAW text (tokenized join as fallback). `sentenceText` is
@@ -279,9 +282,55 @@ level 9 (literacy-lesson.machine.ts `READ_SPEED_GATE_FROM_LEVEL`).
   `aserLetters` counts and the asked letter `wrongLetters[0]`). Comprehension
   taps carry `aser` unchanged.
 - selectNextString: ASER rows excluded from recent_rows and
-  lifetime_done_count; `has_aser_placement` holds a placed student at the
-  base instead of the new-user floor while recent_rows < 8; `forcedLevel`
-  overrides the computed cap (then the usual clamps).
+  lifetime_done_count; every student is held at the base while
+  recent_rows < 8 (2026-11 — was an ASER-only hold, others dropped to the
+  level-2 new-user floor); `forcedLevel` overrides the computed cap (then the
+  floor/ceiling clamps; it is exempt from the one-step clamp).
 - completedReading uses the passage level when the row has no selected
   level (ASER rows).
 - `splitLessonWords` moved to lesson-words.utils.ts (shared with AserService).
+
+## 2026-11: one level per lesson; passages from the student's own level only
+
+A new lesson's level is at most ONE level away from the previous lesson's
+level, up or down (`MAX_LEVEL_STEP = 1`).
+
+Removed:
+
+- The new-user gate (`NEW_USER_THRESHOLD`; `distinct_word_count < 3` or
+  `recent_row_count < 8` → level 2) and the "recent_words empty → level 2"
+  branch. Every new student is placed by the onboarding ASER test
+  (`forcedLevel`), so level 2 is no longer an initial placement; it remains
+  only as the minimum level (`MIN_WORD_LENGTH_FLOOR`).
+- The fast-find accelerator (+3: `LEVEL_BOOST_WINDOW`,
+  `LEVEL_BOOST_INCREMENT`, `FIRST_WORD_ROW_COUNT`, `SECOND_WORD_ROW_COUNT`,
+  `unique_in_boost_window`, span `pp.lesson.word.accelerated`) and the
+  "entering the passage band lands on 8" clamp that only existed for it.
+- SQL columns `distinct_word_count` and `has_aser_placement`. Query params
+  are now $1 user, $2 recent words, $3 row window, $4 add window, $5 keep
+  window, $6 passage history.
+
+Word band (base ≤ 7):
+
+```
+if recent_row_count < 8:          maxLength = base        # too little history
+elif unique_in_add_window >= 3:   maxLength = base + 1
+elif unique_in_keep_window >= 3:  maxLength = base
+else:                             maxLength = base - 1
+```
+
+Sentence band (base ≥ 8): unchanged, already ±1 (computeSentenceBandSignal).
+
+After the floor / MAX_LESSON_LEVEL / MAX_LESSON_LEVEL_CAP clamps, the result
+is clamped to `[base − 1, base + 1]` whenever there is a previous level
+(stored `prev_level`, or cold-state the last word's own level) and no
+`forcedLevel`. Applied LAST, so the env cap also moves a student one level per
+lesson. The onboarding ASER placement is the one selection not measured
+against a previous level — it is the student's first lesson.
+
+Passages: `selectPassage` serves only passages at the student's level —
+unseen first, then (level exhausted for this student) the least recently seen
+one again. It never borrows from another level. When the level has no ready
+passage at all, the student gets a level-7 word lesson and the row still
+records their level (`passage-missing-word-fallback`), so they return to
+passages as soon as that level is seeded; before, the row recorded 7.
