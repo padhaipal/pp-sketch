@@ -38,6 +38,7 @@ import {
   SENTENCE_RECENT_ROWS_WINDOW,
   TurnRow,
   computeSentenceBandSignal,
+  lastLessonFirstTryPass,
 } from './sentence-band-signal.utils';
 
 const RECENT_WORDS_TO_EXCLUDE = 10;
@@ -46,8 +47,10 @@ const SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME = 15;
 const MIN_UNIQUE_WORDS_FOR_PROGRESS = 3;
 const MIN_WORD_LENGTH_FLOOR = 2;
 const NEW_USER_THRESHOLD = 3;
-// Fast-find accelerator: a student cruising through recent words jumps the
-// cap by +3 instead of +1 so they reach their real level in fewer lessons.
+// Fast-find accelerator: a student cruising through recent words moves up a
+// level even inside the new-user window, where the gate below would
+// otherwise pin them at level 2. One level per lesson, like every other
+// change (see the step clamp in selectNextString).
 // A first-try-correct word costs exactly 2 rows (its selection row + its
 // 'done' row — see MIN complete-word:row ratio of 2), so "3 distinct
 // completed words in the last 6 rows" is only reachable when the last three
@@ -55,7 +58,7 @@ const NEW_USER_THRESHOLD = 3;
 // perfect first (or first-two) start, when the new-user gate would otherwise
 // pin the student at level 2.
 const LEVEL_BOOST_WINDOW = 6;
-const LEVEL_BOOST_INCREMENT = 3;
+const LEVEL_BOOST_INCREMENT = 1;
 const FIRST_WORD_ROW_COUNT = 2;
 const SECOND_WORD_ROW_COUNT = 4;
 // Above this lesson level the student gets a reading passage (LLM-generated,
@@ -977,7 +980,7 @@ export class LiteracyLessonService {
             signal.lowCompletionDecrement,
           );
         } else {
-          // Word section (level ≤ 7): fast-find accelerator (+3), checked
+          // Word section (level ≤ 7): fast-find accelerator (+1), checked
           // BEFORE the new-user gate so a strong start escapes the level-2
           // floor: three distinct completed words in the last 6 rows, OR a
           // perfect first word (1 done, 2 rows ever), OR a perfect first two
@@ -1016,27 +1019,45 @@ export class LiteracyLessonService {
           } else {
             maxLength = base - 1;
           }
-          // Entering the sentence band always lands on level 8: the
-          // accelerator must never skip the short-passage levels
-          // (7 + 3 → 8, not 10; 6 + 3 → 8, not 9). Sentence-band
-          // progression (base ≥ 8, the branch above) is untouched.
-          maxLength = Math.min(maxLength, SENTENCE_LEVEL_THRESHOLD + 1);
           span.setAttribute('pp.lesson.word.accelerated', accelerate);
         }
+        // Step clamp: once a student has a level, a lesson moves it at most
+        // one level, and never against the last lesson's first try — no gain
+        // after a wrong first try, no loss after a right one. The ASER
+        // placement is the one exception: it sets the level outright.
+        const hasLevel = prevLevel !== null || recentWords.length > 0;
         if (forcedLevel != null) {
           maxLength = forcedLevel;
           span.setAttribute('pp.lesson.aser.placement_level', forcedLevel);
+        } else if (hasLevel) {
+          const lastFirstTry = lastLessonFirstTryPass(data.recent_turns ?? []);
+          const lowest = lastFirstTry === true ? base : base - 1;
+          const highest = lastFirstTry === false ? base : base + 1;
+          maxLength = Math.min(Math.max(maxLength, lowest), highest);
+          span.setAttribute(
+            'pp.lesson.last_first_try',
+            lastFirstTry === null ? 'none' : String(lastFirstTry),
+          );
         }
         maxLength = Math.max(maxLength, MIN_WORD_LENGTH_FLOOR);
         maxLength = Math.min(maxLength, MAX_LESSON_LEVEL);
-        maxLength = Math.min(maxLength, effectiveMaxLessonLevel());
+        // The ops cap also lowers a student one level per lesson, even after
+        // a first-try pass (it is an override, not a progress signal).
+        const cap = effectiveMaxLessonLevel();
+        maxLength = Math.min(
+          maxLength,
+          forcedLevel == null && hasLevel ? Math.max(cap, base - 1) : cap,
+        );
         span.setAttribute('pp.lesson.word.max_length', maxLength);
         span.setAttribute('pp.lesson.word.prev_level', prevLevel ?? -1);
 
         // Passage lesson: a random ready reading passage at the student's
         // level (media_details.level, set from word count at seeding time),
         // excluding recently-lessoned passages. Falls back to the nearest
-        // level, then to a level-7 word lesson when no passage exists at all.
+        // level, then to a level-7 word lesson when no passage exists at all
+        // — the stored level stays maxLength, so a missing passage never
+        // drops the student.
+        let wordLength = maxLength;
         if (maxLength > SENTENCE_LEVEL_THRESHOLD) {
           const passage = await this.selectPassage(
             maxLength,
@@ -1073,12 +1094,12 @@ export class LiteracyLessonService {
             'pp.lesson.word.selection',
             'passage-missing-word-fallback',
           );
-          maxLength = SENTENCE_LEVEL_THRESHOLD;
+          wordLength = SENTENCE_LEVEL_THRESHOLD;
         }
 
         // Filter by length
         candidates = candidates.filter(
-          (w) => Array.from(w).length <= maxLength,
+          (w) => Array.from(w).length <= wordLength,
         );
 
         // Baseline = mean of "reviewed" letter scores. Seed values arrive in

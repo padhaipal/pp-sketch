@@ -2,6 +2,7 @@ import {
   SENTENCE_RECENT_ROWS_WINDOW,
   TurnRow,
   computeSentenceBandSignal,
+  lastLessonFirstTryPass,
 } from './sentence-band-signal.utils';
 
 // Builds a newest-first turn array from compact specs; rn is assigned by
@@ -359,5 +360,77 @@ describe('computeSentenceBandSignal — flow-mode lessons (level 11+)', () => {
     expect(out.bothFailedOut).toBe(false);
     // Both are first-try READ passes → increment, regardless of the tap.
     expect(out.decision).toBe('increment');
+  });
+});
+
+describe('lastLessonFirstTryPass', () => {
+  it('null with no lesson history', () => {
+    expect(lastLessonFirstTryPass([])).toBeNull();
+  });
+
+  it('true for a word read right first try', () => {
+    expect(
+      lastLessonFirstTryPass(
+        turns([
+          { done: true, stid: 'कमल-word-complete-correct-first' },
+          { stid: 'कमल-start-word-initial' },
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  it('false for a word read right only on a retry', () => {
+    expect(
+      lastLessonFirstTryPass(
+        turns([
+          { done: true, stid: 'कमल-word-complete-correct-retry' },
+          { stid: 'क-letter-...' },
+          { stid: 'कमल-start-word-initial' },
+          { done: true, stid: 'घर-word-complete-correct-first' },
+        ]),
+      ),
+    ).toBe(false);
+  });
+
+  it('only looks at the newest lesson', () => {
+    expect(
+      lastLessonFirstTryPass(
+        turns([
+          { done: true, stid: 'कमल-word-complete-correct-first' },
+          { stid: 'कमल-start-word-initial' },
+          { done: true, stid: 'घर-word-complete-correct-retry' },
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  it('true for a passage read first try (level 9+ and level 8)', () => {
+    expect(lastLessonFirstTryPass(turns(passedLesson(true)))).toBe(true);
+    expect(lastLessonFirstTryPass(turns(passedLevel8Lesson(true)))).toBe(true);
+    expect(lastLessonFirstTryPass(turns(passedLesson(false)))).toBe(false);
+  });
+
+  it('false for a failed-out passage', () => {
+    expect(lastLessonFirstTryPass(turns(failedLesson()))).toBe(false);
+  });
+
+  it('scores an unfinished newest lesson too', () => {
+    expect(
+      lastLessonFirstTryPass(
+        turns([
+          { stid: 'p1-sentence-comprehension-correct-first' },
+          { stid: 'sentence-start-sentence-initial' },
+          { done: true, stid: 'घर-word-complete-correct-retry' },
+        ]),
+      ),
+    ).toBe(true);
+    expect(
+      lastLessonFirstTryPass(
+        turns([
+          { stid: 'कमल-start-word-initial' },
+          { done: true, stid: 'घर-word-complete-correct-first' },
+        ]),
+      ),
+    ).toBe(false);
   });
 });

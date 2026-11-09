@@ -154,3 +154,28 @@ export function computeSentenceBandSignal(
     bothFailedOut,
   };
 }
+
+// A word lesson read correctly on the first attempt (literacy-lesson.machine.ts).
+const WORD_FIRST_TRY_SUFFIX = '-word-complete-correct-first';
+
+/**
+ * Whether the student's most recent lesson — word or passage — was read
+ * correctly on the first attempt. Its rows are the newest rows up to, not
+ * including, the next-older done row; an unfinished lesson (newest row not
+ * done) is scored the same way, so a passage abandoned after a first-try
+ * read still counts. Null when there is no lesson history (ASER rows are
+ * not in the window), so neither first-try rule applies.
+ */
+export function lastLessonFirstTryPass(turns: TurnRow[]): boolean | null {
+  const sorted = [...turns].sort((a, b) => a.rn - b.rn); // newest first
+  if (sorted.length === 0) return null;
+  const lesson: TurnRow[] = [sorted[0]];
+  for (const turn of sorted.slice(1)) {
+    if (turn.is_done) break;
+    lesson.push(turn);
+  }
+  return (
+    flagsOf(lesson).firstTryPass ||
+    lesson.some((t) => (t.stid ?? '').endsWith(WORD_FIRST_TRY_SUFFIX))
+  );
+}

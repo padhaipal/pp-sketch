@@ -1960,6 +1960,17 @@ describe('LiteracyLessonService.selectNextString — passage lessons (level ≥ 
     ]);
   });
 
+  it('keeps the student at their level when no passage exists (no drop to 7)', async () => {
+    const { input, dsQuery } = await freshSentenceStart(
+      progressed({ prev_level: 10, recent_words: ['अब कमल'] }),
+      happySnapshot(),
+      [], // empty passage pool
+    );
+    expect(input.sentence).toBeUndefined();
+    expect(Array.from(input.word).length).toBeLessThanOrEqual(7);
+    expect(insertParamsOf(dsQuery)[6]).toBe(10);
+  });
+
   it('passes the recently-lessoned passage ids into the exclusion parameter', async () => {
     const { dsQuery } = await freshSentenceStart(
       progressed({
@@ -2551,14 +2562,23 @@ describe('LiteracyLessonService — MAX_LESSON_LEVEL_CAP env cap', () => {
     expect(levelParam).toBe(7);
   });
 
-  it('a stored prev_level of 10 is pulled down to 7', async () => {
+  it('a stored prev_level of 10 is lowered one level at a time, not straight to 7', async () => {
     const { maxLength, levelParam } = await runLevel({
       prev_level: 10,
       recent_words: ['अब कमल'],
       // no two-lesson signal → the band would hold at 10
     });
-    expect(maxLength).toBe(7);
-    expect(levelParam).toBe(7);
+    expect(maxLength).toBe(9);
+    expect(levelParam).toBe(9);
+  });
+
+  it('lowers one level even after a first-try pass (the cap is an override)', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 9,
+      recent_words: ['अब कमल'],
+      recent_turns: sentenceTurns(passedLessonTurns(true)),
+    });
+    expect(maxLength).toBe(8);
   });
 
   it('a +3 boost that would cross into the passage band is held at 7', async () => {
@@ -2648,16 +2668,14 @@ describe('LiteracyLessonService — cap cold-start (all levels null)', () => {
   });
 });
 
-describe('LiteracyLessonService — fast-find accelerator (+3)', () => {
-  it('boosts by 3 when 3 distinct words completed in the last 6 rows', async () => {
-    // base 3 + 3 = 6 sits below the 7 ceiling so this pins the increment
-    // itself, not the clamp.
+describe('LiteracyLessonService — fast-find accelerator (+1)', () => {
+  it('boosts by 1 when 3 distinct words completed in the last 6 rows', async () => {
     const { maxLength, accelerated } = await runLevel({
       prev_level: 3,
       recent_words: ['अब'],
       unique_in_boost_window: 3,
     });
-    expect(maxLength).toBe(6);
+    expect(maxLength).toBe(4);
     expect(accelerated).toBe(true);
   });
 
@@ -2669,11 +2687,11 @@ describe('LiteracyLessonService — fast-find accelerator (+3)', () => {
       distinct_word_count: 1, // and the < 3 gate
       unique_in_keep_window: 1,
     });
-    expect(maxLength).toBe(5);
+    expect(maxLength).toBe(3);
     expect(accelerated).toBe(true);
   });
 
-  it('cold-start perfect-first-word boost derives base from word length then +3', async () => {
+  it('cold-start perfect-first-word boost derives base from word length then +1', async () => {
     const { maxLength } = await runLevel({
       prev_level: null,
       recent_words: ['अब'], // base 2
@@ -2681,7 +2699,7 @@ describe('LiteracyLessonService — fast-find accelerator (+3)', () => {
       distinct_word_count: 1,
       unique_in_keep_window: 1,
     });
-    expect(maxLength).toBe(5);
+    expect(maxLength).toBe(3);
   });
 
   it('boosts on a perfect first two words (4 rows, 2 done)', async () => {
@@ -2692,7 +2710,7 @@ describe('LiteracyLessonService — fast-find accelerator (+3)', () => {
       distinct_word_count: 2,
       unique_in_keep_window: 2,
     });
-    expect(maxLength).toBe(6);
+    expect(maxLength).toBe(4);
     expect(accelerated).toBe(true);
   });
 
@@ -2748,18 +2766,18 @@ describe('LiteracyLessonService — fast-find accelerator (+3)', () => {
     expect(maxLength).toBe(6);
   });
 
-  it('a boost crossing into the passage band lands on level 8, never higher', async () => {
+  it('a boost from level 6 moves to 7, one level only', async () => {
     const { maxLength } = await runLevel({
-      prev_level: 6, // +3 would be 9 — the band-entry cap lands it on 8
+      prev_level: 6,
       recent_words: ['अब'],
       unique_in_boost_window: 3,
     });
-    expect(maxLength).toBe(8);
+    expect(maxLength).toBe(7);
   });
 
   it('a level-7 boost enters the sentence band at exactly 8 (no level skipping)', async () => {
     const { maxLength } = await runLevel({
-      prev_level: 7, // +3 would be 10 — capped to the band entry level
+      prev_level: 7,
       recent_words: ['अब'],
       unique_in_boost_window: 3,
     });
@@ -3123,5 +3141,118 @@ describe('LiteracyLessonService.processAnswer — comprehension answers', () => 
         transcripts: [{ id: 't1', text: 'कुछ' }] as never,
       }),
     ).rejects.toThrow('mutually exclusive');
+  });
+});
+
+// ─── step clamp: one level per lesson, first-try rules (2026-11) ─────────────
+
+const wordTurns = (firstTry: boolean) =>
+  sentenceTurns([
+    {
+      done: true,
+      stid: firstTry
+        ? 'कमल-word-complete-correct-first'
+        : 'कमल-word-complete-correct-retry',
+    },
+    { stid: 'कमल-start-word-initial' },
+  ]);
+
+describe('LiteracyLessonService — step clamp and first-try rules', () => {
+  it('no gain after a word that was wrong on the first try', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 5,
+      recent_words: ['अब'],
+      unique_in_add_window: 3, // would be +1
+      unique_in_keep_window: 3,
+      recent_turns: wordTurns(false),
+    });
+    expect(maxLength).toBe(5);
+  });
+
+  it('gains after a word that was right on the first try', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 5,
+      recent_words: ['अब'],
+      unique_in_add_window: 3,
+      unique_in_keep_window: 3,
+      recent_turns: wordTurns(true),
+    });
+    expect(maxLength).toBe(6);
+  });
+
+  it('no loss after a word that was right on the first try', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 7,
+      recent_words: ['अब'],
+      unique_in_add_window: 0, // would be −1
+      unique_in_keep_window: 0,
+      recent_turns: wordTurns(true),
+    });
+    expect(maxLength).toBe(7);
+  });
+
+  it('loses one level after a word that was wrong on the first try', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 7,
+      recent_words: ['अब'],
+      unique_in_add_window: 0,
+      unique_in_keep_window: 0,
+      recent_turns: wordTurns(false),
+    });
+    expect(maxLength).toBe(6);
+  });
+
+  it('the new-user floor drops one level at a time, not straight to 2', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 5,
+      recent_words: ['अब'],
+      recent_row_count: 3, // < 8 → new-user floor would give 2
+      distinct_word_count: 2,
+      recent_turns: wordTurns(false),
+    });
+    expect(maxLength).toBe(4);
+  });
+
+  it('the new-user floor cannot drop a student whose last word was right first try', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 3,
+      recent_words: ['अब'],
+      recent_row_count: 6,
+      distinct_word_count: 2,
+      recent_turns: wordTurns(true),
+    });
+    expect(maxLength).toBe(3);
+  });
+
+  it('sentence band: no loss after a passage read right on the first try', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 10,
+      recent_words: ['अब कमल'],
+      recent_row_count: 18,
+      // churn rule would decrement (few done in window, many lifetime)
+      lifetime_done_count: 10,
+      recent_turns: sentenceTurns(passedLessonTurns(true)),
+    });
+    expect(maxLength).toBe(10);
+  });
+
+  it('the ASER placement still sets any level', async () => {
+    const { svc } = freshStart(
+      freshRow({
+        prev_level: 3,
+        recent_words: ['अब'],
+        recent_row_count: 20,
+        distinct_word_count: 20,
+      }),
+    );
+    const lesson = await (
+      svc as unknown as {
+        selectNextString: (
+          userId: string,
+          forcedLevel: number | null,
+        ) => Promise<{ level: number }>;
+      }
+    ).selectNextString('u1', 10);
+    expect(lesson.level).toBe(10);
   });
 });

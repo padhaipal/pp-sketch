@@ -153,8 +153,9 @@ This enforces the max-length rule and avoids repeating any of the last `RECENT_W
 
 Env var `MAX_LESSON_LEVEL_CAP` (integer). When set to a value in
 `[MIN_WORD_LENGTH_FLOOR, MAX_LESSON_LEVEL]`, `effectiveMaxLessonLevel()`
-applies it in selectNextString as a final `Math.min` clamp AFTER the ratchet
-base and the MAX_LESSON_LEVEL clamp. Unset, non-numeric, or out-of-range
+applies it in selectNextString as a final clamp AFTER the ratchet
+base and the MAX_LESSON_LEVEL clamp. A student above the cap is lowered one
+level per lesson (2026-11 step clamp), even after a first-try pass. Unset, non-numeric, or out-of-range
 means no extra cap. Read per selection (Railway redeploys on variable change,
 so no restart step; specs toggle `process.env` directly).
 
@@ -165,8 +166,8 @@ comprehension handling, and passage generation/gates are all live and simply
 unreachable from selection. Mid-lesson students continue at their stored
 level (continue path skips selection), so completedReading at 8+ still
 fires (see "completedReading" below). While capped, new lesson rows are written at the capped level, so
-prev_level ratchets down; on lifting the cap students re-climb (the +3
-accelerator can jump 7→10 in one selection).
+prev_level ratchets down one level per lesson; on lifting the cap students
+re-climb one level per lesson.
 
 TOGGLE: set/unset the Railway variable. No code change in either direction.
 
@@ -183,7 +184,9 @@ TOGGLE: set/unset the Railway variable. No code change in either direction.
   (`ORDER BY array_position($2, id) DESC`) → (4) nearest level, LRU. Steps 3–4
   return `reused: true` → span `pp.lesson.passage.reused` + a warn
   ("passage bank exhausted … reusing") — the signal to seed more. An empty
-  bank with no history still falls back to a level-7 word lesson. "Seen" =
+  bank with no history still falls back to a level-7 word lesson; the row
+keeps the selected level (2026-11), so a missing passage never drops the
+student. "Seen" =
   any literacy_lesson_states row with that passage_id (assigned, not
   necessarily completed).
 - Sentence-band progression (base ≥ 8, 2026-08): the single round-trip SQL
@@ -285,3 +288,18 @@ level 9 (literacy-lesson.machine.ts `READ_SPEED_GATE_FROM_LEVEL`).
 - completedReading uses the passage level when the row has no selected
   level (ASER rows).
 - `splitLessonWords` moved to lesson-words.utils.ts (shared with AserService).
+
+## 2026-11: one level per lesson, first-try rules
+
+- After the band logic computes a cap, selectNextString clamps it to
+  `base ± 1` whenever the student has a level (stored `prev_level` or any
+  recent word). The accelerator is now +1 (`LEVEL_BOOST_INCREMENT`), and the
+  new-user floor (level 2) can lower a student only one level per lesson.
+- `lastLessonFirstTryPass(recent_turns)` (sentence-band-signal.utils.ts)
+  reads the newest lesson: a word `-word-complete-correct-first`, or a
+  passage first-try pass as in `flagsOf` (finished or not). False → the cap
+  cannot rise; true → it cannot fall; null (no lesson history) → ±1 only.
+  Span `pp.lesson.last_first_try` = `true` / `false` / `none`.
+- `forcedLevel` (ASER placement) is exempt and sets the level outright.
+- Passage-missing fallback serves a ≤7-grapheme word but stores the
+  selected level (no drop).
