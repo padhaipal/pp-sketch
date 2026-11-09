@@ -95,8 +95,7 @@ describe('TractionService', () => {
       mau: 1,
       dau_avg: 0.5, // one student-day over the 2 complete days
       dau_mau: 50,
-      projected_mau: 15,
-      projected_dau_mau: 3.3, // 0.5 ÷ 15
+      projected_dau_mau: null, // August has no writers to compare with
     });
     expect(cache.set).toHaveBeenCalledWith(
       'dashboard:traction:v5:2026-09-03',

@@ -145,7 +145,6 @@ describe('buildTraction', () => {
         mau: 0,
         dau_avg: 0,
         dau_mau: null,
-        projected_mau: null,
         projected_dau_mau: null,
       },
       {
@@ -157,7 +156,6 @@ describe('buildTraction', () => {
         mau: 0,
         dau_avg: 0,
         dau_mau: null,
-        projected_mau: 0,
         projected_dau_mau: null,
       },
     ]);
@@ -199,7 +197,6 @@ describe('buildTraction', () => {
         mau: 1,
         dau_avg: 0.1, // 3 ÷ 31
         dau_mau: 9.7,
-        projected_mau: null,
         projected_dau_mau: null,
       }),
     );
@@ -209,8 +206,49 @@ describe('buildTraction', () => {
         mau: 2,
         dau_avg: 0.6, // 6 student-days ÷ 10 complete days
         dau_mau: 30,
-        projected_mau: 6, // 2 × 30 ÷ 10
-        projected_dau_mau: 10, // 0.6 ÷ 6
+        // August had no writer in its first 10 days: nothing to scale by
+        projected_dau_mau: null,
+      }),
+    );
+  });
+
+  it('monthly DAU / MAU: the month in progress is estimated from how last month settled', () => {
+    const day = (user_id: string, date: string) => ({ user_id, date });
+    const out = buildTraction(
+      {
+        ...empty(),
+        students: ['a', 'b', 'c', 'd'].map((id) => ({
+          id,
+          onboarded_on: '2026-07-01',
+          units: [],
+        })),
+        messageDays: [
+          // August, first 10 days: a ×5, b ×5 → 10 ÷ 10 ÷ 2 = 50 %
+          ...[1, 2, 3, 4, 5].map((d) => day('a', `2026-08-0${d}`)),
+          ...[1, 2, 3, 4, 5].map((d) => day('b', `2026-08-0${d}`)),
+          // … then c and d write once each: 12 ÷ 31 ÷ 4 = 9.68 % for the month
+          day('c', '2026-08-20'),
+          day('d', '2026-08-25'),
+          // September so far (10 days): a ×4 → 4 ÷ 10 ÷ 1 = 40 %
+          ...[1, 2, 3, 4].map((d) => day('a', `2026-09-0${d}`)),
+        ],
+      },
+      '2026-08-01',
+      '2026-09-10',
+      AT,
+    );
+    expect(out.monthly[0]).toEqual(
+      expect.objectContaining({
+        mau: 4,
+        dau_mau: 9.7,
+        projected_dau_mau: null,
+      }),
+    );
+    expect(out.monthly[1]).toEqual(
+      expect.objectContaining({
+        mau: 1,
+        dau_mau: 40,
+        projected_dau_mau: 7.7, // 40 % × (9.68 ÷ 50)
       }),
     );
   });
@@ -249,7 +287,6 @@ describe('buildTraction', () => {
         mau: 0,
         dau_avg: 0,
         dau_mau: null,
-        projected_mau: null,
         projected_dau_mau: null,
       },
     ]);

@@ -35,9 +35,12 @@ Aggregates only — no ids, names or numbers leave.
   every day of the month (zero days included; the month in progress: its
   complete days) of how many wrote that day, 1 dp; `dau_mau` = dau_avg ÷
   mau as a percentage, 1 dp, null at mau 0. The month in progress also gets
-  `projected_mau` (linear, as above) and `projected_dau_mau` = dau_avg ÷
-  projected_mau (the average day held as it is while the month's audience
-  grows — a rough estimate that reads low early in the month).
+  `projected_dau_mau`, its month-end estimate: the ratio starts high and
+  settles as the month's audience builds up, so the ratio so far is scaled
+  by how the PREVIOUS month moved from the same number of days in to its
+  end (previous final ratio ÷ previous ratio over its first N days); null
+  when the previous month has nothing to compare with. (A linear scale-up
+  of `mau`, as the counts above use, would read far too low early on.)
 - **Cache**: pp-redis-cache key `dashboard:traction:v5:<IST date>`, TTL
   26 h; a concurrent miss shares one in-flight computation.
 - **Warm**: queue `traction-warm`, cron `TRACTION_WARM_CRON` 20:00 UTC =

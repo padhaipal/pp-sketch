@@ -53,10 +53,12 @@ export interface TractionMonth {
   mau: number;
   dau_avg: number;
   dau_mau: number | null;
-  // The month in progress only (null otherwise): mau scaled linearly to the
-  // whole month (as the counts above), and dau_avg ÷ that — the average day
-  // is taken to stay as it is while the month's audience keeps growing.
-  projected_mau: number | null;
+  // The month in progress only (null otherwise): the month-end estimate.
+  // The ratio starts high and settles as the month's audience builds up, so
+  // it is scaled by how the PREVIOUS month moved from the same number of
+  // days in to its end: dau_mau × (previous month's final ratio ÷ its ratio
+  // over its first N days). Null when the previous month has nothing to
+  // compare with.
   projected_dau_mau: number | null;
 }
 
@@ -246,11 +248,16 @@ function buildMonthly(
     if (j < a.month) c.earlier++;
     else c.now++;
   }
+  const lastMonth = to.slice(0, 7);
+  const elapsed = Number(to.slice(8, 10));
+  const total = daysInMonth(lastMonth);
+
   // DAU / MAU: per month, the students who wrote (onboarded by the end of
-  // that month) and their student-days.
-  const writers = new Map(
-    months.map((m) => [m, { users: new Set<string>(), userDays: 0 }]),
-  );
+  // that month) and their student-days — plus the same over only the first
+  // `elapsed` days of each month, for the month-end estimate.
+  const tally = () => ({ users: new Set<string>(), userDays: 0 });
+  const writers = new Map(months.map((m) => [m, tally()]));
+  const early = new Map(months.map((m) => [m, tally()]));
   const seenDay = new Set<string>();
   for (const d of inputs.messageDays) {
     if (d.date < from || d.date > to) continue;
@@ -263,18 +270,40 @@ function buildMonthly(
     seenDay.add(key);
     w.users.add(d.user_id);
     w.userDays++;
+    if (Number(d.date.slice(8, 10)) <= elapsed) {
+      const e = early.get(month)!;
+      e.users.add(d.user_id);
+      e.userDays++;
+    }
   }
   const windowDays = new Map<string, number>();
   for (const d of dateRange(from, to)) {
     const m = d.slice(0, 7);
     windowDays.set(m, (windowDays.get(m) ?? 0) + 1);
   }
-  const pct = (dau: number, mau: number): number | null =>
-    mau > 0 ? Math.round((dau / mau) * 1000) / 10 : null;
-
-  const lastMonth = to.slice(0, 7);
-  const elapsed = Number(to.slice(8, 10));
-  const total = daysInMonth(lastMonth);
+  const ratio = (userDays: number, days: number, mau: number): number | null =>
+    mau > 0 && days > 0 ? userDays / days / mau : null;
+  const pct = (r: number | null): number | null =>
+    r === null ? null : Math.round(r * 1000) / 10;
+  // Month-end estimate for the month in progress (see TractionMonth).
+  const projectRatio = (month: string, soFar: number | null): number | null => {
+    const prevMonth = months[months.indexOf(month) - 1];
+    if (soFar === null || prevMonth === undefined) return null;
+    const w = writers.get(prevMonth)!;
+    const e = early.get(prevMonth)!;
+    const full = ratio(
+      w.userDays,
+      windowDays.get(prevMonth) ?? 0,
+      w.users.size,
+    );
+    const start = ratio(
+      e.userDays,
+      Math.min(elapsed, windowDays.get(prevMonth) ?? 0),
+      e.users.size,
+    );
+    if (full === null || start === null || start === 0) return null;
+    return Math.min(1, soFar * (full / start));
+  };
   return months.map((month) => {
     const c = counts.get(month)!;
     const partial = month === lastMonth && elapsed < total;
@@ -282,8 +311,8 @@ function buildMonthly(
       partial ? Math.round((n * total) / elapsed) : null;
     const w = writers.get(month)!;
     const mau = w.users.size;
-    const dau = w.userDays / (windowDays.get(month) ?? 1);
-    const projectedMau = scale(mau);
+    const days = windowDays.get(month) ?? 1;
+    const soFar = ratio(w.userDays, days, mau);
     return {
       month,
       joined_earlier: c.earlier,
@@ -291,10 +320,9 @@ function buildMonthly(
       projected_joined_earlier: scale(c.earlier),
       projected_joined_this_month: scale(c.now),
       mau,
-      dau_avg: Math.round(dau * 10) / 10,
-      dau_mau: pct(dau, mau),
-      projected_mau: projectedMau,
-      projected_dau_mau: projectedMau === null ? null : pct(dau, projectedMau),
+      dau_avg: Math.round((w.userDays / days) * 10) / 10,
+      dau_mau: pct(soFar),
+      projected_dau_mau: partial ? pct(projectRatio(month, soFar)) : null,
     };
   });
 }
