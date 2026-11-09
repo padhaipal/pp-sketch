@@ -448,6 +448,74 @@ export interface AserTestScore {
   history?: AserTestPoint[];
 }
 
+// ─── The ASER proxy as one figure (dashboard metric `aser_grade`, 2026-11) ───
+
+// A student's ASER level: the highest test whose latest result is a pass —
+// 0 took a test and passed none, 1 letter, 2 word, 3 paragraph, 4 story.
+// Null = never tested. Stored as level ÷ ASER_LEVEL_MAX (0 … 1).
+export const ASER_LEVEL_MAX = ASER_TESTS.length;
+export function aserTestLevel(
+  tests: Partial<
+    Record<
+      AserTestKey,
+      { correct?: number | null; passed?: boolean | null } | undefined
+    >
+  >,
+): number | null {
+  let taken = false;
+  let level = 0;
+  ASER_TESTS.forEach(([key], i) => {
+    const t = tests[key];
+    if (!t || t.correct == null) return;
+    taken = true;
+    if (t.passed === true) level = i + 1;
+  });
+  return taken ? level : null;
+}
+
+// "Reads at grade level", decided with Tom / David 2026-11: a six-year-old
+// passes with the paragraph or the story, a seven-year-old only with the
+// story. Letters and words never count. Every other age: null — not part of
+// the figure at all (eight and over never count, pass or fail).
+export const ASER_GRADE_PASS_LEVEL: Readonly<Record<number, number>> = {
+  6: 3,
+  7: 4,
+};
+export function aserGradePassed(
+  level: number,
+  age: number | null,
+): boolean | null {
+  const need = age === null ? undefined : ASER_GRADE_PASS_LEVEL[age];
+  return need === undefined ? null : level >= need;
+}
+
+// The student's ASER level after each finished run, oldest first — what the
+// dashboard's student graph draws (GET users/:id/literacy-test-scores
+// `aser_levels`). Any age: the age rule only decides who counts in an
+// area's figure, not what a child's own graph shows.
+export interface AserLevelPoint {
+  run: number;
+  at: Date;
+  level: number; // 0 … ASER_LEVEL_MAX
+}
+export function aserLevelHistory(
+  tests: Record<AserTestKey, AserTestScore>,
+): AserLevelPoint[] {
+  const runs = new Map<number, Date>();
+  for (const [key] of ASER_TESTS)
+    for (const p of tests[key].history ?? []) runs.set(p.run, p.at);
+  const latest: Partial<Record<AserTestKey, AserTestPoint>> = {};
+  return [...runs]
+    .sort((a, b) => a[0] - b[0])
+    .map(([run, at]) => {
+      for (const [key] of ASER_TESTS) {
+        const p = tests[key].history?.find((h) => h.run === run);
+        if (p) latest[key] = p;
+      }
+      return { run, at, level: aserTestLevel(latest) ?? 0 };
+    });
+}
+
 // The rows aserTestScoresFromRows reads (user ids = $1), chronological.
 export const ASER_ROWS_SQL = `/* aser:rows */
   SELECT user_id, created_at, snapshot->'context'->'aser' AS aser

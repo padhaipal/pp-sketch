@@ -92,3 +92,29 @@ letter 2, word 3, paragraph 9, story 10) selects the next lesson.
   1794000000000-AddAserMetrics): `test_results_student.aser_lN_correct /
   _incorrect / _passed / _at` (latest); `test_results_geo_entity.aser_lN_n
   / _pass / _fail`, summed up the tree. No age band. No backfill.
+
+## 2026-11: one dashboard figure — `aser_grade`
+
+Replaces the NIPUN proxies on the dashboards. Decided with David / Tom.
+
+- `aserTestLevel(tests)`: highest test whose LATEST result is a pass — 0
+  took one and passed none, 1 letter, 2 word, 3 paragraph, 4 story; null =
+  never tested. A pass stands without the tests below it (fast jump).
+- `aserGradePassed(level, age)` ("reads at grade level"): age 6 → paragraph
+  or story; age 7 → story only; any other age → null (not in the figure,
+  pass or fail). Letters and words never count as a pass.
+- Nightly: `test_results_student.aser_grade_score` (level ÷ 4) / `_passed` /
+  `_attempts` (finished runs), all NULL outside the 6–7 band
+  (`aserGradeColumns`); `test_results_geo_entity.aser_grade_n / _sum /
+  _sumsq / _pass / _hist[5]` — worked out in `studentVector` from the
+  stored aser_lN columns and the student's age on the night, so a birthday
+  moves a child between the rules (or out) without a new lesson. Migration
+  1795000000000-AddAserGrade; no backfill (area history starts at deploy;
+  student columns fill on the next rescore or `POST
+  admin/test-results/run?full=true`).
+- Dashboard: `metric=aser_grade` on GET /geo-entities/:id/scores — pass
+  rate = passers ÷ 6–7 year olds with an ASER result; `testMeta` gives
+  `age_band: [6, 8]` and no `pass_mark`.
+- `aserLevelHistory(tests)` → `aser_levels` on GET
+  /users/:id/literacy-test-scores: the student's level after each finished
+  run (any age) — the student graph.

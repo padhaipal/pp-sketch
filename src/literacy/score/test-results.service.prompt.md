@@ -29,8 +29,19 @@ undecided) and `_at` (the answer that ended the run); all NULL when never
 taken. Per area, `aser_lN_n` (students whose latest row has the test),
 `_pass`, `_fail` — NO age band, every student with a geo counts — summed
 up the tree like the other vectors (`AserCounts` in `GeoVector.aser`). The
-usage backfill leaves them alone. ASER does not count towards
-`students_scored`. No backfill: earlier rows stay NULL / 0.
+usage backfill leaves them alone. No backfill: earlier rows stay NULL / 0.
+
+### 2026-11: `aser_grade` — the ASER proxy as one metric
+
+A fifth entry of `TEST_METRICS` (migration 1795000000000-AddAserGrade), so
+it rides the generic n / sum / sumsq / pass / hist vector and the generic
+student score / passed / attempts columns. Score = ASER level ÷ 4
+(`aserTestLevel`), pass = the age rule (`aserGradePassed`: six → paragraph
+or story, seven → story), band 6–7. `studentVector` works it out from the
+aser_lN columns of the student's latest row and their age on computed_for;
+`aserGradeColumns` writes the student's own columns (NULL outside the
+band). A student with any ASER result now counts in `students_scored`
+(any age), so a school whose students have only sat ASER is "using".
 
 ## Why sums, not averages
 

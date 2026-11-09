@@ -17,7 +17,7 @@ import {
   Equals,
 } from 'class-validator';
 import type { GeoEntity } from '../geo-entities/geo-entity.dto';
-import type { AserTestScore } from '../literacy/aser/aser';
+import type { AserLevelPoint, AserTestScore } from '../literacy/aser/aser';
 
 export interface User {
   id: string;
@@ -968,4 +968,8 @@ export interface LiteracyTestScores {
   aser_l2?: AserTestScore;
   aser_l3?: AserTestScore;
   aser_l4?: AserTestScore;
+  // The student's ASER level (0 none … 4 story) after each finished run,
+  // oldest first (aser.ts aserLevelHistory) — the dashboard's "ASER proxy"
+  // student graph. Empty until a run finishes.
+  aser_levels?: AserLevelPoint[];
 }

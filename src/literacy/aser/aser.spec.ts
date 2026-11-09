@@ -1,4 +1,8 @@
 import {
+  aserGradePassed,
+  aserLevelHistory,
+  aserTestLevel,
+  type AserTestScore,
   applyAserTurn,
   ASER_BANKS,
   aserMilestoneForHours,
@@ -362,5 +366,92 @@ describe('passage word exclusion', () => {
       turn(true, 'जय-letter-word-correct-last', 'जय'),
     );
     expect(again).toBe(s);
+  });
+});
+
+describe('the ASER proxy as one figure (aser_grade)', () => {
+  it('aserTestLevel: the highest test whose latest result is a pass; 0 when none; null when never tested', () => {
+    expect(aserTestLevel({})).toBeNull();
+    expect(aserTestLevel({ aser_l2: { correct: null, passed: null } })).toBe(
+      null,
+    );
+    expect(
+      aserTestLevel({
+        aser_l1: { correct: 0, passed: false },
+        aser_l2: { correct: 0, passed: null },
+      }),
+    ).toBe(0);
+    // fast-jumped past letters: the word pass stands on its own
+    expect(aserTestLevel({ aser_l2: { correct: 4, passed: true } })).toBe(2);
+    expect(
+      aserTestLevel({
+        aser_l2: { correct: 4, passed: true },
+        aser_l3: { correct: 1, passed: true },
+        aser_l4: { correct: 0, passed: false },
+      }),
+    ).toBe(3);
+    expect(aserTestLevel({ aser_l4: { correct: 1, passed: true } })).toBe(4);
+  });
+
+  it('aserGradePassed: six → paragraph or story, seven → story, anyone else is not counted', () => {
+    expect([0, 1, 2, 3, 4].map((l) => aserGradePassed(l, 6))).toEqual([
+      false,
+      false,
+      false,
+      true,
+      true,
+    ]);
+    expect([0, 1, 2, 3, 4].map((l) => aserGradePassed(l, 7))).toEqual([
+      false,
+      false,
+      false,
+      false,
+      true,
+    ]);
+    for (const age of [5, 8, 9, 14, null]) {
+      expect(aserGradePassed(4, age)).toBeNull();
+    }
+  });
+
+  it('aserLevelHistory: the level after each finished run, a later run only replacing the tests it reached', () => {
+    const at = (d: number) => new Date(`2026-10-1${d}T10:00:00Z`);
+    const point = (run: number, passed: boolean | null) => ({
+      run,
+      at: at(run),
+      correct: 1,
+      incorrect: 0,
+      passed,
+    });
+    const score = (...history: ReturnType<typeof point>[]): AserTestScore =>
+      history.length
+        ? {
+            status: 'ok',
+            runs_available: history.length,
+            latest: history[history.length - 1],
+            history,
+          }
+        : { status: 'insufficient_data', runs_available: 0 };
+    expect(
+      aserLevelHistory({
+        aser_l1: score(),
+        // run 1: words passed, paragraph failed; run 2: paragraph passed,
+        // story failed; run 3: story passed
+        aser_l2: score(point(1, true)),
+        aser_l3: score(point(1, false), point(2, true)),
+        aser_l4: score(point(2, false), point(3, true)),
+      }),
+    ).toEqual([
+      { run: 1, at: at(1), level: 2 },
+      { run: 2, at: at(2), level: 3 },
+      { run: 3, at: at(3), level: 4 },
+    ]);
+    expect(
+      aserLevelHistory({
+        aser_l1: score(),
+        aser_l2: score(),
+        aser_l3: score(),
+        aser_l4: score(),
+      }),
+    ).toEqual([]);
   });
 });

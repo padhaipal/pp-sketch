@@ -1128,6 +1128,7 @@ describe('UserService.getLiteracyTestScores', () => {
       'aser_l2',
       'aser_l3',
       'aser_l4',
+      'aser_levels',
       'mpl_b',
       'nipun_grade_1',
       'nipun_grade_2',

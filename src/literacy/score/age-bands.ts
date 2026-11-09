@@ -11,18 +11,23 @@ export type LiteracyMetric =
   | 'nipun_g2'
   | 'nipun_g3'
   | 'mpl_b'
+  // The ASER proxy as ONE figure (2026-11): the share of 6–7 year olds
+  // reading at their grade — aser.ts aserGradePassed.
+  | 'aser_grade'
   | 'usage';
 export type TestMetric = Exclude<LiteracyMetric, 'usage'>;
 
 // [min, max) in whole years on the computed_for date — confirmed with Tom
 // 2026-10: a test's window runs from the child's min-th birthday to the day
-// before their max-th. The bands are disjoint; nine-year-olds sit no test.
-// nipun_g1 (2026-10) is the year below g2.
+// before their max-th. The NIPUN / MPL-B bands are disjoint; nine-year-olds
+// sit no test. nipun_g1 (2026-10) is the year below g2. aser_grade
+// (2026-11) spans six- and seven-year-olds, with a pass rule per age.
 export const METRIC_AGE_BANDS: Record<TestMetric, [number, number]> = {
   nipun_g1: [6, 7],
   nipun_g2: [7, 8],
   nipun_g3: [8, 9],
   mpl_b: [10, 11],
+  aser_grade: [6, 8],
 };
 
 export const IST_OFFSET_MS = 5.5 * 3_600_000;

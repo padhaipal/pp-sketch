@@ -12,8 +12,12 @@ import {
 } from './literacy-test-scores';
 import { ageOn, inBand, LiteracyMetric, TestMetric } from './age-bands';
 import {
+  ASER_LEVEL_MAX,
   ASER_TESTS,
+  aserGradePassed,
+  aserTestLevel,
   type AserTestKey,
+  type AserTestScore,
   computeAserTestScores,
 } from '../aser/aser';
 import {
@@ -32,6 +36,7 @@ export const TEST_METRICS: readonly TestMetric[] = [
   'nipun_g2',
   'nipun_g3',
   'mpl_b',
+  'aser_grade',
 ];
 export const METRICS: readonly LiteracyMetric[] = [...TEST_METRICS, 'usage'];
 // Usage — the leading indicator: active minutes (voice-note gap rule,
@@ -49,6 +54,7 @@ export const HIST_DENOMINATOR: Record<LiteracyMetric, number> = {
   nipun_g2: NIPUN_QUESTION_COUNT,
   nipun_g3: NIPUN_QUESTION_COUNT,
   mpl_b: MPL_B_QUESTION_COUNT,
+  aser_grade: ASER_LEVEL_MAX,
   usage: 1,
 };
 export const HIST_LENGTH: Record<LiteracyMetric, number> = {
@@ -56,6 +62,7 @@ export const HIST_LENGTH: Record<LiteracyMetric, number> = {
   nipun_g2: NIPUN_QUESTION_COUNT + 1,
   nipun_g3: NIPUN_QUESTION_COUNT + 1,
   mpl_b: MPL_B_QUESTION_COUNT + 1,
+  aser_grade: ASER_LEVEL_MAX + 1,
   usage: USAGE_HIST_MAX_MINUTES + 1,
 };
 export function histIndex(metric: LiteracyMetric, score: number): number {
@@ -140,6 +147,8 @@ export interface GeoVector {
   nipun_g2: MetricVector;
   nipun_g3: MetricVector;
   mpl_b: MetricVector;
+  // 6–7 year olds with an ASER result; pass = reads at grade level.
+  aser_grade: MetricVector;
   usage: MetricVector;
   aser: Record<AserTestKey, AserCounts>;
 }
@@ -167,6 +176,7 @@ export function emptyVector(): GeoVector {
     nipun_g2: metric('nipun_g2'),
     nipun_g3: metric('nipun_g3'),
     mpl_b: metric('mpl_b'),
+    aser_grade: metric('aser_grade'),
     usage: metric('usage'),
     aser: Object.fromEntries(
       ASER_KEYS.map((k) => [k, { n: 0, pass: 0, fail: 0 }]),
@@ -265,18 +275,40 @@ export function impliedNipun(
 // active/scored flags, unbanded when birth_year is null, and per metric —
 // only when the student has a score AND is inside that metric's age band —
 // n/sum/sumsq/pass/hist. nipun_g1/g2 are read through impliedNipun.
+// aser_grade is worked out here from the four ASER tests and the student's
+// age TODAY (aser.ts aserTestLevel / aserGradePassed), not read from the
+// student's stored aser_grade_* — so a birthday moves a child between the
+// rules without waiting for their next lesson.
 export function studentVector(
   row: LatestStudentRow,
   computedFor: Date,
 ): GeoVector {
   const v = emptyVector();
   v.students_active = row.active ? 1 : 0;
+  const age = ageOn(
+    computedFor,
+    row.birth_year,
+    row.birth_month,
+    row.created_at,
+  );
   const implied = impliedNipun(row);
+  const level = aserTestLevel(
+    Object.fromEntries(
+      ASER_KEYS.map((k) => [
+        k,
+        { correct: row[`${k}_correct`], passed: row[`${k}_passed`] },
+      ]),
+    ),
+  );
   const scores: Record<TestMetric, ScorePair> = {
     nipun_g1: implied.nipun_g1,
     nipun_g2: implied.nipun_g2,
     nipun_g3: [row.nipun_g3_score, row.nipun_g3_passed],
     mpl_b: [row.mpl_b_score, row.mpl_b_passed],
+    aser_grade:
+      level === null
+        ? [null, null]
+        : [level / ASER_LEVEL_MAX, aserGradePassed(level, age)],
   };
   v.students_scored = TEST_METRICS.some((m) => scores[m][0] !== null) ? 1 : 0;
   // Usage counts every student, banded or not: absent minutes are zero.
@@ -296,12 +328,6 @@ export function studentVector(
       fail: passed === false ? 1 : 0,
     };
   }
-  const age = ageOn(
-    computedFor,
-    row.birth_year,
-    row.birth_month,
-    row.created_at,
-  );
   if (age === null) {
     v.students_unbanded = 1;
     return v;
@@ -413,7 +439,35 @@ interface CandidateRow {
   id: string;
   birth_year: number | null;
   birth_month: number | null;
+  // users.created_at — the age rule's fallback (age-bands.ts assumedBirth)
+  created_at: Date | string | null;
   geo_entity_id: string | null;
+}
+
+// A student's stored aser_grade_* on `computedFor`: score = ASER level ÷ 4
+// and the age's pass rule, both NULL outside the 6–7 band (and before any
+// ASER test) so every reader of the student rows — class and teacher
+// figures, trend lines — leaves those students out. attempts = finished
+// runs that reached any test.
+export function aserGradeColumns(
+  tests: Record<AserTestKey, AserTestScore> | undefined,
+  age: number | null,
+): { score: number | null; passed: boolean | null; attempts: number } {
+  const attempts = tests
+    ? Math.max(...ASER_KEYS.map((k) => tests[k].runs_available))
+    : 0;
+  const level = tests
+    ? aserTestLevel(
+        Object.fromEntries(ASER_KEYS.map((k) => [k, tests[k].latest])),
+      )
+    : null;
+  if (level === null || !inBand('aser_grade', age))
+    return { score: null, passed: null, attempts };
+  return {
+    score: level / ASER_LEVEL_MAX,
+    passed: aserGradePassed(level, age),
+    attempts,
+  };
 }
 
 export type EnqueueResult = 'enqueued' | 'already-running';
@@ -543,7 +597,7 @@ export class TestResultsService {
   private async candidates(full: boolean): Promise<CandidateRow[]> {
     return await this.dataSource.query(
       `/* test-results:candidates */
-       SELECT u.id, u.birth_year, u.birth_month, r.geo_entity_id
+       SELECT u.id, u.birth_year, u.birth_month, u.created_at, r.geo_entity_id
        FROM users u
        LEFT JOIN users r ON r.id = u.referrer_user_id
        WHERE u.role = 'student' AND u.deleted_at IS NULL
@@ -597,6 +651,15 @@ export class TestResultsService {
       };
       const u = usage.get(c.id) ?? { minutes: null, notes: 0 };
       const a = aser.get(c.id);
+      const grade = aserGradeColumns(
+        a,
+        ageOn(
+          new Date(`${computedFor}T00:00:00Z`),
+          c.birth_year,
+          c.birth_month,
+          c.created_at,
+        ),
+      );
       // Bound AFTER the columns before it (push numbers the params).
       const aserCols = () =>
         ASER_KEYS.map((k) => {
@@ -613,7 +676,8 @@ export class TestResultsService {
           `${push(s.nipun_g3.score)}, ${push(s.nipun_g3.passed)}, ${push(s.nipun_g3.attempts)}, ` +
           `${push(s.mpl_b.score)}, ${push(s.mpl_b.passed)}, ${push(s.mpl_b.attempts)}, ` +
           `${push(u.minutes)}, ${push(u.minutes === null ? null : u.minutes > USAGE_PASS_MINUTES)}, ${push(u.notes)}, ` +
-          `${aserCols()})`,
+          `${aserCols()}, ` +
+          `${push(grade.score)}, ${push(grade.passed)}, ${push(grade.attempts)})`,
       );
     }
     if (values.length === 0) return 0;
@@ -626,7 +690,8 @@ export class TestResultsService {
           nipun_g3_score, nipun_g3_passed, nipun_g3_attempts,
           mpl_b_score, mpl_b_passed, mpl_b_attempts,
           usage_score, usage_passed, usage_attempts,
-          ${ASER_STUDENT_COLUMNS.join(', ')})
+          ${ASER_STUDENT_COLUMNS.join(', ')},
+          aser_grade_score, aser_grade_passed, aser_grade_attempts)
        VALUES ${values.join(',\n')}
        ON CONFLICT (student_id, computed_for) DO UPDATE SET
          geo_entity_id = EXCLUDED.geo_entity_id,
@@ -636,6 +701,7 @@ export class TestResultsService {
          mpl_b_score = EXCLUDED.mpl_b_score, mpl_b_passed = EXCLUDED.mpl_b_passed, mpl_b_attempts = EXCLUDED.mpl_b_attempts,
          usage_score = EXCLUDED.usage_score, usage_passed = EXCLUDED.usage_passed, usage_attempts = EXCLUDED.usage_attempts,
          ${ASER_STUDENT_COLUMNS.map((c) => `${c} = EXCLUDED.${c}`).join(', ')},
+         aser_grade_score = EXCLUDED.aser_grade_score, aser_grade_passed = EXCLUDED.aser_grade_passed, aser_grade_attempts = EXCLUDED.aser_grade_attempts,
          created_at = now()`,
       params,
     );

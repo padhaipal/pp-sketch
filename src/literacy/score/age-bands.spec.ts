@@ -77,7 +77,13 @@ describe('inBand', () => {
       nipun_g2: [7, 8],
       nipun_g3: [8, 9],
       mpl_b: [10, 11],
+      aser_grade: [6, 8],
     });
+    // The ASER proxy spans six- and seven-year-olds.
+    expect(inBand('aser_grade', 5)).toBe(false);
+    expect(inBand('aser_grade', 6)).toBe(true);
+    expect(inBand('aser_grade', 7)).toBe(true);
+    expect(inBand('aser_grade', 8)).toBe(false);
     expect(inBand('nipun_g1', 5)).toBe(false);
     expect(inBand('nipun_g1', 6)).toBe(true);
     expect(inBand('nipun_g1', 7)).toBe(false);
