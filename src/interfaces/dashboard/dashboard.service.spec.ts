@@ -136,7 +136,19 @@ describe('DashboardService.getMailingListSubscribers', () => {
     const out = await service.getMailingListSubscribers();
 
     expect(query.mock.calls[0][0]).toMatch(/ORDER BY created_at DESC/);
+    expect(query.mock.calls[0][1]).toEqual([null]); // no `since`: everyone
     expect(out).toBe(rows);
+  });
+
+  it('with `since`, asks only for sign-ups after that moment', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const { service } = makeService(query);
+    const since = new Date('2026-11-01T00:00:00Z');
+
+    await service.getMailingListSubscribers(since);
+
+    expect(query.mock.calls[0][0]).toMatch(/created_at > \$1::timestamptz/);
+    expect(query.mock.calls[0][1]).toEqual([since]);
   });
 });
 

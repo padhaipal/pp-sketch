@@ -52,14 +52,18 @@ export class DashboardService {
     );
   }
 
-  async getMailingListSubscribers(): Promise<
-    { email: string; name: string | null; created_at: Date }[]
-  > {
+  // `since`: only the people who signed up AFTER that moment (the "new
+  // emails since I last looked" read); omitted = the whole list.
+  async getMailingListSubscribers(
+    since?: Date,
+  ): Promise<{ email: string; name: string | null; created_at: Date }[]> {
     const rows: { email: string; name: string | null; created_at: Date }[] =
       await this.dataSource.query(
         `SELECT email, name, created_at
          FROM mailing_list_entries
+         WHERE ($1::timestamptz IS NULL OR created_at > $1::timestamptz)
          ORDER BY created_at DESC`,
+        [since ?? null],
       );
     return rows;
   }

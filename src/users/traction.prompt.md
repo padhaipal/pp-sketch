@@ -27,7 +27,18 @@ Aggregates only — no ids, names or numbers leave.
   an earlier month) / `joined_this_month` (that month or later). The month
   in progress also gets `projected_*` = count × days in month ÷ complete
   days so far (simple linear); null for complete months.
-- **Cache**: pp-redis-cache key `dashboard:traction:v4:<IST date>`, TTL
+- **DAU / MAU** (2026-11, on each `monthly` row; the donor chart's
+  "DAU / MAU" toggle): over students onboarded by the end of that month,
+  active on a day = sent at least one message that IST day (any
+  `per_user_day` row — the 'u' rows of `traction:activity`). `mau` =
+  students who wrote on any day of the month; `dau_avg` = the mean over
+  every day of the month (zero days included; the month in progress: its
+  complete days) of how many wrote that day, 1 dp; `dau_mau` = dau_avg ÷
+  mau as a percentage, 1 dp, null at mau 0. The month in progress also gets
+  `projected_mau` (linear, as above) and `projected_dau_mau` = dau_avg ÷
+  projected_mau (the average day held as it is while the month's audience
+  grows — a rough estimate that reads low early in the month).
+- **Cache**: pp-redis-cache key `dashboard:traction:v5:<IST date>`, TTL
   26 h; a concurrent miss shares one in-flight computation.
 - **Warm**: queue `traction-warm`, cron `TRACTION_WARM_CRON` 20:00 UTC =
   01:30 IST (after the 00:15 IST test results), `refresh()` overwrites the

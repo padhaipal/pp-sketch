@@ -187,28 +187,59 @@ describe('DashboardController.getShare', () => {
 });
 
 describe('DashboardController.getSubscribers', () => {
-  it('returns subscribers array and its count', async () => {
+  it('returns subscribers, their count and the newest sign-up time', async () => {
     const svc = makeSvc();
     const subs = [
-      { email: 'a@b.com', name: 'A', created_at: new Date() },
-      { email: 'c@d.com', name: null, created_at: new Date() },
+      { email: 'a@b.com', name: 'A', created_at: new Date('2026-11-02') },
+      { email: 'c@d.com', name: null, created_at: new Date('2026-11-01') },
     ];
     svc.getMailingListSubscribers.mockResolvedValue(subs);
     const ctrl = makeController(svc);
 
     const out = await ctrl.getSubscribers();
 
-    expect(out).toEqual({ subscribers: subs, count: 2 });
+    expect(out).toEqual({
+      subscribers: subs,
+      count: 2,
+      latest_created_at: new Date('2026-11-02'),
+    });
+    expect(svc.getMailingListSubscribers).toHaveBeenCalledWith(undefined);
   });
 
-  it('returns count=0 for an empty subscriber list', async () => {
+  it('returns count=0 and no newest time for an empty list', async () => {
     const svc = makeSvc();
     svc.getMailingListSubscribers.mockResolvedValue([]);
     const ctrl = makeController(svc);
 
-    await expect(ctrl.getSubscribers()).resolves.toEqual({
+    await expect(ctrl.getSubscribers('')).resolves.toEqual({
       subscribers: [],
       count: 0,
+      latest_created_at: null,
     });
+    expect(svc.getMailingListSubscribers).toHaveBeenCalledWith(undefined);
+  });
+
+  it('passes `since` on as a date (a plain date or a full timestamp)', async () => {
+    const svc = makeSvc();
+    svc.getMailingListSubscribers.mockResolvedValue([]);
+    const ctrl = makeController(svc);
+
+    await ctrl.getSubscribers('2026-11-01');
+    await ctrl.getSubscribers('2026-11-01T09:30:00.000Z');
+
+    expect(svc.getMailingListSubscribers.mock.calls).toEqual([
+      [new Date('2026-11-01T00:00:00.000Z')],
+      [new Date('2026-11-01T09:30:00.000Z')],
+    ]);
+  });
+
+  it('rejects a `since` that is not a date', async () => {
+    const svc = makeSvc();
+    const ctrl = makeController(svc);
+
+    await expect(ctrl.getSubscribers('last week')).rejects.toThrow(
+      'since must be a date',
+    );
+    expect(svc.getMailingListSubscribers).not.toHaveBeenCalled();
   });
 });
