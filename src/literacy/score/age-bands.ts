@@ -27,7 +27,8 @@ export const METRIC_AGE_BANDS: Record<TestMetric, [number, number]> = {
   nipun_g2: [7, 8],
   nipun_g3: [8, 9],
   mpl_b: [10, 11],
-  aser_grade: [6, 8],
+  // seven and under (2026-11: under-sixes count, by the six-year-old rule)
+  aser_grade: [0, 8],
 };
 
 export const IST_OFFSET_MS = 5.5 * 3_600_000;

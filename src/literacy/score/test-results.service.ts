@@ -428,6 +428,14 @@ export interface StudentUsageRow {
   notes: number;
 }
 
+// One student's aser_grade_* on one past night (updateStudentAserGrade).
+export interface StudentAserGradeRow {
+  student_id: string;
+  score: number;
+  passed: boolean;
+  attempts: number;
+}
+
 export interface RunOptions {
   full: boolean;
   now?: Date;
@@ -901,28 +909,54 @@ export class TestResultsService {
     return rows.length;
   }
 
+  // `metric` (2026-11): which metric's columns the backfill owns — 'usage'
+  // (backfill-usage.ts) or 'aser_grade' (backfill-aser.ts).
   async upsertGeoUsage(
     entries: Array<[string, GeoVector]>,
     computedFor: string,
     createdAt: Date,
+    metric: 'usage' | 'aser_grade' = 'usage',
   ): Promise<number> {
     for (let i = 0; i < entries.length; i += GEO_BATCH_SIZE) {
       await this.upsertGeoRows(
         entries.slice(i, i + GEO_BATCH_SIZE),
         computedFor,
-        {
-          usageOnly: true,
-          createdAt,
-        },
+        { only: metric, createdAt },
       );
     }
     return entries.length;
   }
 
+  // ASER backfill (src/scripts/backfill-aser.ts): the aser_grade_* columns
+  // of student rows that ALREADY exist for `computedFor` — never inserts, so
+  // no row's created_at (which orders a student's rows) is touched.
+  async updateStudentAserGrade(
+    rows: StudentAserGradeRow[],
+    computedFor: string,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const values: string[] = [];
+    const params: unknown[] = [computedFor];
+    for (const r of rows) {
+      const n = params.push(r.student_id, r.score, r.passed, r.attempts);
+      values.push(
+        `($${n - 3}::uuid, $${n - 2}::numeric, $${n - 1}::boolean, $${n}::integer)`,
+      );
+    }
+    await this.dataSource.query(
+      `/* test-results:backfill-aser-students */
+       UPDATE test_results_student t
+       SET aser_grade_score = v.score, aser_grade_passed = v.passed, aser_grade_attempts = v.attempts
+       FROM (VALUES ${values.join(', ')}) AS v(student_id, score, passed, attempts)
+       WHERE t.student_id = v.student_id AND t.computed_for = $1::date`,
+      params,
+    );
+  }
+
   private async upsertGeoRows(
     entries: Array<[string, GeoVector]>,
     computedFor: string,
-    backfill?: { usageOnly: true; createdAt: Date },
+    backfill?: { only: 'usage' | 'aser_grade'; createdAt: Date },
   ): Promise<void> {
     if (entries.length === 0) return;
     const values: string[] = [];
@@ -967,7 +1001,7 @@ export class TestResultsService {
       `${m}_hist`,
     ]);
     const updatable = backfill
-      ? metricColumnNames.filter((c) => c.startsWith('usage_'))
+      ? metricColumnNames.filter((c) => c.startsWith(`${backfill.only}_`))
       : [
           'students_active',
           'students_scored',

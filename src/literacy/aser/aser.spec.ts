@@ -394,7 +394,7 @@ describe('the ASER proxy as one figure (aser_grade)', () => {
     expect(aserTestLevel({ aser_l4: { correct: 1, passed: true } })).toBe(4);
   });
 
-  it('aserGradePassed: six → paragraph or story, seven → story, anyone else is not counted', () => {
+  it('aserGradePassed: six and under → paragraph or story, seven → story, eight and over or no age is not counted', () => {
     expect([0, 1, 2, 3, 4].map((l) => aserGradePassed(l, 6))).toEqual([
       false,
       false,
@@ -409,7 +409,14 @@ describe('the ASER proxy as one figure (aser_grade)', () => {
       false,
       true,
     ]);
-    for (const age of [5, 8, 9, 14, null]) {
+    // under six: counted, by the six-year-old rule
+    expect([2, 3, 4].map((l) => aserGradePassed(l, 5))).toEqual([
+      false,
+      true,
+      true,
+    ]);
+    expect(aserGradePassed(3, 3)).toBe(true);
+    for (const age of [8, 9, 14, null]) {
       expect(aserGradePassed(4, age)).toBeNull();
     }
   });

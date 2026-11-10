@@ -40,6 +40,8 @@ function make(cached: unknown = null) {
       ];
     if (sql.includes('traction:teachers'))
       return [{ created_on: '2026-09-01' }];
+    if (sql.includes('traction:aser'))
+      return [{ computed_for: '2026-09-02', passing: '3' }];
     return [];
   });
   const cache = {
@@ -59,7 +61,7 @@ describe('TractionService', () => {
   it('a cache hit is returned without touching the database', async () => {
     const { svc, query, cache } = make({ daily: [] });
     expect(await svc.get(NOW)).toEqual({ daily: [] });
-    expect(cache.get).toHaveBeenCalledWith('dashboard:traction:v5:2026-09-03');
+    expect(cache.get).toHaveBeenCalledWith('dashboard:traction:v6:2026-09-03');
     expect(query).not.toHaveBeenCalled();
   });
 
@@ -98,7 +100,7 @@ describe('TractionService', () => {
       projected_dau_mau: null, // August has no writers to compare with
     });
     expect(cache.set).toHaveBeenCalledWith(
-      'dashboard:traction:v5:2026-09-03',
+      'dashboard:traction:v6:2026-09-03',
       out,
       26 * 3600,
     );
@@ -116,6 +118,6 @@ describe('TractionService', () => {
   it('concurrent misses share one computation', async () => {
     const { svc, query } = make();
     await Promise.all([svc.get(NOW), svc.get(NOW), svc.refresh(NOW)]);
-    expect(query).toHaveBeenCalledTimes(4); // one of each read
+    expect(query).toHaveBeenCalledTimes(5); // one of each read
   });
 });

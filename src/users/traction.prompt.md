@@ -19,7 +19,11 @@ Aggregates only — no ids, names or numbers leave.
   student through the referrer's geo entity and its ancestors, from the
   first; `mpl_b_passed` = students whose latest nightly
   `test_results_student.mpl_b_passed` is true, day X reading rows dated
-  ≤ X + 1 (a row dated D covers through 00:15 IST on D).
+  ≤ X + 1 (a row dated D covers through 00:15 IST on D);
+  `aser_passed` (2026-11) = children aged 7 and under reading at grade
+  level on the ASER proxy — the country rows' `aser_grade_pass` in
+  `test_results_geo_entity` (so it matches the map's headline; students
+  with no school or no age are not in it), latest row dated ≤ X + 1.
 - **Totals** (headline, all time through `to`): `totals.hours` = active
   hours over every user, whole; `totals.students` = onboarded students.
 - **Monthly** (per IST month of the window): onboarded students with ≥ 1
@@ -41,7 +45,7 @@ Aggregates only — no ids, names or numbers leave.
   end (previous final ratio ÷ previous ratio over its first N days); null
   when the previous month has nothing to compare with. (A linear scale-up
   of `mau`, as the counts above use, would read far too low early on.)
-- **Cache**: pp-redis-cache key `dashboard:traction:v5:<IST date>`, TTL
+- **Cache**: pp-redis-cache key `dashboard:traction:v6:<IST date>`, TTL
   26 h; a concurrent miss shares one in-flight computation.
 - **Warm**: queue `traction-warm`, cron `TRACTION_WARM_CRON` 20:00 UTC =
   01:30 IST (after the 00:15 IST test results), `refresh()` overwrites the

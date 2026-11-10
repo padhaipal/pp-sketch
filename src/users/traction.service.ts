@@ -79,7 +79,7 @@ export class TractionService {
   private async readInputs(from: string, to: string): Promise<TractionInputs> {
     const db = this.dataSource;
     const cutoff = onboardingCutoff();
-    const [activityRows, studentRows, teacherRows, mplbRows] =
+    const [activityRows, studentRows, teacherRows, mplbRows, aserRows] =
       await Promise.all([
         // per IST day ('d'), per (user, IST month) with a day > 5 min ('m')
         // and per (user, IST day) with any message ('u') — the last two
@@ -177,6 +177,15 @@ export class TractionService {
            FROM test_results_student t
            JOIN users u ON u.id = t.student_id AND u.deleted_at IS NULL`,
         ),
+        db.query<Array<{ computed_for: string; passing: number }>>(
+          `/* traction:aser */
+           SELECT t.computed_for::text AS computed_for,
+                  SUM(t.aser_grade_pass)::int AS passing
+           FROM test_results_geo_entity t
+           JOIN geo_entity g ON g.id = t.geo_entity_id
+           WHERE g.type = 'country'
+           GROUP BY t.computed_for`,
+        ),
       ]);
 
     const activityByDay: TractionInputs['activityByDay'] = [];
@@ -211,6 +220,10 @@ export class TractionService {
         student_id: r.student_id,
         computed_for: r.computed_for,
         passed: r.mpl_b_passed,
+      })),
+      aser: aserRows.map((r) => ({
+        computed_for: r.computed_for,
+        passing: Number(r.passing ?? 0),
       })),
     };
   }

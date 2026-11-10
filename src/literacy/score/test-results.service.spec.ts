@@ -1441,6 +1441,59 @@ describe('TestResultsService — usage backfill writers', () => {
     expect(params[0]).toBe('S1');
   });
 
+  it('upsertGeoUsage for aser_grade (backfill-aser) updates only aser_grade_* on conflict', async () => {
+    const { svc, query } = plainService();
+    const v = emptyVector();
+    v.aser_grade = { n: 3, sum: 2, sumsq: 1.5, pass: 1, hist: [0, 1, 1, 1, 0] };
+    await svc.upsertGeoUsage([['S1', v]], '2026-06-02', at, 'aser_grade');
+    const [sql] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('test-results:backfill-geo');
+    expect(sql).toMatch(
+      /DO UPDATE SET aser_grade_n = EXCLUDED\.aser_grade_n, aser_grade_sum = EXCLUDED\.aser_grade_sum, aser_grade_sumsq = EXCLUDED\.aser_grade_sumsq, aser_grade_pass = EXCLUDED\.aser_grade_pass, aser_grade_hist = EXCLUDED\.aser_grade_hist$/,
+    );
+    expect(sql).not.toMatch(
+      /usage_n = EXCLUDED|students_active = EXCLUDED|created_at = now\(\)/,
+    );
+  });
+
+  it('updateStudentAserGrade updates aser_grade_* on existing rows of that night only — never inserts', async () => {
+    const { svc, query } = plainService();
+    await svc.updateStudentAserGrade(
+      [
+        { student_id: 'a', score: 0.75, passed: true, attempts: 2 },
+        { student_id: 'b', score: 0, passed: false, attempts: 1 },
+      ],
+      '2026-06-02',
+    );
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('test-results:backfill-aser-students');
+    expect(sql).toContain('UPDATE test_results_student t');
+    expect(sql).not.toContain('INSERT');
+    expect(sql).toContain(
+      'SET aser_grade_score = v.score, aser_grade_passed = v.passed, aser_grade_attempts = v.attempts',
+    );
+    expect(sql).toContain(
+      '($2::uuid, $3::numeric, $4::boolean, $5::integer), ($6::uuid, $7::numeric, $8::boolean, $9::integer)',
+    );
+    expect(sql).toContain(
+      'WHERE t.student_id = v.student_id AND t.computed_for = $1::date',
+    );
+    expect(params).toEqual([
+      '2026-06-02',
+      'a',
+      0.75,
+      true,
+      2,
+      'b',
+      0,
+      false,
+      1,
+    ]);
+    query.mockClear();
+    await svc.updateStudentAserGrade([], '2026-06-02');
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('upsertGeoUsage with no entries issues no query', async () => {
     const { svc, query } = plainService();
     expect(await svc.upsertGeoUsage([], '2026-06-02', at)).toBe(0);
@@ -1539,7 +1592,7 @@ describe('a higher NIPUN grade pass implies the lower grades at 100 % (roll-up o
     expect(eight.nipun_g3).toMatchObject({ n: 1, sum: 0.75, pass: 1 });
   });
 
-  it('studentVector, aser_grade: a six-year-old passes with the paragraph or story, a seven-year-old only with the story; letters / words, eight and over and unknown ages never count as passes', () => {
+  it('studentVector, aser_grade: six and under pass with the paragraph or story, a seven-year-old only with the story; letters / words never pass; eight and over and unknown ages are not counted', () => {
     // highest test passed: 1 letter … 4 story (0 = took one, passed none)
     const aser = (birth_year: number | null, level: number | null) =>
       studentVector(
@@ -1576,8 +1629,12 @@ describe('a higher NIPUN grade pass implies the lower grades at 100 % (roll-up o
     ]);
     expect(seven(3)).toMatchObject({ n: 1, pass: 0 });
     expect(seven(4)).toMatchObject({ n: 1, sum: 1, pass: 1 });
-    // eight and over, five and under, no birth year: not in the figure at all
-    for (const v of [aser(2018, 4), aser(2021, 4), aser(null, 4)]) {
+    // five and under: counted, by the six-year-old rule
+    expect(aser(2021, 3).aser_grade).toMatchObject({ n: 1, pass: 1 });
+    expect(aser(2021, 2).aser_grade).toMatchObject({ n: 1, pass: 0 });
+    expect(aser(2021, 4).students_scored).toBe(0);
+    // eight and over, no birth year: not in the figure at all
+    for (const v of [aser(2018, 4), aser(null, 4)]) {
       expect(v.aser_grade.n).toBe(0);
       expect(v.aser_grade.pass).toBe(0);
       expect(v.students_scored).toBe(0); // an ASER result alone is not "scored"
