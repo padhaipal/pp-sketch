@@ -1,5 +1,6 @@
 import {
   aserGradePassed,
+  aserStudentPassed,
   aserLevelHistory,
   aserTestLevel,
   type AserTestScore,
@@ -410,6 +411,15 @@ describe('the ASER proxy as one figure (aser_grade)', () => {
     ]);
     for (const age of [5, 8, 9, 14, null]) {
       expect(aserGradePassed(4, age)).toBeNull();
+    }
+  });
+
+  it('aserStudentPassed: a verdict at every age — under seven the paragraph, seven and over or unknown the story', () => {
+    expect([5, 6].map((a) => aserStudentPassed(3, a))).toEqual([true, true]);
+    expect([5, 6].map((a) => aserStudentPassed(2, a))).toEqual([false, false]);
+    for (const age of [7, 8, 14, null]) {
+      expect(aserStudentPassed(3, age)).toBe(false);
+      expect(aserStudentPassed(4, age)).toBe(true);
     }
   });
 

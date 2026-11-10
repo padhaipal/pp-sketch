@@ -1,0 +1,28 @@
+name: Recompute test results (staging)
+
+# One-off full recompute of the nightly test results on STAGING — after a
+# metric is added, or after the prod → staging mirror, so the dashboards
+# fill without waiting for the 00:15 IST run. Manual only.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Kick the full run
+        # Same host and badge as mirror-staging.yml: STAGING_MIRROR_URL is
+        # staging's POST /admin/mirror, the key staging's DASHBOARD_API_KEY.
+        env:
+          MIRROR_URL: ${{ secrets.STAGING_MIRROR_URL }}
+          API_KEY: ${{ secrets.STAGING_MIRROR_API_KEY }}
+        run: |
+          set -euo pipefail
+          curl -fsS -X POST "${MIRROR_URL%/admin/mirror}/admin/test-results/run?full=true" \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: $API_KEY" \
+            -w "\nHTTP %{http_code}\n"
