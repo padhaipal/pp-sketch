@@ -158,7 +158,10 @@ export interface AserState {
   wordDrills: string[];
   paragraphDrills: string[];
   result: AserLevel | null; // set when done
-  // Set when done on the onboarding test: the LIFTeracy level to start at.
+  // Set when done: the LIFTeracy level the next lesson is selected at —
+  // after the onboarding test and (2026-11) after every retest. Null only
+  // for a retest that ended early (no passage to deliver): its result is
+  // incomplete, so the student keeps their level.
   placementLevel: number | null;
 }
 
@@ -196,7 +199,8 @@ export function aserLevel(outcomes: AserState['outcomes']): AserLevel {
   return 'beginner';
 }
 
-// LIFTeracy level the onboarding test places the student at. The lesson
+// LIFTeracy level a finished test (onboarding or retest) places the student
+// at. The lesson
 // floor is word length 2 (literacy-lesson.service MIN_WORD_LENGTH_FLOOR), so
 // "level 1" (failed letters) starts at 2 like failed words.
 export const ASER_PLACEMENT_LEVEL: Record<AserLevel, number> = {
@@ -214,13 +218,14 @@ const above = (s: AserStage): AserStage | null =>
 const below = (s: AserStage): AserStage | null =>
   ASER_STAGES[ASER_STAGES.indexOf(s) - 1] ?? null;
 
-function finish(state: AserState): AserState {
+function finish(state: AserState, abandoned = false): AserState {
   const result = aserLevel(state.outcomes);
   return {
     ...state,
     status: 'done',
     result,
-    placementLevel: state.milestone === 0 ? ASER_PLACEMENT_LEVEL[result] : null,
+    placementLevel:
+      abandoned && state.milestone !== 0 ? null : ASER_PLACEMENT_LEVEL[result],
   };
 }
 
@@ -317,7 +322,7 @@ export function recordParagraphDrill(
 
 // Ends the test early (no passage left to deliver) with what is known.
 export function abandonAser(state: AserState): AserState {
-  return finish(state);
+  return finish(state, true);
 }
 
 // Bank items not yet delivered at `stage` (letter / word levels).

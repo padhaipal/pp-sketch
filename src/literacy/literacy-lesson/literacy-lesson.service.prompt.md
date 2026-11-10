@@ -334,3 +334,25 @@ one again. It never borrows from another level. When the level has no ready
 passage at all, the student gets a level-7 word lesson and the row still
 records their level (`passage-missing-word-fallback`), so they return to
 passages as soon as that level is seeded; before, the row recorded 7.
+
+## 2026-11: no thin-history hold; ASER turns feed the rule; windows 6 / 10
+
+- The `recent_row_count < 8` hold is removed (and the SQL column with it).
+  The word-band rule always runs:
+
+```
+if unique_in_add_window >= 3:     maxLength = base + 1   # last 6 turns
+elif unique_in_keep_window >= 3:  maxLength = base       # last 10 turns
+else:                             maxLength = base - 1
+```
+
+- `SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH` 8 → 6,
+  `SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME` 15 → 10.
+- ASER test turns are no longer filtered out of `recent_rows` /
+  `lifetime_done_count`: the test's word, paragraph and story lessons count
+  exactly like normal lessons (both bands). Only the letter level is left
+  out: `level IS NULL` rows whose `context.aser.item.stage` is `letter` or
+  absent.
+- The lesson after ANY finished ASER run (not just onboarding) is selected at
+  the run's placement level (`forcedLevel`), the one exception to the
+  one-level clamp. See aser.prompt.md.

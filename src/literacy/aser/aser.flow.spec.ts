@@ -215,11 +215,14 @@ describe('ASER delivered through the lesson loop', () => {
     }
     out = await w.next();
     expect(w.normalSelections).toEqual([9]);
-    // progression never reads ASER rows
+    // progression reads ASER rows — all but the letter level
     const selectionSql = w.query.mock.calls
       .map((c) => c[0])
       .find((q) => q.includes('recent_distinct_words'))!;
-    expect(selectionSql).toContain("snapshot->'context'->>'aser' IS NULL");
+    expect(selectionSql).not.toContain("snapshot->'context'->>'aser' IS NULL");
+    expect(selectionSql).toContain(
+      "COALESCE(snapshot->'context'->'aser'->'item'->>'stage', 'letter') = 'letter'",
+    );
     expect(w.last().level).toBe(9);
     expect(w.last().snapshot.context.aser).toBeNull();
   });
@@ -331,6 +334,33 @@ describe('ASER delivered through the lesson loop', () => {
     });
     expect(['B', 'D', 'E']).toContain(w.aser().bank);
     expect(w.last().passage_id).toBe(w.aser().item!.value);
+  });
+
+  it('a retest re-places the student: level 12, story read right → next lesson at level 10', async () => {
+    const w = makeWorld({
+      has_lessons: true,
+      last_run: 1,
+      last_milestone: 2,
+      story_passed: false,
+      mpl_b_passed: false,
+      active_ms: 5.2 * 3_600_000,
+      bank_history: [{ run: 1, bank: 'C', shown: true }],
+      lesson_level: 12,
+    });
+    await w.next();
+    expect(w.aser()).toMatchObject({ run: 2, startStage: 'story' });
+    await w.say(P10[0].text.replace(/।/g, ''));
+    expect(w.aser()).toMatchObject({
+      status: 'done',
+      result: 'story',
+      placementLevel: 10,
+    });
+    const out = await w.tap(); // the comprehension question ends the lesson
+    expect(out.isComplete).toBe(true);
+    await w.next();
+    expect(w.normalSelections).toEqual([10]);
+    expect(w.last().level).toBe(10);
+    expect(w.last().snapshot.context.aser).toBeNull();
   });
 
   it('not due between milestones', async () => {
