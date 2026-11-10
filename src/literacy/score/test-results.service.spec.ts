@@ -1587,7 +1587,7 @@ describe('a higher NIPUN grade pass implies the lower grades at 100 % (roll-up o
     expect(aser(2020, null).students_scored).toBe(0);
   });
 
-  it('aserGradeColumns: the student row carries level ÷ 4 and the age rule, nothing outside 6–7', () => {
+  it('aserGradeColumns: the student row carries level ÷ 4 and the student’s own verdict at any age', () => {
     const at = new Date('2026-09-11T10:00:00Z');
     const test = (passed: boolean | null, runs = 1) => ({
       status: 'ok' as const,
@@ -1611,13 +1611,19 @@ describe('a higher NIPUN grade pass implies the lower grades at 100 % (roll-up o
       passed: false,
       attempts: 2,
     });
-    for (const age of [5, 8, 12, null]) {
+    // outside 6–7 (the NIPUN pattern): still listed — under seven is held
+    // to the paragraph, seven and over or age unknown to the story
+    expect(aserGradeColumns(paragraph, 5).passed).toBe(true);
+    for (const age of [8, 12, null]) {
       expect(aserGradeColumns(paragraph, age)).toEqual({
-        score: null,
-        passed: null,
+        score: 0.75,
+        passed: false,
         attempts: 2,
       });
     }
+    expect(aserGradeColumns({ ...paragraph, aser_l4: test(true) }, 12)).toEqual(
+      { score: 1, passed: true, attempts: 2 },
+    );
     expect(
       aserGradeColumns(
         { aser_l1: none, aser_l2: none, aser_l3: none, aser_l4: none },

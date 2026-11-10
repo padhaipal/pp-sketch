@@ -489,6 +489,14 @@ export function aserGradePassed(
   return need === undefined ? null : level >= need;
 }
 
+// A student's OWN verdict, any age (2026-11, the NIPUN pattern: a class
+// lists and counts every tested student, the age band only gates the area
+// figures): under seven → the six-year-old rule (paragraph or story); seven
+// and over, or age unknown → the story.
+export function aserStudentPassed(level: number, age: number | null): boolean {
+  return level >= (age !== null && age < 7 ? 3 : ASER_LEVEL_MAX);
+}
+
 // The student's ASER level after each finished run, oldest first — what the
 // dashboard's student graph draws (GET users/:id/literacy-test-scores
 // `aser_levels`). Any age: the age rule only decides who counts in an

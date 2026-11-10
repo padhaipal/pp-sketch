@@ -103,9 +103,13 @@ Replaces the NIPUN proxies on the dashboards. Decided with David / Tom.
 - `aserGradePassed(level, age)` ("reads at grade level"): age 6 → paragraph
   or story; age 7 → story only; any other age → null (not in the figure,
   pass or fail). Letters and words never count as a pass.
-- Nightly: `test_results_student.aser_grade_score` (level ÷ 4) / `_passed` /
-  `_attempts` (finished runs), all NULL outside the 6–7 band
-  (`aserGradeColumns`); `test_results_geo_entity.aser_grade_n / _sum /
+- `aserStudentPassed(level, age)` (2026-11, "the same pattern as NIPUN"): a
+  student's OWN verdict at any age — under seven → paragraph or story;
+  seven and over, or age unknown → story. Class and teacher views list and
+  count every tested student; only the area figures keep to the 6–7 band.
+- Nightly: `test_results_student.aser_grade_score` (level ÷ 4) / `_passed`
+  (`aserStudentPassed`) / `_attempts` (finished runs) for every tested
+  student, any age (`aserGradeColumns`); `test_results_geo_entity.aser_grade_n / _sum /
   _sumsq / _pass / _hist[5]` — worked out in `studentVector` from the
   stored aser_lN columns and the student's age on the night, so a birthday
   moves a child between the rules (or out) without a new lesson. Migration

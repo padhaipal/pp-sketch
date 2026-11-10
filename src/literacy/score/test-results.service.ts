@@ -15,6 +15,7 @@ import {
   ASER_LEVEL_MAX,
   ASER_TESTS,
   aserGradePassed,
+  aserStudentPassed,
   aserTestLevel,
   type AserTestKey,
   type AserTestScore,
@@ -445,10 +446,11 @@ interface CandidateRow {
 }
 
 // A student's stored aser_grade_* on `computedFor`: score = ASER level ÷ 4
-// and the age's pass rule, both NULL outside the 6–7 band (and before any
-// ASER test) so every reader of the student rows — class and teacher
-// figures, trend lines — leaves those students out. attempts = finished
-// runs that reached any test.
+// and the student's own verdict (aserStudentPassed), for EVERY tested
+// student whatever their age — the NIPUN pattern: class and teacher figures
+// list and count them all, only the area figures (studentVector) keep to
+// the 6–7 band. NULL before any ASER test. attempts = finished runs that
+// reached any test.
 export function aserGradeColumns(
   tests: Record<AserTestKey, AserTestScore> | undefined,
   age: number | null,
@@ -461,11 +463,10 @@ export function aserGradeColumns(
         Object.fromEntries(ASER_KEYS.map((k) => [k, tests[k].latest])),
       )
     : null;
-  if (level === null || !inBand('aser_grade', age))
-    return { score: null, passed: null, attempts };
+  if (level === null) return { score: null, passed: null, attempts };
   return {
     score: level / ASER_LEVEL_MAX,
-    passed: aserGradePassed(level, age),
+    passed: aserStudentPassed(level, age),
     attempts,
   };
 }
