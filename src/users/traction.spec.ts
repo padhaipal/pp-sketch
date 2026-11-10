@@ -9,6 +9,7 @@ const empty = (): TractionInputs => ({
   students: [],
   teacherDays: [],
   mplb: [],
+  aser: [],
 });
 const AT = new Date('2026-09-04T00:00:00Z');
 
@@ -112,6 +113,22 @@ describe('buildTraction', () => {
       AT,
     );
     expect(out.daily.map((d) => d.mpl_b_passed)).toEqual([1, 2, 1]);
+  });
+
+  it('ASER: the country figure of the latest night dated <= X + 1, carried forward; 0 before the first', () => {
+    const out = buildTraction(
+      {
+        ...empty(),
+        aser: [
+          { computed_for: '2026-09-05', passing: 9 },
+          { computed_for: '2026-09-03', passing: 4 },
+        ],
+      },
+      '2026-09-01',
+      '2026-09-05',
+      AT,
+    );
+    expect(out.daily.map((d) => d.aser_passed)).toEqual([0, 4, 4, 9, 9]);
   });
 
   it('monthly: active students split by onboarding month; the month in progress projected linearly', () => {

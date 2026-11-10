@@ -477,16 +477,15 @@ export function aserTestLevel(
 // passes with the paragraph or the story, a seven-year-old only with the
 // story. Letters and words never count. Every other age: null — not part of
 // the figure at all (eight and over never count, pass or fail).
-export const ASER_GRADE_PASS_LEVEL: Readonly<Record<number, number>> = {
-  6: 3,
-  7: 4,
-};
+// 2026-11 (David): under-sixes count too, by the six-year-old rule — "seven
+// and under". No recorded age: never counted.
+export const ASER_GRADE_MAX_AGE = 7;
 export function aserGradePassed(
   level: number,
   age: number | null,
 ): boolean | null {
-  const need = age === null ? undefined : ASER_GRADE_PASS_LEVEL[age];
-  return need === undefined ? null : level >= need;
+  if (age === null || age > ASER_GRADE_MAX_AGE) return null;
+  return level >= (age < ASER_GRADE_MAX_AGE ? 3 : ASER_LEVEL_MAX);
 }
 
 // A student's OWN verdict, any age (2026-11, the NIPUN pattern: a class

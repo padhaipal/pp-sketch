@@ -21,6 +21,10 @@ export interface TractionDay {
   // D covers everything through 00:15 IST on D, so day X reads rows
   // dated <= X + 1.
   mpl_b_passed: number;
+  // Children aged 7 and under reading at grade level on the ASER proxy: the
+  // country row's aser_grade_pass (what the map's headline divides), same
+  // "rows dated <= X + 1" reading; 0 before the first row.
+  aser_passed: number;
   teachers_onboarded: number;
   // Units with at least one onboarded student (through the student's
   // referrer's geo entity and its ancestors), counted from the first.
@@ -97,6 +101,8 @@ export interface TractionInputs {
     computed_for: string;
     passed: boolean | null;
   }>;
+  // nightly country-level ASER passers per computed_for date, any order
+  aser: Array<{ computed_for: string; passing: number }>;
 }
 
 export interface UnitRef {
@@ -191,6 +197,25 @@ export function buildTraction(
     mplb.push(passing);
   }
 
+  // ASER: the latest country figure dated <= X + 1, carried forward.
+  const aserRows = [...inputs.aser].sort((a, b) =>
+    a.computed_for < b.computed_for
+      ? -1
+      : a.computed_for > b.computed_for
+        ? 1
+        : 0,
+  );
+  let aserNow = 0;
+  let ai = 0;
+  const aser: number[] = [];
+  for (const day of days) {
+    const until = nextDay(day);
+    while (ai < aserRows.length && aserRows[ai].computed_for <= until) {
+      aserNow = aserRows[ai++].passing;
+    }
+    aser.push(aserNow);
+  }
+
   const daily: TractionDay[] = days.map((date, k) => {
     const a = activity.get(date);
     return {
@@ -199,6 +224,7 @@ export function buildTraction(
       minutes: a ? Math.round((a.active_ms / MS_PER_MINUTE) * 10) / 10 : 0,
       students_onboarded: students[k],
       mpl_b_passed: mplb[k],
+      aser_passed: aser[k],
       teachers_onboarded: teachers[k],
       schools: unitStock.school[k],
       blocks: unitStock.block[k],

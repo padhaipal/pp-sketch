@@ -256,7 +256,7 @@ describe('dashboard-scores arithmetic', () => {
     expect(testMeta('mpl_b')).toEqual({ age_band: [10, 11], pass_mark: 50 });
     // the ASER proxy: 6–7 year olds, no single pass mark (it depends on age)
     expect(validateMetric('aser_grade')).toBe('aser_grade');
-    expect(testMeta('aser_grade')).toEqual({ age_band: [6, 8] });
+    expect(testMeta('aser_grade')).toEqual({ age_band: [0, 8] });
     expect(testMeta('usage')).toEqual({});
   });
 

@@ -100,9 +100,12 @@ Replaces the NIPUN proxies on the dashboards. Decided with David / Tom.
 - `aserTestLevel(tests)`: highest test whose LATEST result is a pass — 0
   took one and passed none, 1 letter, 2 word, 3 paragraph, 4 story; null =
   never tested. A pass stands without the tests below it (fast jump).
-- `aserGradePassed(level, age)` ("reads at grade level"): age 6 → paragraph
-  or story; age 7 → story only; any other age → null (not in the figure,
-  pass or fail). Letters and words never count as a pass.
+- `aserGradePassed(level, age)` ("reads at grade level"): age 6 and under
+  → paragraph or story (2026-11: under-sixes count too); age 7 → story
+  only; 8 and over or no recorded age → null (not in the figure, pass or
+  fail). Letters and words never count as a pass. Band `[0, 8)`.
+- History: `npm run backfill-aser` / `node dist/scripts/backfill-aser.main.js`
+  (src/scripts/backfill-aser.prompt.md) fills aser_grade_* for past nights.
 - `aserStudentPassed(level, age)` (2026-11, "the same pattern as NIPUN"): a
   student's OWN verdict at any age — under seven → paragraph or story;
   seven and over, or age unknown → story. Class and teacher views list and
