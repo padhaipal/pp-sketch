@@ -84,6 +84,8 @@ describe('dashboard-scores arithmetic', () => {
     expect(usingLifteracy(banded, 'usage')).toBe(true);
     expect(usingLifteracy(banded, 'mpl_b')).toBe(false);
     expect(usingLifteracy(banded, 'nipun_g2')).toBe(false);
+    // the public ASER view: counted ASER results colour the area
+    expect(usingLifteracy(banded, 'aser_grade')).toBe(true);
     expect(
       usingLifteracy(
         { n: 0, students_scored: 0, students_unbanded: 0 },

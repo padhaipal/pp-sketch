@@ -41,8 +41,8 @@ or story, seven → story), band 6–7. `studentVector` works it out from the
 aser_lN columns of the student's latest row and their age on computed_for;
 `aserGradeColumns` writes the student's own columns for every tested
 student, any age (verdict = `aserStudentPassed`) — as with NIPUN, the band
-only gates the area figures. A student with any ASER result now counts in `students_scored`
-(any age), so a school whose students have only sat ASER is "using".
+only gates the area figures. An ASER result does NOT count in `students_scored`
+(reverted 2026-11: "using LIFTeracy" must not follow the initial ASER test).
 
 ## Why sums, not averages
 
