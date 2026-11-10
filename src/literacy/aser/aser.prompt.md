@@ -76,10 +76,16 @@ the story.
 `AserState` rides in each ASER lesson row's `snapshot.context.aser`;
 LiteracyLessonService applies `applyAserTurn` on each voice turn. An
 abandoned item is delivered again (an abandoned letter test restarts on the
-letters not yet answered). ASER rows have `level = NULL` and are excluded
-from progression, so a retest returns the student to their pre-test level.
-The onboarding run's placement (`ASER_PLACEMENT_LEVEL`: beginner 1 → floor 2,
-letter 2, word 3, paragraph 9, story 10) selects the next lesson.
+letters not yet answered). ASER rows have `level = NULL`.
+
+2026-11: every finished run — onboarding and retest — places the student:
+the next lesson is selected at `ASER_PLACEMENT_LEVEL` (beginner 1 → floor 2,
+letter 2, word 3, paragraph 9, story 10), skipping the one-level-per-lesson
+clamp. Only a RETEST that ended early (no passage to deliver —
+`abandonAser`) places nobody: its result is incomplete, the level is kept.
+ASER turns also feed progression (selectNextString's `recent_rows`) like
+lesson turns, except the letter level (rows whose `aser.item` is a letter,
+or null).
 
 ## Results — the NIPUN/MPL-B pattern
 

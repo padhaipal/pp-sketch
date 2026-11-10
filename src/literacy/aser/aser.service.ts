@@ -110,9 +110,10 @@ export class AserService {
       return this.drawNext(userId, prev);
     }
     if (prev && prev.status === 'done') {
-      // The lesson right after a test: the onboarding test places the
-      // student; a retest returns them to their pre-test level (ASER rows
-      // carry no level, so the ratchet reads the last normal lesson's).
+      // The lesson right after a test is selected at the test's placement
+      // level — onboarding and every retest alike (null only for a retest
+      // that ended early: the ratchet then reads the last normal lesson's
+      // level, ASER rows carrying none).
       return {
         kind: 'normal',
         forcedLevel: prev.placementLevel ?? null,

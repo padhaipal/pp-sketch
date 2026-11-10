@@ -1,4 +1,5 @@
 import {
+  abandonAser,
   aserGradePassed,
   aserStudentPassed,
   aserLevelHistory,
@@ -210,10 +211,21 @@ describe('recordAserAnswer — routing', () => {
     expect(t.result).toBe('letter');
   });
 
-  it('retests carry no placement', () => {
+  it('retests place the student too', () => {
     const s = answers(newAserState(2, 5, 'B'), [true, true, true, true]);
     expect(s.status).toBe('done');
-    expect(s.placementLevel).toBeNull();
+    expect(s.result).toBe('story');
+    expect(s.placementLevel).toBe(10);
+  });
+
+  it('a test ended early places only on the onboarding run', () => {
+    // two words right → paragraph stage, then no passage to deliver
+    const jumped = (milestone: number) =>
+      answers(newAserState(1, milestone, 'B'), [true, true]);
+    expect(abandonAser(jumped(0)).placementLevel).toBe(1);
+    const retest = abandonAser(jumped(5));
+    expect(retest.status).toBe('done');
+    expect(retest.placementLevel).toBeNull(); // level kept
   });
 
   it('only the FIRST answer to an item counts', () => {
@@ -247,7 +259,7 @@ describe('retests', () => {
     s = answers(s, [true, true]);
     expect(s.outcomes.word).toBe('passed');
     expect(s.status).toBe('done'); // paragraph already failed
-    expect(s.placementLevel).toBeNull();
+    expect(s.placementLevel).toBe(3); // a level-9 student comes down to 3
   });
 
   it('from words (level 2–8) the fast jump applies', () => {

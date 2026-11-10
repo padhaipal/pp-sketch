@@ -1040,23 +1040,9 @@ describe('LiteracyLessonService.processAnswer — persisted snapshot fields', ()
 describe('LiteracyLessonService.selectNextWord — exact length thresholds', () => {
   // TEST_WORD_LIST grapheme lengths: अब=2, कमल=3, पानी/खाना/सूरज=4, दीवार/किताब=5.
 
-  it('thin history (< 8 rows) HOLDS the level — no drop to the floor of 2', async () => {
+  it('3 completions in the add window step up → length-4 word can win', async () => {
     const word = await selectedWord(
       freshRow({
-        recent_row_count: 7,
-        recent_words: ['पानी'], // level 4 held → a length-4 word still qualifies
-        unique_in_add_window: 0,
-        unique_in_keep_window: 0,
-        letter_scores: seed(['स', 'ू', 'र', 'ज'], -5),
-      }),
-    );
-    expect(word).toBe('सूरज');
-  });
-
-  it('recent_row_count exactly 8 is enough history to step up (kills < → <=) → length-4 word can win', async () => {
-    const word = await selectedWord(
-      freshRow({
-        recent_row_count: 8,
         recent_words: ['कमल'],
         unique_in_add_window: 5,
         letter_scores: seed(['स', 'ू', 'र', 'ज'], -5),
@@ -1698,11 +1684,34 @@ describe('LiteracyLessonService — selectNextWord SQL (timeout progression regr
     );
   });
 
-  it('recent_row_count still counts ALL rows — the thin-history hold must see timed-out attempts', async () => {
+  it('no thin-history hold: the query ships no row count', async () => {
     const sql = await capturedSql();
-    expect(sql).toContain(
-      'COUNT(*)::int FROM recent_rows), 0) AS recent_row_count',
-    );
+    expect(sql).not.toContain('recent_row_count');
+  });
+
+  it('ASER test turns feed progression — all but the letter level', async () => {
+    const sql = await capturedSql();
+    expect(sql).not.toContain("snapshot->'context'->>'aser' IS NULL");
+    const letterOnly =
+      "COALESCE(snapshot->'context'->'aser'->'item'->>'stage', 'letter') = 'letter'";
+    // recent_rows and lifetime_done_count both
+    expect(sql.split(letterOnly).length - 1).toBe(2);
+    expect(sql).toContain('AND level IS NULL');
+  });
+
+  it('windows: 3 words in the last 6 turns to go up, in the last 10 to stay', async () => {
+    const dsQuery = jest
+      .fn()
+      .mockResolvedValueOnce([freshRow()])
+      .mockResolvedValueOnce([{ id: 'lls-1' }]);
+    mockActorGetSnapshot.mockReturnValue(happySnapshot());
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue(null);
+    const { svc } = makeService({ repo, dsQuery });
+    await svc.processAnswer({ user, user_message_id: 'mm-1' });
+    const params = dsQuery.mock.calls[0][1] as unknown[];
+    expect(params[3]).toBe(6);
+    expect(params[4]).toBe(10);
   });
 
   it('recent-word exclusion list is NOT completion-filtered — a timed-out word must not repeat immediately', async () => {
@@ -2613,78 +2622,45 @@ describe('LiteracyLessonService — one level per lesson (no accelerator, no lev
     expect(levelParam).toBe(4);
   });
 
-  it('a perfect first word (2 rows, 1 done) holds the level — no boost', async () => {
-    const { maxLength } = await runLevel({
-      prev_level: 3,
-      recent_words: ['अब'],
-      recent_row_count: 2,
-      unique_in_add_window: 1,
-      unique_in_keep_window: 1,
-    });
-    expect(maxLength).toBe(3);
+  // No "too little history" hold (removed 2026-11): the rule always runs,
+  // however few turns there are — the ASER test's turns are among them.
+  it('fewer than 3 completed words → one level down, however short the history', async () => {
+    for (const done of [0, 1, 2]) {
+      const { maxLength, levelParam } = await runLevel({
+        prev_level: 5,
+        recent_words: ['अब'],
+        unique_in_add_window: done,
+        unique_in_keep_window: done,
+      });
+      expect(maxLength).toBe(4);
+      expect(levelParam).toBe(4);
+    }
   });
 
-  it('a perfect first two words (4 rows, 2 done) holds the level — no boost', async () => {
-    const { maxLength } = await runLevel({
-      prev_level: 3,
-      recent_words: ['अब'],
-      recent_row_count: 4,
-      unique_in_add_window: 2,
-      unique_in_keep_window: 2,
-    });
-    expect(maxLength).toBe(3);
-  });
-
-  it('thin history (< 8 rows) holds the stored level instead of dropping to 2', async () => {
-    const { maxLength, levelParam } = await runLevel({
-      prev_level: 5,
-      recent_words: ['अब'],
-      recent_row_count: 3,
-      unique_in_add_window: 0,
-      unique_in_keep_window: 0,
-    });
-    expect(maxLength).toBe(5);
-    expect(levelParam).toBe(5);
-  });
-
-  it('7 rows is still thin history: completions do not step the level up', async () => {
-    const { maxLength } = await runLevel({
-      prev_level: 5,
-      recent_words: ['अब'],
-      recent_row_count: 7,
-      unique_in_add_window: 3,
-      unique_in_keep_window: 3,
-    });
-    expect(maxLength).toBe(5);
-  });
-
-  it('8 rows is enough history: completions step up by 1, none step down by 1', async () => {
+  it('3 completed words step up by 1; 3 only in the keep window hold', async () => {
     const up = await runLevel({
       prev_level: 5,
       recent_words: ['अब'],
-      recent_row_count: 8,
       unique_in_add_window: 3,
       unique_in_keep_window: 3,
     });
     expect(up.maxLength).toBe(6);
-    const down = await runLevel({
+    const hold = await runLevel({
       prev_level: 5,
       recent_words: ['अब'],
-      recent_row_count: 8,
-      unique_in_add_window: 0,
-      unique_in_keep_window: 0,
+      unique_in_add_window: 2,
+      unique_in_keep_window: 3,
     });
-    expect(down.maxLength).toBe(4);
+    expect(hold.maxLength).toBe(5);
   });
 
-  it('cold start with thin history holds the last word’s own level', async () => {
+  it('cold start (no stored level) runs the rule from the last word’s own level', async () => {
     const { maxLength } = await runLevel({
       prev_level: null,
       recent_words: ['कमल'], // base 3
-      recent_row_count: 2,
       unique_in_keep_window: 1,
     });
-    expect(maxLength).toBe(3);
+    expect(maxLength).toBe(2);
   });
 
   it('level 7 enters the passage band at exactly 8', async () => {

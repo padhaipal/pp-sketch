@@ -41,15 +41,16 @@ import {
 } from './sentence-band-signal.utils';
 
 const RECENT_WORDS_TO_EXCLUDE = 10;
-const SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH = 8;
-const SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME = 15;
+const SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH = 6;
+const SNAPSHOT_THRESHOLD_KEEP_WORD_LENGTH_SAME = 10;
 const MIN_UNIQUE_WORDS_FOR_PROGRESS = 3;
 const MIN_WORD_LENGTH_FLOOR = 2;
 // One step per lesson (2026-11): a new lesson's level is at most this far
 // from the previous lesson's level, up or down. Every progression rule below
 // moves by one; selectNextString also clamps its result to this as a
-// backstop. The only selection not measured against a previous level is the
-// onboarding ASER placement (`forcedLevel`), the student's first lesson.
+// backstop. The one exception is the lesson right after an ASER test —
+// onboarding or retest — which is selected at the test's placement level
+// (`forcedLevel`), however far that is from the previous level.
 const MAX_LEVEL_STEP = 1;
 // Above this lesson level the student gets a reading passage (LLM-generated,
 // selected from media_metadata by media_details.level) instead of single
@@ -256,8 +257,8 @@ export class LiteracyLessonService {
         // lesson, carried forward from the current lesson's row on continue.
         // Null for a continue against a pre-migration row that never had a
         // level (self-heals on the next fresh selection) and for every ASER
-        // row — the ratchet then reads the last NORMAL lesson's level, which
-        // is how a retest hands the student back their pre-test level.
+        // row. The lesson after a finished test — onboarding or retest — is
+        // selected at the test's placement level (`forcedLevel`).
         let selectedLevel: number | null;
         // ASER (aser/aser.ts): the test state before this turn. ASER uses
         // only the lesson loop's own stids — none are added here.
@@ -745,9 +746,9 @@ export class LiteracyLessonService {
     );
   }
 
-  // `forcedLevel`: the onboarding ASER test's placement — the lesson right
-  // after the test is selected AT that level, skipping the ratchet and the
-  // one-step clamp (it is the student's first lesson: no previous level).
+  // `forcedLevel`: an ASER test's placement (onboarding or retest) — the
+  // lesson right after the test is selected AT that level, skipping the
+  // ratchet and the one-step clamp.
   private async selectNextString(
     userId: string,
     forcedLevel: number | null = null,
@@ -761,7 +762,6 @@ export class LiteracyLessonService {
           recent_words: string[];
           unique_in_add_window: number;
           unique_in_keep_window: number;
-          recent_row_count: number;
           // Cap of the most recent row that HAS a stored level. Null when
           // every row is null (post-migration cold state) — the caller then
           // derives the base from the most recent word's length.
@@ -793,8 +793,14 @@ export class LiteracyLessonService {
                    snapshot->'context'->>'stateTransitionId' AS stid
             FROM literacy_lesson_states
             WHERE user_id = $1
-              -- ASER test rows never feed progression (aser/aser.ts)
-              AND snapshot->'context'->>'aser' IS NULL
+              -- ASER test turns count like lesson turns (2026-11), except the
+              -- letter level: an ASER row (it has no level) whose item is a
+              -- letter, or the letter lesson before its first answer.
+              AND NOT (
+                snapshot->'context'->>'aser' IS NOT NULL
+                AND level IS NULL
+                AND COALESCE(snapshot->'context'->'aser'->'item'->>'stage', 'letter') = 'letter'
+              )
             ORDER BY created_at DESC
             LIMIT $3
           ),
@@ -832,7 +838,6 @@ export class LiteracyLessonService {
               (SELECT COUNT(DISTINCT word)::int FROM recent_rows WHERE rn <= $5 AND is_done),
               0
             ) AS unique_in_keep_window,
-            COALESCE((SELECT COUNT(*)::int FROM recent_rows), 0) AS recent_row_count,
             (SELECT s.level FROM literacy_lesson_states s
               WHERE s.user_id = $1 AND s.level IS NOT NULL
               ORDER BY s.created_at DESC
@@ -844,7 +849,11 @@ export class LiteracyLessonService {
             ) AS recent_turns,
             (SELECT COUNT(*)::int FROM literacy_lesson_states
               WHERE user_id = $1 AND snapshot->>'status' = 'done'
-                AND snapshot->'context'->>'aser' IS NULL
+                AND NOT (
+                  snapshot->'context'->>'aser' IS NOT NULL
+                  AND level IS NULL
+                  AND COALESCE(snapshot->'context'->'aser'->'item'->>'stage', 'letter') = 'letter'
+                )
             ) AS lifetime_done_count,
             COALESCE(
               (SELECT json_agg(passage_id ORDER BY latest_at DESC)
@@ -866,7 +875,6 @@ export class LiteracyLessonService {
         const recentWords = data.recent_words;
         const uniqueInAddWindow = Number(data.unique_in_add_window);
         const uniqueInKeepWindow = Number(data.unique_in_keep_window);
-        const recentRowCount = Number(data.recent_row_count);
         // Ratchet base: the last stored cap, or (cold state) the most recent
         // word's own level. recentWords[0] is the most recent row's word
         // because recent_distinct_words orders by MAX(created_at) DESC.
@@ -934,12 +942,10 @@ export class LiteracyLessonService {
           );
         } else {
           // Word section (level ≤ 7): one step up, hold, or one step down.
-          if (recentRowCount < SNAPSHOT_THRESHOLD_ADD_WORD_LENGTH) {
-            // Too little lesson history to judge yet (ASER rows are not in
-            // recent_rows): hold the level — for a new student that is the
-            // onboarding ASER placement.
-            maxLength = base;
-          } else if (uniqueInAddWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
+          // No "too little history" hold (removed 2026-11): the ASER test's
+          // word / paragraph / story turns are in recent_rows, so a student
+          // fresh from a test is judged on those.
+          if (uniqueInAddWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
             maxLength = base + 1;
           } else if (uniqueInKeepWindow >= MIN_UNIQUE_WORDS_FOR_PROGRESS) {
             maxLength = base;
