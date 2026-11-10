@@ -15,6 +15,9 @@ export interface TractionDay {
   users_over_5min: number; // distinct users active > 5 min (active-time.ts gap rule)
   minutes: number; // active minutes over every user, 1 dp
   // Stocks (as of the END of that IST day):
+  // Onboarded students whose all-time active time (active-time.ts gap rule)
+  // has reached 5 minutes (2026-11) — counted from the later of their
+  // onboarding day and the day the 5 minutes were reached.
   students_onboarded: number;
   // Students whose latest nightly MPL-B result is a pass (mpl_b_passed —
   // the pass mark literacy-test-scores.ts applies). The nightly row dated
@@ -42,8 +45,10 @@ export interface TractionMonth {
   month: string; // IST YYYY-MM
   joined_earlier: number;
   joined_this_month: number;
-  // The month in progress only (null otherwise): both counts scaled
-  // linearly from the complete days so far to the whole month.
+  // The month in progress only (null otherwise), d = complete days so far
+  // capped at 30 (2026-11): returning students grow slowly,
+  // joined_earlier × (30 ÷ d)^0.35; new students linearly,
+  // joined_this_month × 30 ÷ d. Each rounded.
   projected_joined_earlier: number | null;
   projected_joined_this_month: number | null;
   // DAU / MAU ("stickiness", 2026-11) over students onboarded by the end of
@@ -76,7 +81,7 @@ export interface TractionResponse {
   // Headline figures through `to`, all time (not just the window).
   totals: {
     hours: number; // active hours over every user, whole
-    students: number; // onboarded students
+    students: number; // as students_onboarded: onboarded, 5+ active minutes
   };
 }
 
@@ -93,6 +98,8 @@ export interface TractionInputs {
   messageDays: Array<{ user_id: string; date: string }>;
   // onboarded students: IST date of onboarding + the referrer's geo chain
   students: Array<{ id: string; onboarded_on: string; units: UnitRef[] }>;
+  // per user: the IST day their all-time active time reached 5 minutes
+  activeFrom: Array<{ user_id: string; date: string }>;
   // IST dates on which each school-level teacher account was created
   teacherDays: string[];
   // nightly MPL-B results, any order
@@ -149,10 +156,14 @@ export function buildTraction(
   const days = dateRange(from, to);
   const activity = new Map(inputs.activityByDay.map((r) => [r.date, r]));
 
-  const students = stock(
-    inputs.students.map((s) => s.onboarded_on),
-    days,
-  );
+  // Counted students: onboarded AND 5+ active minutes, from the later day.
+  const activeFrom = new Map(inputs.activeFrom.map((a) => [a.user_id, a.date]));
+  const countedFrom = inputs.students.flatMap((s) => {
+    const reached = activeFrom.get(s.id);
+    if (reached === undefined) return [];
+    return [reached > s.onboarded_on ? reached : s.onboarded_on];
+  });
+  const students = stock(countedFrom, days);
   const teachers = stock(inputs.teacherDays, days);
 
   // first onboarded student per unit
@@ -245,10 +256,17 @@ export function buildTraction(
           .filter((a) => a.date <= to)
           .reduce((sum, a) => sum + a.active_ms, 0) / MS_PER_HOUR,
       ),
-      students: inputs.students.filter((s) => s.onboarded_on <= to).length,
+      students: countedFrom.filter((d) => d <= to).length,
     },
   };
 }
+
+// Month-end projection of monthly active students (2026-11):
+//   R × (30 ÷ d)^0.35 + N × 30 ÷ d
+// R = returning (joined earlier), N = new (joined this month), d = complete
+// days of the month so far, capped at 30.
+const PROJECTION_MONTH_DAYS = 30;
+const RETURNING_GROWTH_EXPONENT = 0.35;
 
 // Days in the IST month `ym` (YYYY-MM).
 const daysInMonth = (ym: string): number => {
@@ -333,8 +351,8 @@ function buildMonthly(
   return months.map((month) => {
     const c = counts.get(month)!;
     const partial = month === lastMonth && elapsed < total;
-    const scale = (n: number) =>
-      partial ? Math.round((n * total) / elapsed) : null;
+    const d = Math.min(elapsed, PROJECTION_MONTH_DAYS);
+    const growth = PROJECTION_MONTH_DAYS / d;
     const w = writers.get(month)!;
     const mau = w.users.size;
     const days = windowDays.get(month) ?? 1;
@@ -343,8 +361,10 @@ function buildMonthly(
       month,
       joined_earlier: c.earlier,
       joined_this_month: c.now,
-      projected_joined_earlier: scale(c.earlier),
-      projected_joined_this_month: scale(c.now),
+      projected_joined_earlier: partial
+        ? Math.round(c.earlier * Math.pow(growth, RETURNING_GROWTH_EXPONENT))
+        : null,
+      projected_joined_this_month: partial ? Math.round(c.now * growth) : null,
       mau,
       dau_avg: Math.round((w.userDays / days) * 10) / 10,
       dau_mau: pct(soFar),

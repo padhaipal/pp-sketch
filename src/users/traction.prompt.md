@@ -45,9 +45,21 @@ Aggregates only — no ids, names or numbers leave.
   end (previous final ratio ÷ previous ratio over its first N days); null
   when the previous month has nothing to compare with. (A linear scale-up
   of `mau`, as the counts above use, would read far too low early on.)
-- **Cache**: pp-redis-cache key `dashboard:traction:v6:<IST date>`, TTL
+- **Cache**: pp-redis-cache key `dashboard:traction:v7:<IST date>`, TTL
   26 h; a concurrent miss shares one in-flight computation.
 - **Warm**: queue `traction-warm`, cron `TRACTION_WARM_CRON` 20:00 UTC =
   01:30 IST (after the 00:15 IST test results), `refresh()` overwrites the
   day's key; registered in main.ts (pinned by traction.spec.ts).
 - Pure assembly in traction.ts (`buildTraction`), unit-tested.
+
+## 2026-11: counted students need 5 active minutes; new monthly projection
+
+- `students_onboarded` and `totals.students`: onboarded students whose
+  all-time active time (active-time.ts gap rule) has reached 5 minutes,
+  counted from the later of the onboarding day and the day it was reached
+  (`activeFrom`, the `'q'` rows of the activity query). Units, monthly active
+  students and DAU / MAU still read every onboarded student.
+- Monthly projection: `R × (30 ÷ d)^0.35 + N × 30 ÷ d`, R = joined earlier,
+  N = joined this month, d = complete days so far capped at 30. Replaces the
+  linear scale-up.
+- Cache key bumped to v7.

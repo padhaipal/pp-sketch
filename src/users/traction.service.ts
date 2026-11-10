@@ -83,10 +83,11 @@ export class TractionService {
       await Promise.all([
         // per IST day ('d'), per (user, IST month) with a day > 5 min ('m')
         // and per (user, IST day) with any message ('u') — the last two
-        // within the window — from one scan
+        // within the window — and per user the IST day their all-time
+        // active time reached 5 min ('q'), from one scan
         db.query<
           Array<{
-            k: 'd' | 'm' | 'u';
+            k: 'd' | 'm' | 'u' | 'q';
             date: string | null;
             user_id: string | null;
             users_over_5min: number | null;
@@ -108,7 +109,16 @@ export class TractionService {
            UNION ALL
            SELECT 'u', ist_date::text, user_id, NULL::int, NULL::numeric
            FROM per_user_day
-           WHERE ist_date BETWEEN $2::date AND $3::date`,
+           WHERE ist_date BETWEEN $2::date AND $3::date
+           UNION ALL
+           SELECT 'q', MIN(ist_date)::text, user_id, NULL::int, NULL::numeric
+           FROM (SELECT user_id, ist_date,
+                        SUM(active_ms) OVER (
+                          PARTITION BY user_id ORDER BY ist_date
+                        ) AS total_ms
+                 FROM per_user_day) running
+           WHERE total_ms >= $1
+           GROUP BY user_id`,
           [FIVE_MIN_MS, from, to],
         ),
         // onboarded students (UserService.isOnboarded): grandfathered by
@@ -191,6 +201,7 @@ export class TractionService {
     const activityByDay: TractionInputs['activityByDay'] = [];
     const activeMonths: TractionInputs['activeMonths'] = [];
     const messageDays: TractionInputs['messageDays'] = [];
+    const activeFrom: TractionInputs['activeFrom'] = [];
     for (const r of activityRows) {
       if (r.k === 'd' && r.date) {
         activityByDay.push({
@@ -202,12 +213,15 @@ export class TractionService {
         activeMonths.push({ user_id: r.user_id, month: r.date });
       } else if (r.k === 'u' && r.date && r.user_id) {
         messageDays.push({ user_id: r.user_id, date: r.date });
+      } else if (r.k === 'q' && r.date && r.user_id) {
+        activeFrom.push({ user_id: r.user_id, date: r.date });
       }
     }
     return {
       activityByDay,
       activeMonths,
       messageDays,
+      activeFrom,
       students: studentRows
         .filter((r) => r.onboarded_on)
         .map((r) => ({
