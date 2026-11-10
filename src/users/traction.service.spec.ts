@@ -29,6 +29,13 @@ function make(cached: unknown = null) {
           users_over_5min: null,
           active_ms: null,
         },
+        {
+          k: 'q',
+          date: '2026-09-01',
+          user_id: 's1',
+          users_over_5min: null,
+          active_ms: null,
+        },
       ];
     if (sql.includes('traction:students'))
       return [
@@ -61,7 +68,7 @@ describe('TractionService', () => {
   it('a cache hit is returned without touching the database', async () => {
     const { svc, query, cache } = make({ daily: [] });
     expect(await svc.get(NOW)).toEqual({ daily: [] });
-    expect(cache.get).toHaveBeenCalledWith('dashboard:traction:v6:2026-09-03');
+    expect(cache.get).toHaveBeenCalledWith('dashboard:traction:v7:2026-09-03');
     expect(query).not.toHaveBeenCalled();
   });
 
@@ -100,7 +107,7 @@ describe('TractionService', () => {
       projected_dau_mau: null, // August has no writers to compare with
     });
     expect(cache.set).toHaveBeenCalledWith(
-      'dashboard:traction:v6:2026-09-03',
+      'dashboard:traction:v7:2026-09-03',
       out,
       26 * 3600,
     );

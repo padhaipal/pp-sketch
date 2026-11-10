@@ -6,6 +6,7 @@ const empty = (): TractionInputs => ({
   activityByDay: [],
   activeMonths: [],
   messageDays: [],
+  activeFrom: [],
   students: [],
   teacherDays: [],
   mplb: [],
@@ -54,6 +55,13 @@ describe('buildTraction', () => {
         students: [
           { id: 'a', onboarded_on: '2026-08-10', units: [] },
           { id: 'b', onboarded_on: '2026-09-02', units: [] },
+          { id: 'c', onboarded_on: '2026-08-10', units: [] }, // under 5 min
+        ],
+        // a reached 5 active minutes before onboarding, b the day after
+        activeFrom: [
+          { user_id: 'a', date: '2026-08-01' },
+          { user_id: 'b', date: '2026-09-03' },
+          { user_id: 'x', date: '2026-08-01' }, // not onboarded
         ],
         teacherDays: ['2026-09-01', '2026-07-01', '2026-09-03'],
       },
@@ -61,7 +69,7 @@ describe('buildTraction', () => {
       '2026-09-03',
       AT,
     );
-    expect(out.daily.map((d) => d.students_onboarded)).toEqual([1, 2, 2]);
+    expect(out.daily.map((d) => d.students_onboarded)).toEqual([1, 1, 2]);
     expect(out.daily.map((d) => d.teachers_onboarded)).toEqual([2, 2, 3]);
   });
 
@@ -168,8 +176,8 @@ describe('buildTraction', () => {
         month: '2026-09',
         joined_earlier: 1,
         joined_this_month: 1,
-        projected_joined_earlier: 3, // 1 × 30 ÷ 10
-        projected_joined_this_month: 3,
+        projected_joined_earlier: 1, // 1 × (30 ÷ 10)^0.35 = 1.47
+        projected_joined_this_month: 3, // 1 × 30 ÷ 10
         mau: 0,
         dau_avg: 0,
         dau_mau: null,
@@ -283,7 +291,12 @@ describe('buildTraction', () => {
           { id: 'a', onboarded_on: '2026-03-01', units: [] },
           { id: 'b', onboarded_on: '2026-09-02', units: [] },
           { id: 'c', onboarded_on: '2026-09-04', units: [] }, // after `to`
+          { id: 'd', onboarded_on: '2026-03-01', units: [] }, // under 5 min
         ],
+        activeFrom: ['a', 'b', 'c'].map((user_id) => ({
+          user_id,
+          date: '2026-03-01',
+        })),
       },
       '2026-09-01',
       '2026-09-03',
@@ -331,5 +344,46 @@ describe('traction-warm worker registration', () => {
     expect(read('users/user.controller.ts')).toMatch(
       /@Get\('dashboard\/traction'\)/,
     );
+  });
+});
+
+describe('monthly projection: R × (30 ÷ d)^0.35 + N × 30 ÷ d', () => {
+  const run = (to: string, earlier: number, now: number) => {
+    const month = to.slice(0, 7);
+    const students = [
+      ...Array.from({ length: earlier }, (_, i) => ({
+        id: `r${i}`,
+        onboarded_on: '2026-01-01',
+        units: [],
+      })),
+      ...Array.from({ length: now }, (_, i) => ({
+        id: `n${i}`,
+        onboarded_on: `${month}-01`,
+        units: [],
+      })),
+    ];
+    const out = buildTraction(
+      {
+        ...empty(),
+        students,
+        activeMonths: students.map((s) => ({ user_id: s.id, month })),
+      },
+      `${month}-01`,
+      to,
+      AT,
+    );
+    const m = out.monthly[0];
+    return [m.projected_joined_earlier, m.projected_joined_this_month];
+  };
+
+  it('returning students grow by the 0.35 power, new ones linearly', () => {
+    // d = 6: 40 × 5^0.35 = 70.3; 10 × 5 = 50
+    expect(run('2026-09-06', 40, 10)).toEqual([70, 50]);
+    // d = 15: 40 × 2^0.35 = 50.98; 10 × 2 = 20
+    expect(run('2026-09-15', 40, 10)).toEqual([51, 20]);
+  });
+
+  it('d is capped at 30: day 30 of a 31-day month projects no growth', () => {
+    expect(run('2026-10-30', 40, 10)).toEqual([40, 10]);
   });
 });
