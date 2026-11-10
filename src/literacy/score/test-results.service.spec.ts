@@ -1580,7 +1580,7 @@ describe('a higher NIPUN grade pass implies the lower grades at 100 % (roll-up o
     for (const v of [aser(2018, 4), aser(2021, 4), aser(null, 4)]) {
       expect(v.aser_grade.n).toBe(0);
       expect(v.aser_grade.pass).toBe(0);
-      expect(v.students_scored).toBe(1); // still a student using the tests
+      expect(v.students_scored).toBe(0); // an ASER result alone is not "scored"
     }
     // never tested: nothing
     expect(aser(2020, null).aser_grade.n).toBe(0);

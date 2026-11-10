@@ -528,6 +528,9 @@ export function usingLifteracy(
 ): boolean {
   if (!row) return false;
   if (metric === 'usage') return (row.n ?? 0) > 0;
+  // The public map's ASER view: an area with ASER results is coloured even
+  // though ASER does not count in students_scored.
+  if (metric === 'aser_grade' && (row.n ?? 0) > 0) return true;
   return row.students_scored + row.students_unbanded > 0;
 }
 

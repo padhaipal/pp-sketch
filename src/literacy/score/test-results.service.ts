@@ -311,7 +311,13 @@ export function studentVector(
         ? [null, null]
         : [level / ASER_LEVEL_MAX, aserGradePassed(level, age)],
   };
-  v.students_scored = TEST_METRICS.some((m) => scores[m][0] !== null) ? 1 : 0;
+  // ASER does not count here (2026-11): students_scored feeds "using
+  // LIFTeracy" on every dashboard, which an initial ASER test must not flip.
+  v.students_scored = TEST_METRICS.some(
+    (m) => m !== 'aser_grade' && scores[m][0] !== null,
+  )
+    ? 1
+    : 0;
   // Usage counts every student, banded or not: absent minutes are zero.
   const minutes = row.usage_score ?? 0;
   v.usage.n = 1;
