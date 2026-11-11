@@ -889,7 +889,6 @@ describe('evaluate-answer.utils', () => {
       ['ा', 'बड़ा'],
       ['ी', 'बड़ी'],
       ['ए', 'ऐसे'],
-      ['ब', 'वाह'],
       ['ख', 'हाँ'],
       ['ऐ', 'है'],
       ['ऐ', 'हाय'],
@@ -908,6 +907,17 @@ describe('evaluate-answer.utils', () => {
       expect(
         markLetter({ correctAnswer: correct, studentAnswer: student }),
       ).toBe(true);
+    });
+
+    // वाह starts with व, so it is not a reading of ब or भ.
+    it.each([
+      ['ब', 'वाह'],
+      ['भ', 'वाह'],
+      ['भ', 'दा ~ वाह'],
+    ])('correct=%s, student=%s → false', (correct, student) => {
+      expect(
+        markLetter({ correctAnswer: correct, studentAnswer: student }),
+      ).toBe(false);
     });
   });
 
