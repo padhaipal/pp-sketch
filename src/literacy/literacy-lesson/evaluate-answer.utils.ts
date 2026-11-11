@@ -993,7 +993,6 @@ class EvaluateAnswer {
       if (cleanedCorrectAnswer === 'ा' && cleaned === 'बड़ा') return true;
       if (cleanedCorrectAnswer === 'ी' && cleaned === 'बड़ी') return true;
       if (cleanedCorrectAnswer === 'ए' && cleaned === 'ऐसे') return true;
-      if (cleanedCorrectAnswer === 'ब' && cleaned === 'वाह') return true;
       if (cleanedCorrectAnswer === 'ख' && cleaned === 'हाँ') return true;
       if (cleanedCorrectAnswer === 'ऐ' && cleaned === 'है') return true;
       if (cleanedCorrectAnswer === 'ऐ' && cleaned === 'हाय') return true;
@@ -1011,7 +1010,6 @@ class EvaluateAnswer {
 
       // markLetter — inside words.some((w) => { ... })
       if (cleanedCorrectAnswer === 'च' && cleaned === 'क्या') return true;
-      if (cleanedCorrectAnswer === 'भ' && cleaned === 'वाह') return true;
       if (cleanedCorrectAnswer === 'औ' && cleaned === 'और') return true;
       if (cleanedCorrectAnswer === 'च' && cleaned === 'चार') return true;
       if (cleanedCorrectAnswer === 'अ' && cleaned === 'हाँ') return true;
