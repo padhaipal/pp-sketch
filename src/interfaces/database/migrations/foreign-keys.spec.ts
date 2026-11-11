@@ -102,6 +102,7 @@ describe('migrations — foreign keys onto users / media_metadata', () => {
         'outbound_messages.media_metadata_id',
         'outbound_messages.user_id',
         'outbound_messages.user_message_id',
+        'referral_link_clicks.referrer_user_id',
         'scores.user_id',
         'scores.user_message_id',
         'test_results_student.student_id',
