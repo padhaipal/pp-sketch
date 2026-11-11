@@ -21,6 +21,7 @@ import { OutboundMessageModule } from './outbound-messages/outbound-message.modu
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { GeoEntityModule } from './geo-entities/geo-entity.module';
 import { TestResultsModule } from './literacy/score/test-results.module';
+import { ReferralClickModule } from './referral-clicks/referral-click.module';
 import { ApiKeyGuard } from './auth/api-key.guard';
 
 @Module({
@@ -39,6 +40,7 @@ import { ApiKeyGuard } from './auth/api-key.guard';
     OnboardingModule,
     GeoEntityModule,
     TestResultsModule,
+    ReferralClickModule,
   ],
   controllers: [
     AppController,
