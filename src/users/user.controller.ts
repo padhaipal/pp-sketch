@@ -291,8 +291,8 @@ export class UserController {
   }
 
   // The donor page's live stream: the latest student turns, at least two
-  // minutes old, names and transcripts masked to first and last character,
-  // no audio and no ids (interaction-stream.ts). Public through the
+  // minutes old, transcripts masked to first and last character, no student
+  // name or phone, no audio and no ids (interaction-stream.ts). Public through the
   // pp-dashboard proxy; one shared computation per ~minute.
   @Get('dashboard/interactions')
   async dashboardInteractions(): Promise<InteractionStreamResponse> {
