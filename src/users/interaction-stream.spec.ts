@@ -9,8 +9,6 @@ import {
   displayedAnswer,
   pickTranscript,
   rowKey,
-  STAND_IN_NAMES,
-  studentInitials,
   toStreamRow,
   wpmOf,
   type InteractionSourceRow,
@@ -45,9 +43,10 @@ const voice = (
 });
 
 describe('interaction stream rows', () => {
-  it('masks the name and the transcript to first and last character', () => {
+  it('masks the transcript to first and last character and sends no name', () => {
     const row = toStreamRow(voice());
-    expect(row.student).toBe('R...i');
+    expect(row).not.toHaveProperty('student');
+    expect(JSON.stringify(row)).not.toContain('Rani');
     expect(row.answer).toBe('क...ल');
     expect(row.kind).toBe('voice');
     expect(row.at).toBe('2026-10-22T13:00:00.000Z');
@@ -65,17 +64,6 @@ describe('interaction stream rows', () => {
       voice({ transcripts: [{ source: 'sarvam', text: '9876543210 कमल' }] }),
     );
     expect(row.answer).toBe('[...ल');
-  });
-
-  it('an unnamed student is a masked common Indian name, stable per student', () => {
-    const a = toStreamRow(voice({ student_name: null })).student;
-    const real = new Set(STAND_IN_NAMES.map((n) => `${n[0]}...${n.at(-1)}`));
-    expect(real.has(a)).toBe(true);
-    expect(toStreamRow(voice({ student_name: '  ' })).student).toBe(a);
-    expect(
-      toStreamRow(voice({ student_name: null, user_id: 'other' })).student,
-    ).not.toBe(a);
-    expect(a).toBe(studentInitials('aaaaaaaa-0000-4000-8000-000000000001'));
   });
 
   it('picks transcripts sarvam → azure → bodhan, skipping empty ones', () => {
@@ -164,7 +152,7 @@ describe('InteractionStreamService', () => {
     const out = await svc.get();
     expect(out.delay_s).toBe(120);
     expect(out.rows).toHaveLength(1);
-    expect(out.rows[0].student).toBe('R...i');
+    expect(out.rows[0]).not.toHaveProperty('student');
     const [sql, params] = query.mock.calls[0] as unknown as [string, unknown[]];
     expect(sql).toContain('interaction-stream:rows');
     expect(params[0]).toBe(120);
