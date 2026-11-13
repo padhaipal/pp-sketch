@@ -745,7 +745,7 @@ describe('UserController.patchUser', () => {
       phone: 'new-phone',
       name: 'Alice',
       password: 'pw',
-      role: 'dev',
+      role: 'admin',
     });
 
     expect(bcrypt.hash).toHaveBeenCalledWith('pw', 10);
@@ -754,7 +754,7 @@ describe('UserController.patchUser', () => {
       new_external_id: 'new-phone',
       new_name: 'Alice',
       new_password_hash: 'hashed-pw',
-      new_role: 'dev',
+      new_role: 'admin',
     });
     // Never the direct repo write that skipped cache eviction.
     expect(userRepo.save).not.toHaveBeenCalled();
@@ -762,8 +762,36 @@ describe('UserController.patchUser', () => {
       id: 'u1',
       external_id: 'new-phone',
       name: 'Alice',
-      role: 'dev',
+      role: 'admin',
     });
+  });
+
+  it('refuses role=dev on any target and any change to a dev target (403)', async () => {
+    const student = { id: 'u1', external_id: 'x', name: 'S', role: 'student' };
+    const dev = { id: 'd1', external_id: 'y', name: 'Dev', role: 'dev' };
+    const findOneBy = jest
+      .fn()
+      .mockImplementation(({ id }: { id: string }) =>
+        Promise.resolve(id === 'd1' ? dev : student),
+      );
+    const userRepo = makeRepo({ findOneBy });
+    const update = updateMock(student);
+    const ctrl = makeController({ userRepo, userSvc: { update } });
+
+    await expect(
+      ctrl.patchUser('u1', { role: 'dev' } as never),
+    ).rejects.toThrow(ForbiddenException);
+    for (const body of [
+      { password: 'pw' },
+      { phone: '919999990002' },
+      { name: 'X' },
+      { role: 'student' },
+    ]) {
+      await expect(ctrl.patchUser('d1', body as never)).rejects.toThrow(
+        ForbiddenException,
+      );
+    }
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('refuses the staff fields on a dev/admin target (403) but still allows name/password/role there', async () => {
