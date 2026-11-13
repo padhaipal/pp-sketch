@@ -1098,8 +1098,8 @@ export class UserController {
   // Goes through UserService.update so the user cache is evicted (the
   // previous userRepo.save path left a renamed student stale for
   // CACHE_TTL.USER). The staff fields are refused on dev/admin targets; name,
-  // phone, password and role still work there — that is how admin accounts
-  // are managed.
+  // phone, password and role still work on admins — that is how admin
+  // accounts are managed. Dev targets and role=dev are refused outright.
   @Patch(':id')
   async patchUser(
     @Param('id') id: string,
@@ -1126,6 +1126,13 @@ export class UserController {
     const user = await this.userRepo.findOneBy({ id });
     if (!user) {
       throw new NotFoundException('User not found');
+    }
+    // pp-sketch can't tell an admin caller from a dev one, so no API caller
+    // may mint or edit a dev; dev accounts are managed via seed.ts / SQL.
+    if (body.role === 'dev' || user.role === 'dev') {
+      throw new ForbiddenException(
+        'Dev accounts cannot be created or changed via the API',
+      );
     }
     if (
       staffFieldsPresent &&
