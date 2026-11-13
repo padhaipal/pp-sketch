@@ -35,8 +35,14 @@ export class ScoreController {
       viewer,
       results.map((r) => r.userId),
     );
+    // The general public (donor page) gets no phone at all.
     return results.map((r) =>
-      visible.has(r.userId) ? r : { ...r, userPhone: maskPii(r.userPhone) },
+      visible.has(r.userId)
+        ? r
+        : {
+            ...r,
+            userPhone: viewer.kind === 'anonymous' ? '' : maskPii(r.userPhone),
+          },
     );
   }
 }

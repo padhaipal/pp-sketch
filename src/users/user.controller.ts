@@ -547,12 +547,17 @@ export class UserController {
     const user = await this.userRepo.findOneBy({ id });
     if (!user) throw new NotFoundException('User not found');
     const canSeePii = await this.piiAccess.canSee(viewer, user.id);
+    const publicView = viewer.kind === 'anonymous';
+    // The general public (donor page) gets no name or phone at all.
     const userInfo = {
-      name: canSeePii ? user.name : maskPii(user.name),
-      phone: canSeePii ? user.external_id : maskPii(user.external_id),
+      name: canSeePii ? user.name : publicView ? '' : maskPii(user.name),
+      phone: canSeePii
+        ? user.external_id
+        : publicView
+          ? ''
+          : maskPii(user.external_id),
       pii: visibilityOf(canSeePii),
     };
-    const publicView = viewer.kind === 'anonymous';
     const censor = (text: string | null) =>
       text === null
         ? { text, redactions: 0 }

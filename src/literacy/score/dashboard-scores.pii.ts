@@ -17,7 +17,9 @@ import type {
 // `publicView` = the general public is looking (an anonymous viewer — the
 // donor page). Then teachers' and officials' NAMES are masked too and their
 // spotlight message (free text) is withheld; a /d link holder still sees
-// every teacher's and official's name, as before.
+// every teacher's and official's name, as before. Students' names, labels
+// and phone numbers are not sent to the general public at all (empty
+// strings, not masked).
 
 // The stand-in name of a teacher without one (dashboard-scores.service.ts):
 // identifies nobody, so it is never masked.
@@ -50,9 +52,12 @@ export function piiSubjects(response: ScoresResponse): string[] {
 export function redactStudent(
   row: StudentRow,
   visible: ReadonlySet<string>,
+  publicView = false,
 ): StudentRow {
   const full = visible.has(row.student_id);
   if (full) return { ...row, pii: 'full' };
+  if (publicView)
+    return { ...row, label: '', name: '', phone: '', pii: 'masked' };
   return {
     ...row,
     // The label is the first name when there is one ("Student N" otherwise,
@@ -108,7 +113,7 @@ export function redactScores(
     // a teacher's class: the entity is the teacher
     entity: publicView ? maskTeacherRef(response.entity) : response.entity,
     children: isStudentRows(response.children)
-      ? response.children.map((s) => redactStudent(s, visible))
+      ? response.children.map((s) => redactStudent(s, visible, publicView))
       : response.children.map((c) => redactChild(c, visible, publicView)),
     most_improved: response.most_improved.map((c) =>
       redactChild(c, visible, publicView),
@@ -149,7 +154,12 @@ function redactRankRow(
   if (level === 'student') {
     return {
       ...row,
-      name: !full && named.has(row.id) ? maskPii(row.name) : row.name,
+      name:
+        publicView && !full
+          ? ''
+          : !full && named.has(row.id)
+            ? maskPii(row.name)
+            : row.name,
       sub: null,
       path,
     };
