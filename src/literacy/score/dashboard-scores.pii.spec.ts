@@ -1,12 +1,14 @@
 import {
   piiSubjects,
   redactOfficial,
+  redactRankings,
   redactScores,
   redactStudent,
 } from './dashboard-scores.pii';
 import type {
   ChildRow,
   Official,
+  RankRow,
   ScoresResponse,
   StudentRow,
 } from './dashboard-scores.dto';
@@ -111,6 +113,44 @@ describe('redactStudent', () => {
         pii: 'masked',
       }),
     );
+  });
+  it('general public → name, label and phone empty (not masked), named or not', () => {
+    for (const s of [
+      student('s1', 'Rani Devi', 'Rani'),
+      student('s2', null, 'Student 2'),
+    ]) {
+      expect(redactStudent(s, new Set(), true)).toEqual(
+        expect.objectContaining({
+          name: '',
+          label: '',
+          phone: '',
+          pii: 'masked',
+        }),
+      );
+    }
+  });
+});
+
+describe('redactRankings — student level', () => {
+  const row = (id: string, name: string): RankRow =>
+    ({ id, name, sub: null, value: 50, delta: null, path: [] }) as RankRow;
+  const response = {
+    level: 'student' as const,
+    as_of: null,
+    top: [row('s1', 'Rani Devi'), row('s2', 'Student 2')],
+    most_improved: [row('s1', 'Rani Devi')],
+  };
+  it('general public → every student name empty', () => {
+    const out = redactRankings(response, new Set(), true, new Set(['s1']));
+    expect([...out.top, ...out.most_improved].map((r) => r.name)).toEqual([
+      '',
+      '',
+      '',
+    ]);
+  });
+  it('a /d link holder → named students masked, "Student N" kept', () => {
+    const out = redactRankings(response, new Set(), false, new Set(['s1']));
+    expect(out.top.map((r) => r.name)).toEqual(['R...i', 'Student 2']);
   });
 });
 

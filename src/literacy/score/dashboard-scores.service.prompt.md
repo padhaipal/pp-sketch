@@ -248,6 +248,8 @@ its drill stack.
 viewer — is `publicView` in dashboard-scores.pii.ts: on top of the masking
 every viewer gets, teachers' and officials' NAMES are masked too (the
 teacher row name, `official.name`, a teacher entity / drill ref name; the
-"Teacher" fallback stays) and `official.spotlight_message` is null. A /d
+"Teacher" fallback stays), `official.spotlight_message` is null, and
+students' name / label / phone are empty strings (not masked; student-level
+ranking names too). A /d
 link holder still sees every teacher's and official's name. Applies to
 scores (and so spotlight + scores.csv) and rankings.

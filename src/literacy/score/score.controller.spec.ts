@@ -54,10 +54,10 @@ describe('ScoreController.letterBins', () => {
     expect(svc.getLetterBins).toHaveBeenCalledTimes(1);
   });
 
-  it('defaults to the anonymous viewer: every phone masked', async () => {
+  it('defaults to the anonymous viewer: no phone at all (empty, not masked)', async () => {
     const { ctrl, visibleTo } = make([]);
     const out = await ctrl.letterBins({ users: [U1] });
     expect(visibleTo).toHaveBeenCalledWith(ANONYMOUS, [U1, U2]);
-    expect(out.map((r) => r.userPhone)).toEqual(['9...1', '9...2']);
+    expect(out.map((r) => r.userPhone)).toEqual(['', '']);
   });
 });

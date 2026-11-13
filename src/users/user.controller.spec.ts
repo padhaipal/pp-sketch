@@ -2644,12 +2644,18 @@ describe('UserController — PII by viewer', () => {
 
   it('media: anyone else gets name and phone masked and pii masked; the rows themselves are unchanged', async () => {
     const { ctrl } = make(false);
-    const out = await ctrl.userMedia(STUDENT_ID);
+    const out = await ctrl.userMedia(STUDENT_ID, undefined, undefined, TEACHER);
     expect(out.user).toEqual({ name: 'R...i', phone: '9...1', pii: 'masked' });
     expect(out.media.map((m) => [m.id, m.has_audio])).toEqual([
       ['m1', true],
       ['m2', false],
     ]);
+  });
+
+  it('media: the general public (anonymous viewer) gets no name or phone at all', async () => {
+    const { ctrl } = make(false);
+    const out = await ctrl.userMedia(STUDENT_ID);
+    expect(out.user).toEqual({ name: '', phone: '', pii: 'masked' });
   });
 
   it('media: transcripts are censored for EVERY viewer — spoken phone numbers, "mera naam …" and the student’s own name', async () => {
