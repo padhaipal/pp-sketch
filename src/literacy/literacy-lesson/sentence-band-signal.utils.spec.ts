@@ -2,6 +2,7 @@ import {
   SENTENCE_RECENT_ROWS_WINDOW,
   TurnRow,
   computeSentenceBandSignal,
+  hasOpenTurn,
 } from './sentence-band-signal.utils';
 
 // Builds a newest-first turn array from compact specs; rn is assigned by
@@ -359,5 +360,42 @@ describe('computeSentenceBandSignal — flow-mode lessons (level 11+)', () => {
     expect(out.bothFailedOut).toBe(false);
     // Both are first-try READ passes → increment, regardless of the tap.
     expect(out.decision).toBe('increment');
+  });
+});
+
+describe('hasOpenTurn', () => {
+  it('empty window (no history) → false', () => {
+    expect(hasOpenTurn([])).toBe(false);
+  });
+
+  it('newest row is done (normal flow: lesson just finished) → false', () => {
+    expect(hasOpenTurn(turns([...passedLesson(), ...passedLesson()]))).toBe(
+      false,
+    );
+  });
+
+  it('newest row is an unfinished lesson start (timeout / reminder) → true', () => {
+    expect(
+      hasOpenTurn(
+        turns([
+          { stid: 'sentence-start-sentence-initial' },
+          ...passedLesson(),
+          ...passedLesson(),
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  it('window of only open rows → true', () => {
+    expect(hasOpenTurn(turns([{}, {}, {}]))).toBe(true);
+  });
+
+  it('uses rn, not array order', () => {
+    const rows: TurnRow[] = [
+      { rn: 2, is_done: true, stid: 'opt1-comprehension-complete' },
+      { rn: 1, is_done: false, stid: 'sentence-start-sentence-initial' },
+    ];
+    expect(hasOpenTurn(rows)).toBe(true);
+    expect(hasOpenTurn([...rows].reverse())).toBe(true);
   });
 });

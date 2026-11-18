@@ -57,3 +57,16 @@ A lesson is a FLOW-MODE lesson when any of its stids ends
 correct answers increment and two wrong answers decrement; mixed read/flow
 pairs around the 10↔11 boundary combine naturally (a first-try read pass and
 a correct answer both count as a pass).
+
+## 2026-11: open-turn hold — `hasOpenTurn(turns)`
+
+True when the newest row (lowest `rn`) is not a done row: a row was written
+after the last completed lesson, so a fresh selection has already used the
+current evidence and nothing has finished since. Empty window → false.
+The service calls it BEFORE either band's decision and holds the level
+when it is true (word band and sentence band alike).
+
+Why: the decision has no memory. Each fresh start (7pm notifier, hail-mary,
+stale/abandoned-lesson restart) re-read the same last two passes and gave
++1 again, so one student went 8 → 12 on one correct answer. The same
+mechanism made repeated −1s on return (low-completion rule).
