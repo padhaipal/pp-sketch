@@ -38,6 +38,7 @@ import {
   SENTENCE_RECENT_ROWS_WINDOW,
   TurnRow,
   computeSentenceBandSignal,
+  hasOpenTurn,
 } from './sentence-band-signal.utils';
 
 const RECENT_WORDS_TO_EXCLUDE = 10;
@@ -904,8 +905,18 @@ export class LiteracyLessonService {
         const hasPreviousLevel = prevLevel !== null || recentWords.length > 0;
         const base = prevLevel ?? lessonLevel(recentWords[0] ?? '');
 
+        // Open-turn hold (both bands): a row newer than the last completed
+        // lesson means a selection already ran on this evidence and nothing
+        // was completed since (timeout, 7pm notifier, hail-mary, stale
+        // restart). Hold instead of re-applying the same up/down decision.
+        // The clamps below (floor, env cap, forcedLevel) still apply.
+        const openTurnHold = hasOpenTurn(data.recent_turns ?? []);
+        span.setAttribute('pp.lesson.level.open_turn_hold', openTurnHold);
+
         let maxLength: number;
-        if (base > SENTENCE_LEVEL_THRESHOLD) {
+        if (openTurnHold) {
+          maxLength = base;
+        } else if (base > SENTENCE_LEVEL_THRESHOLD) {
           // Sentence band (level ≥ 8): grouping + decision live in the pure
           // signal function (see sentence-band-signal.utils.ts for the
           // lesson-validity and rule-ordering rationale).

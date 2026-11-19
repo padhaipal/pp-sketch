@@ -2898,6 +2898,106 @@ describe('LiteracyLessonService — sentence-band two-lesson signal (level ≥ 8
   });
 });
 
+// ─── open-turn hold (2026-11) ────────────────────────────────────────────────
+// A row newer than the last completed lesson = a selection already used this
+// evidence (timeout, 7pm notifier, hail-mary, stale restart). Hold, both bands.
+
+describe('LiteracyLessonService — open-turn hold (both bands)', () => {
+  const OPEN_START = { stid: 'sentence-start-sentence-initial' };
+
+  it('sentence band: two first-try passes + an unfinished lesson after them → hold (no repeat +1)', async () => {
+    const { maxLength, levelParam } = await runLevel({
+      prev_level: 9,
+      recent_words: ['अब कमल'],
+      recent_turns: sentenceTurns([
+        OPEN_START,
+        ...passedLessonTurns(true),
+        ...passedLessonTurns(true),
+      ]),
+    });
+    expect(maxLength).toBe(9);
+    expect(levelParam).toBe(9);
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.level.open_turn_hold',
+      true,
+    ]);
+  });
+
+  it('sentence band: repeated unfinished starts never climb (8→12 regression)', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 11,
+      recent_words: ['अब कमल'],
+      recent_turns: sentenceTurns([
+        OPEN_START,
+        OPEN_START,
+        OPEN_START,
+        ...passedLessonTurns(true),
+        ...passedLessonTurns(true),
+      ]),
+    });
+    expect(maxLength).toBe(11);
+  });
+
+  it('sentence band: churn with an open turn → hold, not −1 (no drop on return)', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 9,
+      recent_words: ['अब कमल'],
+      recent_turns: sentenceTurns([
+        ...Array.from({ length: 15 }, () => ({})),
+        ...passedLessonTurns(false),
+      ]),
+      lifetime_done_count: 10,
+    });
+    expect(maxLength).toBe(9);
+  });
+
+  it('sentence band: newest row done (normal flow) → signal still applies (+1)', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 9,
+      recent_words: ['अब कमल'],
+      recent_turns: TWO_FIRST_TRY_TURNS,
+    });
+    expect(maxLength).toBe(10);
+    expect(mockSpanSetAttribute.mock.calls).toContainEqual([
+      'pp.lesson.level.open_turn_hold',
+      false,
+    ]);
+  });
+
+  it('word band: add window met but an open turn → hold', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 5,
+      recent_words: ['अब'],
+      unique_in_add_window: 3,
+      unique_in_keep_window: 3,
+      recent_turns: sentenceTurns([{}, { done: true }, { done: true }]),
+    });
+    expect(maxLength).toBe(5);
+  });
+
+  it('word band: neither window met but an open turn → hold, not −1', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 5,
+      recent_words: ['अब'],
+      unique_in_add_window: 0,
+      unique_in_keep_window: 0,
+      recent_turns: sentenceTurns([{}, {}, {}]),
+    });
+    expect(maxLength).toBe(5);
+  });
+
+  it('word band: newest row done → add window still applies (+1)', async () => {
+    const { maxLength } = await runLevel({
+      prev_level: 5,
+      recent_words: ['अब'],
+      unique_in_add_window: 3,
+      unique_in_keep_window: 3,
+      recent_turns: sentenceTurns([{ done: true }, {}, { done: true }]),
+    });
+    expect(maxLength).toBe(6);
+  });
+});
+
 // ─── comprehension answers (2026-07) ─────────────────────────────────────────
 
 describe('LiteracyLessonService.processAnswer — comprehension answers', () => {

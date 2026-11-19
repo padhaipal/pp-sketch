@@ -356,3 +356,14 @@ else:                             maxLength = base - 1
 - The lesson after ANY finished ASER run (not just onboarding) is selected at
   the run's placement level (`forcedLevel`), the one exception to the
   one-level clamp. See aser.prompt.md.
+
+## 2026-11: open-turn hold (both bands)
+
+Before the word/sentence band decision, selectNextString checks
+`hasOpenTurn(recent_turns)` (sentence-band-signal.utils.ts). If the newest
+row is not a done row, a selection already ran on the current evidence and
+no lesson has finished since, so `maxLength = base` (hold). Floor,
+MAX_LESSON_LEVEL, MAX_LESSON_LEVEL_CAP, forcedLevel and the ±1 clamp still
+apply afterwards. Span: `pp.lesson.level.open_turn_hold`. In the normal flow
+the done row is newest, so the decision is unchanged. Stops evidence being
+re-applied by the 7pm notifier, hail-mary and stale restarts (8 → 12 bug).

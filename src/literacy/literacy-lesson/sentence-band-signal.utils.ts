@@ -87,6 +87,22 @@ function flagsOf(rows: TurnRow[]): LessonFlags {
   };
 }
 
+/**
+ * True when the newest row in the window is NOT a done row, i.e. at least one
+ * row was written after the last completed lesson. Each lesson start writes
+ * a row, so such a row means a fresh selection has already run on the
+ * current evidence (the last completed lessons) and nothing has been completed
+ * since. Re-deciding would apply the same evidence again. That was the
+ * 2026-11 bug: the 7pm notifier, hail-mary and stale-lesson restarts each
+ * re-applied one pair of passes, 8 → 12 with one new answer. Callers hold
+ * the level when this is true. Empty window (no history) → false.
+ */
+export function hasOpenTurn(turns: TurnRow[]): boolean {
+  if (turns.length === 0) return false;
+  const newest = turns.reduce((a, b) => (b.rn < a.rn ? b : a));
+  return !newest.is_done;
+}
+
 export function computeSentenceBandSignal(
   turns: TurnRow[],
   lifetimeDoneCount: number,
